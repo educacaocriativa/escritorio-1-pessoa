@@ -7,7 +7,7 @@ from __future__ import annotations
 
 from datetime import datetime
 
-from sqlalchemy import and_, select
+from sqlalchemy import and_, func, select
 from sqlalchemy.orm import Session
 
 from app.core import audit
@@ -107,6 +107,27 @@ def list_events(
         stmt = stmt.where(AgendaEvent.kind.in_(kinds))
     stmt = stmt.order_by(AgendaEvent.starts_at).limit(limit).offset(offset)
     return list(db.scalars(stmt).all())
+
+
+def count_events(
+    db: Session,
+    *,
+    start: datetime | None = None,
+    end: datetime | None = None,
+    kinds: list[str] | None = None,
+    exclude_cancelled: bool = True,
+) -> int:
+    """Conta eventos na janela SEM cap de paginação (para KPIs corretos)."""
+    stmt = select(func.count(AgendaEvent.id))
+    if start is not None:
+        stmt = stmt.where(AgendaEvent.ends_at >= start)
+    if end is not None:
+        stmt = stmt.where(AgendaEvent.starts_at <= end)
+    if kinds:
+        stmt = stmt.where(AgendaEvent.kind.in_(kinds))
+    if exclude_cancelled:
+        stmt = stmt.where(AgendaEvent.status != STATUS_CANCELLED)
+    return db.scalar(stmt) or 0
 
 
 def get_event(db: Session, event_id: str) -> AgendaEvent:

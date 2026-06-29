@@ -56,7 +56,8 @@ Ao criar/alterar qualquer funcionalidade:
 - [x] **Módulo auth + tenant** (register/login/me, JWT, RBAC, RLS na migration 0001). 24 testes.
 - [x] **Módulo Agenda** (eventos, detecção de conflitos, CRUD, transições de status, paginação; migration 0002). 43 testes no total.
 - [x] **Módulo CRM & Kanban** (clientes, estágios dinâmicos, board, mover card, segmentação; barramento de eventos `core/events`; migration 0003). 61 testes no total.
-- [ ] Próximo (Fase 1): **Cockpit com dados reais** (agregar Agenda + CRM). Depois Fase 2 (financeiro/split).
+- [x] **Cockpit** (agregador read-only de Agenda + CRM: contagem do dia, críticos pendentes, funil/conversão; financeiro como placeholder). 70 testes no total. **→ Fase 1 COMPLETA.**
+- [ ] Próximo: **Fase 2 — dinheiro entra/sai** (Carteira & Split → Contas a Receber → Contas a Pagar → Produtos & Checkout). O placeholder `finance` do Cockpit e o evento `crm.client.moved` já estão prontos para ligar.
 - [ ] Migrar módulo **Assistente Jurídico** do app existente (`~/lex-intelligentia-app`) — Fase 5.
 
 ## 6.1 Dívida técnica / TODO de segurança (de revisão QA — endereçar antes de produção)
@@ -80,6 +81,11 @@ Ao criar/alterar qualquer funcionalidade:
 - **Múltiplos estágios `is_won`/`is_lost`:** permitido; o consumidor do evento `crm.client.moved` deve tolerar. Avaliar regra de no máx. 1 de cada.
 - **Filtro por tag carrega em memória:** feito em Python p/ portabilidade; trocar por operador JSON do Postgres (`tags @> [tag]`) em escala.
 - **Validação de CPF (`document`):** reutiliza a dívida global (sem dígito verificador).
+
+**Cockpit — pendência (de revisão QA):**
+- **Janela do dia ancorada em meia-noite UTC**, não no fuso do tenant. Para -03:00 (Brasil), eventos entre 00:00–03:00 UTC caem no dia errado. O frontend deve passar `day` correto, mas o offset de 3h da janela só some quando passarmos o fuso/offset do tenant. Resolver junto com a dívida geral de fuso por tenant.
+
+> Já corrigidos no Cockpit (revisão QA): removido efeito colateral de escrita (GET não semeia mais estágios); `today_count` via `COUNT(*)` real (não capado em 500); cancelados fora da contagem; críticos concluídos (`done`) fora do alerta; `day` malformado → 422 (tipado como `date`); CRM agregado por `GROUP BY` (não carrega todos os clientes).
 
 > Já corrigidos no módulo CRM (revisão QA): barramento `core/events.emit` isola exceções de assinantes (não derruba o chamador pós-commit); race de seed de estágios fechada com `UNIQUE(tenant_id, name)` + retry; `create_stage` duplicado → 409; FK `RESTRICT` (impede card órfão sumir do board); filtro por tag agora ordenado/determinístico; limites de tags + birthdate não-futura. (Bug pego por teste: router não capturava `CrmError` no create_stage.)
 

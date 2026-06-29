@@ -6,10 +6,12 @@ from fastapi import APIRouter
 
 from app.modules.agenda.router import router as agenda_router
 from app.modules.auth.router import router as auth_router
+from app.modules.cockpit.router import router as cockpit_router
 from app.modules.crm.router import router as crm_router
 
 ALL_ROUTERS: list[APIRouter] = [
     auth_router,
     agenda_router,
     crm_router,
+    cockpit_router,
 ]

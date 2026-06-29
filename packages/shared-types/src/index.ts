@@ -134,4 +134,40 @@ export interface Board {
   columns: BoardColumn[];
 }
 
+// ── Cockpit (dashboard de entrada) ─────────────────────
+export interface AgendaSummary {
+  today_count: number;
+  today_events: AgendaEvent[];
+  upcoming_critical: AgendaEvent[];
+}
+
+export interface StageCount {
+  stage_id: UUID;
+  name: string;
+  count: number;
+  is_won: boolean;
+  is_lost: boolean;
+}
+
+export interface CrmSummary {
+  total_clients: number;
+  won_count: number;
+  lost_count: number;
+  conversion_rate: number; // 0..1
+  by_stage: StageCount[];
+}
+
+export interface FinanceSummary {
+  available: boolean;
+  net_revenue_cents: number | null;
+  monthly_costs_cents: number | null;
+  signed_contracts: number | null;
+}
+
+export interface CockpitSummary {
+  agenda: AgendaSummary;
+  crm: CrmSummary;
+  finance: FinanceSummary;
+}
+
 // Os tipos de cada módulo (financeiro...) entram aqui conforme forem construídos.
