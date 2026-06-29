@@ -46,7 +46,7 @@ export const navSections: NavSection[] = [
       { label: "Orçamentos", to: "/orcamentos", icon: FileText, ready: true },
       { label: "Contratos", to: "/contratos", icon: FileSignature, ready: true },
       { label: "Produtos", to: "/produtos", icon: ShoppingBag, ready: true },
-      { label: "Marketing", to: "/marketing", icon: Megaphone },
+      { label: "Marketing", to: "/marketing", icon: Megaphone, ready: true },
       { label: "Sites", to: "/sites", icon: Globe },
       { label: "Jurídico", to: "/juridico", icon: Scale },
       { label: "Configurações", to: "/config", icon: Settings },

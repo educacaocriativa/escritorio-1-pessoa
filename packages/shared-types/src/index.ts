@@ -475,3 +475,35 @@ export interface PublicContract {
   signer_name: string;
   signed_at: string | null;
 }
+
+// ── Marketing / Carrossel ──────────────────────────────
+export interface Slide {
+  heading: string;
+  body: string;
+}
+
+export interface CarouselTemplate {
+  key: string;
+  label: string;
+  primary_color: string;
+  bg_color: string;
+  text_color: string;
+  accent_color: string;
+  font: string;
+}
+
+export interface Carousel {
+  id: UUID;
+  tenant_id: UUID;
+  topic: string;
+  platform: string;
+  slides: Slide[];
+  status: string;
+  template: string;
+  primary_color: string;
+  bg_color: string;
+  text_color: string;
+  accent_color: string;
+  font: string;
+  created_at: string;
+}

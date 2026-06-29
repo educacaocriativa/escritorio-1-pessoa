@@ -89,6 +89,11 @@ Ao criar/alterar qualquer funcionalidade:
   - Validado e2e: cliente aceita no link público → cobrança + contrato nascem juntos.
 - [x] **Área do Cliente / Ficha 360°** — `/crm/clients/:id`: editar dados do cliente (nome/contato/tags/obs), resumo financeiro (a vencer/vencido/recebido), e abas **Cobranças** (receber, **trocar vencimento** → move o evento da agenda junto, **protestar** vencidas), **Contratos** e **Orçamentos** do cliente (links pras fichas). Backend: filtros `?client_id=` em `/receivables/charges`, `/contracts`, `/quotes`; `POST /charges/{id}/reschedule` (atualiza `due_date` + AgendaEvent); `POST /charges/{id}/protest` (campo `protested_at`, só vencida+aberta, idempotente). Migration 0017. 166 testes. **→ FASE 3 COMPLETA.**
   - **Dívida:** "Documentos" como conceito próprio (hoje a aba mostra Contratos); histórico de conversas/agendamentos na ficha; protesto real via cartório/serviço.
+
+## Fase 4 — Marketing & Conteúdo (em andamento)
+- [x] **Gerador de Carrossel (Redes Sociais)** — `/marketing`: gera os slides com IA a partir de um tema (`core/ai` + fallback estruturado sem API key: gancho → valor → CTA), 3–10 slides; editor de slides (editar/adicionar/remover/reordenar); **templates personalizáveis** (Moderno/Minimalista/Gradiente/Jurídico/Vibrante) + customização livre de cores (primária/fundo/texto/destaque) e fonte; prévia ao vivo 1:1 navegável. Migration 0018. 173 testes. Atende o pedido antigo de "reusar a skill de carrossel + templates fáceis de personalizar" [[e1p-carrossel-skill]].
+  - **Dívida:** export real PNG/PDF dos slides (hoje só prévia no app); brand kit por tenant (logo/fontes salvos); publicação/agendamento no Instagram; reaproveitar a skill `social-content` do usuário quando disponível; gestor de tráfego (Meta Ads) e métricas.
+- [ ] Próximo na Fase 4: **Construtor de Funil de Vendas** (React Flow) — módulo separado, ver [[e1p-funil-vendas]].
 - [ ] Migrar módulo **Assistente Jurídico** do app existente (`~/lex-intelligentia-app`) — Fase 5.
 
 ## 6.1 Dívida técnica / TODO de segurança (de revisão QA — endereçar antes de produção)

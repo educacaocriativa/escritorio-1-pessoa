@@ -10,6 +10,8 @@ import PublicContractPage from "../features/contratos/PublicContractPage";
 import ClientDetailPage from "../features/crm/ClientDetailPage";
 import CrmPage from "../features/crm/CrmPage";
 import FinanceiroPage from "../features/financeiro/FinanceiroPage";
+import CarrosselBuilderPage from "../features/marketing/CarrosselBuilderPage";
+import MarketingPage from "../features/marketing/MarketingPage";
 import PagarPage from "../features/pagar/PagarPage";
 import OrcamentosPage from "../features/orcamentos/OrcamentosPage";
 import PublicProposalPage from "../features/orcamentos/PublicProposalPage";
@@ -41,6 +43,9 @@ export default function App() {
           <Route path="/contratos" element={<ContratosPage />} />
           <Route path="/contratos/novo" element={<ContractBuilderPage />} />
           <Route path="/contratos/:id" element={<ContractBuilderPage />} />
+          <Route path="/marketing" element={<MarketingPage />} />
+          <Route path="/marketing/novo" element={<CarrosselBuilderPage />} />
+          <Route path="/marketing/:id" element={<CarrosselBuilderPage />} />
           <Route path="/admin" element={<AdminOnly />} />
           <Route path="*" element={<ComingSoon />} />
         </Route>
