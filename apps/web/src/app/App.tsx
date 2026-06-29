@@ -1,6 +1,7 @@
 import { Route, Routes } from "react-router-dom";
 import AgendaPage from "../features/agenda/AgendaPage";
 import CockpitPage from "../features/cockpit/CockpitPage";
+import CrmPage from "../features/crm/CrmPage";
 import AppShell from "./AppShell";
 
 /**
@@ -13,6 +14,7 @@ export default function App() {
       <Routes>
         <Route path="/" element={<CockpitPage />} />
         <Route path="/agenda" element={<AgendaPage />} />
+        <Route path="/crm" element={<CrmPage />} />
         <Route path="*" element={<ComingSoon />} />
       </Routes>
     </AppShell>

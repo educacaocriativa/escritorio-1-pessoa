@@ -8,5 +8,6 @@ from app.core.audit import AuditEntry  # noqa: F401
 from app.db.base import Base
 from app.modules.agenda.models import AgendaEvent  # noqa: F401
 from app.modules.auth.models import Tenant, User  # noqa: F401
+from app.modules.crm.models import Client, PipelineStage  # noqa: F401
 
 __all__ = ["Base"]

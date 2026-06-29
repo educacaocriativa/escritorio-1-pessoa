@@ -98,4 +98,40 @@ export interface CreateEventResult {
   conflicts: AgendaEvent[];
 }
 
-// Os tipos de cada módulo (crm, financeiro...) entram aqui conforme forem construídos.
+// ── CRM & Kanban ───────────────────────────────────────
+export type Gender = "male" | "female" | "other" | "unspecified";
+
+export interface PipelineStage {
+  id: UUID;
+  name: string;
+  position: number;
+  is_won: boolean;
+  is_lost: boolean;
+}
+
+export interface Client {
+  id: UUID;
+  tenant_id: UUID;
+  name: string;
+  email: string | null;
+  phone: string | null;
+  document: string | null;
+  gender: Gender;
+  birthdate: string | null;
+  notes: string;
+  tags: string[];
+  source: string;
+  stage_id: UUID | null;
+  created_at: string;
+}
+
+export interface BoardColumn {
+  stage: PipelineStage;
+  clients: Client[];
+}
+
+export interface Board {
+  columns: BoardColumn[];
+}
+
+// Os tipos de cada módulo (financeiro...) entram aqui conforme forem construídos.
