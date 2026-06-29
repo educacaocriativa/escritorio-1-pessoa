@@ -1,6 +1,7 @@
 import type { Board, BoardColumn, Client } from "@e1p/shared-types";
-import { Archive, GripVertical, Plus } from "lucide-react";
+import { Archive, ArrowUpRight, GripVertical, Plus } from "lucide-react";
 import { useCallback, useEffect, useState } from "react";
+import { useNavigate } from "react-router-dom";
 import Modal, { Field } from "../../components/Modal";
 import { api, apiErrorMessage } from "../../lib/api";
 import { usePrimaryAction } from "../../store/pageActions";
@@ -183,6 +184,7 @@ function Column({
 }
 
 function Card({ client, stageId }: { client: Client; stageId: string }) {
+  const navigate = useNavigate();
   return (
     <div
       draggable
@@ -191,7 +193,7 @@ function Card({ client, stageId }: { client: Client; stageId: string }) {
         e.dataTransfer.setData("text/from-stage", stageId);
         e.dataTransfer.effectAllowed = "move";
       }}
-      className="flex cursor-grab items-start gap-2 rounded-xl bg-white p-3 shadow-sm active:cursor-grabbing"
+      className="group flex cursor-grab items-start gap-2 rounded-xl bg-white p-3 shadow-sm active:cursor-grabbing"
     >
       <GripVertical size={16} className="mt-0.5 shrink-0 text-neutral-300" />
       <div className="min-w-0 flex-1">
@@ -206,6 +208,13 @@ function Card({ client, stageId }: { client: Client; stageId: string }) {
           </div>
         )}
       </div>
+      <button
+        onClick={() => navigate(`/crm/clients/${client.id}`)}
+        title="Abrir ficha 360°"
+        className="shrink-0 text-neutral-300 transition hover:text-primary-600 group-hover:text-neutral-500"
+      >
+        <ArrowUpRight size={16} />
+      </button>
     </div>
   );
 }

@@ -15,6 +15,7 @@ from app.modules.receivables.schemas import (
     ChargesSummary,
     DunningResult,
     MessageRequest,
+    RescheduleRequest,
 )
 
 router = APIRouter(prefix="/receivables", tags=["receivables"])
@@ -36,6 +37,7 @@ def _out(charge: Charge, db: Session) -> ChargeOut:
         due_date=charge.due_date,
         status=charge.status,
         is_overdue=service.is_overdue(charge),
+        protested_at=charge.protested_at,
         payment_code=charge.payment_code,
         transaction_id=charge.transaction_id,
         created_at=charge.created_at,
@@ -57,10 +59,11 @@ def summary(
 @router.get("/charges", response_model=list[ChargeOut])
 def list_charges(
     status: str | None = Query(default=None),
+    client_id: str | None = Query(default=None),
     _user: CurrentUser = Depends(_guard),
     db: Session = Depends(get_tenant_db),
 ) -> list[ChargeOut]:
-    return [_out(c, db) for c in service.list_charges(db, status=status)]
+    return [_out(c, db) for c in service.list_charges(db, status=status, client_id=client_id)]
 
 
 @router.post("/charges", response_model=ChargeOut, status_code=201)
@@ -153,6 +156,38 @@ def cancel_charge(
 ) -> ChargeOut:
     try:
         charge = service.cancel_charge(
+            db, charge_id=charge_id, tenant_id=user.tenant_id, actor=user.user_id
+        )
+    except service.ReceivableError as e:
+        raise _err(e) from e
+    return _out(charge, db)
+
+
+@router.post("/charges/{charge_id}/reschedule", response_model=ChargeOut)
+def reschedule_charge(
+    charge_id: str,
+    data: RescheduleRequest,
+    user: CurrentUser = Depends(_guard),
+    db: Session = Depends(get_tenant_db),
+) -> ChargeOut:
+    try:
+        charge = service.reschedule_charge(
+            db, charge_id=charge_id, tenant_id=user.tenant_id, actor=user.user_id,
+            due_date=data.due_date,
+        )
+    except service.ReceivableError as e:
+        raise _err(e) from e
+    return _out(charge, db)
+
+
+@router.post("/charges/{charge_id}/protest", response_model=ChargeOut)
+def protest_charge(
+    charge_id: str,
+    user: CurrentUser = Depends(_guard),
+    db: Session = Depends(get_tenant_db),
+) -> ChargeOut:
+    try:
+        charge = service.protest_charge(
             db, charge_id=charge_id, tenant_id=user.tenant_id, actor=user.user_id
         )
     except service.ReceivableError as e:

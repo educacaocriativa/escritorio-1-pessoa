@@ -44,9 +44,14 @@ class ChargeOut(BaseModel):
     due_date: date
     status: str
     is_overdue: bool
+    protested_at: datetime | None
     payment_code: str
     transaction_id: str | None
     created_at: datetime
+
+
+class RescheduleRequest(BaseModel):
+    due_date: date
 
 
 class DunningResult(BaseModel):

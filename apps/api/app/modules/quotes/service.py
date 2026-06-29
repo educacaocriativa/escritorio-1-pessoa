@@ -134,10 +134,14 @@ def get_quote(db: Session, quote_id: str) -> Quote:
     return q
 
 
-def list_quotes(db: Session, *, status: str | None = None) -> list[Quote]:
+def list_quotes(
+    db: Session, *, status: str | None = None, client_id: str | None = None
+) -> list[Quote]:
     stmt = select(Quote).order_by(Quote.created_at.desc())
     if status:
         stmt = stmt.where(Quote.status == status)
+    if client_id:
+        stmt = stmt.where(Quote.client_id == client_id)
     return list(db.scalars(stmt).all())
 
 

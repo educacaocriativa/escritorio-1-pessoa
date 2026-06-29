@@ -77,10 +77,11 @@ def create_template(
 @router.get("", response_model=list[ContractOut])
 def list_contracts(
     status: str | None = Query(default=None),
+    client_id: str | None = Query(default=None),
     _u: CurrentUser = Depends(_guard),
     db: Session = Depends(get_tenant_db),
 ) -> list[ContractOut]:
-    return [_out(c, db) for c in service.list_contracts(db, status=status)]
+    return [_out(c, db) for c in service.list_contracts(db, status=status, client_id=client_id)]
 
 
 @router.post("", response_model=ContractOut, status_code=201)

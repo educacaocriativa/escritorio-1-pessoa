@@ -260,6 +260,7 @@ export interface Charge {
   due_date: string;
   status: ChargeStatus;
   is_overdue: boolean;
+  protested_at: string | null;
   payment_code: string;
   transaction_id: UUID | null;
   created_at: string;

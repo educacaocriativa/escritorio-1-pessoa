@@ -212,10 +212,14 @@ def get_contract(db: Session, contract_id: str) -> Contract:
     return c
 
 
-def list_contracts(db: Session, *, status: str | None = None) -> list[Contract]:
+def list_contracts(
+    db: Session, *, status: str | None = None, client_id: str | None = None
+) -> list[Contract]:
     stmt = select(Contract).order_by(Contract.created_at.desc())
     if status:
         stmt = stmt.where(Contract.status == status)
+    if client_id:
+        stmt = stmt.where(Contract.client_id == client_id)
     return list(db.scalars(stmt).all())
 
 

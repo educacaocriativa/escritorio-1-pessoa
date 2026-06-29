@@ -82,10 +82,11 @@ def scope(
 @router.get("", response_model=list[QuoteOut])
 def list_quotes(
     status: str | None = Query(default=None),
+    client_id: str | None = Query(default=None),
     _u: CurrentUser = Depends(_guard),
     db: Session = Depends(get_tenant_db),
 ) -> list[QuoteOut]:
-    return [_out(q) for q in service.list_quotes(db, status=status)]
+    return [_out(q) for q in service.list_quotes(db, status=status, client_id=client_id)]
 
 
 @router.post("", response_model=QuoteOut, status_code=201)

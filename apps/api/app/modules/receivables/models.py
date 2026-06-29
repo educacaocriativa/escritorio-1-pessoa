@@ -5,9 +5,9 @@ vencimento é injetado na Agenda. Tabela de NEGÓCIO (RLS).
 """
 from __future__ import annotations
 
-from datetime import date
+from datetime import date, datetime
 
-from sqlalchemy import BigInteger, Date, String, Text
+from sqlalchemy import BigInteger, Date, DateTime, String, Text
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.db.base import Base, TenantMixin, TimestampMixin, _uuid
@@ -43,3 +43,5 @@ class Charge(Base, TenantMixin, TimestampMixin):
     # evento de vencimento na agenda
     agenda_event_id: Mapped[str | None] = mapped_column(String(36), nullable=True)
     external_ref: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    # quando protestada (cobrança vencida levada a protesto); None = não protestada
+    protested_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)

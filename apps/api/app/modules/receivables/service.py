@@ -113,13 +113,61 @@ def get_charge(db: Session, charge_id: str) -> Charge:
 
 
 def list_charges(
-    db: Session, *, status: str | None = None, limit: int = 200, offset: int = 0
+    db: Session,
+    *,
+    status: str | None = None,
+    client_id: str | None = None,
+    limit: int = 200,
+    offset: int = 0,
 ) -> list[Charge]:
     limit = max(1, min(limit, 500))
     stmt = select(Charge).order_by(Charge.due_date)
     if status:
         stmt = stmt.where(Charge.status == status)
+    if client_id:
+        stmt = stmt.where(Charge.client_id == client_id)
     return list(db.scalars(stmt.limit(limit).offset(max(0, offset))).all())
+
+
+def reschedule_charge(
+    db: Session, *, charge_id: str, tenant_id: str, actor: str, due_date: date
+) -> Charge:
+    """Troca o vencimento de uma cobrança em aberto e move o evento da agenda junto."""
+    charge = get_charge(db, charge_id)
+    if charge.status != STATUS_OPEN:
+        raise ReceivableError("Só cobranças em aberto podem ter o vencimento alterado", 409)
+    charge.due_date = due_date
+    if charge.agenda_event_id:
+        ev = db.get(AgendaEvent, charge.agenda_event_id)
+        if ev is not None:
+            day_start = datetime.combine(due_date, time.min, tzinfo=UTC)
+            ev.starts_at = day_start
+            ev.ends_at = day_start.replace(hour=23, minute=59)
+            ev.status = STATUS_SCHEDULED  # volta a "agendado" (deixa de ficar vermelho se atrasara)
+    audit.record(
+        db, tenant_id=tenant_id, actor=actor, action="receivable.reschedule", target=charge.id
+    )
+    db.commit()
+    db.refresh(charge)
+    return charge
+
+
+def protest_charge(db: Session, *, charge_id: str, tenant_id: str, actor: str) -> Charge:
+    """Protesta uma cobrança VENCIDA e em aberto (registra o protesto; cartório real é dívida)."""
+    charge = get_charge(db, charge_id)
+    if charge.status != STATUS_OPEN:
+        raise ReceivableError("Só cobranças em aberto podem ser protestadas", 409)
+    if not is_overdue(charge):
+        raise ReceivableError("Só cobranças vencidas podem ser protestadas", 409)
+    if charge.protested_at is not None:
+        return charge  # idempotente
+    charge.protested_at = datetime.now(UTC)
+    audit.record(
+        db, tenant_id=tenant_id, actor=actor, action="receivable.protest", target=charge.id
+    )
+    db.commit()
+    db.refresh(charge)
+    return charge
 
 
 def mark_paid(db: Session, *, charge_id: str, tenant_id: str, actor: str, by_ai: bool) -> Charge:
