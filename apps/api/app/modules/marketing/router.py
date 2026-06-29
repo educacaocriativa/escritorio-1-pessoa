@@ -29,6 +29,9 @@ def _out(c: Carousel) -> CarouselOut:
         platform=c.platform,
         slides=c.slides,
         status=c.status,
+        handle=c.handle,
+        caption=c.caption,
+        hashtags=c.hashtags,
         template=c.template,
         primary_color=c.primary_color,
         bg_color=c.bg_color,
@@ -54,7 +57,7 @@ def generate(
     _u: CurrentUser = Depends(_guard),
     _db: Session = Depends(get_tenant_db),
 ) -> GenerateResult:
-    return GenerateResult(slides=service.generate_slides(data.topic, data.slides, data.tone))
+    return GenerateResult(**service.generate_content(data.topic, data.slides, data.tone))
 
 
 @router.get("", response_model=list[CarouselOut])

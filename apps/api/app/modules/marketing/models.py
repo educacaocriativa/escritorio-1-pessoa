@@ -6,7 +6,7 @@ Slides: JSON [{heading, body}].
 """
 from __future__ import annotations
 
-from sqlalchemy import JSON, String
+from sqlalchemy import JSON, String, Text
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.db.base import Base, TenantMixin, TimestampMixin, _uuid
@@ -14,11 +14,12 @@ from app.db.base import Base, TenantMixin, TimestampMixin, _uuid
 STATUS_DRAFT = "draft"
 STATUS_READY = "ready"
 
-DEFAULT_PRIMARY = "#5D44F8"
-DEFAULT_BG = "#0F1020"
+# Padrão editorial (estilo da skill do usuário): fundo escuro + acento roxo.
+DEFAULT_PRIMARY = "#B078FF"
+DEFAULT_BG = "#292A25"
 DEFAULT_TEXT = "#FFFFFF"
-DEFAULT_ACCENT = "#3DD68C"
-DEFAULT_FONT = "Inter"
+DEFAULT_ACCENT = "#3CD3A4"
+DEFAULT_FONT = "Raleway"
 
 
 class Carousel(Base, TenantMixin, TimestampMixin):
@@ -29,6 +30,9 @@ class Carousel(Base, TenantMixin, TimestampMixin):
     platform: Mapped[str] = mapped_column(String(20), default="instagram", nullable=False)
     slides: Mapped[list] = mapped_column(JSON, default=list, nullable=False)
     status: Mapped[str] = mapped_column(String(12), default=STATUS_DRAFT, nullable=False)
+    handle: Mapped[str] = mapped_column(String(120), default="", nullable=False)  # @ do Instagram
+    caption: Mapped[str] = mapped_column(Text, default="", nullable=False)
+    hashtags: Mapped[str] = mapped_column(String(600), default="", nullable=False)
 
     # Template personalizável (cores + fonte + layout)
     template: Mapped[str] = mapped_column(String(24), default="moderno", nullable=False)

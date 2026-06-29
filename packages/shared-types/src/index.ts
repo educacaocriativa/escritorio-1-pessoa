@@ -477,9 +477,16 @@ export interface PublicContract {
 }
 
 // ── Marketing / Carrossel ──────────────────────────────
+export type SlideKind = "cover" | "editorial" | "accent" | "cta";
+
 export interface Slide {
+  kind: SlideKind;
   heading: string;
   body: string;
+  secondary: string;
+  highlight: string;
+  photo_url: string;
+  photo_position: "top" | "mid" | "base";
 }
 
 export interface CarouselTemplate {
@@ -499,6 +506,9 @@ export interface Carousel {
   platform: string;
   slides: Slide[];
   status: string;
+  handle: string;
+  caption: string;
+  hashtags: string;
   template: string;
   primary_color: string;
   bg_color: string;

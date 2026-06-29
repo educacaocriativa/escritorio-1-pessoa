@@ -4,7 +4,7 @@ import { useCallback, useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { api } from "../../lib/api";
 import { usePrimaryAction } from "../../store/pageActions";
-import { SlideCard } from "./CarouselSlideView";
+import { CarouselThumb } from "./CarouselSlideView";
 
 export default function MarketingPage() {
   const navigate = useNavigate();
@@ -50,17 +50,8 @@ export default function MarketingPage() {
               onClick={() => navigate(`/marketing/${c.id}`)}
               className="group text-left"
             >
-              <div className="overflow-hidden rounded-2xl shadow-sm transition group-hover:shadow-md">
-                {c.slides.length > 0 ? (
-                  <SlideCard slide={c.slides[0]} style={c} index={0} total={c.slides.length} />
-                ) : (
-                  <div
-                    className="flex aspect-square items-center justify-center text-sm"
-                    style={{ background: c.bg_color, color: c.text_color }}
-                  >
-                    Sem slides
-                  </div>
-                )}
+              <div className="flex justify-center overflow-hidden rounded-2xl shadow-sm transition group-hover:shadow-md">
+                <CarouselThumb slides={c.slides} style={c} display={240} />
               </div>
               <div className="mt-2 flex items-start justify-between gap-2">
                 <div className="min-w-0">

@@ -1,4 +1,9 @@
-"""Marketing: geração de carrossel por IA (com fallback) + templates personalizáveis + CRUD."""
+"""Marketing: geração de carrossel editorial por IA (com fallback) + templates + CRUD.
+
+Estilo inspirado na skill do usuário (ver docs/skills/carrosseis-instagram.md): carrossel
+editorial/investigativo 4:5 com capa, slides editoriais, slide de acento e CTA, + legenda
+e hashtags. A geração de IMAGEM (HTML→PNG) acontece no front (html2canvas).
+"""
 from __future__ import annotations
 
 import json
@@ -12,8 +17,10 @@ from app.core import ai, audit
 from app.modules.marketing.models import Carousel
 from app.modules.marketing.schemas import CarouselCreate, CarouselUpdate
 
-# Templates personalizáveis: ponto de partida que o usuário ajusta (cores/fonte).
+# Templates personalizáveis (ponto de partida; usuário ajusta cores/fonte).
 TEMPLATES = [
+    {"key": "editorial", "label": "Editorial", "primary_color": "#B078FF", "bg_color": "#292A25",
+     "text_color": "#FFFFFF", "accent_color": "#3CD3A4", "font": "Raleway"},
     {"key": "moderno", "label": "Moderno", "primary_color": "#5D44F8", "bg_color": "#0F1020",
      "text_color": "#FFFFFF", "accent_color": "#3DD68C", "font": "Inter"},
     {"key": "minimalista", "label": "Minimalista", "primary_color": "#111827",
@@ -26,6 +33,24 @@ TEMPLATES = [
      "text_color": "#FFFFFF", "accent_color": "#00F5D4", "font": "Poppins"},
 ]
 
+_EDITORIAL_SYSTEM = (
+    "Você cria carrosséis editoriais/investigativos para Instagram (pt-BR), estilo manchete de "
+    "revista que para o scroll. REGRA DE OURO: se uma pessoa leiga não entende, falhou — zero "
+    "jargão sem explicação.\n"
+    "Responda APENAS com um objeto JSON: "
+    "{\"slides\": [...], \"caption\": \"...\", \"hashtags\": \"...\"}.\n"
+    "Cada slide é {\"kind\", \"heading\", \"body\", \"secondary\", \"highlight\"}:\n"
+    "- 1º slide kind='cover': heading = título IMPACTANTE em CAIXA ALTA (pergunta provocativa ou "
+    "afirmação chocante); highlight = 1 palavra-chave do título.\n"
+    "- slides do meio kind='editorial': heading = frase narrativa (storytelling, 1 ideia por "
+    "slide), secondary = complemento com dado/número; highlight = palavra a destacar.\n"
+    "- 1 slide do meio pode ser kind='accent' (frase de impacto máximo).\n"
+    "- último slide kind='cta': heading = chamada (ex.: 'GOSTOU? SALVE ESTE POST'); "
+    "body = 'Compartilhe com quem precisa'.\n"
+    "Máximo ~30 palavras por slide. caption = legenda envolvente (2-4 linhas). "
+    "hashtags = 8 a 10 hashtags relevantes separadas por espaço, cada uma começando com #."
+)
+
 
 class MarketingError(Exception):
     def __init__(self, message: str, status_code: int = 400):
@@ -33,56 +58,67 @@ class MarketingError(Exception):
         self.status_code = status_code
 
 
-def _fallback_slides(topic: str, n: int) -> list[dict]:
-    slides = [{"heading": topic.strip()[:60], "body": "Arraste para o lado 👉"}]
+def _fallback(topic: str, n: int) -> dict:
+    first = topic.strip().split()[0] if topic.strip() else "Isso"
+    slides = [{"kind": "cover", "heading": topic.strip().upper()[:90], "body": "",
+               "secondary": "", "highlight": first}]
     for i in range(1, n - 1):
-        slides.append({"heading": f"Ponto {i}", "body": f"Algo importante sobre {topic}."})
-    slides.append({"heading": "Gostou?", "body": "Salve este post e siga para mais! 🚀"})
-    return slides[:n]
+        slides.append({
+            "kind": "accent" if i == n - 2 else "editorial",
+            "heading": f"Ponto {i} sobre {topic}".strip(),
+            "body": "",
+            "secondary": "Explique aqui o ponto com um dado ou exemplo.",
+            "highlight": "",
+        })
+    slides.append({"kind": "cta", "heading": "GOSTOU? SALVE ESTE POST",
+                   "body": "Salve e compartilhe com quem precisa.",
+                   "secondary": "", "highlight": ""})
+    return {
+        "slides": slides[:n],
+        "caption": f"{topic}\n\nSalve este carrossel e compartilhe com quem precisa. 🚀",
+        "hashtags": "#conteudo #dicas #negocios #empreendedorismo #marketing "
+                    "#instagram #carrossel #brasil",
+    }
 
 
-def _parse_slides(text: str) -> list[dict]:
+def _parse(text: str, topic: str, n: int) -> dict:
     cleaned = re.sub(r"^```(?:json)?|```$", "", text.strip(), flags=re.MULTILINE).strip()
     data = json.loads(cleaned)
-    out = []
-    for s in data:
-        out.append({
-            "heading": str(s.get("heading", ""))[:120],
-            "body": str(s.get("body", ""))[:500],
+    raw = data.get("slides", []) if isinstance(data, dict) else data
+    slides = []
+    for s in raw:
+        slides.append({
+            "kind": str(s.get("kind", "editorial"))[:12],
+            "heading": str(s.get("heading", ""))[:200],
+            "body": str(s.get("body", ""))[:600],
+            "secondary": str(s.get("secondary", ""))[:400],
+            "highlight": str(s.get("highlight", ""))[:80],
         })
-    if not out:
-        raise ValueError("vazio")
-    return out
+    if not slides:
+        raise ValueError("sem slides")
+    if len(slides) < n:
+        slides += _fallback(topic, n)["slides"][len(slides):]
+    return {
+        "slides": slides[:n],
+        "caption": str(data.get("caption", "") if isinstance(data, dict) else "")[:1500],
+        "hashtags": str(data.get("hashtags", "") if isinstance(data, dict) else "")[:600],
+    }
 
 
-# Metodologia destilada da skill do usuário "social-content-juridico" (estrutura de carrossel
-# de alto impacto). Generalizada para qualquer nicho, não só jurídico.
-_CAROUSEL_SYSTEM = (
-    "Você é redator de carrosséis de Instagram (pt-BR), no método de conteúdo de alto impacto.\n"
-    "REGRA DE OURO: se uma pessoa leiga não entender, o conteúdo falhou — zero jargão sem "
-    "explicação; troque termos técnicos por analogias do dia a dia.\n"
-    "Estrutura do carrossel:\n"
-    "- Slide 1 (CAPA): título impactante — um problema ou pergunta que prende (gancho forte).\n"
-    "- Slide 2 (CONTEXTO): por que isso importa para o seguidor + um dado/fato surpreendente.\n"
-    "- Slides do meio: UM ponto por slide, no máximo ~50 palavras, linguagem de conversa.\n"
-    "- Penúltimo (TAKEAWAY): resumo rápido em lista (ex.: '3 coisas para lembrar').\n"
-    "- Último (CTA): chamada clara — 'Salva esse carrossel', 'Manda para quem precisa'.\n"
-    "headings curtos (até 6 palavras); body com 1-2 frases, direto e útil.\n"
-    "Responda APENAS com um array JSON de objetos {\"heading\": \"...\", \"body\": \"...\"}."
-)
-
-
-def generate_slides(topic: str, n: int, tone: str) -> list[dict]:
-    """IA escreve os slides; cai para um esqueleto se não houver chave/parsing falhar."""
+def generate_content(topic: str, n: int, tone: str) -> dict:
+    """IA escreve slides + legenda + hashtags; cai para um esqueleto editorial em caso de erro."""
     if not settings.anthropic_api_key:
-        return _fallback_slides(topic, n)
+        return _fallback(topic, n)
     user = f"Tema: {topic}\nNúmero de slides: {n}\nTom: {tone}"
     try:
-        text = ai.complete(system=_CAROUSEL_SYSTEM, user_message=user, max_tokens=1500).text
-        slides = _parse_slides(text)
-        return slides[:n] if len(slides) >= n else slides + _fallback_slides(topic, n)[len(slides):]
+        text = ai.complete(system=_EDITORIAL_SYSTEM, user_message=user, max_tokens=2000).text
+        return _parse(text, topic, n)
     except Exception:
-        return _fallback_slides(topic, n)
+        return _fallback(topic, n)
+
+
+_FIELDS = ("topic", "status", "handle", "caption", "hashtags", "template",
+           "primary_color", "bg_color", "text_color", "accent_color", "font")
 
 
 def create_carousel(db: Session, *, tenant_id: str, actor: str, data: CarouselCreate) -> Carousel:
@@ -90,6 +126,9 @@ def create_carousel(db: Session, *, tenant_id: str, actor: str, data: CarouselCr
         tenant_id=tenant_id,
         topic=data.topic,
         slides=[s.model_dump() for s in data.slides],
+        handle=data.handle,
+        caption=data.caption,
+        hashtags=data.hashtags,
         template=data.template,
         primary_color=data.primary_color,
         bg_color=data.bg_color,
@@ -119,9 +158,7 @@ def update_carousel(
     db: Session, *, carousel_id: str, tenant_id: str, actor: str, data: CarouselUpdate
 ) -> Carousel:
     car = get_carousel(db, carousel_id)
-    fields = ("topic", "status", "template", "primary_color", "bg_color", "text_color",
-              "accent_color", "font")
-    for f in fields:
+    for f in _FIELDS:
         val = getattr(data, f)
         if val is not None:
             setattr(car, f, val)

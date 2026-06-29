@@ -33,10 +33,14 @@ def test_generate_fallback_slides(client: TestClient, headers):
         headers=headers,
     )
     assert resp.status_code == 200
-    slides = resp.json()["slides"]
+    out = resp.json()
+    slides = out["slides"]
     assert len(slides) == 5
-    assert slides[0]["heading"]  # gancho
-    assert "Salve" in slides[-1]["body"] or slides[-1]["heading"]  # CTA
+    assert slides[0]["kind"] == "cover"  # capa
+    assert slides[-1]["kind"] == "cta"  # CTA
+    assert "Salve" in slides[-1]["body"] or slides[-1]["heading"]
+    assert out["caption"]  # legenda gerada
+    assert out["hashtags"].startswith("#")  # hashtags geradas
 
 
 def test_generate_min_max(client: TestClient, headers):
@@ -57,10 +61,14 @@ def test_create_and_customize(client: TestClient, headers):
         "primary_color": "#1E3A5F",
         "font": "Georgia",
     }
+    payload["handle"] = "@meuperfil"
+    payload["caption"] = "Legenda teste"
     c = client.post("/marketing/carousels", json=payload, headers=headers).json()
     assert c["template"] == "juridico"
     assert c["primary_color"] == "#1E3A5F"
     assert c["font"] == "Georgia"
+    assert c["handle"] == "@meuperfil"
+    assert c["caption"] == "Legenda teste"
     assert len(c["slides"]) == 1
 
 
