@@ -1,10 +1,11 @@
 """Registro de módulos de negócio.
 
-Cada módulo expõe um `router` (APIRouter). Conforme forem criados, importe e adicione em ALL_ROUTERS.
-Ex.:
-    from app.modules.agenda.router import router as agenda_router
-    ALL_ROUTERS = [agenda_router, ...]
+Cada módulo expõe um `router` (APIRouter). Adicione novos módulos aqui conforme construídos.
 """
 from fastapi import APIRouter
 
-ALL_ROUTERS: list[APIRouter] = []
+from app.modules.auth.router import router as auth_router
+
+ALL_ROUTERS: list[APIRouter] = [
+    auth_router,
+]

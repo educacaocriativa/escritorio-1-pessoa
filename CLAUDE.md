@@ -51,10 +51,21 @@ Ao criar/alterar qualquer funcionalidade:
 
 ## 6. Estado atual / roadmap
 - [x] Fundação do monorepo, docs, agentes de QA, CI local.
-- [ ] Core do backend: auth + tenancy (RLS) + anonimizador + camada de IA.
-- [ ] Shell do frontend (sidebar/topbar/layout do design "Portal").
-- [ ] Migrar módulo **Assistente Jurídico** do app existente (`~/lex-intelligentia-app`).
-- [ ] Módulos restantes (faseados — ver `docs/MODULES.md` para ordem sugerida).
+- [x] Core do backend: tenancy (RLS) + anonimizador + camada de IA + auditoria.
+- [x] Shell do frontend (sidebar/topbar/layout do design "Portal") + Cockpit (esqueleto).
+- [x] **Módulo auth + tenant** (register/login/me, JWT, RBAC, RLS na migration 0001). 24 testes.
+- [ ] Próximo (Fase 1): Agenda → CRM/Kanban → Cockpit com dados reais. Depois Fase 2 (financeiro/split).
+- [ ] Migrar módulo **Assistente Jurídico** do app existente (`~/lex-intelligentia-app`) — Fase 5.
+
+## 6.1 Dívida técnica / TODO de segurança (de revisão QA — endereçar antes de produção)
+- **Enumeração de e-mail no /register:** retorna 409 "e-mail já cadastrado" (UX comum em signup, mas revela existência). Reavaliar quando houver fluxo de e-mail/confirmação.
+- **Validação de CPF/CNPJ:** hoje só valida tamanho; falta dígito verificador + normalização + unicidade por tenant.
+- **Hardening da tabela `users` (global):** não tem RLS (login por e-mail é global). Garantir que módulos de negócio NUNCA consultem `users` via `get_db` sem filtro de tenant.
+- **Idle timeout LGPD (30min):** configurado mas não implementado (JWT é stateless, expira em 7 dias). Implementar tracking de atividade / refresh curto quando o frontend de auth entrar.
+- **Truncagem bcrypt por bytes (72):** pode cortar caractere multibyte; documentado, aceitável.
+- **Geração de tipos:** `shared-types` é mantido à mão espelhando os schemas. Avaliar gerar TS a partir do OpenAPI do FastAPI para eliminar divergência.
+
+> Já corrigidos na fundação: guarda de boot p/ JWT_SECRET fraco em produção; RLS fail-closed (valida tenant_id); IntegrityError→409 no register (race); /me revalida is_active e não reemite token; e-mail case-insensitive; alinhamento de `created_at`/`role` com shared-types.
 
 ## 7. Materiais de referência (fora do repo)
 - Spec mestre: `/Volumes/Extreme SSD/2026_e1p/Configuração do software.docx`

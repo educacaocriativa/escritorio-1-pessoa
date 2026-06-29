@@ -1,4 +1,7 @@
+from pydantic import model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+_DEV_SECRET = "dev-secret-change-in-production"  # noqa: S105 (sentinela do default de dev)
 
 
 class Settings(BaseSettings):
@@ -14,7 +17,7 @@ class Settings(BaseSettings):
     anthropic_model: str = "claude-opus-4-8"
 
     # Auth
-    jwt_secret: str = "dev-secret-change-in-production"  # noqa: S105 (default só de dev; prod via env)
+    jwt_secret: str = _DEV_SECRET
     jwt_algorithm: str = "HS256"
     jwt_expire_minutes: int = 10080  # 7 dias
     session_idle_timeout_minutes: int = 30  # LGPD
@@ -28,6 +31,19 @@ class Settings(BaseSettings):
     @property
     def is_production(self) -> bool:
         return self.environment == "production"
+
+    @model_validator(mode="after")
+    def _guard_production_secrets(self) -> "Settings":
+        """Fail-fast: em produção, segredos fracos não podem subir (isolamento de tenant
+        depende inteiramente da integridade do JWT)."""
+        if self.is_production:
+            if self.jwt_secret == _DEV_SECRET or len(self.jwt_secret) < 32:
+                raise ValueError(
+                    "JWT_SECRET inseguro em produção: defina uma string aleatória de >=32 chars"
+                )
+            if not self.anthropic_api_key:
+                raise ValueError("ANTHROPIC_API_KEY ausente em produção")
+        return self
 
 
 settings = Settings()

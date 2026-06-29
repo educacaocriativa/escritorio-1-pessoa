@@ -30,11 +30,16 @@ export interface User {
   created_at: string;
 }
 
-export interface AuthToken {
-  access_token: string;
-  token_type: "bearer";
+/** Retorno de GET /auth/me — só identidade, sem credencial. */
+export interface SessionInfo {
   user: User;
   tenant: Tenant;
+}
+
+/** Retorno de /auth/register e /auth/login — identidade + credencial. */
+export interface AuthToken extends SessionInfo {
+  access_token: string;
+  token_type: "bearer";
 }
 
 // ── Auditoria ──────────────────────────────────────────

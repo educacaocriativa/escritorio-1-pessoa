@@ -20,7 +20,13 @@ SessionLocal = sessionmaker(bind=engine, autoflush=False, expire_on_commit=False
 
 @contextmanager
 def tenant_session(tenant_id: str) -> Iterator[Session]:
-    """Abre uma sessão com o tenant fixado para a RLS. Use em TODO acesso a dados de negócio."""
+    """Abre uma sessão com o tenant fixado para a RLS. Use em TODO acesso a dados de negócio.
+
+    Valida o tenant_id antes de setar a GUC: um tenant vazio/None faria a policy RLS casar
+    com `tenant_id = ''` ou NULL (fail-open). Aqui é fail-closed explícito.
+    """
+    if not tenant_id or not isinstance(tenant_id, str) or len(tenant_id) < 8:
+        raise ValueError("tenant_id inválido para abrir sessão de tenant")
     db = SessionLocal()
     try:
         # set_config local: válido só nesta transação/conexão.

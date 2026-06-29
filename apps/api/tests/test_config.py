@@ -1,0 +1,32 @@
+"""Guarda de configuração: produção não pode subir com segredos fracos."""
+import pytest
+from pydantic import ValidationError
+
+from app.config import Settings
+
+STRONG = "x" * 40
+
+
+def test_production_rejects_default_secret():
+    with pytest.raises(ValidationError):
+        Settings(environment="production", anthropic_api_key="sk-ant-x")
+
+
+def test_production_rejects_short_secret():
+    with pytest.raises(ValidationError):
+        Settings(environment="production", jwt_secret="curto", anthropic_api_key="sk-ant-x")
+
+
+def test_production_requires_anthropic_key():
+    with pytest.raises(ValidationError):
+        Settings(environment="production", jwt_secret=STRONG, anthropic_api_key="")
+
+
+def test_production_ok_with_strong_secret():
+    s = Settings(environment="production", jwt_secret=STRONG, anthropic_api_key="sk-ant-x")
+    assert s.is_production
+
+
+def test_development_allows_defaults():
+    s = Settings(environment="development")
+    assert not s.is_production
