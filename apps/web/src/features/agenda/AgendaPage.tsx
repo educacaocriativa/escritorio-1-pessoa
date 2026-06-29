@@ -1,5 +1,5 @@
 import type { AgendaEvent, CreateEventResult } from "@e1p/shared-types";
-import { AlertTriangle, Clock } from "lucide-react";
+import { AlertTriangle, Clock, MapPin, Users, Video } from "lucide-react";
 import { useCallback, useEffect, useState } from "react";
 import Modal, { Field } from "../../components/Modal";
 import { api, apiErrorMessage } from "../../lib/api";
@@ -44,7 +44,7 @@ export default function AgendaPage() {
 
       <div className="rounded-2xl bg-white p-5 shadow-sm">
         {loading ? (
-          <Empty text="Carregando..." />
+          <p className="py-8 text-center text-sm text-neutral-400">Carregando...</p>
         ) : events.length === 0 ? (
           <div className="flex flex-col items-center gap-2 py-12 text-neutral-400">
             <Clock size={28} />
@@ -72,18 +72,43 @@ const priorityDot: Record<AgendaEvent["priority"], string> = {
 
 function EventRow({ event }: { event: AgendaEvent }) {
   const start = new Date(event.starts_at);
-  const when = start.toLocaleString("pt-BR", {
-    day: "2-digit",
-    month: "2-digit",
-    hour: "2-digit",
-    minute: "2-digit",
-  });
+  const end = new Date(event.ends_at);
+  const when = event.all_day
+    ? start.toLocaleDateString("pt-BR")
+    : `${start.toLocaleDateString("pt-BR", { day: "2-digit", month: "2-digit" })} · ${start.toLocaleTimeString("pt-BR", { hour: "2-digit", minute: "2-digit" })}–${end.toLocaleTimeString("pt-BR", { hour: "2-digit", minute: "2-digit" })}`;
   return (
     <li className="flex items-center gap-3 py-3">
-      <span className={`h-2 w-2 rounded-full ${priorityDot[event.priority]}`} />
-      <span className="w-32 text-sm tabular-nums text-neutral-500">{when}</span>
-      <span className="flex-1 font-medium text-neutral-800">{event.title}</span>
-      <span className="rounded-pill bg-neutral-100 px-2 py-0.5 text-xs text-neutral-500">
+      <span className={`h-2 w-2 shrink-0 rounded-full ${priorityDot[event.priority]}`} />
+      <span className="w-36 shrink-0 text-sm tabular-nums text-neutral-500">{when}</span>
+      <div className="min-w-0 flex-1">
+        <span className="font-medium text-neutral-800">{event.title}</span>
+        <div className="flex flex-wrap gap-3 text-xs text-neutral-400">
+          {event.location && (
+            <span className="flex items-center gap-1">
+              <MapPin size={12} />
+              {event.location}
+            </span>
+          )}
+          {event.guests.length > 0 && (
+            <span className="flex items-center gap-1">
+              <Users size={12} />
+              {event.guests.length}
+            </span>
+          )}
+          {event.meeting_url && (
+            <a
+              href={event.meeting_url}
+              target="_blank"
+              rel="noreferrer"
+              className="flex items-center gap-1 text-accent-600 hover:underline"
+            >
+              <Video size={12} />
+              Entrar
+            </a>
+          )}
+        </div>
+      </div>
+      <span className="shrink-0 rounded-pill bg-neutral-100 px-2 py-0.5 text-xs text-neutral-500">
         {event.kind}
       </span>
       {event.priority === "critical" && <AlertTriangle size={16} className="text-danger" />}
@@ -102,8 +127,15 @@ function NewEventModal({
 }) {
   const [title, setTitle] = useState("");
   const [kind, setKind] = useState("atendimento");
+  const [allDay, setAllDay] = useState(false);
   const [start, setStart] = useState("");
   const [end, setEnd] = useState("");
+  const [startDate, setStartDate] = useState("");
+  const [endDate, setEndDate] = useState("");
+  const [location, setLocation] = useState("");
+  const [guests, setGuests] = useState("");
+  const [meetingUrl, setMeetingUrl] = useState("");
+  const [description, setDescription] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [conflict, setConflict] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
@@ -113,20 +145,27 @@ function NewEventModal({
     setConflict(null);
     setSaving(true);
     try {
+      const starts_at = allDay ? `${startDate}T00:00:00` : start;
+      const ends_at = allDay ? `${endDate || startDate}T23:59:00` : end;
       const { data } = await api.post<CreateEventResult>("/agenda/events", {
         title,
         kind,
-        starts_at: start,
-        ends_at: end,
+        all_day: allDay,
+        starts_at,
+        ends_at,
+        location,
+        meeting_url: meetingUrl || null,
+        guests: guests ? guests.split(",").map((g) => g.trim()) : [],
+        description,
       });
       if (data.conflicts.length > 0) {
-        setConflict(`⚠ Conflito com: ${data.conflicts.map((c) => c.title).join(", ")}`);
+        setConflict(`⚠ Conflito de horário com: ${data.conflicts.map((c) => c.title).join(", ")}`);
       }
       onCreated();
-      setTitle("");
-      setStart("");
-      setEnd("");
-      if (data.conflicts.length === 0) onClose();
+      if (data.conflicts.length === 0) {
+        reset();
+        onClose();
+      }
     } catch (err) {
       setError(apiErrorMessage(err));
     } finally {
@@ -134,33 +173,104 @@ function NewEventModal({
     }
   }
 
+  function reset() {
+    setTitle("");
+    setStart("");
+    setEnd("");
+    setStartDate("");
+    setEndDate("");
+    setLocation("");
+    setGuests("");
+    setMeetingUrl("");
+    setDescription("");
+  }
+
+  const valid = title && (allDay ? startDate : start && end);
+
   return (
     <Modal title="Novo evento" open={open} onClose={onClose}>
       <div className="space-y-3">
         <Field label="Título" value={title} onChange={setTitle} placeholder="Atendimento cliente" />
+
+        <div className="flex items-end gap-3">
+          <label className="flex-1">
+            <span className="mb-1 block text-xs font-medium text-neutral-600">Tipo</span>
+            <select
+              value={kind}
+              onChange={(e) => setKind(e.target.value)}
+              className="w-full rounded-lg border border-neutral-200 px-3 py-2 text-sm outline-none focus:border-primary-400"
+            >
+              {KINDS.map(([v, l]) => (
+                <option key={v} value={v}>
+                  {l}
+                </option>
+              ))}
+            </select>
+          </label>
+          <label className="flex items-center gap-2 pb-2 text-sm text-neutral-600">
+            <input type="checkbox" checked={allDay} onChange={(e) => setAllDay(e.target.checked)} />
+            Dia inteiro
+          </label>
+        </div>
+
+        {allDay ? (
+          <div className="flex gap-2">
+            <Field label="Data início" type="date" value={startDate} onChange={setStartDate} />
+            <Field label="Data fim" type="date" value={endDate} onChange={setEndDate} />
+          </div>
+        ) : (
+          <div className="flex gap-2">
+            <Field label="Início" type="datetime-local" value={start} onChange={setStart} />
+            <Field label="Fim" type="datetime-local" value={end} onChange={setEnd} />
+          </div>
+        )}
+
+        <Field label="Local" value={location} onChange={setLocation} placeholder="Escritório ou endereço" />
+
+        <div>
+          <span className="mb-1 block text-xs font-medium text-neutral-600">
+            Reunião (Google Meet / Zoom)
+          </span>
+          <div className="flex gap-2">
+            <input
+              value={meetingUrl}
+              onChange={(e) => setMeetingUrl(e.target.value)}
+              placeholder="Cole o link da reunião"
+              className="w-full rounded-lg border border-neutral-200 px-3 py-2 text-sm outline-none focus:border-primary-400"
+            />
+            <a
+              href="https://meet.google.com/new"
+              target="_blank"
+              rel="noreferrer"
+              className="flex shrink-0 items-center gap-1 rounded-lg bg-primary-50 px-3 text-sm font-medium text-primary-700 hover:bg-primary-100"
+            >
+              <Video size={15} />
+              Meet
+            </a>
+          </div>
+          <p className="mt-1 text-[11px] text-neutral-400">
+            Abra o Meet, copie o link e cole aqui. A geração automática via Google vem em breve.
+          </p>
+        </div>
+
+        <Field label="Convidados (e-mails, separados por vírgula)" value={guests} onChange={setGuests} />
+
         <label className="block">
-          <span className="mb-1 block text-xs font-medium text-neutral-600">Tipo</span>
-          <select
-            value={kind}
-            onChange={(e) => setKind(e.target.value)}
+          <span className="mb-1 block text-xs font-medium text-neutral-600">Descrição</span>
+          <textarea
+            value={description}
+            onChange={(e) => setDescription(e.target.value)}
+            rows={2}
             className="w-full rounded-lg border border-neutral-200 px-3 py-2 text-sm outline-none focus:border-primary-400"
-          >
-            {KINDS.map(([v, l]) => (
-              <option key={v} value={v}>
-                {l}
-              </option>
-            ))}
-          </select>
+          />
         </label>
-        <Field label="Início" type="datetime-local" value={start} onChange={setStart} />
-        <Field label="Fim" type="datetime-local" value={end} onChange={setEnd} />
 
         {conflict && <p className="rounded-lg bg-amber-50 p-2 text-sm text-amber-700">{conflict}</p>}
         {error && <p className="rounded-lg bg-red-50 p-2 text-sm text-danger">{error}</p>}
 
         <button
           onClick={save}
-          disabled={saving || !title || !start || !end}
+          disabled={saving || !valid}
           className="w-full rounded-pill bg-accent-400 py-2.5 font-semibold text-white transition hover:bg-accent-500 disabled:opacity-60"
         >
           {saving ? "Salvando..." : "Criar evento"}
@@ -168,8 +278,4 @@ function NewEventModal({
       </div>
     </Modal>
   );
-}
-
-function Empty({ text }: { text: string }) {
-  return <p className="py-8 text-center text-sm text-neutral-400">{text}</p>;
 }

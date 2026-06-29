@@ -72,6 +72,9 @@ def create_event(
         starts_at=data.starts_at,
         ends_at=data.ends_at,
         all_day=data.all_day,
+        location=data.location,
+        meeting_url=data.meeting_url,
+        guests=data.guests,
         amount_cents=data.amount_cents,
         external_ref=data.external_ref,
         created_by_ai=by_ai,
@@ -149,6 +152,10 @@ def update_event(
         event.status = data.status
     if data.priority is not None:
         event.priority = data.priority
+    if data.location is not None:
+        event.location = data.location
+    if data.meeting_url is not None:
+        event.meeting_url = data.meeting_url
     audit.record(
         db, tenant_id=tenant_id, actor=actor, action="agenda.event.update", target=event.id
     )

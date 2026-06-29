@@ -30,10 +30,25 @@ class EventCreate(BaseModel):
     all_day: bool = False
     priority: str = PRIORITY_NORMAL
     source: str = "manual"
+    location: str = Field(default="", max_length=255)
+    meeting_url: str | None = Field(default=None, max_length=512)
+    guests: list[str] = Field(default_factory=list)
     amount_cents: int | None = Field(default=None, ge=0)
     external_ref: str | None = None
 
     _aware = field_validator("starts_at", "ends_at")(_ensure_aware)
+
+    @field_validator("guests")
+    @classmethod
+    def _guests(cls, v: list[str]) -> list[str]:
+        out: list[str] = []
+        for g in v:
+            g = g.strip()
+            if g and g not in out:
+                out.append(g)
+        if len(out) > 100:
+            raise ValueError("máximo de 100 convidados")
+        return out
 
     @model_validator(mode="after")
     def _validate(self) -> EventCreate:
@@ -51,6 +66,8 @@ class EventUpdate(BaseModel):
     description: str | None = None
     status: str | None = None
     priority: str | None = None
+    location: str | None = Field(default=None, max_length=255)
+    meeting_url: str | None = Field(default=None, max_length=512)
 
     @model_validator(mode="after")
     def _validate(self) -> EventUpdate:
@@ -86,6 +103,9 @@ class EventOut(BaseModel):
     starts_at: datetime
     ends_at: datetime
     all_day: bool
+    location: str
+    meeting_url: str | None
+    guests: list[str]
     amount_cents: int | None
     external_ref: str | None
     created_by_ai: bool

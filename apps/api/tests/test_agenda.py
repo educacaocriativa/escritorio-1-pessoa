@@ -37,6 +37,35 @@ def test_create_event(client: TestClient, headers):
     assert body["conflicts"] == []
 
 
+def test_create_event_with_details(client: TestClient, headers):
+    resp = client.post(
+        "/agenda/events",
+        json=_event(
+            location="Escritório centro",
+            meeting_url="https://meet.google.com/abc-defg-hij",
+            guests=["cliente@example.com", "cliente@example.com", " "],
+        ),
+        headers=headers,
+    )
+    assert resp.status_code == 201
+    ev = resp.json()["event"]
+    assert ev["location"] == "Escritório centro"
+    assert ev["meeting_url"].startswith("https://meet.google.com/")
+    assert ev["guests"] == ["cliente@example.com"]  # dedup + sem vazias
+
+
+def test_update_event_location_and_meet(client: TestClient, headers):
+    created = client.post("/agenda/events", json=_event(), headers=headers).json()["event"]
+    resp = client.patch(
+        f"/agenda/events/{created['id']}",
+        json={"location": "Online", "meeting_url": "https://meet.google.com/xyz"},
+        headers=headers,
+    )
+    assert resp.status_code == 200
+    assert resp.json()["location"] == "Online"
+    assert resp.json()["meeting_url"] == "https://meet.google.com/xyz"
+
+
 def test_create_requires_auth(client: TestClient):
     resp = client.post("/agenda/events", json=_event())
     assert resp.status_code == 401

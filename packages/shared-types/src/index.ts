@@ -93,6 +93,11 @@ export interface AgendaEvent {
   starts_at: string;
   ends_at: string;
   all_day: boolean;
+  location: string;
+  /** Link de videoconferência (Google Meet, Zoom...). */
+  meeting_url: string | null;
+  /** E-mails dos convidados. */
+  guests: string[];
   /** Valor em centavos (inteiro) para eventos de cobrança. */
   amount_cents: number | null;
   external_ref: string | null;

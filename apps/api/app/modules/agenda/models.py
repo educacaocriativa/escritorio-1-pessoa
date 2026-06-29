@@ -10,7 +10,7 @@ from __future__ import annotations
 
 from datetime import datetime
 
-from sqlalchemy import Boolean, DateTime, Integer, String, Text
+from sqlalchemy import JSON, Boolean, DateTime, Integer, String, Text
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.db.base import Base, TenantMixin, TimestampMixin, _uuid
@@ -60,6 +60,11 @@ class AgendaEvent(Base, TenantMixin, TimestampMixin):
     starts_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     ends_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     all_day: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+
+    # Detalhes estilo Google Agenda
+    location: Mapped[str] = mapped_column(String(255), default="", nullable=False)
+    meeting_url: Mapped[str | None] = mapped_column(String(512), nullable=True)  # link Meet/Zoom
+    guests: Mapped[list[str]] = mapped_column(JSON, default=list, nullable=False)  # e-mails
 
     # Dinheiro SEMPRE em centavos inteiros (evita erro de float). Opcional (cobranças).
     amount_cents: Mapped[int | None] = mapped_column(Integer, nullable=True)

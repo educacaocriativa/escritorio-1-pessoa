@@ -62,6 +62,8 @@ Ao criar/alterar qualquer funcionalidade:
 - [x] **Frontend ligado à API** (login só-acesso, telas Agenda/CRM/Cockpit funcionais, botões criam de verdade). Cor `#5D44F8` + sidebar no formato "Portal" + logout.
 - [x] **Super Admin (Master)** — dashboard de plataforma: criar/listar/suspender/excluir contas; `is_platform_admin` (migration 0004); seed via env; delete atômico com purga dinâmica de tabelas de negócio. 77 testes.
 - [x] **Recuperação de senha** — `/auth/forgot-password` + `/auth/reset-password` (token sha256 + expiração 1h, single-use); botão na tela de login; migration 0005. 81 testes. **Pendente: provedor de e-mail** — em dev o token volta na resposta (`dev_reset_token`); em produção precisa SMTP/WhatsApp p/ entregar o link.
+- [x] **Agenda detalhada (estilo Google Agenda)** — evento com local, convidados, link de reunião (Meet/Zoom), dia-inteiro, descrição (migration 0006). **Kanban com drag-and-drop** (HTML5 nativo, move otimista). 83 testes.
+- [ ] **Integração Google (Meet/Calendar)** — PENDENTE: gerar Meet automaticamente exige OAuth Google (Google Cloud project + Calendar API). Hoje: campo manual + botão que abre meet.google.com/new. É o módulo 6 (API Hub) da spec — fazer quando o usuário fornecer credenciais Google.
 - [ ] Próximo: **Fase 2 — dinheiro entra/sai** (Carteira & Split → Contas a Receber → Contas a Pagar → Produtos & Checkout). O placeholder `finance` do Cockpit e o evento `crm.client.moved` já estão prontos para ligar.
 - [ ] Migrar módulo **Assistente Jurídico** do app existente (`~/lex-intelligentia-app`) — Fase 5.
 

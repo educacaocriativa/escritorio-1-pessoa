@@ -1,4 +1,5 @@
 import type { Board, BoardColumn, Client } from "@e1p/shared-types";
+import { GripVertical } from "lucide-react";
 import { useCallback, useEffect, useState } from "react";
 import Modal, { Field } from "../../components/Modal";
 import { api, apiErrorMessage } from "../../lib/api";
@@ -8,6 +9,7 @@ export default function CrmPage() {
   const [board, setBoard] = useState<Board>({ columns: [] });
   const [open, setOpen] = useState(false);
   const [loading, setLoading] = useState(true);
+  const [dragOver, setDragOver] = useState<string | null>(null);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -25,11 +27,15 @@ export default function CrmPage() {
 
   usePrimaryAction("Novo cliente", useCallback(() => setOpen(true), []));
 
-  const stages = board.columns.map((c) => c.stage);
-
-  async function move(clientId: string, stageId: string) {
-    await api.post(`/crm/clients/${clientId}/move`, { stage_id: stageId });
-    load();
+  async function moveTo(clientId: string, fromStage: string | null, stageId: string) {
+    if (fromStage === stageId) return;
+    // otimista: move o card na UI antes da resposta
+    setBoard((b) => optimisticMove(b, clientId, stageId));
+    try {
+      await api.post(`/crm/clients/${clientId}/move`, { stage_id: stageId });
+    } finally {
+      load();
+    }
   }
 
   return (
@@ -37,6 +43,7 @@ export default function CrmPage() {
       <div>
         <p className="text-sm text-neutral-500">Página / CRM</p>
         <h1 className="text-2xl font-bold text-neutral-800">Funil de clientes</h1>
+        <p className="text-xs text-neutral-400">Arraste os cards entre as colunas.</p>
       </div>
 
       {loading ? (
@@ -44,7 +51,17 @@ export default function CrmPage() {
       ) : (
         <div className="flex gap-4 overflow-x-auto pb-4">
           {board.columns.map((col) => (
-            <Column key={col.stage.id} column={col} stages={stages} onMove={move} />
+            <Column
+              key={col.stage.id}
+              column={col}
+              isOver={dragOver === col.stage.id}
+              onDragOverCol={() => setDragOver(col.stage.id)}
+              onDragLeaveCol={() => setDragOver((s) => (s === col.stage.id ? null : s))}
+              onDropCard={(clientId, fromStage) => {
+                setDragOver(null);
+                moveTo(clientId, fromStage, col.stage.id);
+              }}
+            />
           ))}
         </div>
       )}
@@ -54,14 +71,33 @@ export default function CrmPage() {
   );
 }
 
+function optimisticMove(board: Board, clientId: string, stageId: string): Board {
+  let moved: Client | undefined;
+  const stripped = board.columns.map((c) => {
+    const found = c.clients.find((cl) => cl.id === clientId);
+    if (found) moved = { ...found, stage_id: stageId };
+    return { ...c, clients: c.clients.filter((cl) => cl.id !== clientId) };
+  });
+  if (!moved) return board;
+  return {
+    columns: stripped.map((c) =>
+      c.stage.id === stageId ? { ...c, clients: [...c.clients, moved!] } : c,
+    ),
+  };
+}
+
 function Column({
   column,
-  stages,
-  onMove,
+  isOver,
+  onDragOverCol,
+  onDragLeaveCol,
+  onDropCard,
 }: {
   column: BoardColumn;
-  stages: Board["columns"][number]["stage"][];
-  onMove: (clientId: string, stageId: string) => void;
+  isOver: boolean;
+  onDragOverCol: () => void;
+  onDragLeaveCol: () => void;
+  onDropCard: (clientId: string, fromStage: string | null) => void;
 }) {
   const accent = column.stage.is_won
     ? "text-accent-600"
@@ -69,60 +105,65 @@ function Column({
       ? "text-danger"
       : "text-neutral-600";
   return (
-    <div className="flex w-72 shrink-0 flex-col rounded-2xl bg-neutral-100 p-3">
+    <div
+      onDragOver={(e) => {
+        e.preventDefault();
+        onDragOverCol();
+      }}
+      onDragLeave={onDragLeaveCol}
+      onDrop={(e) => {
+        e.preventDefault();
+        const clientId = e.dataTransfer.getData("text/client-id");
+        const fromStage = e.dataTransfer.getData("text/from-stage") || null;
+        if (clientId) onDropCard(clientId, fromStage);
+      }}
+      className={`flex w-72 shrink-0 flex-col rounded-2xl p-3 transition ${
+        isOver ? "bg-primary-100 ring-2 ring-primary-300" : "bg-neutral-100"
+      }`}
+    >
       <div className="mb-3 flex items-center justify-between px-1">
         <span className={`text-sm font-semibold ${accent}`}>{column.stage.name}</span>
         <span className="rounded-pill bg-white px-2 text-xs text-neutral-500">
           {column.clients.length}
         </span>
       </div>
-      <div className="flex flex-col gap-2">
+      <div className="flex min-h-[60px] flex-col gap-2">
         {column.clients.length === 0 ? (
           <div className="rounded-xl border border-dashed border-neutral-200 py-6 text-center text-xs text-neutral-400">
-            Sem clientes
+            Solte um card aqui
           </div>
         ) : (
-          column.clients.map((c) => (
-            <Card key={c.id} client={c} stages={stages} onMove={onMove} />
-          ))
+          column.clients.map((c) => <Card key={c.id} client={c} stageId={column.stage.id} />)
         )}
       </div>
     </div>
   );
 }
 
-function Card({
-  client,
-  stages,
-  onMove,
-}: {
-  client: Client;
-  stages: Board["columns"][number]["stage"][];
-  onMove: (clientId: string, stageId: string) => void;
-}) {
+function Card({ client, stageId }: { client: Client; stageId: string }) {
   return (
-    <div className="rounded-xl bg-white p-3 shadow-sm">
-      <p className="font-medium text-neutral-800">{client.name}</p>
-      {client.tags.length > 0 && (
-        <div className="mt-1 flex flex-wrap gap-1">
-          {client.tags.map((t) => (
-            <span key={t} className="rounded-pill bg-primary-50 px-2 text-[10px] text-primary-700">
-              {t}
-            </span>
-          ))}
-        </div>
-      )}
-      <select
-        value={client.stage_id ?? ""}
-        onChange={(e) => onMove(client.id, e.target.value)}
-        className="mt-2 w-full rounded-lg border border-neutral-200 px-2 py-1 text-xs text-neutral-500 outline-none"
-      >
-        {stages.map((s) => (
-          <option key={s.id} value={s.id}>
-            Mover para: {s.name}
-          </option>
-        ))}
-      </select>
+    <div
+      draggable
+      onDragStart={(e) => {
+        e.dataTransfer.setData("text/client-id", client.id);
+        e.dataTransfer.setData("text/from-stage", stageId);
+        e.dataTransfer.effectAllowed = "move";
+      }}
+      className="flex cursor-grab items-start gap-2 rounded-xl bg-white p-3 shadow-sm active:cursor-grabbing"
+    >
+      <GripVertical size={16} className="mt-0.5 shrink-0 text-neutral-300" />
+      <div className="min-w-0 flex-1">
+        <p className="font-medium text-neutral-800">{client.name}</p>
+        {client.tags.length > 0 && (
+          <div className="mt-1 flex flex-wrap gap-1">
+            {client.tags.map((t) => (
+              <span key={t} className="rounded-pill bg-primary-50 px-2 text-[10px] text-primary-700">
+                {t}
+              </span>
+            ))}
+          </div>
+        )}
+      </div>
     </div>
   );
 }
