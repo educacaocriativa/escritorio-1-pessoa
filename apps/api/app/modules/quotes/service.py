@@ -235,6 +235,14 @@ def approve_quote(db: Session, *, quote_id: str, tenant_id: str, actor: str) -> 
     )
     q.status = STATUS_APPROVED
     q.charge_id = charge.id
+    # Efeito dominó completo: se o orçamento tem a aba "Contrato" ativada, gera o contrato
+    # no MESMO commit (sem commitar lá dentro), atômico com a cobrança.
+    if q.show_contract:
+        from app.modules.contracts import service as contracts_service
+
+        contracts_service.build_contract_from_quote(
+            db, tenant_id=tenant_id, actor=actor, quote=q
+        )
     _publish(db, q)
     audit.record(db, tenant_id=tenant_id, actor=actor, action="quote.approve", target=q.id)
     db.commit()

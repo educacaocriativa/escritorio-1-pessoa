@@ -171,6 +171,30 @@ def test_public_accept_approves_and_charges(client: TestClient, headers):
     assert any(c["amount_cents"] == 200000 for c in charges)
 
 
+def test_approve_with_contract_generates_contract(client: TestClient, headers):
+    cl = client.post("/crm/clients", json={"name": "Cliente Doc"}, headers=headers).json()
+    payload = _quote(
+        client_id=cl["id"],
+        show_contract=True,
+        contract_text="As partes acordam os termos a seguir.",
+    )
+    q = client.post("/quotes", json=payload, headers=headers).json()
+    client.post(f"/quotes/{q['id']}/approve", headers=headers)
+    # dominó completo: além da cobrança, nasce um contrato ligado ao orçamento
+    contracts = client.get("/contracts", headers=headers).json()
+    gen = [c for c in contracts if c["quote_id"] == q["id"]]
+    assert len(gen) == 1
+    assert gen[0]["title"] == "Contrato — Consultoria"
+    assert gen[0]["status"] == "draft"
+
+
+def test_approve_without_contract_flag_makes_no_contract(client: TestClient, headers):
+    q = client.post("/quotes", json=_quote(), headers=headers).json()
+    client.post(f"/quotes/{q['id']}/approve", headers=headers)
+    contracts = client.get("/contracts", headers=headers).json()
+    assert all(c["quote_id"] != q["id"] for c in contracts)
+
+
 def test_public_accept_wrong_password(client: TestClient, headers):
     q = client.post("/quotes", json=_quote(link_password="abc"), headers=headers).json()
     resp = client.post(f"/public/proposals/{q['public_slug']}/accept", json={"password": "errada"})

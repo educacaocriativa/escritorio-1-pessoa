@@ -166,6 +166,45 @@ def create_contract(db: Session, *, tenant_id: str, actor: str, data: ContractCr
     return contract
 
 
+def build_contract_from_quote(db: Session, *, tenant_id: str, actor: str, quote) -> Contract:
+    """Cria o contrato a partir de um orçamento aprovado, SEM commitar (efeito dominó atômico).
+
+    Chamado por quotes.approve_quote quando o orçamento tem a aba "Contrato" ativada, para
+    que cobrança + contrato nasçam no mesmo commit. Cláusulas já vêm concretas (sem [VARS]).
+    """
+    company = _company_name(db, tenant_id)
+    total = f"R$ {quote.total_cents / 100:.2f}".replace(".", ",")
+    servicos = "; ".join(
+        f"{i.get('quantity', 1)}x {i.get('description', '')}" for i in (quote.items or [])
+    )
+    clauses: list[dict] = [
+        {"title": "Objeto", "text": f"Prestação dos serviços da proposta '{quote.title}'."},
+    ]
+    if servicos:
+        clauses.append({"title": "Serviços", "text": servicos})
+    clauses.append({"title": "Valor", "text": f"Valor total de {total}."})
+    if getattr(quote, "payment_terms", ""):
+        clauses.append({"title": "Pagamento", "text": quote.payment_terms})
+    if getattr(quote, "contract_text", ""):
+        clauses.append({"title": "Cláusulas", "text": quote.contract_text})
+
+    contract = Contract(
+        tenant_id=tenant_id,
+        client_id=quote.client_id,
+        quote_id=quote.id,
+        title=f"Contrato — {quote.title}",
+        clauses=clauses,
+        public_slug=_gen_slug(quote.title),
+    )
+    db.add(contract)
+    db.flush()
+    _publish(db, contract, company)
+    audit.record(
+        db, tenant_id=tenant_id, actor=actor, action="contract.from_quote", target=contract.id
+    )
+    return contract
+
+
 def get_contract(db: Session, contract_id: str) -> Contract:
     c = db.get(Contract, contract_id)
     if c is None:
