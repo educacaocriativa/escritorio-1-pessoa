@@ -15,6 +15,7 @@ from app.modules.wallet import service
 from app.modules.wallet.schemas import (
     PayoutResult,
     PlatformEarningsSummary,
+    SplitRates,
     TransactionCreate,
     TransactionOut,
     WalletSummary,
@@ -86,3 +87,29 @@ def platform_earnings(
     db: Session = Depends(get_db),
 ) -> PlatformEarningsSummary:
     return PlatformEarningsSummary(**service.platform_earnings(db))
+
+
+@router.get("/split-rates", response_model=SplitRates, tags=["platform-admin"])
+def get_split_rates(
+    _admin: CurrentUser = Depends(require_platform_admin),
+    db: Session = Depends(get_db),
+) -> SplitRates:
+    return SplitRates(**service.current_rates(db))
+
+
+@router.put("/split-rates", response_model=SplitRates, tags=["platform-admin"])
+def update_split_rates(
+    data: SplitRates,
+    _admin: CurrentUser = Depends(require_platform_admin),
+    db: Session = Depends(get_db),
+) -> SplitRates:
+    try:
+        rates = service.update_split_rates(
+            db,
+            product_pct=data.product_pct,
+            service_pct=data.service_pct,
+            recurring_pct=data.recurring_pct,
+        )
+    except service.WalletError as e:
+        raise HTTPException(status_code=e.status_code, detail=str(e)) from e
+    return SplitRates(**rates)

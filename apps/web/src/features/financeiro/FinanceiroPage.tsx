@@ -8,9 +8,9 @@ export const brl = (cents: number) =>
   (cents / 100).toLocaleString("pt-BR", { style: "currency", currency: "BRL" });
 
 const KINDS = [
-  ["service", "Serviço (taxa 30%)"],
-  ["product", "Produto (taxa 40%)"],
-  ["recurring", "Recorrente (taxa 20%)"],
+  ["service", "Serviço"],
+  ["product", "Produto"],
+  ["recurring", "Recorrente"],
 ] as const;
 const METHODS = [
   ["pix", "Pix"],

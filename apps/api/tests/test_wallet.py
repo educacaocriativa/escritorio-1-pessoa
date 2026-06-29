@@ -26,21 +26,17 @@ def headers(client: TestClient) -> dict[str, str]:
 # ── split (unitário) ───────────────────────────────────
 
 
-def test_split_product_40():
-    assert compute_split("product", 10000) == (4000, 6000)  # 40% / 60%
+def test_split_40():
+    assert compute_split(10000, 40) == (4000, 6000)  # 40% / 60%
 
 
-def test_split_service_30():
-    assert compute_split("service", 10000) == (3000, 7000)  # 30% / 70%
-
-
-def test_split_recurring_20():
-    assert compute_split("recurring", 10000) == (2000, 8000)  # 20% / 80%
+def test_split_30():
+    assert compute_split(10000, 30) == (3000, 7000)  # 30% / 70%
 
 
 def test_split_rounds_half_up():
     # 40% de 999 = 399,6 -> 400 (meio-para-cima); líquido 599
-    assert compute_split("product", 999) == (400, 599)
+    assert compute_split(999, 40) == (400, 599)
 
 
 # ── transações ─────────────────────────────────────────
@@ -143,6 +139,65 @@ def test_requires_auth(client: TestClient):
 
 
 # ── Master: ganhos da plataforma ───────────────────────
+
+
+def _make_admin(client: TestClient, db: Session) -> dict[str, str]:
+    t = Tenant(slug="platform", legal_name="Plat", document="00000000000")
+    db.add(t)
+    db.flush()
+    db.add(
+        User(
+            tenant_id=t.id,
+            email="master@e1p.com",
+            name="Master",
+            password_hash=hash_password("senha-master-123"),
+            role="owner",
+            allowed_modules=[],
+            is_platform_admin=True,
+        )
+    )
+    db.commit()
+    at = client.post(
+        "/auth/login", json={"email": "master@e1p.com", "password": "senha-master-123"}
+    ).json()["access_token"]
+    return {"Authorization": f"Bearer {at}"}
+
+
+def test_split_rates_master_defines_and_applies(client: TestClient, headers, db: Session):
+    # usuário comum não acessa
+    assert client.get("/wallet/split-rates", headers=headers).status_code == 403
+
+    admin = _make_admin(client, db)
+    # padrão 40/30/20
+    assert client.get("/wallet/split-rates", headers=admin).json() == {
+        "product_pct": 40,
+        "service_pct": 30,
+        "recurring_pct": 20,
+    }
+    # Master redefine
+    client.put(
+        "/wallet/split-rates",
+        json={"product_pct": 50, "service_pct": 25, "recurring_pct": 10},
+        headers=admin,
+    )
+    # nova venda de produto usa a nova taxa (50%)
+    tx = client.post(
+        "/wallet/transactions",
+        json={"kind": "product", "method": "pix", "gross_cents": 10000},
+        headers=headers,
+    ).json()
+    assert tx["platform_fee_cents"] == 5000
+    assert tx["net_cents"] == 5000
+
+
+def test_split_rate_above_limit_rejected(client: TestClient, db: Session):
+    admin = _make_admin(client, db)
+    resp = client.put(
+        "/wallet/split-rates",
+        json={"product_pct": 99, "service_pct": 30, "recurring_pct": 20},
+        headers=admin,
+    )
+    assert resp.status_code == 422  # schema limita a 95%
 
 
 def test_platform_earnings_master_only(client: TestClient, headers, db: Session):

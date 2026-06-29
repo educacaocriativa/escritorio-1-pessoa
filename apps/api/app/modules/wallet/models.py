@@ -7,7 +7,7 @@ DINHEIRO SEMPRE EM CENTAVOS INTEIROS (nunca float).
 """
 from __future__ import annotations
 
-from sqlalchemy import BigInteger, String, Text
+from sqlalchemy import BigInteger, Integer, String, Text
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.db.base import Base, TenantMixin, TimestampMixin, _uuid
@@ -18,11 +18,11 @@ KIND_SERVICE = "service"  # 30% plataforma / 70% usuário
 KIND_RECURRING = "recurring"  # 20% plataforma / 80% usuário
 ALL_KINDS = {KIND_PRODUCT, KIND_SERVICE, KIND_RECURRING}
 
-# Numerador/denominador da taxa da PLATAFORMA por tipo (split definido na spec).
-SPLIT_RATES: dict[str, tuple[int, int]] = {
-    KIND_PRODUCT: (40, 100),
-    KIND_SERVICE: (30, 100),
-    KIND_RECURRING: (20, 100),
+# Taxa PADRÃO da plataforma (%) por tipo. O Master pode sobrescrever em PlatformSetting.
+DEFAULT_SPLIT_PCT: dict[str, int] = {
+    KIND_PRODUCT: 40,
+    KIND_SERVICE: 30,
+    KIND_RECURRING: 20,
 }
 
 METHOD_PIX = "pix"
@@ -52,6 +52,23 @@ class Transaction(Base, TenantMixin, TimestampMixin):
     status: Mapped[str] = mapped_column(String(12), default=STATUS_AVAILABLE, nullable=False)
     client_id: Mapped[str | None] = mapped_column(String(36), nullable=True)
     external_ref: Mapped[str | None] = mapped_column(String(64), nullable=True)
+
+
+SETTINGS_ID = "platform"  # singleton
+
+
+class PlatformSetting(Base, TimestampMixin):
+    """Configuração GLOBAL da plataforma (linha única). Editável só pelo Master.
+
+    Guarda as taxas de split (% retido pela plataforma) por tipo de venda.
+    """
+
+    __tablename__ = "platform_settings"
+
+    id: Mapped[str] = mapped_column(String(16), primary_key=True, default=SETTINGS_ID)
+    split_product_pct: Mapped[int] = mapped_column(Integer, default=40, nullable=False)
+    split_service_pct: Mapped[int] = mapped_column(Integer, default=30, nullable=False)
+    split_recurring_pct: Mapped[int] = mapped_column(Integer, default=20, nullable=False)
 
 
 class PlatformEarning(Base, TimestampMixin):

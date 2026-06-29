@@ -61,6 +61,12 @@ class PayoutResult(BaseModel):
     transactions: int
 
 
+class SplitRates(BaseModel):
+    product_pct: int = Field(ge=0, le=95)
+    service_pct: int = Field(ge=0, le=95)
+    recurring_pct: int = Field(ge=0, le=95)
+
+
 class PlatformEarningsSummary(BaseModel):
     """Visão do Master: ganhos da plataforma (GMV e taxas)."""
 

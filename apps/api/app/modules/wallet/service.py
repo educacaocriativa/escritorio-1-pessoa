@@ -6,16 +6,24 @@ from sqlalchemy.orm import Session
 
 from app.core import audit
 from app.modules.wallet.models import (
+    DEFAULT_SPLIT_PCT,
+    KIND_PRODUCT,
+    KIND_RECURRING,
+    KIND_SERVICE,
     METHOD_CARD,
-    SPLIT_RATES,
+    SETTINGS_ID,
     STATUS_AVAILABLE,
     STATUS_PENDING,
     STATUS_REFUNDED,
     STATUS_WITHDRAWN,
     PlatformEarning,
+    PlatformSetting,
     Transaction,
 )
 from app.modules.wallet.schemas import TransactionCreate
+
+# Limite de segurança: a plataforma nunca retém 100% (deixaria o usuário sem nada).
+MAX_SPLIT_PCT = 95
 
 
 class WalletError(Exception):
@@ -24,21 +32,69 @@ class WalletError(Exception):
         self.status_code = status_code
 
 
-def compute_split(kind: str, gross_cents: int) -> tuple[int, int]:
+def compute_split(gross_cents: int, platform_pct: int) -> tuple[int, int]:
     """Retorna (taxa_plataforma, liquido_usuario) em centavos. Arredonda meio-para-cima.
 
-    Tudo em inteiro — nunca float. A taxa é a parte da plataforma (40/30/20).
+    Tudo em inteiro — nunca float. `platform_pct` é a % retida pela plataforma.
     """
-    numer, denom = SPLIT_RATES[kind]
-    fee = (gross_cents * numer + denom // 2) // denom
+    fee = (gross_cents * platform_pct + 50) // 100
     net = gross_cents - fee
     return fee, net
+
+
+def get_settings(db: Session) -> PlatformSetting | None:
+    return db.get(PlatformSetting, SETTINGS_ID)
+
+
+def split_pct_for(db: Session, kind: str) -> int:
+    """% retida pela plataforma para o tipo, lida da configuração do Master (ou padrão)."""
+    s = get_settings(db)
+    if s is None:
+        return DEFAULT_SPLIT_PCT[kind]
+    return {
+        KIND_PRODUCT: s.split_product_pct,
+        KIND_SERVICE: s.split_service_pct,
+        KIND_RECURRING: s.split_recurring_pct,
+    }[kind]
+
+
+def current_rates(db: Session) -> dict:
+    s = get_settings(db)
+    if s is None:
+        return {
+            "product_pct": DEFAULT_SPLIT_PCT[KIND_PRODUCT],
+            "service_pct": DEFAULT_SPLIT_PCT[KIND_SERVICE],
+            "recurring_pct": DEFAULT_SPLIT_PCT[KIND_RECURRING],
+        }
+    return {
+        "product_pct": s.split_product_pct,
+        "service_pct": s.split_service_pct,
+        "recurring_pct": s.split_recurring_pct,
+    }
+
+
+def update_split_rates(
+    db: Session, *, product_pct: int, service_pct: int, recurring_pct: int
+) -> dict:
+    for pct in (product_pct, service_pct, recurring_pct):
+        if pct < 0 or pct > MAX_SPLIT_PCT:
+            raise WalletError(f"taxa inválida: use de 0 a {MAX_SPLIT_PCT}%")
+    s = get_settings(db)
+    if s is None:
+        s = PlatformSetting(id=SETTINGS_ID)
+        db.add(s)
+    s.split_product_pct = product_pct
+    s.split_service_pct = service_pct
+    s.split_recurring_pct = recurring_pct
+    db.commit()
+    return current_rates(db)
 
 
 def create_transaction(
     db: Session, *, tenant_id: str, actor: str, by_ai: bool, data: TransactionCreate
 ) -> Transaction:
-    fee, net = compute_split(data.kind, data.gross_cents)
+    pct = split_pct_for(db, data.kind)
+    fee, net = compute_split(data.gross_cents, pct)
     # Cartão entra como "a receber" (a liberar); Pix/boleto já caem como disponível.
     status = STATUS_PENDING if data.method == METHOD_CARD else STATUS_AVAILABLE
 

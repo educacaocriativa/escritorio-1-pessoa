@@ -217,3 +217,10 @@ export interface PlatformEarningsSummary {
   transaction_count: number;
   by_kind: Record<string, number>;
 }
+
+/** Taxas de split (% retido pela plataforma) — definidas pelo Super Admin. */
+export interface SplitRates {
+  product_pct: number;
+  service_pct: number;
+  recurring_pct: number;
+}
