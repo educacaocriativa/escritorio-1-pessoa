@@ -1,9 +1,19 @@
 """Schemas do Cockpit (dashboard de entrada). Agrega outros módulos — sem modelos próprios."""
 from __future__ import annotations
 
+from datetime import date
+
 from pydantic import BaseModel
 
 from app.modules.agenda.schemas import EventOut
+
+
+class OverdueCharge(BaseModel):
+    charge_id: str
+    client_name: str
+    description: str
+    amount_cents: int
+    due_date: date
 
 
 class AgendaSummary(BaseModel):
@@ -41,3 +51,4 @@ class CockpitSummary(BaseModel):
     agenda: AgendaSummary
     crm: CrmSummary
     finance: FinanceSummary
+    overdue: list[OverdueCharge]  # cobranças em atraso (p/ cobrar com IA)

@@ -93,6 +93,24 @@ def test_crm_conversion(client: TestClient, headers):
     assert sum(s["count"] for s in body["crm"]["by_stage"]) == 4
 
 
+def test_overdue_charges_in_cockpit(client: TestClient, headers):
+    client.post(
+        "/receivables/charges",
+        json={
+            "kind": "service",
+            "method": "pix",
+            "amount_cents": 12000,
+            "due_date": "2020-01-01",
+            "description": "Mensalidade atrasada",
+        },
+        headers=headers,
+    )
+    body = client.get("/cockpit/summary", params={"day": DAY}, headers=headers).json()
+    assert len(body["overdue"]) == 1
+    assert body["overdue"][0]["amount_cents"] == 12000
+    assert body["overdue"][0]["charge_id"]
+
+
 def test_default_day_is_today(client: TestClient, headers):
     # sem 'day' não deve quebrar (usa hoje em UTC)
     resp = client.get("/cockpit/summary", headers=headers)

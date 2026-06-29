@@ -7,7 +7,12 @@ from sqlalchemy.orm import Session
 from app.core.tenancy import CurrentUser, get_tenant_db, require_module
 from app.modules.receivables import service
 from app.modules.receivables.models import Charge
-from app.modules.receivables.schemas import ChargeCreate, ChargeOut, ChargesSummary
+from app.modules.receivables.schemas import (
+    ChargeCreate,
+    ChargeOut,
+    ChargesSummary,
+    DunningResult,
+)
 
 router = APIRouter(prefix="/receivables", tags=["receivables"])
 
@@ -76,6 +81,22 @@ def pay_charge(
     except service.ReceivableError as e:
         raise _err(e) from e
     return _out(charge)
+
+
+@router.post("/charges/{charge_id}/collect", response_model=DunningResult)
+def collect_charge(
+    charge_id: str,
+    user: CurrentUser = Depends(_guard),
+    db: Session = Depends(get_tenant_db),
+) -> DunningResult:
+    """A IA escreve e envia uma cobrança amigável ao cliente no WhatsApp."""
+    try:
+        result = service.collect_with_ai(
+            db, charge_id=charge_id, tenant_id=user.tenant_id, actor=user.user_id
+        )
+    except service.ReceivableError as e:
+        raise _err(e) from e
+    return DunningResult(**result)
 
 
 @router.post("/charges/{charge_id}/cancel", response_model=ChargeOut)

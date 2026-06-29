@@ -14,6 +14,7 @@ from app.modules.cockpit.schemas import (
     CockpitSummary,
     CrmSummary,
     FinanceSummary,
+    OverdueCharge,
 )
 
 router = APIRouter(prefix="/cockpit", tags=["cockpit"])
@@ -47,4 +48,5 @@ def summary(
         ),
         crm=CrmSummary(**crm),
         finance=FinanceSummary(**service.finance_summary(db)),
+        overdue=[OverdueCharge(**o) for o in service.overdue_charges(db)],
     )

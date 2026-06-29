@@ -1,6 +1,7 @@
 import type { CockpitSummary } from "@e1p/shared-types";
-import { CalendarDays, FileSignature, TrendingUp, Wallet } from "lucide-react";
+import { AlertTriangle, CalendarDays, FileSignature, Sparkles, TrendingUp, Wallet } from "lucide-react";
 import { type ReactNode, useEffect, useState } from "react";
+import Modal from "../../components/Modal";
 import { api } from "../../lib/api";
 import { useAuth } from "../../store/auth";
 
@@ -8,16 +9,31 @@ const EMPTY: CockpitSummary = {
   agenda: { today_count: 0, today_events: [], upcoming_critical: [] },
   crm: { total_clients: 0, won_count: 0, lost_count: 0, conversion_rate: 0, by_stage: [] },
   finance: { available: false, net_revenue_cents: null, monthly_costs_cents: null, signed_contracts: null },
+  overdue: [],
 };
 
 export default function CockpitPage() {
   const { user } = useAuth();
   const [summary, setSummary] = useState<CockpitSummary>(EMPTY);
+  const [collecting, setCollecting] = useState<string | null>(null);
+  const [aiMessage, setAiMessage] = useState<string | null>(null);
 
   useEffect(() => {
     const day = new Date().toISOString().slice(0, 10);
     api.get<CockpitSummary>(`/cockpit/summary?day=${day}`).then(({ data }) => setSummary(data));
   }, []);
+
+  async function collect(chargeId: string) {
+    setCollecting(chargeId);
+    try {
+      const { data } = await api.post<{ message: string }>(
+        `/receivables/charges/${chargeId}/collect`,
+      );
+      setAiMessage(data.message);
+    } finally {
+      setCollecting(null);
+    }
+  }
 
   const conv = `${Math.round(summary.crm.conversion_rate * 100)}%`;
   const brl = (c: number) => (c / 100).toLocaleString("pt-BR", { style: "currency", currency: "BRL" });
@@ -46,6 +62,44 @@ export default function CockpitPage() {
           icon={CalendarDays}
         />
       </div>
+
+      {summary.overdue.length > 0 && (
+        <div className="rounded-2xl border border-red-100 bg-white p-5 shadow-sm">
+          <div className="mb-3 flex items-center gap-2">
+            <AlertTriangle size={18} className="text-danger" />
+            <h2 className="font-semibold text-neutral-800">
+              Clientes em atraso ({summary.overdue.length})
+            </h2>
+          </div>
+          <ul className="divide-y divide-neutral-100">
+            {summary.overdue.map((o) => (
+              <li key={o.charge_id} className="flex items-center gap-3 py-2.5">
+                <div className="min-w-0 flex-1">
+                  <span className="font-medium text-neutral-800">{o.client_name}</span>
+                  <span className="ml-2 text-xs text-neutral-400">
+                    {brl(o.amount_cents)} · venceu {new Date(o.due_date + "T00:00").toLocaleDateString("pt-BR")}
+                  </span>
+                </div>
+                <button
+                  onClick={() => collect(o.charge_id)}
+                  disabled={collecting === o.charge_id}
+                  className="flex shrink-0 items-center gap-1.5 rounded-pill bg-primary-500 px-3 py-1.5 text-xs font-semibold text-white transition hover:bg-primary-600 disabled:opacity-60"
+                >
+                  <Sparkles size={13} />
+                  {collecting === o.charge_id ? "Escrevendo..." : "Cobrar com IA"}
+                </button>
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
+
+      <Modal title="Cobrança enviada pela IA" open={aiMessage !== null} onClose={() => setAiMessage(null)}>
+        <p className="rounded-lg bg-neutral-50 p-3 text-sm text-neutral-700">{aiMessage}</p>
+        <p className="mt-3 text-xs text-neutral-400">
+          Mensagem registrada para envio no WhatsApp do cliente.
+        </p>
+      </Modal>
 
       <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
         <Panel title="Agenda do dia">

@@ -6,7 +6,7 @@ no seu lugar.
 """
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import UTC, datetime
 
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
@@ -19,6 +19,8 @@ from app.modules.agenda.models import (
     AgendaEvent,
 )
 from app.modules.crm.models import Client, PipelineStage
+from app.modules.receivables.models import STATUS_OPEN as CHARGE_OPEN
+from app.modules.receivables.models import Charge
 from app.modules.wallet import service as wallet_service
 
 UPCOMING_CRITICAL_LIMIT = 10
@@ -94,6 +96,31 @@ def crm_summary(db: Session) -> dict:
         "conversion_rate": round(conversion, 4),
         "by_stage": by_stage,
     }
+
+
+def overdue_charges(db: Session) -> list[dict]:
+    """Cobranças vencidas e não pagas — com o nome do cliente resolvido (p/ cobrar com IA)."""
+    today = datetime.now(UTC).date()
+    rows = list(
+        db.scalars(
+            select(Charge)
+            .where(Charge.status == CHARGE_OPEN, Charge.due_date < today)
+            .order_by(Charge.due_date)
+        ).all()
+    )
+    out = []
+    for c in rows:
+        client = db.get(Client, c.client_id) if c.client_id else None
+        out.append(
+            {
+                "charge_id": c.id,
+                "client_name": client.name if client else (c.description or "Cliente"),
+                "description": c.description,
+                "amount_cents": c.amount_cents,
+                "due_date": c.due_date,
+            }
+        )
+    return out
 
 
 def finance_summary(db: Session) -> dict:

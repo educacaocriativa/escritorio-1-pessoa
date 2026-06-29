@@ -48,6 +48,11 @@ class ChargeOut(BaseModel):
     created_at: datetime
 
 
+class DunningResult(BaseModel):
+    message: str
+    status: str  # sent / logged / failed
+
+
 class ChargesSummary(BaseModel):
     open_cents: int  # em aberto (a vencer)
     overdue_cents: int  # vencido e não pago

@@ -10,13 +10,16 @@ from datetime import UTC, date, datetime, time
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
-from app.core import audit
+from app.config import settings
+from app.core import ai, audit, whatsapp
 from app.modules.agenda.models import (
     KIND_COBRANCA_RECEBER,
     PRIORITY_NORMAL,
     STATUS_SCHEDULED,
     AgendaEvent,
 )
+from app.modules.crm.models import Client
+from app.modules.notifications.models import Notification
 from app.modules.receivables.models import (
     STATUS_CANCELED,
     STATUS_OPEN,
@@ -141,6 +144,64 @@ def cancel_charge(db: Session, *, charge_id: str, tenant_id: str, actor: str) ->
     db.commit()
     db.refresh(charge)
     return charge
+
+
+def _money(cents: int) -> str:
+    return f"R$ {cents / 100:.2f}".replace(".", ",")
+
+
+def _compose_dunning(name: str, amount_cents: int, due: date, description: str) -> str:
+    """Mensagem de cobrança amigável. Usa a IA (Claude) se houver chave; senão, template.
+
+    PII: enviamos o placeholder [NOME] ao Claude e reinserimos o nome real localmente.
+    """
+    valor = _money(amount_cents)
+    venc = due.strftime("%d/%m/%Y")
+    desc = description or "sua cobrança"
+    if not settings.anthropic_api_key:
+        return (
+            f"Olá {name}, tudo bem? Notamos que {desc} no valor de {valor} venceu em {venc}. "
+            "Consegue dar uma olhadinha quando puder? Qualquer dúvida, estou à disposição! 🙂"
+        )
+    system = (
+        "Você é um assistente de cobrança amigável de um pequeno negócio brasileiro. "
+        "Escreva UMA mensagem curta de WhatsApp (2-3 frases) cobrando um pagamento em atraso, "
+        "em tom cordial e respeitoso, em português do Brasil. Nunca ameace. Use o placeholder "
+        "[NOME] onde aparecer o nome do cliente. Responda só com a mensagem."
+    )
+    user = f"Valor: {valor}\nVencimento: {venc}\nDescrição: {desc}\nNome do cliente: [NOME]"
+    try:
+        result = ai.complete(system=system, user_message=user, max_tokens=300)
+        return result.text.strip().replace("[NOME]", name)
+    except Exception:
+        return (
+            f"Olá {name}, tudo bem? Notamos que {desc} no valor de {valor} venceu em {venc}. "
+            "Consegue dar uma olhadinha quando puder? Qualquer dúvida, estou à disposição! 🙂"
+        )
+
+
+def collect_with_ai(db: Session, *, charge_id: str, tenant_id: str, actor: str) -> dict:
+    """A IA escreve uma cobrança amigável e 'envia' no WhatsApp do cliente (rastro de IA)."""
+    charge = get_charge(db, charge_id)
+    if charge.status != STATUS_OPEN:
+        raise ReceivableError("Só cobranças em aberto podem ser cobradas", 409)
+    client = db.get(Client, charge.client_id) if charge.client_id else None
+    name = client.name if client else "cliente"
+    recipient = (client.phone if client and client.phone else None) or name
+    message = _compose_dunning(name, charge.amount_cents, charge.due_date, charge.description)
+    status = whatsapp.send_text(to=recipient, text=message)
+    db.add(
+        Notification(
+            tenant_id=tenant_id, channel="whatsapp", recipient=recipient,
+            message=message, status=status,
+        )
+    )
+    audit.record(
+        db, tenant_id=tenant_id, actor=actor, action="receivable.collect.ai",
+        target=charge.id, is_ai=True,
+    )
+    db.commit()
+    return {"message": message, "status": status}
 
 
 def summary(db: Session) -> dict:

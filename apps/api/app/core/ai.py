@@ -6,17 +6,19 @@ Esta camada não conhece dados reais — ela só fala com a Anthropic e devolve 
 from __future__ import annotations
 
 from dataclasses import dataclass
-
-from anthropic import Anthropic
+from typing import Any
 
 from app.config import settings
 
-_client: Anthropic | None = None
+_client: Any | None = None
 
 
-def _get_client() -> Anthropic:
+def _get_client() -> Any:
+    # Import lazy: só carrega o SDK quando a IA é de fato usada (mantém o boot/testes leves).
     global _client
     if _client is None:
+        from anthropic import Anthropic
+
         _client = Anthropic(api_key=settings.anthropic_api_key)
     return _client
 

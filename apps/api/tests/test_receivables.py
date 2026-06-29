@@ -91,5 +91,29 @@ def test_overdue_summary(client: TestClient, headers):
     assert s["overdue_count"] == 1
 
 
+def test_collect_with_ai_writes_message_and_notifies(client: TestClient, headers):
+    # sem ANTHROPIC_API_KEY nos testes, usa o template (não chama o Claude)
+    c = client.post(
+        "/receivables/charges",
+        json=_charge(due_date="2020-01-01", amount_cents=15000),
+        headers=headers,
+    ).json()
+    r = client.post(f"/receivables/charges/{c['id']}/collect", headers=headers)
+    assert r.status_code == 200
+    body = r.json()
+    assert len(body["message"]) > 10
+    assert body["status"] == "logged"
+    # uma notificação de WhatsApp foi registrada
+    notifs = client.get("/notifications", headers=headers).json()
+    assert any(n["channel"] == "whatsapp" for n in notifs)
+
+
+def test_collect_only_open(client: TestClient, headers):
+    c = client.post("/receivables/charges", json=_charge(), headers=headers).json()
+    client.post(f"/receivables/charges/{c['id']}/pay", headers=headers)  # paga
+    resp = client.post(f"/receivables/charges/{c['id']}/collect", headers=headers)
+    assert resp.status_code == 409
+
+
 def test_requires_auth(client: TestClient):
     assert client.get("/receivables/summary").status_code == 401

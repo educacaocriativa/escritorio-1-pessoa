@@ -177,10 +177,19 @@ export interface FinanceSummary {
   signed_contracts: number | null;
 }
 
+export interface OverdueCharge {
+  charge_id: UUID;
+  client_name: string;
+  description: string;
+  amount_cents: number;
+  due_date: string;
+}
+
 export interface CockpitSummary {
   agenda: AgendaSummary;
   crm: CrmSummary;
   finance: FinanceSummary;
+  overdue: OverdueCharge[];
 }
 
 // ── Carteira & Split ───────────────────────────────────
