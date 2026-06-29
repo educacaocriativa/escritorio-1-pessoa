@@ -24,7 +24,7 @@ export interface NavSection {
   items: NavItem[];
 }
 
-/** Dois grupos, no formato do design "Portal": principal + "Extra Section". */
+/** Dois grupos, no formato do design "Portal": principal + "Ferramentas de Produtividade". */
 export const navSections: NavSection[] = [
   {
     items: [
@@ -35,7 +35,7 @@ export const navSections: NavSection[] = [
     ],
   },
   {
-    title: "Extra Section",
+    title: "Ferramentas de Produtividade",
     items: [
       { label: "Produtos", to: "/produtos", icon: ShoppingBag },
       { label: "Marketing", to: "/marketing", icon: Megaphone },
