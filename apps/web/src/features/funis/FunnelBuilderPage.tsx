@@ -1,6 +1,6 @@
 import type { FunnelComponentCategory } from "@e1p/shared-types";
 import html2canvas from "html2canvas";
-import { ArrowLeft, Download, Maximize2, Save, Share2, Trash2 } from "lucide-react";
+import { ArrowLeft, Download, Maximize2, Save, Share2, Sparkles, Trash2 } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
 import ReactFlow, {
@@ -21,9 +21,29 @@ import ReactFlow, {
 import "reactflow/dist/style.css";
 import { api, apiErrorMessage } from "../../lib/api";
 
-type NodeData = { label: string; description: string; color: string; category: string; key: string };
+type NodeConfig = { subject?: string; body?: string };
+type NodeData = {
+  label: string; description: string; color: string; category: string; key: string;
+  config?: NodeConfig;
+};
+
+// Tipo de conteúdo editável conforme o componente.
+const EMAIL_KEYS = new Set(["email-base", "enviar-email", "sequencia-email"]);
+const MSG_KEYS = new Set(["whatsapp", "sequencia-whatsapp", "dm-instagram", "manychat", "telegram"]);
+const SMS_KEYS = new Set(["sms"]);
+function contentKind(key: string): "email" | "whatsapp" | "sms" | "generic" {
+  if (EMAIL_KEYS.has(key)) return "email";
+  if (MSG_KEYS.has(key)) return "whatsapp";
+  if (SMS_KEYS.has(key)) return "sms";
+  return "generic";
+}
+const KIND_VERB: Record<string, string> = {
+  email: "Criar e-mail", whatsapp: "Escrever mensagem", sms: "Escrever SMS",
+  generic: "Configurar conteúdo",
+};
 
 function FunnelNode({ data, selected }: NodeProps<NodeData>) {
+  const configured = !!data.config?.body;
   return (
     <div
       className="rounded-xl bg-white px-3 py-2 shadow-sm"
@@ -34,7 +54,10 @@ function FunnelNode({ data, selected }: NodeProps<NodeData>) {
       }}
     >
       <Handle type="target" position={Position.Top} style={{ background: data.color }} />
-      <p className="text-sm font-semibold text-neutral-800">{data.label}</p>
+      <div className="flex items-center justify-between gap-1">
+        <p className="text-sm font-semibold text-neutral-800">{data.label}</p>
+        {configured && <span title="Conteúdo definido" className="h-2 w-2 shrink-0 rounded-full bg-accent-500" />}
+      </div>
       <p className="mt-0.5 text-[11px] leading-tight text-neutral-400">{data.description}</p>
       <Handle type="source" position={Position.Bottom} style={{ background: data.color }} />
     </div>
@@ -55,6 +78,7 @@ function Builder() {
   const [present, setPresent] = useState(false);
   const [saving, setSaving] = useState(false);
   const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [editing, setEditing] = useState<string | null>(null);
   const [toast, setToast] = useState<{ msg: string; type: "ok" | "err" } | null>(null);
 
   const [nodes, setNodes, onNodesChange] = useNodesState([]);
@@ -294,6 +318,13 @@ function Builder() {
                 <span className="mb-1 block text-xs font-medium text-neutral-600">Descrição</span>
                 <textarea value={selectedNode.data.description} onChange={(e) => updateSelected({ description: e.target.value })} rows={3} className="w-full rounded-lg border border-neutral-200 px-2 py-1.5 text-sm outline-none focus:border-primary-400" />
               </label>
+              <button
+                onClick={() => setEditing(selectedNode.id)}
+                className="mb-2 flex w-full items-center justify-center gap-1.5 rounded-pill bg-primary-500 py-2 text-sm font-semibold text-white hover:bg-primary-600"
+              >
+                <Sparkles size={14} /> {KIND_VERB[contentKind(selectedNode.data.key)]}
+                {selectedNode.data.config?.body ? " (editar)" : ""}
+              </button>
               <p className="mb-3 text-[11px] text-neutral-400">
                 ID e Chave: <span className="font-mono text-neutral-500">{selectedNode.data.key || selectedNode.id.slice(0, 8)}</span>
               </p>
@@ -303,6 +334,25 @@ function Builder() {
             </div>
           )}
 
+          {/* Editor de conteúdo do nó (e-mail / mensagem / genérico) */}
+          {editing && (() => {
+            const node = nodes.find((n) => n.id === editing) as Node<NodeData> | undefined;
+            if (!node) return null;
+            return (
+              <NodeContentEditor
+                node={node}
+                onClose={() => setEditing(null)}
+                onSave={(config) => {
+                  setNodes((nds) =>
+                    nds.map((n) => (n.id === editing ? { ...n, data: { ...n.data, config } } : n)),
+                  );
+                  setEditing(null);
+                  notify("Conteúdo salvo no nó");
+                }}
+              />
+            );
+          })()}
+
           {/* Toast */}
           {toast && (
             <div
@@ -311,6 +361,79 @@ function Builder() {
               {toast.msg}
             </div>
           )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function NodeContentEditor({
+  node,
+  onClose,
+  onSave,
+}: {
+  node: Node<NodeData>;
+  onClose: () => void;
+  onSave: (config: NodeConfig) => void;
+}) {
+  const kind = contentKind(node.data.key);
+  const isEmail = kind === "email";
+  const [subject, setSubject] = useState(node.data.config?.subject ?? "");
+  const [body, setBody] = useState(node.data.config?.body ?? "");
+  const [brief, setBrief] = useState("");
+  const [aiBusy, setAiBusy] = useState(false);
+
+  const bodyLabel = isEmail ? "Corpo do e-mail" : kind === "generic" ? "Conteúdo" : "Mensagem";
+
+  async function generate() {
+    setAiBusy(true);
+    try {
+      const { data } = await api.post<{ subject: string; body: string }>("/funnels/ai-compose", {
+        kind,
+        prompt: brief.trim() || node.data.label,
+      });
+      if (isEmail && data.subject) setSubject(data.subject);
+      setBody(data.body);
+    } finally {
+      setAiBusy(false);
+    }
+  }
+
+  return (
+    <div className="absolute inset-0 z-30 flex items-center justify-center bg-black/30 p-4" onClick={onClose}>
+      <div className="w-full max-w-lg rounded-2xl bg-white p-6 shadow-card" onClick={(e) => e.stopPropagation()}>
+        <div className="mb-1 flex items-center gap-2">
+          <span className="h-3 w-3 rounded-full" style={{ background: node.data.color }} />
+          <h3 className="text-lg font-bold text-neutral-800">{KIND_VERB[kind]}</h3>
+        </div>
+        <p className="mb-4 text-xs text-neutral-400">{node.data.label}</p>
+
+        <div className="mb-3 rounded-lg bg-primary-50 p-2">
+          <span className="mb-1 block text-xs font-medium text-primary-700">Gerar com IA</span>
+          <div className="flex gap-2">
+            <input value={brief} onChange={(e) => setBrief(e.target.value)} placeholder={`Sobre o que? (ex: ${node.data.label.toLowerCase()})`} className="w-full rounded-lg border border-neutral-200 px-2 py-1.5 text-sm outline-none" />
+            <button onClick={generate} disabled={aiBusy} className="flex shrink-0 items-center gap-1 rounded-lg bg-primary-500 px-3 text-xs font-semibold text-white disabled:opacity-60">
+              <Sparkles size={12} /> {aiBusy ? "..." : "Gerar"}
+            </button>
+          </div>
+        </div>
+
+        {isEmail && (
+          <label className="mb-3 block">
+            <span className="mb-1 block text-xs font-medium text-neutral-600">Assunto</span>
+            <input value={subject} onChange={(e) => setSubject(e.target.value)} className="w-full rounded-lg border border-neutral-200 px-3 py-2 text-sm outline-none focus:border-primary-400" />
+          </label>
+        )}
+        <label className="mb-4 block">
+          <span className="mb-1 block text-xs font-medium text-neutral-600">{bodyLabel}</span>
+          <textarea value={body} onChange={(e) => setBody(e.target.value)} rows={isEmail ? 8 : 5} placeholder={`Escreva ${bodyLabel.toLowerCase()}...`} className="w-full rounded-lg border border-neutral-200 px-3 py-2 text-sm outline-none focus:border-primary-400" />
+        </label>
+
+        <div className="flex gap-2">
+          <button onClick={onClose} className="flex-1 rounded-pill bg-neutral-100 py-2.5 font-semibold text-neutral-600 hover:bg-neutral-200">Cancelar</button>
+          <button onClick={() => onSave({ subject: isEmail ? subject : "", body })} className="flex-1 rounded-pill bg-accent-400 py-2.5 font-semibold text-white hover:bg-accent-500">
+            Salvar no nó
+          </button>
         </div>
       </div>
     </div>

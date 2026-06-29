@@ -9,6 +9,8 @@ from app.modules.funnels import service
 from app.modules.funnels.models import Funnel
 from app.modules.funnels.schemas import (
     ComponentCategory,
+    ComposeRequest,
+    ComposeResult,
     FunnelCreate,
     FunnelOut,
     FunnelSummary,
@@ -34,6 +36,15 @@ def _err(e: service.FunnelError) -> HTTPException:
 @router.get("/components", response_model=list[ComponentCategory])
 def components(_u: CurrentUser = Depends(_guard)) -> list[ComponentCategory]:
     return [ComponentCategory(**c) for c in service.CATALOG]
+
+
+@router.post("/ai-compose", response_model=ComposeResult)
+def ai_compose(
+    data: ComposeRequest,
+    _u: CurrentUser = Depends(_guard),
+    _db: Session = Depends(get_tenant_db),
+) -> ComposeResult:
+    return ComposeResult(**service.ai_compose(data.kind, data.prompt))
 
 
 @router.get("", response_model=list[FunnelSummary])

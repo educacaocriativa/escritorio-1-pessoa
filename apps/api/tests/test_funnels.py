@@ -74,5 +74,27 @@ def test_requires_name(client: TestClient, headers):
     assert client.post("/funnels", json={"nodes": []}, headers=headers).status_code == 422
 
 
+def test_ai_compose_email(client: TestClient, headers):
+    resp = client.post(
+        "/funnels/ai-compose",
+        json={"kind": "email", "prompt": "boas-vindas para novo aluno"},
+        headers=headers,
+    )
+    assert resp.status_code == 200
+    out = resp.json()
+    assert out["subject"]  # e-mail tem assunto
+    assert out["body"]
+
+
+def test_ai_compose_whatsapp(client: TestClient, headers):
+    resp = client.post(
+        "/funnels/ai-compose",
+        json={"kind": "whatsapp", "prompt": "lembrete de pagamento"},
+        headers=headers,
+    )
+    assert resp.status_code == 200
+    assert resp.json()["body"]
+
+
 def test_requires_auth(client: TestClient):
     assert client.get("/funnels").status_code == 401

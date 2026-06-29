@@ -1,10 +1,14 @@
 """Funil de Vendas: catálogo de componentes (paleta) + CRUD do grafo."""
 from __future__ import annotations
 
+import json
+import re
+
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.core import audit
+from app.config import settings
+from app.core import ai, audit
 from app.modules.funnels.models import Funnel
 from app.modules.funnels.schemas import FunnelCreate, FunnelUpdate
 
@@ -137,6 +141,50 @@ class FunnelError(Exception):
     def __init__(self, message: str, status_code: int = 400):
         super().__init__(message)
         self.status_code = status_code
+
+
+# ── IA: compõe o conteúdo de um nó (e-mail / mensagem / texto) ──────────────
+_COMPOSE_SYSTEM = {
+    "email": (
+        "Você é redator de e-mail marketing (pt-BR). Escreva um e-mail curto e persuasivo. "
+        "Responda APENAS com JSON {\"subject\": \"...\", \"body\": \"...\"}. Assunto curto."
+    ),
+    "whatsapp": (
+        "Você escreve mensagens de WhatsApp (pt-BR), curtas, calorosas e diretas, com 1 emoji. "
+        "Responda APENAS com JSON {\"body\": \"...\"}."
+    ),
+    "sms": (
+        "Você escreve SMS (pt-BR) com no máximo 160 caracteres, direto ao ponto. "
+        "Responda APENAS com JSON {\"body\": \"...\"}."
+    ),
+    "generic": (
+        "Você escreve um texto curto e claro (pt-BR) para esta etapa de um funil de vendas. "
+        "Responda APENAS com JSON {\"body\": \"...\"}."
+    ),
+}
+
+
+def _compose_fallback(kind: str, prompt: str) -> dict:
+    if kind == "email":
+        return {"subject": prompt.strip()[:60], "body": f"Olá!\n\nSobre {prompt}.\n\nAbraço."}
+    return {"subject": "", "body": f"Sobre {prompt}."}
+
+
+def ai_compose(kind: str, prompt: str) -> dict:
+    """Gera o conteúdo do nó com IA; cai para um rascunho simples sem chave/parsing."""
+    system = _COMPOSE_SYSTEM.get(kind, _COMPOSE_SYSTEM["generic"])
+    if not settings.anthropic_api_key:
+        return _compose_fallback(kind, prompt)
+    try:
+        text = ai.complete(system=system, user_message=prompt, max_tokens=800).text
+        cleaned = re.sub(r"^```(?:json)?|```$", "", text.strip(), flags=re.MULTILINE).strip()
+        data = json.loads(cleaned)
+        return {
+            "subject": str(data.get("subject", ""))[:200],
+            "body": str(data.get("body", ""))[:4000],
+        }
+    except Exception:
+        return _compose_fallback(kind, prompt)
 
 
 def create_funnel(db: Session, *, tenant_id: str, actor: str, data: FunnelCreate) -> Funnel:

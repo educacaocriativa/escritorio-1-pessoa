@@ -45,3 +45,13 @@ class ComponentCategory(BaseModel):
     label: str
     color: str
     items: list[ComponentItem]
+
+
+class ComposeRequest(BaseModel):
+    kind: str = Field(default="generic")  # email | whatsapp | sms | generic
+    prompt: str = Field(min_length=2, max_length=500)
+
+
+class ComposeResult(BaseModel):
+    subject: str = ""
+    body: str = ""
