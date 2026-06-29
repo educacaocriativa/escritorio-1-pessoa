@@ -115,5 +115,12 @@ def test_collect_only_open(client: TestClient, headers):
     assert resp.status_code == 409
 
 
+def test_charge_shows_client_name(client: TestClient, headers):
+    cl = client.post("/crm/clients", json={"name": "João Cobrado"}, headers=headers).json()
+    client.post("/receivables/charges", json=_charge(client_id=cl["id"]), headers=headers)
+    charges = client.get("/receivables/charges", headers=headers).json()
+    assert charges[0]["client_name"] == "João Cobrado"
+
+
 def test_requires_auth(client: TestClient):
     assert client.get("/receivables/summary").status_code == 401

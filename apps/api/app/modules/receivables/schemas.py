@@ -36,6 +36,7 @@ class ChargeOut(BaseModel):
     id: str
     tenant_id: str
     client_id: str | None
+    client_name: str | None
     description: str
     kind: str
     method: str

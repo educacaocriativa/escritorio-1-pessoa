@@ -1,4 +1,4 @@
-import type { Charge, ChargesSummary } from "@e1p/shared-types";
+import type { Charge, ChargesSummary, Client } from "@e1p/shared-types";
 import { Copy } from "lucide-react";
 import { useCallback, useEffect, useState } from "react";
 import Modal, { Field } from "../../components/Modal";
@@ -84,6 +84,7 @@ export default function CobrancasPage() {
           <table className="w-full text-sm">
             <thead>
               <tr className="border-b border-neutral-100 text-left text-xs uppercase text-neutral-400">
+                <th className="px-4 py-3 font-medium">Cliente</th>
                 <th className="px-4 py-3 font-medium">Descrição</th>
                 <th className="px-4 py-3 font-medium">Vencimento</th>
                 <th className="px-4 py-3 font-medium">Valor</th>
@@ -96,6 +97,9 @@ export default function CobrancasPage() {
                 const st = statusInfo(c);
                 return (
                   <tr key={c.id} className="border-b border-neutral-50 last:border-0">
+                    <td className="px-4 py-3 font-medium text-neutral-800">
+                      {c.client_name ?? <span className="text-neutral-300">—</span>}
+                    </td>
                     <td className="px-4 py-3">
                       <span className="text-neutral-800">{c.description || "—"}</span>
                       <span className="ml-2 inline-flex items-center gap-1 text-xs text-neutral-400">
@@ -165,8 +169,14 @@ function NewChargeModal({
   const [value, setValue] = useState("");
   const [dueDate, setDueDate] = useState("");
   const [description, setDescription] = useState("");
+  const [clientId, setClientId] = useState("");
+  const [clients, setClients] = useState<Client[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
+
+  useEffect(() => {
+    if (open) api.get<Client[]>("/crm/clients").then(({ data }) => setClients(data));
+  }, [open]);
 
   async function save() {
     setError(null);
@@ -179,6 +189,7 @@ function NewChargeModal({
         amount_cents,
         due_date: dueDate,
         description,
+        client_id: clientId || null,
       });
       onCreated();
       setValue("");
@@ -195,6 +206,21 @@ function NewChargeModal({
   return (
     <Modal title="Nova cobrança" open={open} onClose={onClose}>
       <div className="space-y-3">
+        <label className="block">
+          <span className="mb-1 block text-xs font-medium text-neutral-600">Cliente</span>
+          <select
+            value={clientId}
+            onChange={(e) => setClientId(e.target.value)}
+            className="w-full rounded-lg border border-neutral-200 px-3 py-2 text-sm outline-none focus:border-primary-400"
+          >
+            <option value="">Sem cliente</option>
+            {clients.map((c) => (
+              <option key={c.id} value={c.id}>
+                {c.name}
+              </option>
+            ))}
+          </select>
+        </label>
         <div className="flex gap-2">
           <label className="flex-1">
             <span className="mb-1 block text-xs font-medium text-neutral-600">Tipo</span>

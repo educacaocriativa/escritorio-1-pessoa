@@ -5,6 +5,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.orm import Session
 
 from app.core.tenancy import CurrentUser, get_tenant_db, require_module
+from app.modules.crm.models import Client
 from app.modules.receivables import service
 from app.modules.receivables.models import Charge
 from app.modules.receivables.schemas import (
@@ -19,11 +20,13 @@ router = APIRouter(prefix="/receivables", tags=["receivables"])
 _guard = require_module("receivables")
 
 
-def _out(charge: Charge) -> ChargeOut:
+def _out(charge: Charge, db: Session) -> ChargeOut:
+    client = db.get(Client, charge.client_id) if charge.client_id else None
     return ChargeOut(
         id=charge.id,
         tenant_id=charge.tenant_id,
         client_id=charge.client_id,
+        client_name=client.name if client else None,
         description=charge.description,
         kind=charge.kind,
         method=charge.method,
@@ -55,7 +58,7 @@ def list_charges(
     _user: CurrentUser = Depends(_guard),
     db: Session = Depends(get_tenant_db),
 ) -> list[ChargeOut]:
-    return [_out(c) for c in service.list_charges(db, status=status)]
+    return [_out(c, db) for c in service.list_charges(db, status=status)]
 
 
 @router.post("/charges", response_model=ChargeOut, status_code=201)
@@ -65,7 +68,7 @@ def create_charge(
     db: Session = Depends(get_tenant_db),
 ) -> ChargeOut:
     charge = service.create_charge(db, tenant_id=user.tenant_id, actor=user.user_id, data=data)
-    return _out(charge)
+    return _out(charge, db)
 
 
 @router.post("/charges/{charge_id}/pay", response_model=ChargeOut)
@@ -80,7 +83,7 @@ def pay_charge(
         )
     except service.ReceivableError as e:
         raise _err(e) from e
-    return _out(charge)
+    return _out(charge, db)
 
 
 @router.post("/charges/{charge_id}/collect", response_model=DunningResult)
@@ -111,4 +114,4 @@ def cancel_charge(
         )
     except service.ReceivableError as e:
         raise _err(e) from e
-    return _out(charge)
+    return _out(charge, db)

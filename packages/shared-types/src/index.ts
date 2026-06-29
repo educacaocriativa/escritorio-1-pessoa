@@ -241,6 +241,7 @@ export interface Charge {
   id: UUID;
   tenant_id: UUID;
   client_id: UUID | null;
+  client_name: string | null;
   description: string;
   kind: TransactionKind;
   method: PaymentMethod;
