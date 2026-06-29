@@ -1,6 +1,9 @@
 import type { FunnelComponentCategory } from "@e1p/shared-types";
 import html2canvas from "html2canvas";
-import { ArrowLeft, Download, Maximize2, Save, Share2, Sparkles, Trash2 } from "lucide-react";
+import {
+  ArrowLeft, Download, GitBranch, type LucideIcon, Maximize2, MessageCircle, MousePointerClick,
+  Save, Share2, Sparkles, Trash2, TrendingUp, Zap,
+} from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
 import ReactFlow, {
@@ -21,11 +24,18 @@ import ReactFlow, {
 import "reactflow/dist/style.css";
 import { api, apiErrorMessage } from "../../lib/api";
 
-type NodeConfig = { subject?: string; body?: string };
+type NodeConfig = { subject?: string; body?: string; model?: string };
 type NodeData = {
   label: string; description: string; color: string; category: string; key: string;
+  shape?: "page" | "node";
   config?: NodeConfig;
 };
+
+const CAT_ICON: Record<string, LucideIcon> = {
+  gatilhos: Zap, logica: GitBranch, acoes: MousePointerClick,
+  comunicacao: MessageCircle, trafego: TrendingUp,
+};
+const PAGE_MODELS = ["Vendas", "Captura", "Obrigado", "Checkout", "Download", "Webinar", "Conteúdo"];
 
 // Tipo de conteúdo editável conforme o componente.
 const EMAIL_KEYS = new Set(["email-base", "enviar-email", "sequencia-email"]);
@@ -43,23 +53,54 @@ const KIND_VERB: Record<string, string> = {
 };
 
 function FunnelNode({ data, selected }: NodeProps<NodeData>) {
-  const configured = !!data.config?.body;
+  const configured = !!(data.config?.body || data.config?.model);
+  const handleStyle = { background: "#fff", border: `2px solid ${data.color}`, width: 10, height: 10 };
+
+  // PÁGINA → card quadrado com mockup colorido.
+  if (data.shape === "page") {
+    return (
+      <div
+        className="relative w-[156px] rounded-2xl bg-white shadow-md"
+        style={{ outline: selected ? `3px solid ${data.color}` : "1px solid #E5E7EB" }}
+      >
+        <Handle type="target" position={Position.Top} style={handleStyle} />
+        <div className="flex items-center gap-1 rounded-t-2xl px-2.5 py-1.5" style={{ background: data.color }}>
+          <span className="h-2 w-2 rounded-full bg-white/70" />
+          <span className="h-2 w-2 rounded-full bg-white/50" />
+          <span className="h-2 w-2 rounded-full bg-white/40" />
+          <span className="ml-1 truncate text-[10px] font-bold uppercase tracking-wide text-white">
+            {data.config?.model || "Página"}
+          </span>
+        </div>
+        <div className="space-y-1.5 p-3">
+          <div className="h-2.5 w-3/4 rounded bg-neutral-200" />
+          <div className="h-2 w-full rounded bg-neutral-100" />
+          <div className="h-2 w-5/6 rounded bg-neutral-100" />
+          <div className="mt-1.5 h-5 w-2/3 rounded-md" style={{ background: data.color }} />
+        </div>
+        <p className="truncate border-t border-neutral-100 px-3 py-1.5 text-xs font-semibold text-neutral-800">
+          {data.label}
+        </p>
+        {configured && <span className="absolute right-2 top-2 h-2.5 w-2.5 rounded-full bg-accent-500 ring-2 ring-white" />}
+        <Handle type="source" position={Position.Bottom} style={handleStyle} />
+      </div>
+    );
+  }
+
+  // AÇÃO/LÓGICA/COMUNICAÇÃO/TRÁFEGO → círculo colorido com ícone + rótulo abaixo.
+  const Icon = CAT_ICON[data.category] ?? Zap;
   return (
     <div
-      className="rounded-xl bg-white px-3 py-2 shadow-sm"
-      style={{
-        borderLeft: `5px solid ${data.color}`,
-        outline: selected ? `2px solid ${data.color}` : "1px solid #E5E7EB",
-        minWidth: 150, maxWidth: 200,
-      }}
+      className="relative flex h-16 w-16 items-center justify-center rounded-full text-white shadow-md"
+      style={{ background: data.color, outline: selected ? `3px solid ${data.color}66` : "none" }}
     >
-      <Handle type="target" position={Position.Top} style={{ background: data.color }} />
-      <div className="flex items-center justify-between gap-1">
-        <p className="text-sm font-semibold text-neutral-800">{data.label}</p>
-        {configured && <span title="Conteúdo definido" className="h-2 w-2 shrink-0 rounded-full bg-accent-500" />}
-      </div>
-      <p className="mt-0.5 text-[11px] leading-tight text-neutral-400">{data.description}</p>
-      <Handle type="source" position={Position.Bottom} style={{ background: data.color }} />
+      <Handle type="target" position={Position.Top} style={handleStyle} />
+      <Icon size={24} />
+      {configured && <span className="absolute -right-0.5 -top-0.5 h-3 w-3 rounded-full bg-accent-500 ring-2 ring-white" />}
+      <span className="pointer-events-none absolute left-1/2 top-[112%] w-28 -translate-x-1/2 text-center text-[11px] font-semibold leading-tight text-neutral-700">
+        {data.label}
+      </span>
+      <Handle type="source" position={Position.Bottom} style={handleStyle} />
     </div>
   );
 }
@@ -115,12 +156,16 @@ function Builder() {
   );
 
   const makeNode = useCallback(
-    (item: { key: string; label: string; description: string }, color: string, category: string,
+    (item: { key: string; label: string; description: string; shape?: "page" | "node" },
+     color: string, category: string,
      position: { x: number; y: number }): Node<NodeData> => ({
       id: crypto.randomUUID(),
       type: "funnelNode",
       position,
-      data: { label: item.label, description: item.description, color, category, key: item.key },
+      data: {
+        label: item.label, description: item.description, color, category, key: item.key,
+        shape: item.shape ?? "node",
+      },
     }),
     [],
   );
@@ -322,8 +367,11 @@ function Builder() {
                 onClick={() => setEditing(selectedNode.id)}
                 className="mb-2 flex w-full items-center justify-center gap-1.5 rounded-pill bg-primary-500 py-2 text-sm font-semibold text-white hover:bg-primary-600"
               >
-                <Sparkles size={14} /> {KIND_VERB[contentKind(selectedNode.data.key)]}
-                {selectedNode.data.config?.body ? " (editar)" : ""}
+                <Sparkles size={14} />{" "}
+                {selectedNode.data.shape === "page"
+                  ? "Editar página"
+                  : KIND_VERB[contentKind(selectedNode.data.key)]}
+                {selectedNode.data.config?.body || selectedNode.data.config?.model ? " ✓" : ""}
               </button>
               <p className="mb-3 text-[11px] text-neutral-400">
                 ID e Chave: <span className="font-mono text-neutral-500">{selectedNode.data.key || selectedNode.id.slice(0, 8)}</span>
@@ -376,14 +424,19 @@ function NodeContentEditor({
   onClose: () => void;
   onSave: (config: NodeConfig) => void;
 }) {
+  const isPage = node.data.shape === "page";
   const kind = contentKind(node.data.key);
   const isEmail = kind === "email";
   const [subject, setSubject] = useState(node.data.config?.subject ?? "");
   const [body, setBody] = useState(node.data.config?.body ?? "");
+  const [model, setModel] = useState(node.data.config?.model ?? (isPage ? "Vendas" : ""));
   const [brief, setBrief] = useState("");
   const [aiBusy, setAiBusy] = useState(false);
 
-  const bodyLabel = isEmail ? "Corpo do e-mail" : kind === "generic" ? "Conteúdo" : "Mensagem";
+  const title = isPage ? "Editar página" : KIND_VERB[kind];
+  const bodyLabel = isPage
+    ? "Conteúdo da página"
+    : isEmail ? "Corpo do e-mail" : kind === "generic" ? "Conteúdo" : "Mensagem";
 
   async function generate() {
     setAiBusy(true);
@@ -404,9 +457,18 @@ function NodeContentEditor({
       <div className="w-full max-w-lg rounded-2xl bg-white p-6 shadow-card" onClick={(e) => e.stopPropagation()}>
         <div className="mb-1 flex items-center gap-2">
           <span className="h-3 w-3 rounded-full" style={{ background: node.data.color }} />
-          <h3 className="text-lg font-bold text-neutral-800">{KIND_VERB[kind]}</h3>
+          <h3 className="text-lg font-bold text-neutral-800">{title}</h3>
         </div>
         <p className="mb-4 text-xs text-neutral-400">{node.data.label}</p>
+
+        {isPage && (
+          <label className="mb-3 block">
+            <span className="mb-1 block text-xs font-medium text-neutral-600">Modelo de página</span>
+            <select value={model} onChange={(e) => setModel(e.target.value)} className="w-full rounded-lg border border-neutral-200 px-3 py-2 text-sm outline-none focus:border-primary-400">
+              {PAGE_MODELS.map((m) => <option key={m} value={m}>{m}</option>)}
+            </select>
+          </label>
+        )}
 
         <div className="mb-3 rounded-lg bg-primary-50 p-2">
           <span className="mb-1 block text-xs font-medium text-primary-700">Gerar com IA</span>
@@ -431,7 +493,7 @@ function NodeContentEditor({
 
         <div className="flex gap-2">
           <button onClick={onClose} className="flex-1 rounded-pill bg-neutral-100 py-2.5 font-semibold text-neutral-600 hover:bg-neutral-200">Cancelar</button>
-          <button onClick={() => onSave({ subject: isEmail ? subject : "", body })} className="flex-1 rounded-pill bg-accent-400 py-2.5 font-semibold text-white hover:bg-accent-500">
+          <button onClick={() => onSave({ subject: isEmail ? subject : "", body, model: isPage ? model : undefined })} className="flex-1 rounded-pill bg-accent-400 py-2.5 font-semibold text-white hover:bg-accent-500">
             Salvar no nó
           </button>
         </div>

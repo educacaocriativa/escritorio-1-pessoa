@@ -472,6 +472,7 @@ export interface FunnelComponentItem {
   key: string;
   label: string;
   description: string;
+  shape: "page" | "node";
 }
 
 export interface FunnelComponentCategory {

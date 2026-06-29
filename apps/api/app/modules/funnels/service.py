@@ -137,6 +137,20 @@ CATALOG: list[dict] = [
 ]
 
 
+# Componentes que são "páginas" (renderizados quadrados, com mockup de página no front).
+# Os demais são "nós" redondos (ações/lógica/comunicação/tráfego e gatilhos de evento).
+PAGE_KEYS = {
+    "pagina-vendas", "pagina-captura", "pagina-obrigado", "obrigado-countdown", "obrigado-video",
+    "pagina-download", "checkout", "area-membros", "aplicativo", "modulo", "aula", "webinar",
+    "replay-webinar", "lancamento", "pagina-pedido", "upsell", "downsell", "order-bump",
+    "pesquisa-seg", "avaliacao", "blog", "ebook", "certificado", "comunidade", "briefing",
+}
+
+for _cat in CATALOG:
+    for _item in _cat["items"]:
+        _item["shape"] = "page" if _item["key"] in PAGE_KEYS else "node"
+
+
 class FunnelError(Exception):
     def __init__(self, message: str, status_code: int = 400):
         super().__init__(message)

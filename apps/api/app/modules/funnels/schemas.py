@@ -38,6 +38,7 @@ class ComponentItem(BaseModel):
     key: str
     label: str
     description: str
+    shape: str = "node"  # "page" (quadrado, com mockup) | "node" (redondo)
 
 
 class ComponentCategory(BaseModel):
