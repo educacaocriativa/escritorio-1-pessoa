@@ -31,7 +31,7 @@ export const navSections: NavSection[] = [
       { label: "Dashboard", to: "/", icon: LayoutDashboard, ready: true },
       { label: "Agenda", to: "/agenda", icon: CalendarDays, ready: true },
       { label: "CRM & Kanban", to: "/crm", icon: Users, ready: true },
-      { label: "Financeiro", to: "/financeiro", icon: Wallet },
+      { label: "Financeiro", to: "/financeiro", icon: Wallet, ready: true },
     ],
   },
   {

@@ -1,0 +1,182 @@
+"""Testes da Carteira & Split."""
+import pytest
+from fastapi.testclient import TestClient
+from sqlalchemy.orm import Session
+
+from app.core.security import hash_password
+from app.modules.auth.models import Tenant, User
+from app.modules.wallet.service import compute_split
+
+REGISTER = {
+    "legal_name": "Loja Bia",
+    "document": "44555666000133",
+    "slug": "lojabia",
+    "email": "bia@example.com",
+    "name": "Bia",
+    "password": "senha-bem-comprida",
+}
+
+
+@pytest.fixture()
+def headers(client: TestClient) -> dict[str, str]:
+    token = client.post("/auth/register", json=REGISTER).json()["access_token"]
+    return {"Authorization": f"Bearer {token}"}
+
+
+# ── split (unitário) ───────────────────────────────────
+
+
+def test_split_product_40():
+    assert compute_split("product", 10000) == (4000, 6000)  # 40% / 60%
+
+
+def test_split_service_30():
+    assert compute_split("service", 10000) == (3000, 7000)  # 30% / 70%
+
+
+def test_split_recurring_20():
+    assert compute_split("recurring", 10000) == (2000, 8000)  # 20% / 80%
+
+
+def test_split_rounds_half_up():
+    # 40% de 999 = 399,6 -> 400 (meio-para-cima); líquido 599
+    assert compute_split("product", 999) == (400, 599)
+
+
+# ── transações ─────────────────────────────────────────
+
+
+def test_create_pix_is_available(client: TestClient, headers):
+    resp = client.post(
+        "/wallet/transactions",
+        json={"kind": "service", "method": "pix", "gross_cents": 10000, "description": "Consulta"},
+        headers=headers,
+    )
+    assert resp.status_code == 201, resp.text
+    tx = resp.json()
+    assert tx["platform_fee_cents"] == 3000
+    assert tx["net_cents"] == 7000
+    assert tx["status"] == "available"
+
+
+def test_create_card_is_pending(client: TestClient, headers):
+    tx = client.post(
+        "/wallet/transactions",
+        json={"kind": "product", "method": "card", "gross_cents": 5000},
+        headers=headers,
+    ).json()
+    assert tx["status"] == "pending"
+
+
+def test_invalid_kind_rejected(client: TestClient, headers):
+    resp = client.post(
+        "/wallet/transactions",
+        json={"kind": "doacao", "method": "pix", "gross_cents": 100},
+        headers=headers,
+    )
+    assert resp.status_code == 422
+
+
+def test_zero_amount_rejected(client: TestClient, headers):
+    resp = client.post(
+        "/wallet/transactions",
+        json={"kind": "service", "method": "pix", "gross_cents": 0},
+        headers=headers,
+    )
+    assert resp.status_code == 422
+
+
+def test_wallet_summary(client: TestClient, headers):
+    client.post(
+        "/wallet/transactions",
+        json={"kind": "service", "method": "pix", "gross_cents": 10000},
+        headers=headers,
+    )  # net 7000 available
+    client.post(
+        "/wallet/transactions",
+        json={"kind": "product", "method": "card", "gross_cents": 10000},
+        headers=headers,
+    )  # net 6000 pending
+    s = client.get("/wallet/summary", headers=headers).json()
+    assert s["available_cents"] == 7000
+    assert s["pending_cents"] == 6000
+    assert s["gross_total_cents"] == 20000
+    assert s["fees_total_cents"] == 3000 + 4000
+
+
+def test_settle_moves_pending_to_available(client: TestClient, headers):
+    tx = client.post(
+        "/wallet/transactions",
+        json={"kind": "product", "method": "card", "gross_cents": 10000},
+        headers=headers,
+    ).json()
+    r = client.post(f"/wallet/transactions/{tx['id']}/settle", headers=headers)
+    assert r.status_code == 200
+    assert r.json()["status"] == "available"
+
+
+def test_settle_non_pending_rejected(client: TestClient, headers):
+    tx = client.post(
+        "/wallet/transactions",
+        json={"kind": "service", "method": "pix", "gross_cents": 10000},
+        headers=headers,
+    ).json()  # already available
+    r = client.post(f"/wallet/transactions/{tx['id']}/settle", headers=headers)
+    assert r.status_code == 409
+
+
+def test_payout_withdraws_available(client: TestClient, headers):
+    client.post(
+        "/wallet/transactions",
+        json={"kind": "service", "method": "pix", "gross_cents": 10000},
+        headers=headers,
+    )  # net 7000 available
+    r = client.post("/wallet/payout", headers=headers)
+    assert r.json()["amount_cents"] == 7000
+    assert r.json()["transactions"] == 1
+    # depois do saque, disponível zera
+    assert client.get("/wallet/summary", headers=headers).json()["available_cents"] == 0
+
+
+def test_requires_auth(client: TestClient):
+    assert client.get("/wallet/summary").status_code == 401
+
+
+# ── Master: ganhos da plataforma ───────────────────────
+
+
+def test_platform_earnings_master_only(client: TestClient, headers, db: Session):
+    # tenant gera vendas
+    client.post(
+        "/wallet/transactions",
+        json={"kind": "product", "method": "pix", "gross_cents": 10000},
+        headers=headers,
+    )  # fee 4000
+    # usuário comum não acessa
+    assert client.get("/wallet/platform-earnings", headers=headers).status_code == 403
+
+    # cria um admin e consulta
+    t = Tenant(slug="platform", legal_name="Plat", document="00000000000")
+    db.add(t)
+    db.flush()
+    db.add(
+        User(
+            tenant_id=t.id,
+            email="master@e1p.com",
+            name="Master",
+            password_hash=hash_password("senha-master-123"),
+            role="owner",
+            allowed_modules=[],
+            is_platform_admin=True,
+        )
+    )
+    db.commit()
+    at = client.post(
+        "/auth/login", json={"email": "master@e1p.com", "password": "senha-master-123"}
+    ).json()["access_token"]
+    earnings = client.get(
+        "/wallet/platform-earnings", headers={"Authorization": f"Bearer {at}"}
+    ).json()
+    assert earnings["gmv_cents"] == 10000
+    assert earnings["fees_cents"] == 4000
+    assert earnings["by_kind"]["product"] == 4000

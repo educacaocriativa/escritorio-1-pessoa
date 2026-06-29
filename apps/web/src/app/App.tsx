@@ -4,6 +4,7 @@ import AgendaPage from "../features/agenda/AgendaPage";
 import LoginPage from "../features/auth/LoginPage";
 import CockpitPage from "../features/cockpit/CockpitPage";
 import CrmPage from "../features/crm/CrmPage";
+import FinanceiroPage from "../features/financeiro/FinanceiroPage";
 import { AuthProvider, useAuth } from "../store/auth";
 import { PageActionsProvider } from "../store/pageActions";
 import AppShell from "./AppShell";
@@ -17,6 +18,7 @@ export default function App() {
           <Route path="/" element={<CockpitPage />} />
           <Route path="/agenda" element={<AgendaPage />} />
           <Route path="/crm" element={<CrmPage />} />
+          <Route path="/financeiro" element={<FinanceiroPage />} />
           <Route path="/admin" element={<AdminOnly />} />
           <Route path="*" element={<ComingSoon />} />
         </Route>

@@ -46,5 +46,5 @@ def summary(
             upcoming_critical=[EventOut.model_validate(e) for e in upcoming],
         ),
         crm=CrmSummary(**crm),
-        finance=FinanceSummary(available=False),
+        finance=FinanceSummary(**service.finance_summary(db)),
     )

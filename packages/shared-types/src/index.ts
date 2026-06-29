@@ -183,4 +183,37 @@ export interface CockpitSummary {
   finance: FinanceSummary;
 }
 
-// Os tipos de cada módulo (financeiro...) entram aqui conforme forem construídos.
+// ── Carteira & Split ───────────────────────────────────
+export type TransactionKind = "product" | "service" | "recurring";
+export type PaymentMethod = "pix" | "card" | "boleto";
+export type TransactionStatus = "pending" | "available" | "withdrawn" | "refunded";
+
+export interface Transaction {
+  id: UUID;
+  tenant_id: UUID;
+  kind: TransactionKind;
+  method: PaymentMethod;
+  description: string;
+  gross_cents: number;
+  platform_fee_cents: number;
+  net_cents: number;
+  status: TransactionStatus;
+  client_id: UUID | null;
+  external_ref: string | null;
+  created_at: string;
+}
+
+export interface WalletSummary {
+  available_cents: number;
+  pending_cents: number;
+  withdrawn_cents: number;
+  gross_total_cents: number;
+  fees_total_cents: number;
+}
+
+export interface PlatformEarningsSummary {
+  gmv_cents: number;
+  fees_cents: number;
+  transaction_count: number;
+  by_kind: Record<string, number>;
+}

@@ -20,6 +20,10 @@ export default function CockpitPage() {
   }, []);
 
   const conv = `${Math.round(summary.crm.conversion_rate * 100)}%`;
+  const brl = (c: number) => (c / 100).toLocaleString("pt-BR", { style: "currency", currency: "BRL" });
+  const faturamento = summary.finance.net_revenue_cents != null
+    ? brl(summary.finance.net_revenue_cents)
+    : "R$ —";
 
   return (
     <div className="space-y-6">
@@ -31,7 +35,7 @@ export default function CockpitPage() {
       </div>
 
       <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
-        <StatCard label="Faturamento Líquido" value="R$ —" hint="Fase 2" tone="accent" icon={Wallet} />
+        <StatCard label="Faturamento Líquido" value={faturamento} hint="carteira" tone="accent" icon={Wallet} />
         <StatCard label="Contratos Assinados" value="—" hint="Fase 2" tone="primary" icon={FileSignature} />
         <StatCard label="Taxa de Conversão" value={conv} hint="funil do CRM" tone="info" icon={TrendingUp} />
         <StatCard

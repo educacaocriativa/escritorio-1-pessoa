@@ -37,7 +37,9 @@ def test_summary_empty(client: TestClient, headers):
     assert body["agenda"]["today_count"] == 0
     assert body["crm"]["total_clients"] == 0
     assert body["crm"]["conversion_rate"] == 0.0
-    assert body["finance"]["available"] is False
+    # finance agora vem da Carteira; sem vendas, faturamento líquido é 0
+    assert body["finance"]["available"] is True
+    assert body["finance"]["net_revenue_cents"] == 0
 
 
 def test_summary_requires_auth(client: TestClient):

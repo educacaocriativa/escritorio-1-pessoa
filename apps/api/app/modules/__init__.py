@@ -10,6 +10,7 @@ from app.modules.cockpit.router import router as cockpit_router
 from app.modules.crm.router import router as crm_router
 from app.modules.notifications.router import router as notifications_router
 from app.modules.platform.router import router as platform_router
+from app.modules.wallet.router import router as wallet_router
 
 ALL_ROUTERS: list[APIRouter] = [
     auth_router,
@@ -18,4 +19,5 @@ ALL_ROUTERS: list[APIRouter] = [
     cockpit_router,
     platform_router,
     notifications_router,
+    wallet_router,
 ]

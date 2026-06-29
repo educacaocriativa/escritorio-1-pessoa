@@ -66,7 +66,10 @@ Ao criar/alterar qualquer funcionalidade:
 - [x] **Agenda calendário** (visões Mês/Semana/Dia, navegação, clicar no dia cria evento). **Sidebar fixa** (sticky + min-w-0; Kanban rola sem mover o menu). **Etapas criar/arquivar** no Kanban (arquivar remaneja clientes; migration 0007). **Notificação WhatsApp ao mover card** (barramento `crm.client.moved` → `notifications`, stub `core/whatsapp`). 85 testes.
 - [ ] **Integração WhatsApp Cloud API** — PENDENTE: hoje as notificações ficam `logged` (sem entrega). Precisa `WHATSAPP_TOKEN`+`WHATSAPP_PHONE_ID` (Meta) e um **campo de telefone do owner** (não existe ainda — recipient usa o e-mail como placeholder). Também: o envio é SÍNCRONO no request do move — mover para fila (SQS) quando o worker existir.
 - [ ] **Integração Google (Meet/Calendar)** — PENDENTE: gerar Meet automaticamente exige OAuth Google (Google Cloud project + Calendar API). Hoje: campo manual + botão que abre meet.google.com/new. É o módulo 6 (API Hub) da spec — fazer quando o usuário fornecer credenciais Google.
-- [ ] Próximo: **Fase 2 — dinheiro entra/sai** (Carteira & Split → Contas a Receber → Contas a Pagar → Produtos & Checkout). O placeholder `finance` do Cockpit e o evento `crm.client.moved` já estão prontos para ligar.
+## Fase 2 — dinheiro entra/sai (em andamento)
+- [x] **Carteira & Split** — transações com split 40/30/20 (produto/serviço/recorrente), saldos (disponível/a receber/sacado), settle (libera cartão), payout (saque, com lock FOR UPDATE), painel de ganhos da plataforma p/ o Master (`platform_earnings` global). Dinheiro em centavos BigInteger. Cockpit mostra faturamento líquido real. Migration 0008. 99 testes.
+  - **Dívida:** estorno (`refunded`) ainda sem caminho de execução nem reversão do `platform_earnings`. Payout real precisa integração bancária + KYC (hoje só marca withdrawn). Antecipação de recebíveis não implementada.
+- [ ] Próximo na Fase 2: **Contas a Receber** (boleto/Pix/link, baixa por webhook, régua de cobrança) → **Contas a Pagar** → **Produtos & Checkout**.
 - [ ] Migrar módulo **Assistente Jurídico** do app existente (`~/lex-intelligentia-app`) — Fase 5.
 
 ## 6.1 Dívida técnica / TODO de segurança (de revisão QA — endereçar antes de produção)

@@ -19,6 +19,7 @@ from app.modules.agenda.models import (
     AgendaEvent,
 )
 from app.modules.crm.models import Client, PipelineStage
+from app.modules.wallet import service as wallet_service
 
 UPCOMING_CRITICAL_LIMIT = 10
 TODAY_EVENTS_PREVIEW = 100
@@ -92,4 +93,16 @@ def crm_summary(db: Session) -> dict:
         "lost_count": lost,
         "conversion_rate": round(conversion, 4),
         "by_stage": by_stage,
+    }
+
+
+def finance_summary(db: Session) -> dict:
+    """Faturamento líquido a partir da Carteira (net não estornado)."""
+    w = wallet_service.wallet_summary(db)
+    net_revenue = w["available_cents"] + w["pending_cents"] + w["withdrawn_cents"]
+    return {
+        "available": True,
+        "net_revenue_cents": net_revenue,
+        "monthly_costs_cents": None,  # Contas a Pagar (próximo módulo da Fase 2)
+        "signed_contracts": None,  # módulo de Contratos (Fase 3)
     }

@@ -10,5 +10,6 @@ from app.modules.agenda.models import AgendaEvent  # noqa: F401
 from app.modules.auth.models import Tenant, User  # noqa: F401
 from app.modules.crm.models import Client, PipelineStage  # noqa: F401
 from app.modules.notifications.models import Notification  # noqa: F401
+from app.modules.wallet.models import PlatformEarning, Transaction  # noqa: F401
 
 __all__ = ["Base"]
