@@ -4,6 +4,7 @@ import {
   LayoutDashboard,
   type LucideIcon,
   Megaphone,
+  Receipt,
   Scale,
   Settings,
   ShoppingBag,
@@ -32,6 +33,7 @@ export const navSections: NavSection[] = [
       { label: "Agenda", to: "/agenda", icon: CalendarDays, ready: true },
       { label: "CRM & Kanban", to: "/crm", icon: Users, ready: true },
       { label: "Financeiro", to: "/financeiro", icon: Wallet, ready: true },
+      { label: "Cobranças", to: "/cobrancas", icon: Receipt, ready: true },
     ],
   },
   {

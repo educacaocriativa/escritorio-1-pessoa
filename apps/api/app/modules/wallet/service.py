@@ -90,36 +90,59 @@ def update_split_rates(
     return current_rates(db)
 
 
-def create_transaction(
-    db: Session, *, tenant_id: str, actor: str, by_ai: bool, data: TransactionCreate
+def build_transaction(
+    db: Session,
+    *,
+    tenant_id: str,
+    actor: str,
+    by_ai: bool,
+    kind: str,
+    method: str,
+    gross_cents: int,
+    description: str = "",
+    client_id: str | None = None,
+    external_ref: str | None = None,
 ) -> Transaction:
-    pct = split_pct_for(db, data.kind)
-    fee, net = compute_split(data.gross_cents, pct)
+    """Cria a transação + ganho da plataforma na sessão SEM commitar.
+
+    Permite que outros módulos (ex.: Contas a Receber, ao dar baixa) gravem a transação
+    atomicamente junto com sua própria mutação.
+    """
+    pct = split_pct_for(db, kind)
+    fee, net = compute_split(gross_cents, pct)
     # Cartão entra como "a receber" (a liberar); Pix/boleto já caem como disponível.
-    status = STATUS_PENDING if data.method == METHOD_CARD else STATUS_AVAILABLE
+    status = STATUS_PENDING if method == METHOD_CARD else STATUS_AVAILABLE
 
     tx = Transaction(
         tenant_id=tenant_id,
-        kind=data.kind,
-        method=data.method,
-        description=data.description,
-        gross_cents=data.gross_cents,
+        kind=kind,
+        method=method,
+        description=description,
+        gross_cents=gross_cents,
         platform_fee_cents=fee,
         net_cents=net,
         status=status,
-        client_id=data.client_id,
-        external_ref=data.external_ref,
+        client_id=client_id,
+        external_ref=external_ref,
     )
     db.add(tx)
     # Registro GLOBAL do ganho da plataforma (sem RLS) — alimenta o painel do Master.
-    db.add(
-        PlatformEarning(
-            tenant_id=tenant_id, kind=data.kind, gross_cents=data.gross_cents, fee_cents=fee
-        )
-    )
+    db.add(PlatformEarning(tenant_id=tenant_id, kind=kind, gross_cents=gross_cents, fee_cents=fee))
+    db.flush()  # popula tx.id (p/ a auditoria e p/ quem linka antes do commit)
     audit.record(
         db, tenant_id=tenant_id, actor=actor, action="wallet.transaction.create",
         target=tx.id, is_ai=by_ai,
+    )
+    return tx
+
+
+def create_transaction(
+    db: Session, *, tenant_id: str, actor: str, by_ai: bool, data: TransactionCreate
+) -> Transaction:
+    tx = build_transaction(
+        db, tenant_id=tenant_id, actor=actor, by_ai=by_ai, kind=data.kind, method=data.method,
+        gross_cents=data.gross_cents, description=data.description, client_id=data.client_id,
+        external_ref=data.external_ref,
     )
     db.commit()
     db.refresh(tx)

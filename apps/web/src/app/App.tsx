@@ -3,6 +3,7 @@ import AdminDashboard from "../features/admin/AdminDashboard";
 import AgendaPage from "../features/agenda/AgendaPage";
 import LoginPage from "../features/auth/LoginPage";
 import CockpitPage from "../features/cockpit/CockpitPage";
+import CobrancasPage from "../features/cobrancas/CobrancasPage";
 import CrmPage from "../features/crm/CrmPage";
 import FinanceiroPage from "../features/financeiro/FinanceiroPage";
 import { AuthProvider, useAuth } from "../store/auth";
@@ -19,6 +20,7 @@ export default function App() {
           <Route path="/agenda" element={<AgendaPage />} />
           <Route path="/crm" element={<CrmPage />} />
           <Route path="/financeiro" element={<FinanceiroPage />} />
+          <Route path="/cobrancas" element={<CobrancasPage />} />
           <Route path="/admin" element={<AdminOnly />} />
           <Route path="*" element={<ComingSoon />} />
         </Route>

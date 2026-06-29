@@ -224,3 +224,30 @@ export interface SplitRates {
   service_pct: number;
   recurring_pct: number;
 }
+
+// ── Contas a Receber ───────────────────────────────────
+export type ChargeStatus = "open" | "paid" | "canceled";
+
+export interface Charge {
+  id: UUID;
+  tenant_id: UUID;
+  client_id: UUID | null;
+  description: string;
+  kind: TransactionKind;
+  method: PaymentMethod;
+  amount_cents: number;
+  due_date: string;
+  status: ChargeStatus;
+  is_overdue: boolean;
+  payment_code: string;
+  transaction_id: UUID | null;
+  created_at: string;
+}
+
+export interface ChargesSummary {
+  open_cents: number;
+  overdue_cents: number;
+  paid_cents: number;
+  open_count: number;
+  overdue_count: number;
+}
