@@ -48,6 +48,20 @@ class LoginRequest(BaseModel):
         return v.strip().lower()
 
 
+class ForgotPasswordRequest(BaseModel):
+    email: EmailStr
+
+    @field_validator("email")
+    @classmethod
+    def normalize_email(cls, v: str) -> str:
+        return v.strip().lower()
+
+
+class ResetPasswordRequest(BaseModel):
+    token: str = Field(min_length=8)
+    password: str = Field(min_length=8, max_length=128)
+
+
 class TenantOut(BaseModel):
     id: str
     slug: str

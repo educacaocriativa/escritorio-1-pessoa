@@ -86,6 +86,55 @@ def test_me_without_token(client: TestClient):
     assert resp.status_code == 401
 
 
+def test_forgot_password_unknown_email_is_generic(client: TestClient):
+    resp = client.post("/auth/forgot-password", json={"email": "ninguem@example.com"})
+    assert resp.status_code == 200
+    body = resp.json()
+    assert "instruções" in body["message"]
+    assert "dev_reset_token" not in body  # não existe conta -> sem token
+
+
+def test_password_reset_flow(client: TestClient):
+    _register(client)  # joao@example.com / senha-super-secreta
+    # 1) pedir redefinição (em dev, o token vem na resposta)
+    forgot = client.post("/auth/forgot-password", json={"email": VALID["email"]}).json()
+    token = forgot["dev_reset_token"]
+    assert token
+
+    # 2) redefinir a senha
+    nova = "nova-senha-bem-forte"
+    r = client.post("/auth/reset-password", json={"token": token, "password": nova})
+    assert r.status_code == 200
+
+    # 3) senha antiga não funciona, nova funciona
+    old = client.post(
+        "/auth/login", json={"email": VALID["email"], "password": VALID["password"]}
+    )
+    assert old.status_code == 401
+    new = client.post("/auth/login", json={"email": VALID["email"], "password": nova})
+    assert new.status_code == 200
+
+
+def test_reset_with_invalid_token_rejected(client: TestClient):
+    _register(client)
+    r = client.post(
+        "/auth/reset-password",
+        json={"token": "token-invalido-aqui", "password": "outra-senha"},
+    )
+    assert r.status_code == 400
+
+
+def test_reset_token_single_use(client: TestClient):
+    _register(client)
+    token = client.post("/auth/forgot-password", json={"email": VALID["email"]}).json()[
+        "dev_reset_token"
+    ]
+    client.post("/auth/reset-password", json={"token": token, "password": "primeira-troca-123"})
+    # reusar o mesmo token deve falhar
+    r = client.post("/auth/reset-password", json={"token": token, "password": "segunda-troca-123"})
+    assert r.status_code == 400
+
+
 def test_me_does_not_reissue_token(client: TestClient):
     token = _register(client).json()["access_token"]
     body = client.get("/auth/me", headers={"Authorization": f"Bearer {token}"}).json()

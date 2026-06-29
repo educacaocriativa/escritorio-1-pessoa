@@ -1,13 +1,22 @@
 """Regras de negócio do auth: registro de tenant e autenticação."""
 from __future__ import annotations
 
+from datetime import UTC, datetime, timedelta
+
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
-from app.core.security import hash_password, verify_password
+from app.core.security import (
+    generate_reset_token,
+    hash_password,
+    hash_token,
+    verify_password,
+)
 from app.modules.auth.models import Tenant, User
 from app.modules.auth.schemas import RegisterRequest
+
+RESET_TOKEN_TTL = timedelta(hours=1)
 
 
 class AuthError(Exception):
@@ -51,6 +60,36 @@ def register_tenant(db: Session, data: RegisterRequest) -> tuple[Tenant, User]:
     db.refresh(tenant)
     db.refresh(owner)
     return tenant, owner
+
+
+def request_password_reset(db: Session, email: str) -> str | None:
+    """Gera um token de redefinição para o e-mail, se existir uma conta ativa.
+
+    Retorna o token CRU (para o chamador entregar via e-mail/link) ou None se não há conta.
+    O router responde sempre genérico — nunca revela se o e-mail existe.
+    """
+    user = db.scalar(select(User).where(User.email == email.lower()))
+    if not user or not user.is_active:
+        return None
+    raw, hashed = generate_reset_token()
+    user.reset_token_hash = hashed
+    user.reset_token_expires = datetime.now(UTC) + RESET_TOKEN_TTL
+    db.commit()
+    return raw
+
+
+def reset_password(db: Session, token: str, new_password: str) -> None:
+    """Redefine a senha a partir de um token válido e não expirado."""
+    user = db.scalar(select(User).where(User.reset_token_hash == hash_token(token)))
+    expires = user.reset_token_expires if user else None
+    if expires is not None and expires.tzinfo is None:
+        expires = expires.replace(tzinfo=UTC)  # SQLite guarda naive; normaliza p/ comparar
+    if user is None or expires is None or expires < datetime.now(UTC):
+        raise AuthError("Token inválido ou expirado", 400)
+    user.password_hash = hash_password(new_password)
+    user.reset_token_hash = None
+    user.reset_token_expires = None
+    db.commit()
 
 
 def authenticate(db: Session, email: str, password: str) -> tuple[Tenant, User]:

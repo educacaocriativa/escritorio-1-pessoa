@@ -4,19 +4,28 @@ from __future__ import annotations
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 
+from app.config import settings
 from app.core.security import create_access_token
 from app.core.tenancy import CurrentUser, get_current_user
 from app.db.session import get_db
 from app.modules.auth.models import Tenant, User
 from app.modules.auth.schemas import (
     AuthToken,
+    ForgotPasswordRequest,
     LoginRequest,
     RegisterRequest,
+    ResetPasswordRequest,
     SessionInfo,
     TenantOut,
     UserOut,
 )
-from app.modules.auth.service import AuthError, authenticate, register_tenant
+from app.modules.auth.service import (
+    AuthError,
+    authenticate,
+    register_tenant,
+    request_password_reset,
+    reset_password,
+)
 
 router = APIRouter(prefix="/auth", tags=["auth"])
 
@@ -54,6 +63,27 @@ def login(data: LoginRequest, db: Session = Depends(get_db)) -> AuthToken:
     except AuthError as e:
         raise HTTPException(status_code=e.status_code, detail=str(e)) from e
     return _build_token(tenant, user)
+
+
+@router.post("/forgot-password")
+def forgot_password(data: ForgotPasswordRequest, db: Session = Depends(get_db)) -> dict:
+    raw = request_password_reset(db, str(data.email))
+    # Resposta sempre genérica — não revela se o e-mail existe.
+    resp: dict = {"message": "Se o e-mail existir, enviaremos instruções de redefinição."}
+    # DEV: ainda não há provedor de e-mail. Em desenvolvimento devolvemos o token para
+    # permitir testar o fluxo. NUNCA em produção (lá vai por e-mail/WhatsApp).
+    if raw and not settings.is_production:
+        resp["dev_reset_token"] = raw
+    return resp
+
+
+@router.post("/reset-password")
+def reset_password_route(data: ResetPasswordRequest, db: Session = Depends(get_db)) -> dict:
+    try:
+        reset_password(db, data.token, data.password)
+    except AuthError as e:
+        raise HTTPException(status_code=e.status_code, detail=str(e)) from e
+    return {"message": "Senha redefinida com sucesso."}
 
 
 @router.get("/me", response_model=SessionInfo)

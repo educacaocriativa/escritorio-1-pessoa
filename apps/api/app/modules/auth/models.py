@@ -6,7 +6,9 @@ identidade única na plataforma. Sub-usuários (contador, estagiário) herdam o 
 """
 from __future__ import annotations
 
-from sqlalchemy import JSON, Boolean, ForeignKey, String
+from datetime import datetime
+
+from sqlalchemy import JSON, Boolean, DateTime, ForeignKey, String
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.db.base import Base, TimestampMixin, _uuid
@@ -39,5 +41,11 @@ class User(Base, TimestampMixin):
     is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
     # Nível 1 (Master/plataforma): gerencia todas as contas. NÃO é o owner de um tenant comum.
     is_platform_admin: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+
+    # Recuperação de senha: guardamos o HASH (sha256) do token, nunca o token cru.
+    reset_token_hash: Mapped[str | None] = mapped_column(String(64), index=True, nullable=True)
+    reset_token_expires: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
 
     tenant: Mapped[Tenant] = relationship(back_populates="users")

@@ -1,6 +1,8 @@
 """Primitivas de segurança: hash de senha e tokens JWT."""
 from __future__ import annotations
 
+import hashlib
+import secrets
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
@@ -38,3 +40,14 @@ def decode_access_token(token: str) -> dict[str, Any] | None:
         return jwt.decode(token, settings.jwt_secret, algorithms=[settings.jwt_algorithm])
     except JWTError:
         return None
+
+
+def generate_reset_token() -> tuple[str, str]:
+    """Retorna (token_cru, hash). Só o hash é persistido; o cru vai ao usuário (e-mail/link)."""
+    raw = secrets.token_urlsafe(32)
+    return raw, hash_token(raw)
+
+
+def hash_token(raw: str) -> str:
+    # sha256 (determinístico) p/ permitir lookup; o token tem entropia alta o bastante.
+    return hashlib.sha256(raw.encode("utf-8")).hexdigest()
