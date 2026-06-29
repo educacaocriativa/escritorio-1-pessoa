@@ -55,19 +55,30 @@ def _parse_slides(text: str) -> list[dict]:
     return out
 
 
+# Metodologia destilada da skill do usuário "social-content-juridico" (estrutura de carrossel
+# de alto impacto). Generalizada para qualquer nicho, não só jurídico.
+_CAROUSEL_SYSTEM = (
+    "Você é redator de carrosséis de Instagram (pt-BR), no método de conteúdo de alto impacto.\n"
+    "REGRA DE OURO: se uma pessoa leiga não entender, o conteúdo falhou — zero jargão sem "
+    "explicação; troque termos técnicos por analogias do dia a dia.\n"
+    "Estrutura do carrossel:\n"
+    "- Slide 1 (CAPA): título impactante — um problema ou pergunta que prende (gancho forte).\n"
+    "- Slide 2 (CONTEXTO): por que isso importa para o seguidor + um dado/fato surpreendente.\n"
+    "- Slides do meio: UM ponto por slide, no máximo ~50 palavras, linguagem de conversa.\n"
+    "- Penúltimo (TAKEAWAY): resumo rápido em lista (ex.: '3 coisas para lembrar').\n"
+    "- Último (CTA): chamada clara — 'Salva esse carrossel', 'Manda para quem precisa'.\n"
+    "headings curtos (até 6 palavras); body com 1-2 frases, direto e útil.\n"
+    "Responda APENAS com um array JSON de objetos {\"heading\": \"...\", \"body\": \"...\"}."
+)
+
+
 def generate_slides(topic: str, n: int, tone: str) -> list[dict]:
     """IA escreve os slides; cai para um esqueleto se não houver chave/parsing falhar."""
     if not settings.anthropic_api_key:
         return _fallback_slides(topic, n)
-    system = (
-        "Você é redator de carrosséis de Instagram (pt-BR). Gere um carrossel envolvente. "
-        "Responda APENAS com um array JSON de objetos {\"heading\": \"...\", \"body\": \"...\"}. "
-        "O 1º slide é um gancho forte; os do meio entregam valor; o último é uma CTA. "
-        "headings curtos (até 6 palavras), body com 1-2 frases."
-    )
     user = f"Tema: {topic}\nNúmero de slides: {n}\nTom: {tone}"
     try:
-        text = ai.complete(system=system, user_message=user, max_tokens=1500).text
+        text = ai.complete(system=_CAROUSEL_SYSTEM, user_message=user, max_tokens=1500).text
         slides = _parse_slides(text)
         return slides[:n] if len(slides) >= n else slides + _fallback_slides(topic, n)[len(slides):]
     except Exception:
