@@ -77,7 +77,11 @@ Ao criar/alterar qualquer funcionalidade:
 - [x] **Agenda clicável + detalhe do evento** — todo evento abre um modal central; para `cobranca_receber` mostra os dados da cobrança + **histórico de mensagens** ao cliente + **Cobrar com IA** e **mensagem manual**; para `cobranca_pagar` mostra os dados da conta. Notification ganhou `client_id` (migration 0012) p/ o histórico por cliente. 122 testes.
 - [x] **Produtos & Checkout** (estrutura Super Membros: Produtos / Cupons / Alunos) — produtos (físico/digital/membros), cupons (% ou fixo, único por tenant), venda aplica cupom + cria Transaction na Carteira com split de produto + matricula o Aluno (atômico); link de checkout (stub). Migration 0013. 130 testes. **→ FASE 2 COMPLETA.**
   - **Dívida:** checkout público real (página + gateway), entrega automática (infoproduto: link/arquivo; físico: baixa de estoque + tarefa de envio), área de membros real.
-- [ ] Próximo: **Fase 3 — documentos & fechamento de venda** (Orçamentos → Construtor de Contratos → Assinatura & KYC). Ou integrações pendentes (WhatsApp/Google/gateway).
+## Fase 3 — documentos & fechamento de venda (em andamento)
+- [x] **Central de Orçamentos** — itens/quantidades/desconto com totais, status (rascunho→enviado→aprovado/recusado), enviar (notifica cliente), **efeito dominó** (aprovar gera a cobrança em Contas a Receber, ATÔMICO via `receivables.build_charge` + lock + guarda de total>0), descrição de escopo por IA. Migration 0014. 140 testes.
+  - Refactor: `receivables.build_charge` (sem commit) reutilizável; `create_charge` virou wrapper.
+  - **Dívida:** PDF do orçamento (logo/layout), status "visualizado" (tracking do cliente), follow-up automático, contrato no dominó.
+- [ ] Próximo na Fase 3: **Construtor de Contratos** (drag-and-drop) → **Assinatura & KYC**.
 - [ ] Migrar módulo **Assistente Jurídico** do app existente (`~/lex-intelligentia-app`) — Fase 5.
 
 ## 6.1 Dívida técnica / TODO de segurança (de revisão QA — endereçar antes de produção)

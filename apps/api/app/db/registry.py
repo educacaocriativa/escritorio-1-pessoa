@@ -12,6 +12,7 @@ from app.modules.crm.models import Client, PipelineStage  # noqa: F401
 from app.modules.notifications.models import Notification  # noqa: F401
 from app.modules.payables.models import Payable  # noqa: F401
 from app.modules.products.models import Coupon, Enrollment, Product  # noqa: F401
+from app.modules.quotes.models import Quote  # noqa: F401
 from app.modules.receivables.models import Charge  # noqa: F401
 from app.modules.wallet.models import (  # noqa: F401
     PlatformEarning,

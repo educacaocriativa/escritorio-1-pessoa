@@ -344,3 +344,36 @@ export interface Enrollment {
   amount_cents: number;
   created_at: string;
 }
+
+// ── Orçamentos ─────────────────────────────────────────
+export type QuoteStatus = "draft" | "sent" | "approved" | "rejected";
+
+export interface QuoteItem {
+  description: string;
+  quantity: number;
+  unit_price_cents: number;
+}
+
+export interface Quote {
+  id: UUID;
+  tenant_id: UUID;
+  client_id: UUID | null;
+  client_name: string | null;
+  title: string;
+  items: QuoteItem[];
+  discount_cents: number;
+  subtotal_cents: number;
+  total_cents: number;
+  status: QuoteStatus;
+  valid_until: string | null;
+  notes: string;
+  charge_id: UUID | null;
+  created_at: string;
+}
+
+export interface QuotesSummary {
+  draft_count: number;
+  sent_cents: number;
+  approved_cents: number;
+  approved_count: number;
+}

@@ -51,7 +51,12 @@ def is_overdue(charge: Charge, today: date | None = None) -> bool:
     return charge.status == STATUS_OPEN and charge.due_date < today
 
 
-def create_charge(db: Session, *, tenant_id: str, actor: str, data: ChargeCreate) -> Charge:
+def build_charge(db: Session, *, tenant_id: str, actor: str, data: ChargeCreate) -> Charge:
+    """Cria a cobrança + evento de agenda na sessão SEM commitar.
+
+    Permite que outros módulos (ex.: Orçamentos ao aprovar) gerem a cobrança atomicamente
+    junto com sua própria mutação, num único commit.
+    """
     charge = Charge(
         tenant_id=tenant_id,
         client_id=data.client_id,
@@ -90,6 +95,11 @@ def create_charge(db: Session, *, tenant_id: str, actor: str, data: ChargeCreate
     charge.agenda_event_id = event.id
 
     audit.record(db, tenant_id=tenant_id, actor=actor, action="receivable.create", target=charge.id)
+    return charge
+
+
+def create_charge(db: Session, *, tenant_id: str, actor: str, data: ChargeCreate) -> Charge:
+    charge = build_charge(db, tenant_id=tenant_id, actor=actor, data=data)
     db.commit()
     db.refresh(charge)
     return charge
