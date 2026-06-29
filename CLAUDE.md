@@ -80,8 +80,11 @@ Ao criar/alterar qualquer funcionalidade:
 ## Fase 3 — documentos & fechamento de venda (em andamento)
 - [x] **Central de Orçamentos** — itens/quantidades/desconto com totais, status (rascunho→enviado→aprovado/recusado), enviar (notifica cliente), **efeito dominó** (aprovar gera a cobrança em Contas a Receber, ATÔMICO via `receivables.build_charge` + lock + guarda de total>0), descrição de escopo por IA. Migration 0014. 140 testes.
   - Refactor: `receivables.build_charge` (sem commit) reutilizável; `create_charge` virou wrapper.
-  - **Dívida:** PDF do orçamento (logo/layout), status "visualizado" (tracking do cliente), follow-up automático, contrato no dominó.
+- [x] **Construtor de proposta (estilo Super Membros)** — editor em abas **Serviços / Dados / Imagens / Cronograma / Contrato / Aparência** com prévia ao vivo, e **link público** que o cliente abre SEM login (senha opcional) e **aceita** → dispara o dominó. Migration 0015. 147 testes.
+  - Link público: `quotes` tem RLS; ao salvar copiamos um SNAPSHOT só-de-exibição p/ `published_proposals` (tabela GLOBAL sem RLS) por `slug`. Rota pública lê via `get_db`; o aceite abre `tenant_session(snap.tenant_id)` (injetado por `get_tenant_session_factory`, sobrescrito nos testes) e chama `approve_quote`. QA de segurança: sem vazamento cross-tenant, senha fail-closed antes de aprovar, idempotente (FOR UPDATE). Slug `token_urlsafe(12)`; `<img src>` com guarda de esquema.
+  - **Dívida:** upload real de imagem/logo (hoje por URL — precisa storage S3); PDF do orçamento; status "visualizado"; rate-limit em `/public/proposals/*`; aceite público hoje funciona em rascunho (decidir se exige "enviado"); derivar snapshot do schema `PublicProposal`.
 - [ ] Próximo na Fase 3: **Construtor de Contratos** (drag-and-drop) → **Assinatura & KYC**.
+- [ ] **DEPOIS (lembrete do cliente): Área do Cliente / Ficha 360°** — abrir um cliente e: editar dados, **trocar vencimentos** de cobranças (falta endpoint p/ editar due_date + atualizar evento da agenda), **protestar cobranças** (estado/ação novo em Contas a Receber), **ver contratos e documentos** (depende de Contratos + Documentos). É a Visão 360° do CRM (módulo 8). Construir após Contratos & Assinatura.
 - [ ] Migrar módulo **Assistente Jurídico** do app existente (`~/lex-intelligentia-app`) — Fase 5.
 
 ## 6.1 Dívida técnica / TODO de segurança (de revisão QA — endereçar antes de produção)

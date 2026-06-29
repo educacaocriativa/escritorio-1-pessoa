@@ -345,20 +345,33 @@ export interface Enrollment {
   created_at: string;
 }
 
-// ── Orçamentos ─────────────────────────────────────────
+// ── Orçamentos / Construtor de proposta ────────────────
 export type QuoteStatus = "draft" | "sent" | "approved" | "rejected";
 
 export interface QuoteItem {
-  description: string;
+  description: string; // "Título exibido"
+  subtitle?: string;
   quantity: number;
   unit_price_cents: number;
+}
+
+export interface GalleryImage {
+  url: string;
+  caption?: string;
+}
+
+export interface ScheduleStage {
+  title: string;
+  when?: string;
+  description?: string;
 }
 
 export interface Quote {
   id: UUID;
   tenant_id: UUID;
   client_id: UUID | null;
-  client_name: string | null;
+  client_name: string;
+  client_whatsapp: string;
   title: string;
   items: QuoteItem[];
   discount_cents: number;
@@ -367,8 +380,46 @@ export interface Quote {
   status: QuoteStatus;
   valid_until: string | null;
   notes: string;
+  payment_terms: string;
+  has_password: boolean;
+  show_gallery: boolean;
+  gallery: GalleryImage[];
+  show_schedule: boolean;
+  schedule: ScheduleStage[];
+  show_contract: boolean;
+  contract_text: string;
+  logo_url: string;
+  primary_color: string;
+  bg_color: string;
+  text_color: string;
+  accent_color: string;
+  public_slug: string | null;
   charge_id: UUID | null;
   created_at: string;
+}
+
+// O que a página pública recebe (sem login)
+export interface PublicProposal {
+  title: string;
+  client_name: string;
+  items: QuoteItem[];
+  subtotal_cents: number;
+  discount_cents: number;
+  total_cents: number;
+  payment_terms: string;
+  show_gallery: boolean;
+  gallery: GalleryImage[];
+  show_schedule: boolean;
+  schedule: ScheduleStage[];
+  show_contract: boolean;
+  contract_text: string;
+  logo_url: string;
+  primary_color: string;
+  bg_color: string;
+  text_color: string;
+  accent_color: string;
+  status: QuoteStatus;
+  valid_until: string | null;
 }
 
 export interface QuotesSummary {

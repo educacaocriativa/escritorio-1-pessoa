@@ -4,6 +4,7 @@ Nota: RLS é específica do Postgres e NÃO é exercida aqui — é validada em 
 (ver docs/AWS-DEPLOYMENT.md). Estes testes cobrem a lógica de auth/serviço/rotas.
 """
 from collections.abc import Iterator
+from contextlib import contextmanager
 
 import pytest
 from fastapi.testclient import TestClient
@@ -13,7 +14,7 @@ from sqlalchemy.pool import StaticPool
 
 from app.core.tenancy import get_tenant_db
 from app.db.registry import Base
-from app.db.session import get_db
+from app.db.session import get_db, get_tenant_session_factory
 from app.main import app
 
 engine = create_engine(
@@ -48,8 +49,18 @@ def client(db: Session) -> Iterator[TestClient]:
 
     # get_tenant_db usa set_config (Postgres) — em SQLite trocamos pela sessão de teste.
     # (RLS não é exercida aqui; é validada em ambiente Postgres — ver docs/AWS-DEPLOYMENT.md.)
+    # Rotas públicas abrem tenant_session direto (fora do request) — em teste, apontar à
+    # sessão SQLite compartilhada em vez de abrir conexão Postgres real.
+    def _override_factory():
+        @contextmanager
+        def _factory(_tenant_id: str) -> Iterator[Session]:
+            yield db
+
+        return _factory
+
     app.dependency_overrides[get_db] = _override_get_db
     app.dependency_overrides[get_tenant_db] = _override_get_db
+    app.dependency_overrides[get_tenant_session_factory] = _override_factory
     with TestClient(app) as c:
         yield c
     app.dependency_overrides.clear()

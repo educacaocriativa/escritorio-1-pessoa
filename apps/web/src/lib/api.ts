@@ -14,6 +14,12 @@ api.interceptors.request.use((config) => {
   return config;
 });
 
+/** Cliente para rotas públicas (sem login / sem token) — ex.: proposta compartilhada. */
+export const publicApi = axios.create({
+  baseURL: "/api",
+  headers: { "Content-Type": "application/json" },
+});
+
 export function apiErrorMessage(err: unknown): string {
   if (err instanceof AxiosError) {
     const data = err.response?.data as ApiError | undefined;

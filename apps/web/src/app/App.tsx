@@ -8,6 +8,8 @@ import CrmPage from "../features/crm/CrmPage";
 import FinanceiroPage from "../features/financeiro/FinanceiroPage";
 import PagarPage from "../features/pagar/PagarPage";
 import OrcamentosPage from "../features/orcamentos/OrcamentosPage";
+import PublicProposalPage from "../features/orcamentos/PublicProposalPage";
+import QuoteBuilderPage from "../features/orcamentos/QuoteBuilderPage";
 import ProdutosPage from "../features/produtos/ProdutosPage";
 import { AuthProvider, useAuth } from "../store/auth";
 import { PageActionsProvider } from "../store/pageActions";
@@ -18,6 +20,7 @@ export default function App() {
     <AuthProvider>
       <Routes>
         <Route path="/login" element={<LoginRoute />} />
+        <Route path="/orcamento/:slug" element={<PublicProposalPage />} />
         <Route element={<ProtectedLayout />}>
           <Route path="/" element={<CockpitPage />} />
           <Route path="/agenda" element={<AgendaPage />} />
@@ -27,6 +30,8 @@ export default function App() {
           <Route path="/pagar" element={<PagarPage />} />
           <Route path="/produtos" element={<ProdutosPage />} />
           <Route path="/orcamentos" element={<OrcamentosPage />} />
+          <Route path="/orcamentos/novo" element={<QuoteBuilderPage />} />
+          <Route path="/orcamentos/:id" element={<QuoteBuilderPage />} />
           <Route path="/admin" element={<AdminOnly />} />
           <Route path="*" element={<ComingSoon />} />
         </Route>

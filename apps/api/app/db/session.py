@@ -61,3 +61,13 @@ def get_db() -> Iterator[Session]:
         yield db
     finally:
         db.close()
+
+
+def get_tenant_session_factory():
+    """Dependência: devolve o factory `tenant_session`.
+
+    Existe para que rotas PÚBLICAS (sem auth) consigam abrir uma sessão de tenant a partir de
+    um identificador que NÃO vem do token (ex.: o tenant do snapshot da proposta). Como é uma
+    dependência, os testes a sobrescrevem para apontar à sessão de teste (SQLite).
+    """
+    return tenant_session
