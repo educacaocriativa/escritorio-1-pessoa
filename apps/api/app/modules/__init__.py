@@ -9,6 +9,7 @@ from app.modules.auth.router import router as auth_router
 from app.modules.cockpit.router import router as cockpit_router
 from app.modules.crm.router import router as crm_router
 from app.modules.notifications.router import router as notifications_router
+from app.modules.payables.router import router as payables_router
 from app.modules.platform.router import router as platform_router
 from app.modules.receivables.router import router as receivables_router
 from app.modules.wallet.router import router as wallet_router
@@ -22,4 +23,5 @@ ALL_ROUTERS: list[APIRouter] = [
     notifications_router,
     wallet_router,
     receivables_router,
+    payables_router,
 ]

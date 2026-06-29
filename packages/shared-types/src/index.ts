@@ -260,3 +260,30 @@ export interface ChargesSummary {
   open_count: number;
   overdue_count: number;
 }
+
+// ── Contas a Pagar ─────────────────────────────────────
+export type PayableStatus = "open" | "paid" | "canceled";
+export type Recurrence = "none" | "weekly" | "monthly" | "yearly";
+
+export interface Payable {
+  id: UUID;
+  tenant_id: UUID;
+  description: string;
+  category: string;
+  supplier: string;
+  amount_cents: number;
+  due_date: string;
+  status: PayableStatus;
+  is_overdue: boolean;
+  paid_at: string | null;
+  recurrence: Recurrence;
+  created_at: string;
+}
+
+export interface PayablesSummary {
+  open_cents: number;
+  overdue_cents: number;
+  week_cents: number;
+  month_cents: number;
+  paid_month_cents: number;
+}

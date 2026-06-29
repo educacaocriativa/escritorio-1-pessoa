@@ -1,5 +1,6 @@
 import {
   CalendarDays,
+  CreditCard,
   Globe,
   LayoutDashboard,
   type LucideIcon,
@@ -34,6 +35,7 @@ export const navSections: NavSection[] = [
       { label: "CRM & Kanban", to: "/crm", icon: Users, ready: true },
       { label: "Financeiro", to: "/financeiro", icon: Wallet, ready: true },
       { label: "Cobranças", to: "/cobrancas", icon: Receipt, ready: true },
+      { label: "Contas a Pagar", to: "/pagar", icon: CreditCard, ready: true },
     ],
   },
   {

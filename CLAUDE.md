@@ -72,7 +72,9 @@ Ao criar/alterar qualquer funcionalidade:
 - [x] **Contas a Receber** — cobranças (boleto/Pix/link com código stub), baixa (`/pay` simula webhook) → cria Transaction na Carteira com split (atômico, com lock FOR UPDATE contra baixa dupla), vencimento injetado na Agenda (cobranca_receber), resumo de inadimplência (a vencer/vencido/recebido). Migration 0010. 107 testes.
   - **Dívida:** gateway real (Asaas/Mercado Pago) p/ gerar boleto/Pix de verdade + webhook real; régua de cobrança (lembretes automáticos) + juros/multa; estorno; `is_overdue`/summary usam dia em UTC (mesma dívida de fuso do Cockpit).
 - [x] **Cockpit: painel de inadimplência + Cobrar com IA** — o dashboard (acima da agenda) lista clientes em atraso; botão por cliente dispara `/receivables/charges/{id}/collect`: a IA (Claude, com `[NOME]` como placeholder p/ não vazar PII; fallback template se não houver chave) escreve uma cobrança amigável e registra uma Notification de WhatsApp (rastro de IA). 110 testes.
-- [ ] Próximo na Fase 2: **Contas a Pagar** → **Produtos & Checkout**.
+- [x] **Contas a Pagar** — despesas (categoria, fornecedor, recorrência), vencimento na Agenda (cobranca_pagar), marcar paga (com lock), resumo (a pagar/semana/mês/pago), categorias. Cockpit "Custos do Mês" agora é real. Migration 0011. 118 testes.
+  - **Dívida:** OCR de boleto (IA lê PDF e preenche fornecedor/valor/vencimento) — não implementado; auto-geração de contas recorrentes (precisa scheduler); anexo de comprovante.
+- [ ] Próximo na Fase 2: **Produtos & Checkout** (físicos + infoprodutos, link de pagamento, entrega automática).
 - [ ] Migrar módulo **Assistente Jurídico** do app existente (`~/lex-intelligentia-app`) — Fase 5.
 
 ## 6.1 Dívida técnica / TODO de segurança (de revisão QA — endereçar antes de produção)

@@ -19,6 +19,7 @@ from app.modules.agenda.models import (
     AgendaEvent,
 )
 from app.modules.crm.models import Client, PipelineStage
+from app.modules.payables import service as payables_service
 from app.modules.receivables.models import STATUS_OPEN as CHARGE_OPEN
 from app.modules.receivables.models import Charge
 from app.modules.wallet import service as wallet_service
@@ -124,12 +125,12 @@ def overdue_charges(db: Session) -> list[dict]:
 
 
 def finance_summary(db: Session) -> dict:
-    """Faturamento líquido a partir da Carteira (net não estornado)."""
+    """Faturamento líquido (Carteira) + custos do mês (Contas a Pagar)."""
     w = wallet_service.wallet_summary(db)
     net_revenue = w["available_cents"] + w["pending_cents"] + w["withdrawn_cents"]
     return {
         "available": True,
         "net_revenue_cents": net_revenue,
-        "monthly_costs_cents": None,  # Contas a Pagar (próximo módulo da Fase 2)
+        "monthly_costs_cents": payables_service.monthly_costs(db),
         "signed_contracts": None,  # módulo de Contratos (Fase 3)
     }
