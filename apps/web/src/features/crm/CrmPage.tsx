@@ -1,5 +1,5 @@
 import type { Board, BoardColumn, Client } from "@e1p/shared-types";
-import { GripVertical } from "lucide-react";
+import { Archive, GripVertical, Plus } from "lucide-react";
 import { useCallback, useEffect, useState } from "react";
 import Modal, { Field } from "../../components/Modal";
 import { api, apiErrorMessage } from "../../lib/api";
@@ -38,6 +38,29 @@ export default function CrmPage() {
     }
   }
 
+  async function createStage() {
+    const name = window.prompt("Nome da nova etapa:")?.trim();
+    if (!name) return;
+    try {
+      await api.post("/crm/stages", { name });
+    } catch (err) {
+      alert(apiErrorMessage(err));
+    } finally {
+      load();
+    }
+  }
+
+  async function archiveStage(stageId: string, name: string) {
+    if (!confirm(`Arquivar a etapa "${name}"? Os clientes dela vão para a primeira etapa.`)) return;
+    try {
+      await api.post(`/crm/stages/${stageId}/archive`);
+    } catch (err) {
+      alert(apiErrorMessage(err));
+    } finally {
+      load();
+    }
+  }
+
   return (
     <div className="space-y-6">
       <div>
@@ -55,6 +78,7 @@ export default function CrmPage() {
               key={col.stage.id}
               column={col}
               isOver={dragOver === col.stage.id}
+              onArchive={() => archiveStage(col.stage.id, col.stage.name)}
               onDragOverCol={() => setDragOver(col.stage.id)}
               onDragLeaveCol={() => setDragOver((s) => (s === col.stage.id ? null : s))}
               onDropCard={(clientId, fromStage) => {
@@ -63,6 +87,13 @@ export default function CrmPage() {
               }}
             />
           ))}
+          <button
+            onClick={createStage}
+            className="flex h-12 w-56 shrink-0 items-center justify-center gap-2 rounded-2xl border-2 border-dashed border-neutral-200 text-sm font-medium text-neutral-400 hover:border-primary-300 hover:text-primary-600"
+          >
+            <Plus size={16} />
+            Nova etapa
+          </button>
         </div>
       )}
 
@@ -89,12 +120,14 @@ function optimisticMove(board: Board, clientId: string, stageId: string): Board 
 function Column({
   column,
   isOver,
+  onArchive,
   onDragOverCol,
   onDragLeaveCol,
   onDropCard,
 }: {
   column: BoardColumn;
   isOver: boolean;
+  onArchive: () => void;
   onDragOverCol: () => void;
   onDragLeaveCol: () => void;
   onDropCard: (clientId: string, fromStage: string | null) => void;
@@ -121,11 +154,20 @@ function Column({
         isOver ? "bg-primary-100 ring-2 ring-primary-300" : "bg-neutral-100"
       }`}
     >
-      <div className="mb-3 flex items-center justify-between px-1">
+      <div className="group mb-3 flex items-center justify-between px-1">
         <span className={`text-sm font-semibold ${accent}`}>{column.stage.name}</span>
-        <span className="rounded-pill bg-white px-2 text-xs text-neutral-500">
-          {column.clients.length}
-        </span>
+        <div className="flex items-center gap-1">
+          <span className="rounded-pill bg-white px-2 text-xs text-neutral-500">
+            {column.clients.length}
+          </span>
+          <button
+            onClick={onArchive}
+            title="Arquivar etapa"
+            className="text-neutral-300 opacity-0 transition hover:text-neutral-600 group-hover:opacity-100"
+          >
+            <Archive size={14} />
+          </button>
+        </div>
       </div>
       <div className="flex min-h-[60px] flex-col gap-2">
         {column.clients.length === 0 ? (

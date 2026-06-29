@@ -16,9 +16,11 @@ export default function AppShell({ children }: { children: ReactNode }) {
   return (
     <div className="flex min-h-screen bg-neutral-50">
       {open && <Sidebar onClose={() => setOpen(false)} />}
-      <div className="flex flex-1 flex-col">
+      {/* min-w-0 impede o flex-child de estourar e empurrar a sidebar quando o Kanban
+          rola na horizontal — o scroll fica contido no conteúdo. */}
+      <div className="flex min-w-0 flex-1 flex-col">
         <Topbar onOpen={() => setOpen(true)} sidebarOpen={open} />
-        <main className="flex-1 p-6">{children}</main>
+        <main className="min-w-0 flex-1 overflow-x-hidden p-6">{children}</main>
       </div>
     </div>
   );
@@ -27,7 +29,7 @@ export default function AppShell({ children }: { children: ReactNode }) {
 function Sidebar({ onClose }: { onClose: () => void }) {
   const { logout, user } = useAuth();
   return (
-    <aside className="flex w-64 flex-col bg-primary-500 py-6 pl-4 text-white">
+    <aside className="sticky top-0 flex h-screen w-64 shrink-0 flex-col self-start bg-primary-500 py-6 pl-4 text-white">
       {/* Botão de fechar/colapsar (como no anexo) */}
       <button
         onClick={onClose}

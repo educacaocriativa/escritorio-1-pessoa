@@ -189,6 +189,24 @@ def test_failing_subscriber_does_not_break_move(client: TestClient, headers):
     assert resp.json()["stage_id"] == stages[1]["id"]
 
 
+def test_archive_stage_moves_clients(client: TestClient, headers):
+    stages = client.get("/crm/stages", headers=headers).json()
+    proposta = next(s for s in stages if s["name"] == "Proposta")
+    c = client.post("/crm/clients", json={"name": "Movel"}, headers=headers).json()
+    client.post(f"/crm/clients/{c['id']}/move", json={"stage_id": proposta["id"]}, headers=headers)
+
+    r = client.post(f"/crm/stages/{proposta['id']}/archive", headers=headers)
+    assert r.status_code == 204
+
+    board = client.get("/crm/board", headers=headers).json()
+    names = [col["stage"]["name"] for col in board["columns"]]
+    assert "Proposta" not in names  # etapa arquivada sumiu do board
+
+    # o cliente foi remanejado para a primeira etapa ativa (não ficou órfão)
+    moved = client.get(f"/crm/clients/{c['id']}", headers=headers).json()
+    assert moved["stage_id"] == board["columns"][0]["stage"]["id"]
+
+
 def test_update_client(client: TestClient, headers):
     c = client.post("/crm/clients", json={"name": "Antes"}, headers=headers).json()
     resp = client.patch(

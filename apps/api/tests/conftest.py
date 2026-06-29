@@ -37,6 +37,12 @@ def db() -> Iterator[Session]:
 
 @pytest.fixture()
 def client(db: Session) -> Iterator[TestClient]:
+    # Remove assinantes globais do barramento (ex.: WhatsApp on-move, que abriria uma
+    # conexão Postgres real). Testes que precisam de assinante registram o seu próprio.
+    from app.core import events
+
+    events.clear()
+
     def _override_get_db() -> Iterator[Session]:
         yield db
 

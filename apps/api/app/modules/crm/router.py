@@ -87,6 +87,19 @@ def update_stage(
     return StageOut.model_validate(stage)
 
 
+@router.post("/stages/{stage_id}/archive", status_code=204)
+def archive_stage(
+    stage_id: str,
+    user: CurrentUser = Depends(_guard),
+    db: Session = Depends(get_tenant_db),
+) -> Response:
+    try:
+        service.archive_stage(db, stage_id=stage_id, tenant_id=user.tenant_id, actor=user.user_id)
+    except service.CrmError as e:
+        raise _err(e) from e
+    return Response(status_code=204)
+
+
 @router.delete("/stages/{stage_id}", status_code=204)
 def delete_stage(
     stage_id: str,

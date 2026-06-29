@@ -34,6 +34,7 @@ class StageOut(BaseModel):
     position: int
     is_won: bool
     is_lost: bool
+    is_archived: bool = False
 
     model_config = {"from_attributes": True}
 

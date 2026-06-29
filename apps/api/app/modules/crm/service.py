@@ -25,10 +25,12 @@ class CrmError(Exception):
 
 
 def _ordered_stages(db: Session) -> list[PipelineStage]:
-    # Desempate por id garante ordem estável mesmo se duas posições colidirem.
+    # Apenas etapas ativas (não arquivadas). Desempate por id garante ordem estável.
     return list(
         db.scalars(
-            select(PipelineStage).order_by(PipelineStage.position, PipelineStage.id)
+            select(PipelineStage)
+            .where(PipelineStage.is_archived.is_(False))
+            .order_by(PipelineStage.position, PipelineStage.id)
         ).all()
     )
 
@@ -94,6 +96,24 @@ def update_stage(
     db.commit()
     db.refresh(stage)
     return stage
+
+
+def archive_stage(db: Session, *, stage_id: str, tenant_id: str, actor: str) -> None:
+    """Arquiva uma etapa (some do board). Move os clientes dela para a primeira etapa ativa."""
+    stage = get_stage(db, stage_id)
+    if stage.is_archived:
+        return
+    others = [s for s in _ordered_stages(db) if s.id != stage_id]
+    has_clients = db.scalar(select(func.count(Client.id)).where(Client.stage_id == stage_id))
+    if has_clients:
+        if not others:
+            raise CrmError("Crie outra etapa antes de arquivar esta (há clientes nela)", 409)
+        db.query(Client).filter(Client.stage_id == stage_id).update(
+            {Client.stage_id: others[0].id}, synchronize_session=False
+        )
+    stage.is_archived = True
+    audit.record(db, tenant_id=tenant_id, actor=actor, action="crm.stage.archive", target=stage_id)
+    db.commit()
 
 
 def delete_stage(db: Session, *, stage_id: str, tenant_id: str, actor: str) -> None:

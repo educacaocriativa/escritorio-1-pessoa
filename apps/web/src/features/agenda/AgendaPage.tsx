@@ -1,9 +1,11 @@
 import type { AgendaEvent, CreateEventResult } from "@e1p/shared-types";
-import { AlertTriangle, Clock, MapPin, Users, Video } from "lucide-react";
-import { useCallback, useEffect, useState } from "react";
+import { ChevronLeft, ChevronRight, Video } from "lucide-react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import Modal, { Field } from "../../components/Modal";
 import { api, apiErrorMessage } from "../../lib/api";
 import { usePrimaryAction } from "../../store/pageActions";
+
+type View = "month" | "week" | "day";
 
 const KINDS = [
   ["atendimento", "Atendimento"],
@@ -14,114 +16,292 @@ const KINDS = [
   ["bloqueio", "Bloqueio"],
 ] as const;
 
+const WEEKDAYS = ["Dom", "Seg", "Ter", "Qua", "Qui", "Sex", "Sáb"];
+
+// ── helpers de data (sem lib) ──────────────────────────
+const startOfDay = (d: Date) => new Date(d.getFullYear(), d.getMonth(), d.getDate());
+const addDays = (d: Date, n: number) => {
+  const r = startOfDay(d);
+  r.setDate(r.getDate() + n);
+  return r;
+};
+const startOfWeek = (d: Date) => addDays(d, -d.getDay()); // semana começa no domingo
+const sameDay = (a: Date, b: Date) => a.toDateString() === b.toDateString();
+const ymd = (d: Date) =>
+  `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+
+function rangeFor(view: View, anchor: Date): { start: Date; end: Date; days: Date[] } {
+  if (view === "day") {
+    return { start: startOfDay(anchor), end: addDays(anchor, 1), days: [startOfDay(anchor)] };
+  }
+  if (view === "week") {
+    const s = startOfWeek(anchor);
+    const days = Array.from({ length: 7 }, (_, i) => addDays(s, i));
+    return { start: s, end: addDays(s, 7), days };
+  }
+  // month: grade de 6 semanas a partir do domingo anterior ao dia 1
+  const first = new Date(anchor.getFullYear(), anchor.getMonth(), 1);
+  const gridStart = startOfWeek(first);
+  const days = Array.from({ length: 42 }, (_, i) => addDays(gridStart, i));
+  return { start: gridStart, end: addDays(gridStart, 42), days };
+}
+
 export default function AgendaPage() {
+  const [view, setView] = useState<View>("month");
+  const [anchor, setAnchor] = useState(() => new Date());
   const [events, setEvents] = useState<AgendaEvent[]>([]);
+  const [modalDate, setModalDate] = useState<Date | null>(null);
   const [open, setOpen] = useState(false);
-  const [loading, setLoading] = useState(true);
+
+  const { start, end, days } = useMemo(() => rangeFor(view, anchor), [view, anchor]);
 
   const load = useCallback(async () => {
-    setLoading(true);
-    try {
-      const { data } = await api.get<AgendaEvent[]>("/agenda/events");
-      setEvents(data);
-    } finally {
-      setLoading(false);
-    }
-  }, []);
+    const { data } = await api.get<AgendaEvent[]>("/agenda/events", {
+      params: { start: start.toISOString(), end: end.toISOString(), limit: 500 },
+    });
+    setEvents(data);
+  }, [start, end]);
 
   useEffect(() => {
     load();
   }, [load]);
 
-  usePrimaryAction("Novo evento", useCallback(() => setOpen(true), []));
+  usePrimaryAction(
+    "Novo evento",
+    useCallback(() => {
+      setModalDate(null);
+      setOpen(true);
+    }, []),
+  );
+
+  const step = view === "month" ? "month" : view === "week" ? 7 : 1;
+  function nav(dir: number) {
+    if (step === "month") setAnchor(new Date(anchor.getFullYear(), anchor.getMonth() + dir, 1));
+    else setAnchor(addDays(anchor, dir * (step as number)));
+  }
+
+  const title =
+    view === "day"
+      ? anchor.toLocaleDateString("pt-BR", { weekday: "long", day: "2-digit", month: "long" })
+      : view === "week"
+        ? `${days[0].toLocaleDateString("pt-BR", { day: "2-digit", month: "short" })} – ${days[6].toLocaleDateString("pt-BR", { day: "2-digit", month: "short" })}`
+        : anchor.toLocaleDateString("pt-BR", { month: "long", year: "numeric" });
+
+  function openOnDay(d: Date) {
+    setModalDate(d);
+    setOpen(true);
+  }
 
   return (
-    <div className="space-y-6">
-      <div>
-        <p className="text-sm text-neutral-500">Página / Agenda</p>
-        <h1 className="text-2xl font-bold text-neutral-800">Agenda</h1>
+    <div className="space-y-4">
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <div className="flex items-center gap-2">
+          <button onClick={() => nav(-1)} className="rounded-lg p-1.5 text-neutral-500 hover:bg-neutral-100">
+            <ChevronLeft size={18} />
+          </button>
+          <button onClick={() => nav(1)} className="rounded-lg p-1.5 text-neutral-500 hover:bg-neutral-100">
+            <ChevronRight size={18} />
+          </button>
+          <button
+            onClick={() => setAnchor(new Date())}
+            className="rounded-pill border border-neutral-200 px-3 py-1 text-sm text-neutral-600 hover:bg-neutral-50"
+          >
+            Hoje
+          </button>
+          <h1 className="ml-2 text-lg font-bold capitalize text-neutral-800">{title}</h1>
+        </div>
+        <div className="flex rounded-pill bg-neutral-100 p-1 text-sm">
+          {(["month", "week", "day"] as View[]).map((v) => (
+            <button
+              key={v}
+              onClick={() => setView(v)}
+              className={`rounded-pill px-3 py-1 font-medium transition ${
+                view === v ? "bg-white text-primary-700 shadow-sm" : "text-neutral-500"
+              }`}
+            >
+              {v === "month" ? "Mês" : v === "week" ? "Semana" : "Dia"}
+            </button>
+          ))}
+        </div>
       </div>
 
-      <div className="rounded-2xl bg-white p-5 shadow-sm">
-        {loading ? (
-          <p className="py-8 text-center text-sm text-neutral-400">Carregando...</p>
-        ) : events.length === 0 ? (
-          <div className="flex flex-col items-center gap-2 py-12 text-neutral-400">
-            <Clock size={28} />
-            <p>Nenhum compromisso. Clique em "Novo" para criar.</p>
-          </div>
-        ) : (
-          <ul className="divide-y divide-neutral-100">
-            {events.map((ev) => (
-              <EventRow key={ev.id} event={ev} />
-            ))}
-          </ul>
-        )}
-      </div>
+      {view === "month" && (
+        <MonthGrid days={days} anchor={anchor} events={events} onDayClick={openOnDay} />
+      )}
+      {view === "week" && <WeekView days={days} events={events} onDayClick={openOnDay} />}
+      {view === "day" && <DayView day={anchor} events={events} />}
 
-      <NewEventModal open={open} onClose={() => setOpen(false)} onCreated={load} />
+      <NewEventModal
+        open={open}
+        initialDate={modalDate}
+        onClose={() => setOpen(false)}
+        onCreated={load}
+      />
     </div>
   );
 }
 
-const priorityDot: Record<AgendaEvent["priority"], string> = {
-  normal: "bg-neutral-300",
-  high: "bg-warning",
-  critical: "bg-danger",
-};
+// ── cor por prioridade/tipo ────────────────────────────
+function eventColor(e: AgendaEvent): string {
+  if (e.priority === "critical") return "bg-red-100 text-red-700";
+  if (e.kind === "prazo") return "bg-amber-100 text-amber-700";
+  if (e.kind === "cobranca_receber" || e.kind === "cobranca_pagar") return "bg-blue-100 text-blue-700";
+  return "bg-primary-100 text-primary-700";
+}
+const hhmm = (iso: string) =>
+  new Date(iso).toLocaleTimeString("pt-BR", { hour: "2-digit", minute: "2-digit" });
+const eventsOfDay = (events: AgendaEvent[], d: Date) =>
+  events
+    .filter((e) => sameDay(new Date(e.starts_at), d))
+    .sort((a, b) => +new Date(a.starts_at) - +new Date(b.starts_at));
 
-function EventRow({ event }: { event: AgendaEvent }) {
-  const start = new Date(event.starts_at);
-  const end = new Date(event.ends_at);
-  const when = event.all_day
-    ? start.toLocaleDateString("pt-BR")
-    : `${start.toLocaleDateString("pt-BR", { day: "2-digit", month: "2-digit" })} · ${start.toLocaleTimeString("pt-BR", { hour: "2-digit", minute: "2-digit" })}–${end.toLocaleTimeString("pt-BR", { hour: "2-digit", minute: "2-digit" })}`;
+function MonthGrid({
+  days,
+  anchor,
+  events,
+  onDayClick,
+}: {
+  days: Date[];
+  anchor: Date;
+  events: AgendaEvent[];
+  onDayClick: (d: Date) => void;
+}) {
+  const today = new Date();
   return (
-    <li className="flex items-center gap-3 py-3">
-      <span className={`h-2 w-2 shrink-0 rounded-full ${priorityDot[event.priority]}`} />
-      <span className="w-36 shrink-0 text-sm tabular-nums text-neutral-500">{when}</span>
-      <div className="min-w-0 flex-1">
-        <span className="font-medium text-neutral-800">{event.title}</span>
-        <div className="flex flex-wrap gap-3 text-xs text-neutral-400">
-          {event.location && (
-            <span className="flex items-center gap-1">
-              <MapPin size={12} />
-              {event.location}
-            </span>
-          )}
-          {event.guests.length > 0 && (
-            <span className="flex items-center gap-1">
-              <Users size={12} />
-              {event.guests.length}
-            </span>
-          )}
-          {event.meeting_url && (
-            <a
-              href={event.meeting_url}
-              target="_blank"
-              rel="noreferrer"
-              className="flex items-center gap-1 text-accent-600 hover:underline"
-            >
-              <Video size={12} />
-              Entrar
-            </a>
-          )}
-        </div>
+    <div className="overflow-hidden rounded-2xl border border-neutral-100 bg-white">
+      <div className="grid grid-cols-7 border-b border-neutral-100 text-center text-xs font-medium text-neutral-400">
+        {WEEKDAYS.map((w) => (
+          <div key={w} className="py-2">
+            {w}
+          </div>
+        ))}
       </div>
-      <span className="shrink-0 rounded-pill bg-neutral-100 px-2 py-0.5 text-xs text-neutral-500">
-        {event.kind}
-      </span>
-      {event.priority === "critical" && <AlertTriangle size={16} className="text-danger" />}
-    </li>
+      <div className="grid grid-cols-7">
+        {days.map((d) => {
+          const inMonth = d.getMonth() === anchor.getMonth();
+          const dayEvents = eventsOfDay(events, d);
+          return (
+            <button
+              key={d.toISOString()}
+              onClick={() => onDayClick(d)}
+              className={`min-h-[92px] border-b border-r border-neutral-50 p-1.5 text-left align-top hover:bg-neutral-50 ${
+                inMonth ? "" : "bg-neutral-50/50 text-neutral-300"
+              }`}
+            >
+              <span
+                className={`inline-flex h-6 w-6 items-center justify-center rounded-full text-xs ${
+                  sameDay(d, today) ? "bg-primary-500 font-bold text-white" : "text-neutral-500"
+                }`}
+              >
+                {d.getDate()}
+              </span>
+              <div className="mt-1 space-y-0.5">
+                {dayEvents.slice(0, 3).map((e) => (
+                  <div key={e.id} className={`truncate rounded px-1 py-0.5 text-[11px] ${eventColor(e)}`}>
+                    {!e.all_day && <span className="tabular-nums">{hhmm(e.starts_at)} </span>}
+                    {e.title}
+                  </div>
+                ))}
+                {dayEvents.length > 3 && (
+                  <div className="text-[10px] text-neutral-400">+{dayEvents.length - 3} mais</div>
+                )}
+              </div>
+            </button>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+function WeekView({
+  days,
+  events,
+  onDayClick,
+}: {
+  days: Date[];
+  events: AgendaEvent[];
+  onDayClick: (d: Date) => void;
+}) {
+  const today = new Date();
+  return (
+    <div className="grid grid-cols-7 gap-2">
+      {days.map((d) => {
+        const dayEvents = eventsOfDay(events, d);
+        return (
+          <div key={d.toISOString()} className="rounded-2xl border border-neutral-100 bg-white p-2">
+            <button
+              onClick={() => onDayClick(d)}
+              className="mb-2 w-full text-center text-xs font-medium text-neutral-500 hover:text-primary-600"
+            >
+              <div>{WEEKDAYS[d.getDay()]}</div>
+              <div
+                className={`mx-auto mt-0.5 flex h-6 w-6 items-center justify-center rounded-full ${
+                  sameDay(d, today) ? "bg-primary-500 font-bold text-white" : ""
+                }`}
+              >
+                {d.getDate()}
+              </div>
+            </button>
+            <div className="space-y-1">
+              {dayEvents.map((e) => (
+                <div key={e.id} className={`rounded px-1.5 py-1 text-[11px] ${eventColor(e)}`}>
+                  {!e.all_day && <div className="tabular-nums opacity-70">{hhmm(e.starts_at)}</div>}
+                  <div className="truncate font-medium">{e.title}</div>
+                </div>
+              ))}
+            </div>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+function DayView({ day, events }: { day: Date; events: AgendaEvent[] }) {
+  const dayEvents = eventsOfDay(events, day);
+  return (
+    <div className="rounded-2xl border border-neutral-100 bg-white p-4">
+      {dayEvents.length === 0 ? (
+        <p className="py-12 text-center text-sm text-neutral-400">Nenhum compromisso neste dia.</p>
+      ) : (
+        <ul className="divide-y divide-neutral-100">
+          {dayEvents.map((e) => (
+            <li key={e.id} className="flex items-center gap-3 py-3">
+              <span className="w-28 shrink-0 text-sm tabular-nums text-neutral-500">
+                {e.all_day ? "Dia inteiro" : `${hhmm(e.starts_at)}–${hhmm(e.ends_at)}`}
+              </span>
+              <div className="min-w-0 flex-1">
+                <span className="font-medium text-neutral-800">{e.title}</span>
+                {e.location && <span className="ml-2 text-xs text-neutral-400">· {e.location}</span>}
+              </div>
+              {e.meeting_url && (
+                <a
+                  href={e.meeting_url}
+                  target="_blank"
+                  rel="noreferrer"
+                  className="flex items-center gap-1 text-xs text-accent-600 hover:underline"
+                >
+                  <Video size={12} /> Entrar
+                </a>
+              )}
+              <span className={`rounded-pill px-2 py-0.5 text-xs ${eventColor(e)}`}>{e.kind}</span>
+            </li>
+          ))}
+        </ul>
+      )}
+    </div>
   );
 }
 
 function NewEventModal({
   open,
+  initialDate,
   onClose,
   onCreated,
 }: {
   open: boolean;
+  initialDate: Date | null;
   onClose: () => void;
   onCreated: () => void;
 }) {
@@ -139,6 +319,17 @@ function NewEventModal({
   const [error, setError] = useState<string | null>(null);
   const [conflict, setConflict] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
+
+  // pré-preenche a data ao abrir num dia do calendário
+  useEffect(() => {
+    if (open && initialDate) {
+      const d = ymd(initialDate);
+      setStartDate(d);
+      setEndDate(d);
+      setStart(`${d}T09:00`);
+      setEnd(`${d}T10:00`);
+    }
+  }, [open, initialDate]);
 
   async function save() {
     setError(null);
@@ -162,27 +353,12 @@ function NewEventModal({
         setConflict(`⚠ Conflito de horário com: ${data.conflicts.map((c) => c.title).join(", ")}`);
       }
       onCreated();
-      if (data.conflicts.length === 0) {
-        reset();
-        onClose();
-      }
+      if (data.conflicts.length === 0) onClose();
     } catch (err) {
       setError(apiErrorMessage(err));
     } finally {
       setSaving(false);
     }
-  }
-
-  function reset() {
-    setTitle("");
-    setStart("");
-    setEnd("");
-    setStartDate("");
-    setEndDate("");
-    setLocation("");
-    setGuests("");
-    setMeetingUrl("");
-    setDescription("");
   }
 
   const valid = title && (allDay ? startDate : start && end);
@@ -191,7 +367,6 @@ function NewEventModal({
     <Modal title="Novo evento" open={open} onClose={onClose}>
       <div className="space-y-3">
         <Field label="Título" value={title} onChange={setTitle} placeholder="Atendimento cliente" />
-
         <div className="flex items-end gap-3">
           <label className="flex-1">
             <span className="mb-1 block text-xs font-medium text-neutral-600">Tipo</span>
@@ -226,7 +401,6 @@ function NewEventModal({
         )}
 
         <Field label="Local" value={location} onChange={setLocation} placeholder="Escritório ou endereço" />
-
         <div>
           <span className="mb-1 block text-xs font-medium text-neutral-600">
             Reunião (Google Meet / Zoom)
@@ -244,17 +418,11 @@ function NewEventModal({
               rel="noreferrer"
               className="flex shrink-0 items-center gap-1 rounded-lg bg-primary-50 px-3 text-sm font-medium text-primary-700 hover:bg-primary-100"
             >
-              <Video size={15} />
-              Meet
+              <Video size={15} /> Meet
             </a>
           </div>
-          <p className="mt-1 text-[11px] text-neutral-400">
-            Abra o Meet, copie o link e cole aqui. A geração automática via Google vem em breve.
-          </p>
         </div>
-
         <Field label="Convidados (e-mails, separados por vírgula)" value={guests} onChange={setGuests} />
-
         <label className="block">
           <span className="mb-1 block text-xs font-medium text-neutral-600">Descrição</span>
           <textarea

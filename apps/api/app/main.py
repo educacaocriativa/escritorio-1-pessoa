@@ -3,6 +3,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from app.config import settings
 from app.modules import ALL_ROUTERS
+from app.modules.notifications.service import register as register_notifications
 
 app = FastAPI(
     title="e1p API",
@@ -21,6 +22,9 @@ app.add_middleware(
 # Módulos de negócio (vão sendo registrados conforme construídos — ver app/modules/__init__.py)
 for router in ALL_ROUTERS:
     app.include_router(router)
+
+# Liga os assinantes do barramento de eventos (ex.: WhatsApp ao mover card no CRM).
+register_notifications()
 
 
 @app.get("/health", tags=["infra"])

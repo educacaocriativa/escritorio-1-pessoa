@@ -45,6 +45,7 @@ class PipelineStage(Base, TenantMixin, TimestampMixin):
     position: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     is_won: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     is_lost: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    is_archived: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
 
 
 class Client(Base, TenantMixin, TimestampMixin):

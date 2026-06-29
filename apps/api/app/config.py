@@ -28,6 +28,10 @@ class Settings(BaseSettings):
     super_admin_password: str = _DEFAULT_ADMIN_PASSWORD
     super_admin_name: str = "Administrador e1p"
 
+    # Integrações (vazio = stub/log; preencher quando conectar)
+    whatsapp_token: str = ""
+    whatsapp_phone_id: str = ""
+
     # App
     root_domain: str = "e1p.com"
     frontend_url: str = "http://localhost:5173"
