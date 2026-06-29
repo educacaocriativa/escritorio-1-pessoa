@@ -7,6 +7,7 @@ import CobrancasPage from "../features/cobrancas/CobrancasPage";
 import CrmPage from "../features/crm/CrmPage";
 import FinanceiroPage from "../features/financeiro/FinanceiroPage";
 import PagarPage from "../features/pagar/PagarPage";
+import ProdutosPage from "../features/produtos/ProdutosPage";
 import { AuthProvider, useAuth } from "../store/auth";
 import { PageActionsProvider } from "../store/pageActions";
 import AppShell from "./AppShell";
@@ -23,6 +24,7 @@ export default function App() {
           <Route path="/financeiro" element={<FinanceiroPage />} />
           <Route path="/cobrancas" element={<CobrancasPage />} />
           <Route path="/pagar" element={<PagarPage />} />
+          <Route path="/produtos" element={<ProdutosPage />} />
           <Route path="/admin" element={<AdminOnly />} />
           <Route path="*" element={<ComingSoon />} />
         </Route>

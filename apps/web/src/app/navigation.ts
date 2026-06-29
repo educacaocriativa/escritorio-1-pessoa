@@ -41,7 +41,7 @@ export const navSections: NavSection[] = [
   {
     title: "Ferramentas de Produtividade",
     items: [
-      { label: "Produtos", to: "/produtos", icon: ShoppingBag },
+      { label: "Produtos", to: "/produtos", icon: ShoppingBag, ready: true },
       { label: "Marketing", to: "/marketing", icon: Megaphone },
       { label: "Sites", to: "/sites", icon: Globe },
       { label: "Jurídico", to: "/juridico", icon: Scale },

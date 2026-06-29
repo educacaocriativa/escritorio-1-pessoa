@@ -299,3 +299,48 @@ export interface PayablesSummary {
   month_cents: number;
   paid_month_cents: number;
 }
+
+// ── Produtos, Cupons e Alunos ──────────────────────────
+export type ProductKind = "physical" | "digital" | "membership";
+
+export interface Product {
+  id: UUID;
+  tenant_id: UUID;
+  name: string;
+  kind: ProductKind;
+  price_cents: number;
+  description: string;
+  active: boolean;
+  stock: number | null;
+  checkout_url: string;
+  students: number;
+  created_at: string;
+}
+
+export type DiscountType = "percent" | "fixed";
+
+export interface Coupon {
+  id: UUID;
+  tenant_id: UUID;
+  code: string;
+  discount_type: DiscountType;
+  discount_value: number;
+  product_id: UUID | null;
+  active: boolean;
+  uses: number;
+  max_uses: number | null;
+  expires_at: string | null;
+  created_at: string;
+}
+
+export interface Enrollment {
+  id: UUID;
+  tenant_id: UUID;
+  product_id: UUID;
+  product_name: string | null;
+  name: string;
+  email: string | null;
+  status: string;
+  amount_cents: number;
+  created_at: string;
+}
