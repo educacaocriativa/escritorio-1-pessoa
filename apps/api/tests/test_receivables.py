@@ -122,5 +122,38 @@ def test_charge_shows_client_name(client: TestClient, headers):
     assert charges[0]["client_name"] == "João Cobrado"
 
 
+def test_message_history_and_manual_message(client: TestClient, headers):
+    cl = client.post("/crm/clients", json={"name": "Cliente Msg"}, headers=headers).json()
+    c = client.post(
+        "/receivables/charges",
+        json=_charge(client_id=cl["id"], due_date="2020-01-01"),
+        headers=headers,
+    ).json()
+    # cobrança com IA + mensagem manual
+    client.post(f"/receivables/charges/{c['id']}/collect", headers=headers)
+    r = client.post(
+        f"/receivables/charges/{c['id']}/message",
+        json={"text": "Oi, passando para lembrar 🙂"},
+        headers=headers,
+    )
+    assert r.status_code == 200
+    # histórico mostra as duas mensagens
+    msgs = client.get(f"/receivables/charges/{c['id']}/messages", headers=headers).json()
+    assert len(msgs) == 2
+    assert any("lembrar" in m["message"] for m in msgs)
+
+
+def test_messages_empty_without_client(client: TestClient, headers):
+    c = client.post("/receivables/charges", json=_charge(), headers=headers).json()  # sem cliente
+    msgs = client.get(f"/receivables/charges/{c['id']}/messages", headers=headers).json()
+    assert msgs == []
+
+
+def test_get_single_charge(client: TestClient, headers):
+    c = client.post("/receivables/charges", json=_charge(), headers=headers).json()
+    got = client.get(f"/receivables/charges/{c['id']}", headers=headers).json()
+    assert got["id"] == c["id"]
+
+
 def test_requires_auth(client: TestClient):
     assert client.get("/receivables/summary").status_code == 401

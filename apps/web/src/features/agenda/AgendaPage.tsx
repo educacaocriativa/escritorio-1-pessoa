@@ -1,9 +1,11 @@
-import type { AgendaEvent, CreateEventResult } from "@e1p/shared-types";
-import { ChevronLeft, ChevronRight, Video } from "lucide-react";
+import type { AgendaEvent, Charge, CreateEventResult, Notification, Payable } from "@e1p/shared-types";
+import { ChevronLeft, ChevronRight, MapPin, Sparkles, Users, Video } from "lucide-react";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import Modal, { Field } from "../../components/Modal";
 import { api, apiErrorMessage } from "../../lib/api";
 import { usePrimaryAction } from "../../store/pageActions";
+
+const brl = (c: number) => (c / 100).toLocaleString("pt-BR", { style: "currency", currency: "BRL" });
 
 type View = "month" | "week" | "day";
 
@@ -52,6 +54,7 @@ export default function AgendaPage() {
   const [events, setEvents] = useState<AgendaEvent[]>([]);
   const [modalDate, setModalDate] = useState<Date | null>(null);
   const [open, setOpen] = useState(false);
+  const [selected, setSelected] = useState<AgendaEvent | null>(null);
 
   const { start, end, days } = useMemo(() => rangeFor(view, anchor), [view, anchor]);
 
@@ -126,10 +129,18 @@ export default function AgendaPage() {
       </div>
 
       {view === "month" && (
-        <MonthGrid days={days} anchor={anchor} events={events} onDayClick={openOnDay} />
+        <MonthGrid
+          days={days}
+          anchor={anchor}
+          events={events}
+          onDayClick={openOnDay}
+          onEventClick={setSelected}
+        />
       )}
-      {view === "week" && <WeekView days={days} events={events} onDayClick={openOnDay} />}
-      {view === "day" && <DayView day={anchor} events={events} />}
+      {view === "week" && (
+        <WeekView days={days} events={events} onDayClick={openOnDay} onEventClick={setSelected} />
+      )}
+      {view === "day" && <DayView day={anchor} events={events} onEventClick={setSelected} />}
 
       <NewEventModal
         open={open}
@@ -137,6 +148,8 @@ export default function AgendaPage() {
         onClose={() => setOpen(false)}
         onCreated={load}
       />
+
+      {selected && <EventDetailModal event={selected} onClose={() => setSelected(null)} />}
     </div>
   );
 }
@@ -160,11 +173,13 @@ function MonthGrid({
   anchor,
   events,
   onDayClick,
+  onEventClick,
 }: {
   days: Date[];
   anchor: Date;
   events: AgendaEvent[];
   onDayClick: (d: Date) => void;
+  onEventClick: (e: AgendaEvent) => void;
 }) {
   const today = new Date();
   return (
@@ -197,7 +212,14 @@ function MonthGrid({
               </span>
               <div className="mt-1 space-y-0.5">
                 {dayEvents.slice(0, 3).map((e) => (
-                  <div key={e.id} className={`truncate rounded px-1 py-0.5 text-[11px] ${eventColor(e)}`}>
+                  <div
+                    key={e.id}
+                    onClick={(ev) => {
+                      ev.stopPropagation();
+                      onEventClick(e);
+                    }}
+                    className={`cursor-pointer truncate rounded px-1 py-0.5 text-[11px] hover:opacity-80 ${eventColor(e)}`}
+                  >
                     {!e.all_day && <span className="tabular-nums">{hhmm(e.starts_at)} </span>}
                     {e.title}
                   </div>
@@ -218,10 +240,12 @@ function WeekView({
   days,
   events,
   onDayClick,
+  onEventClick,
 }: {
   days: Date[];
   events: AgendaEvent[];
   onDayClick: (d: Date) => void;
+  onEventClick: (e: AgendaEvent) => void;
 }) {
   const today = new Date();
   return (
@@ -245,7 +269,11 @@ function WeekView({
             </button>
             <div className="space-y-1">
               {dayEvents.map((e) => (
-                <div key={e.id} className={`rounded px-1.5 py-1 text-[11px] ${eventColor(e)}`}>
+                <div
+                  key={e.id}
+                  onClick={() => onEventClick(e)}
+                  className={`cursor-pointer rounded px-1.5 py-1 text-[11px] hover:opacity-80 ${eventColor(e)}`}
+                >
                   {!e.all_day && <div className="tabular-nums opacity-70">{hhmm(e.starts_at)}</div>}
                   <div className="truncate font-medium">{e.title}</div>
                 </div>
@@ -258,7 +286,15 @@ function WeekView({
   );
 }
 
-function DayView({ day, events }: { day: Date; events: AgendaEvent[] }) {
+function DayView({
+  day,
+  events,
+  onEventClick,
+}: {
+  day: Date;
+  events: AgendaEvent[];
+  onEventClick: (e: AgendaEvent) => void;
+}) {
   const dayEvents = eventsOfDay(events, day);
   return (
     <div className="rounded-2xl border border-neutral-100 bg-white p-4">
@@ -267,7 +303,11 @@ function DayView({ day, events }: { day: Date; events: AgendaEvent[] }) {
       ) : (
         <ul className="divide-y divide-neutral-100">
           {dayEvents.map((e) => (
-            <li key={e.id} className="flex items-center gap-3 py-3">
+            <li
+              key={e.id}
+              onClick={() => onEventClick(e)}
+              className="flex cursor-pointer items-center gap-3 py-3 hover:bg-neutral-50"
+            >
               <span className="w-28 shrink-0 text-sm tabular-nums text-neutral-500">
                 {e.all_day ? "Dia inteiro" : `${hhmm(e.starts_at)}–${hhmm(e.ends_at)}`}
               </span>
@@ -291,6 +331,152 @@ function DayView({ day, events }: { day: Date; events: AgendaEvent[] }) {
         </ul>
       )}
     </div>
+  );
+}
+
+function EventDetailModal({ event, onClose }: { event: AgendaEvent; onClose: () => void }) {
+  const isReceber = event.kind === "cobranca_receber" && !!event.external_ref;
+  const isPagar = event.kind === "cobranca_pagar" && !!event.external_ref;
+  const [charge, setCharge] = useState<Charge | null>(null);
+  const [payable, setPayable] = useState<Payable | null>(null);
+  const [messages, setMessages] = useState<Notification[]>([]);
+  const [newMsg, setNewMsg] = useState("");
+  const [busy, setBusy] = useState(false);
+
+  const loadMessages = useCallback(() => {
+    if (!event.external_ref) return;
+    api
+      .get<Notification[]>(`/receivables/charges/${event.external_ref}/messages`)
+      .then(({ data }) => setMessages(data));
+  }, [event.external_ref]);
+
+  useEffect(() => {
+    if (isReceber) {
+      api.get<Charge>(`/receivables/charges/${event.external_ref}`).then(({ data }) => setCharge(data));
+      loadMessages();
+    } else if (isPagar) {
+      api.get<Payable>(`/payables/bills/${event.external_ref}`).then(({ data }) => setPayable(data));
+    }
+  }, [event, isReceber, isPagar, loadMessages]);
+
+  async function act(fn: () => Promise<unknown>) {
+    setBusy(true);
+    try {
+      await fn();
+      loadMessages();
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  const when = event.all_day
+    ? new Date(event.starts_at).toLocaleDateString("pt-BR")
+    : `${new Date(event.starts_at).toLocaleString("pt-BR", { dateStyle: "short", timeStyle: "short" })} – ${hhmm(event.ends_at)}`;
+
+  return (
+    <Modal title={event.title} open onClose={onClose}>
+      <div className="space-y-3 text-sm">
+        <div className="flex flex-wrap items-center gap-2 text-neutral-600">
+          <span className="tabular-nums">{when}</span>
+          <span className="rounded-pill bg-neutral-100 px-2 py-0.5 text-xs">{event.kind}</span>
+        </div>
+        {event.location && (
+          <p className="flex items-center gap-1 text-neutral-600">
+            <MapPin size={14} /> {event.location}
+          </p>
+        )}
+        {event.meeting_url && (
+          <a href={event.meeting_url} target="_blank" rel="noreferrer" className="flex items-center gap-1 text-accent-600 hover:underline">
+            <Video size={14} /> Entrar na reunião
+          </a>
+        )}
+        {event.guests.length > 0 && (
+          <p className="flex items-center gap-1 text-neutral-500">
+            <Users size={14} /> {event.guests.join(", ")}
+          </p>
+        )}
+        {event.amount_cents != null && (
+          <p className="text-base font-bold text-neutral-800">{brl(event.amount_cents)}</p>
+        )}
+        {event.description && <p className="text-neutral-600">{event.description}</p>}
+
+        {isPagar && payable && (
+          <div className="rounded-lg bg-neutral-50 p-3">
+            <p className="font-medium text-neutral-800">{payable.description || "Conta a pagar"}</p>
+            <p className="text-xs text-neutral-500">
+              {payable.supplier && `${payable.supplier} · `}
+              {payable.category} · vence {new Date(payable.due_date + "T00:00").toLocaleDateString("pt-BR")}
+            </p>
+            <p className="mt-1 text-xs">
+              Status: <strong>{payable.status === "paid" ? "Pago" : payable.is_overdue ? "Atrasado" : "A pagar"}</strong>
+            </p>
+          </div>
+        )}
+
+        {isReceber && (
+          <div className="space-y-3 border-t border-neutral-100 pt-3">
+            {charge && (
+              <div className="rounded-lg bg-neutral-50 p-3">
+                <p className="font-medium text-neutral-800">{charge.client_name ?? "Cobrança"}</p>
+                <p className="text-xs text-neutral-500">
+                  {charge.description} · vence{" "}
+                  {new Date(charge.due_date + "T00:00").toLocaleDateString("pt-BR")} ·{" "}
+                  {charge.status === "paid" ? "Recebido" : charge.is_overdue ? "Vencido" : "A vencer"}
+                </p>
+              </div>
+            )}
+
+            <div>
+              <h3 className="mb-2 text-xs font-semibold uppercase text-neutral-400">
+                Histórico de mensagens
+              </h3>
+              {messages.length === 0 ? (
+                <p className="text-xs text-neutral-400">Nenhuma mensagem enviada ainda.</p>
+              ) : (
+                <ul className="max-h-40 space-y-2 overflow-y-auto">
+                  {messages.map((m) => (
+                    <li key={m.id} className="rounded-lg bg-neutral-50 p-2 text-xs text-neutral-700">
+                      <p>{m.message}</p>
+                      <p className="mt-1 text-[10px] text-neutral-400">
+                        {new Date(m.created_at).toLocaleString("pt-BR")} · {m.status}
+                      </p>
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </div>
+
+            <button
+              onClick={() => act(() => api.post(`/receivables/charges/${event.external_ref}/collect`))}
+              disabled={busy}
+              className="flex w-full items-center justify-center gap-1.5 rounded-pill bg-primary-500 py-2 text-sm font-semibold text-white hover:bg-primary-600 disabled:opacity-60"
+            >
+              <Sparkles size={14} /> Cobrar com IA
+            </button>
+
+            <div>
+              <textarea
+                value={newMsg}
+                onChange={(e) => setNewMsg(e.target.value)}
+                rows={2}
+                placeholder="Escrever mensagem manual..."
+                className="w-full rounded-lg border border-neutral-200 px-3 py-2 text-sm outline-none focus:border-primary-400"
+              />
+              <button
+                onClick={() => act(async () => {
+                  await api.post(`/receivables/charges/${event.external_ref}/message`, { text: newMsg });
+                  setNewMsg("");
+                })}
+                disabled={busy || !newMsg.trim()}
+                className="mt-1 w-full rounded-pill bg-accent-400 py-2 text-sm font-semibold text-white hover:bg-accent-500 disabled:opacity-60"
+              >
+                Enviar mensagem
+              </button>
+            </div>
+          </div>
+        )}
+      </div>
+    </Modal>
   );
 }
 

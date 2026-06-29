@@ -50,6 +50,17 @@ export interface AuthToken extends SessionInfo {
   token_type: "bearer";
 }
 
+// ── Notificações ───────────────────────────────────────
+export interface Notification {
+  id: UUID;
+  channel: string;
+  recipient: string;
+  client_id: UUID | null;
+  message: string;
+  status: string;
+  created_at: string;
+}
+
 // ── Auditoria ──────────────────────────────────────────
 export interface AuditEntry {
   id: UUID;

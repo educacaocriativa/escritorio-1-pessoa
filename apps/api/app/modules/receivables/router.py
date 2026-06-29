@@ -6,6 +6,7 @@ from sqlalchemy.orm import Session
 
 from app.core.tenancy import CurrentUser, get_tenant_db, require_module
 from app.modules.crm.models import Client
+from app.modules.notifications.schemas import NotificationOut
 from app.modules.receivables import service
 from app.modules.receivables.models import Charge
 from app.modules.receivables.schemas import (
@@ -13,6 +14,7 @@ from app.modules.receivables.schemas import (
     ChargeOut,
     ChargesSummary,
     DunningResult,
+    MessageRequest,
 )
 
 router = APIRouter(prefix="/receivables", tags=["receivables"])
@@ -84,6 +86,47 @@ def pay_charge(
     except service.ReceivableError as e:
         raise _err(e) from e
     return _out(charge, db)
+
+
+@router.get("/charges/{charge_id}", response_model=ChargeOut)
+def get_charge(
+    charge_id: str,
+    _user: CurrentUser = Depends(_guard),
+    db: Session = Depends(get_tenant_db),
+) -> ChargeOut:
+    try:
+        return _out(service.get_charge(db, charge_id), db)
+    except service.ReceivableError as e:
+        raise _err(e) from e
+
+
+@router.get("/charges/{charge_id}/messages", response_model=list[NotificationOut])
+def charge_messages(
+    charge_id: str,
+    _user: CurrentUser = Depends(_guard),
+    db: Session = Depends(get_tenant_db),
+) -> list[NotificationOut]:
+    try:
+        msgs = service.charge_messages(db, charge_id=charge_id)
+    except service.ReceivableError as e:
+        raise _err(e) from e
+    return [NotificationOut.model_validate(m) for m in msgs]
+
+
+@router.post("/charges/{charge_id}/message", response_model=DunningResult)
+def send_message(
+    charge_id: str,
+    data: MessageRequest,
+    user: CurrentUser = Depends(_guard),
+    db: Session = Depends(get_tenant_db),
+) -> DunningResult:
+    try:
+        result = service.send_message(
+            db, charge_id=charge_id, tenant_id=user.tenant_id, actor=user.user_id, text=data.text
+        )
+    except service.ReceivableError as e:
+        raise _err(e) from e
+    return DunningResult(**result)
 
 
 @router.post("/charges/{charge_id}/collect", response_model=DunningResult)

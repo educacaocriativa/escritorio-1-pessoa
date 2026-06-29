@@ -1,29 +1,16 @@
 """Rotas de notificações (histórico do que o sistema enviou)."""
 from __future__ import annotations
 
-from datetime import datetime
-
 from fastapi import APIRouter, Depends, Query
-from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
 from app.core.tenancy import CurrentUser, get_tenant_db, require_module
 from app.modules.notifications import service
+from app.modules.notifications.schemas import NotificationOut
 
 router = APIRouter(prefix="/notifications", tags=["notifications"])
 
 _guard = require_module("notifications")
-
-
-class NotificationOut(BaseModel):
-    id: str
-    channel: str
-    recipient: str
-    message: str
-    status: str
-    created_at: datetime
-
-    model_config = {"from_attributes": True}
 
 
 @router.get("", response_model=list[NotificationOut])

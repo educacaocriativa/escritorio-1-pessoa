@@ -54,6 +54,10 @@ class DunningResult(BaseModel):
     status: str  # sent / logged / failed
 
 
+class MessageRequest(BaseModel):
+    text: str = Field(min_length=1, max_length=2000)
+
+
 class ChargesSummary(BaseModel):
     open_cents: int  # em aberto (a vencer)
     overdue_cents: int  # vencido e não pago

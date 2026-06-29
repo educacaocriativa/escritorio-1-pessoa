@@ -193,7 +193,7 @@ def collect_with_ai(db: Session, *, charge_id: str, tenant_id: str, actor: str) 
     db.add(
         Notification(
             tenant_id=tenant_id, channel="whatsapp", recipient=recipient,
-            message=message, status=status,
+            client_id=charge.client_id, message=message, status=status,
         )
     )
     audit.record(
@@ -202,6 +202,44 @@ def collect_with_ai(db: Session, *, charge_id: str, tenant_id: str, actor: str) 
     )
     db.commit()
     return {"message": message, "status": status}
+
+
+def send_message(db: Session, *, charge_id: str, tenant_id: str, actor: str, text: str) -> dict:
+    """Mensagem MANUAL (sem IA) ao cliente da cobrança."""
+    text = (text or "").strip()
+    if not text:
+        raise ReceivableError("Mensagem vazia", 400)
+    charge = get_charge(db, charge_id)
+    client = db.get(Client, charge.client_id) if charge.client_id else None
+    recipient = (client.phone if client and client.phone else None) or (
+        client.name if client else "cliente"
+    )
+    status = whatsapp.send_text(to=recipient, text=text)
+    db.add(
+        Notification(
+            tenant_id=tenant_id, channel="whatsapp", recipient=recipient,
+            client_id=charge.client_id, message=text, status=status,
+        )
+    )
+    audit.record(
+        db, tenant_id=tenant_id, actor=actor, action="receivable.message", target=charge.id
+    )
+    db.commit()
+    return {"message": text, "status": status}
+
+
+def charge_messages(db: Session, *, charge_id: str) -> list[Notification]:
+    """Histórico de mensagens enviadas ao cliente desta cobrança (mais recentes primeiro)."""
+    charge = get_charge(db, charge_id)
+    if not charge.client_id:
+        return []
+    return list(
+        db.scalars(
+            select(Notification)
+            .where(Notification.client_id == charge.client_id)
+            .order_by(Notification.created_at.desc())
+        ).all()
+    )
 
 
 def summary(db: Session) -> dict:

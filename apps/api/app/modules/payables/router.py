@@ -60,6 +60,18 @@ def list_bills(
     return [_out(p) for p in service.list_payables(db, status=status)]
 
 
+@router.get("/bills/{payable_id}", response_model=PayableOut)
+def get_bill(
+    payable_id: str,
+    _user: CurrentUser = Depends(_guard),
+    db: Session = Depends(get_tenant_db),
+) -> PayableOut:
+    try:
+        return _out(service.get_payable(db, payable_id))
+    except service.PayableError as e:
+        raise _err(e) from e
+
+
 @router.post("/bills", response_model=PayableOut, status_code=201)
 def create_bill(
     data: PayableCreate,
