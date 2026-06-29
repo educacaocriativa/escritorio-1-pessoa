@@ -1,17 +1,23 @@
 import type { CockpitSummary } from "@e1p/shared-types";
 import { CalendarDays, FileSignature, TrendingUp, Wallet } from "lucide-react";
+import { type ReactNode, useEffect, useState } from "react";
+import { api } from "../../lib/api";
+import { useAuth } from "../../store/auth";
 
-/**
- * Cockpit (Dashboard de Entrada) — módulo 19. Mostra o resumo do dia agregando Agenda + CRM.
- * O backend expõe GET /cockpit/summary; o fetch real entra com o login. Aqui um resumo vazio
- * ilustra a estrutura. Indicadores financeiros ficam "—" até a Fase 2.
- */
+const EMPTY: CockpitSummary = {
+  agenda: { today_count: 0, today_events: [], upcoming_critical: [] },
+  crm: { total_clients: 0, won_count: 0, lost_count: 0, conversion_rate: 0, by_stage: [] },
+  finance: { available: false, net_revenue_cents: null, monthly_costs_cents: null, signed_contracts: null },
+};
+
 export default function CockpitPage() {
-  const summary: CockpitSummary = {
-    agenda: { today_count: 0, today_events: [], upcoming_critical: [] },
-    crm: { total_clients: 0, won_count: 0, lost_count: 0, conversion_rate: 0, by_stage: [] },
-    finance: { available: false, net_revenue_cents: null, monthly_costs_cents: null, signed_contracts: null },
-  };
+  const { user } = useAuth();
+  const [summary, setSummary] = useState<CockpitSummary>(EMPTY);
+
+  useEffect(() => {
+    const day = new Date().toISOString().slice(0, 10);
+    api.get<CockpitSummary>(`/cockpit/summary?day=${day}`).then(({ data }) => setSummary(data));
+  }, []);
 
   const conv = `${Math.round(summary.crm.conversion_rate * 100)}%`;
 
@@ -19,14 +25,22 @@ export default function CockpitPage() {
     <div className="space-y-6">
       <div>
         <p className="text-sm text-neutral-500">Página / Cockpit</p>
-        <h1 className="text-2xl font-bold text-neutral-800">Bom dia 👋</h1>
+        <h1 className="text-2xl font-bold text-neutral-800">
+          Bom dia, {user?.name?.split(" ")[0] ?? ""} 👋
+        </h1>
       </div>
 
       <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
         <StatCard label="Faturamento Líquido" value="R$ —" hint="Fase 2" tone="accent" icon={Wallet} />
         <StatCard label="Contratos Assinados" value="—" hint="Fase 2" tone="primary" icon={FileSignature} />
         <StatCard label="Taxa de Conversão" value={conv} hint="funil do CRM" tone="info" icon={TrendingUp} />
-        <StatCard label="Compromissos Hoje" value={String(summary.agenda.today_count)} hint="agenda" tone="primary" icon={CalendarDays} />
+        <StatCard
+          label="Compromissos Hoje"
+          value={String(summary.agenda.today_count)}
+          hint="agenda"
+          tone="primary"
+          icon={CalendarDays}
+        />
       </div>
 
       <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
@@ -94,7 +108,7 @@ function StatCard({
   );
 }
 
-function Panel({ title, children }: { title: string; children: React.ReactNode }) {
+function Panel({ title, children }: { title: string; children: ReactNode }) {
   return (
     <div className="rounded-2xl bg-white p-5 shadow-sm">
       <h2 className="mb-3 font-semibold text-neutral-800">{title}</h2>

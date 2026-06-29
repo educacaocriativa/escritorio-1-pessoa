@@ -23,15 +23,20 @@ def tenant_session(tenant_id: str) -> Iterator[Session]:
     """Abre uma sessão com o tenant fixado para a RLS. Use em TODO acesso a dados de negócio.
 
     Valida o tenant_id antes de setar a GUC: um tenant vazio/None faria a policy RLS casar
-    com `tenant_id = ''` ou NULL (fail-open). Aqui é fail-closed explícito.
+    com `tenant_id = ''`/NULL (fail-open). Aqui é fail-closed explícito.
+
+    O GUC é setado em escopo de SESSÃO (is_local=false), não de transação. Motivo: queries
+    que rodam APÓS o commit (ex.: db.refresh() para popular created_at) iniciam uma nova
+    transação — com is_local=true o tenant já teria sumido e a RLS esconderia a própria linha.
+    Em escopo de sessão ele sobrevive ao commit; resetamos no finally para não vazar o tenant
+    para a próxima requisição que reaproveitar a conexão do pool.
     """
     if not tenant_id or not isinstance(tenant_id, str) or len(tenant_id) < 8:
         raise ValueError("tenant_id inválido para abrir sessão de tenant")
     db = SessionLocal()
     try:
-        # set_config local: válido só nesta transação/conexão.
         db.execute(
-            text("SELECT set_config('app.current_tenant_id', :tid, true)"),
+            text("SELECT set_config('app.current_tenant_id', :tid, false)"),
             {"tid": tenant_id},
         )
         yield db
@@ -40,6 +45,12 @@ def tenant_session(tenant_id: str) -> Iterator[Session]:
         db.rollback()
         raise
     finally:
+        # Reseta o tenant na conexão antes de devolvê-la ao pool (fail-closed entre requests).
+        try:
+            db.execute(text("SELECT set_config('app.current_tenant_id', '', false)"))
+            db.commit()
+        except Exception:
+            db.rollback()
         db.close()
 
 

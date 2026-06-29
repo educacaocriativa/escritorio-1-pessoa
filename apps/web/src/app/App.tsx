@@ -1,23 +1,42 @@
-import { Route, Routes } from "react-router-dom";
+import { Navigate, Outlet, Route, Routes } from "react-router-dom";
 import AgendaPage from "../features/agenda/AgendaPage";
+import LoginPage from "../features/auth/LoginPage";
 import CockpitPage from "../features/cockpit/CockpitPage";
 import CrmPage from "../features/crm/CrmPage";
+import { AuthProvider, useAuth } from "../store/auth";
+import { PageActionsProvider } from "../store/pageActions";
 import AppShell from "./AppShell";
 
-/**
- * Roteamento raiz. Por ora só o Cockpit existe; cada módulo construído registra sua rota aqui.
- * (Auth/login será adicionado quando o módulo de autenticação entrar — Fase 1.)
- */
 export default function App() {
   return (
-    <AppShell>
+    <AuthProvider>
       <Routes>
-        <Route path="/" element={<CockpitPage />} />
-        <Route path="/agenda" element={<AgendaPage />} />
-        <Route path="/crm" element={<CrmPage />} />
-        <Route path="*" element={<ComingSoon />} />
+        <Route path="/login" element={<LoginRoute />} />
+        <Route element={<ProtectedLayout />}>
+          <Route path="/" element={<CockpitPage />} />
+          <Route path="/agenda" element={<AgendaPage />} />
+          <Route path="/crm" element={<CrmPage />} />
+          <Route path="*" element={<ComingSoon />} />
+        </Route>
       </Routes>
-    </AppShell>
+    </AuthProvider>
+  );
+}
+
+function LoginRoute() {
+  const { isAuthenticated } = useAuth();
+  return isAuthenticated ? <Navigate to="/" replace /> : <LoginPage />;
+}
+
+function ProtectedLayout() {
+  const { isAuthenticated } = useAuth();
+  if (!isAuthenticated) return <Navigate to="/login" replace />;
+  return (
+    <PageActionsProvider>
+      <AppShell>
+        <Outlet />
+      </AppShell>
+    </PageActionsProvider>
   );
 }
 

@@ -1,13 +1,9 @@
 import {
   CalendarDays,
-  FileSignature,
-  FileText,
   Globe,
   LayoutDashboard,
   type LucideIcon,
   Megaphone,
-  Package,
-  Receipt,
   Scale,
   Settings,
   ShoppingBag,
@@ -28,36 +24,24 @@ export interface NavSection {
   items: NavItem[];
 }
 
-/** Navegação espelha os módulos do e1p (ver docs/MODULES.md). `ready` liga conforme construímos. */
+/** Dois grupos, no formato do design "Portal": principal + "Extra Section". */
 export const navSections: NavSection[] = [
   {
     items: [
-      { label: "Cockpit", to: "/", icon: LayoutDashboard, ready: true },
+      { label: "Dashboard", to: "/", icon: LayoutDashboard, ready: true },
       { label: "Agenda", to: "/agenda", icon: CalendarDays, ready: true },
       { label: "CRM & Kanban", to: "/crm", icon: Users, ready: true },
       { label: "Financeiro", to: "/financeiro", icon: Wallet },
     ],
   },
   {
-    title: "Comercial",
+    title: "Extra Section",
     items: [
-      { label: "Orçamentos", to: "/orcamentos", icon: FileText },
-      { label: "Contratos", to: "/contratos", icon: FileSignature },
       { label: "Produtos", to: "/produtos", icon: ShoppingBag },
       { label: "Marketing", to: "/marketing", icon: Megaphone },
-    ],
-  },
-  {
-    title: "Operação",
-    items: [
-      { label: "Estoque", to: "/estoque", icon: Package },
-      { label: "Cobranças", to: "/cobrancas", icon: Receipt },
       { label: "Sites", to: "/sites", icon: Globe },
       { label: "Jurídico", to: "/juridico", icon: Scale },
+      { label: "Configurações", to: "/config", icon: Settings },
     ],
-  },
-  {
-    title: "Conta",
-    items: [{ label: "Configurações", to: "/config", icon: Settings }],
   },
 ];

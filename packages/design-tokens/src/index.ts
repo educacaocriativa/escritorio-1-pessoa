@@ -5,18 +5,18 @@
  */
 
 export const colors = {
-  // Primária — índigo/roxo da sidebar do "Portal"
+  // Primária — violeta da sidebar do "Portal" (base definida pelo cliente: #5D44F8)
   primary: {
-    50: "#eef0ff",
-    100: "#e0e2ff",
-    200: "#c7caff",
-    300: "#a5a8fb",
-    400: "#8385f5",
-    500: "#5d5fef", // base (sidebar)
-    600: "#4f4fe0",
-    700: "#4040c2",
-    800: "#35359c",
-    900: "#2f2f7a",
+    50: "#f0edff",
+    100: "#e4ddff",
+    200: "#cabfff",
+    300: "#a690fb",
+    400: "#8268fa",
+    500: "#5d44f8", // base (sidebar)
+    600: "#4a32e0",
+    700: "#3c28bd",
+    800: "#2f2197",
+    900: "#281d78",
   },
   // Verde — acento de ações, ativos, links
   accent: {
