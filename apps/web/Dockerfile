@@ -6,7 +6,7 @@ WORKDIR /repo
 RUN corepack enable
 
 # Copia manifestos do monorepo para cache de dependências
-COPY pnpm-workspace.yaml package.json ./
+COPY pnpm-workspace.yaml package.json pnpm-lock.yaml* ./
 COPY packages ./packages
 COPY apps/web ./apps/web
 

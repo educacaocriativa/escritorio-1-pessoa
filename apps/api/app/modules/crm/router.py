@@ -1,7 +1,7 @@
 """Rotas do CRM & Funil Kanban. Exigem tenant autenticado + permissão ao módulo 'crm'."""
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, Response
 from sqlalchemy.orm import Session
 
 from app.core.tenancy import CurrentUser, get_tenant_db, require_module
@@ -92,11 +92,12 @@ def delete_stage(
     stage_id: str,
     user: CurrentUser = Depends(_guard),
     db: Session = Depends(get_tenant_db),
-) -> None:
+) -> Response:
     try:
         service.delete_stage(db, stage_id=stage_id, tenant_id=user.tenant_id, actor=user.user_id)
     except service.CrmError as e:
         raise _err(e) from e
+    return Response(status_code=204)
 
 
 # ── Clientes ───────────────────────────────────────────

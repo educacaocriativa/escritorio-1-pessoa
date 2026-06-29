@@ -21,6 +21,13 @@ então trocar o alvo de deploy não exige reescrever a aplicação.
 - Cache → ElastiCache (Redis) se necessário.
 - Observabilidade → CloudWatch + alarmes de custo (Budgets).
 
+## ⚠️ RLS exige papel NÃO-superusuário (isolamento de tenant)
+A app NUNCA deve conectar no Postgres como superusuário — superusuários ignoram Row-Level Security
+e o isolamento entre tenants vaza. Na AWS/RDS:
+- O usuário master do RDS tem `rds_superuser` (faz bypass de RLS). **Não use ele na app.**
+- Crie um papel dedicado `e1p_app` (NOSUPERUSER), dono das tabelas (roda as migrations), e use-o
+  na `DATABASE_URL` da aplicação. Em dev isso é feito por `infra/docker/initdb/01-rls-enforce.sql`.
+
 ## Guard-rails de custo (configurar desde já)
 - **AWS Budgets** com alerta em e-mail (ex.: estourou US$50/mês).
 - Tudo **Graviton/ARM** onde houver opção.

@@ -134,6 +134,13 @@ def test_stage_cannot_be_won_and_lost(client: TestClient, headers):
     assert resp.status_code == 422
 
 
+def test_delete_empty_stage_succeeds(client: TestClient, headers):
+    stage = client.post("/crm/stages", json={"name": "Temporário"}, headers=headers).json()
+    resp = client.delete(f"/crm/stages/{stage['id']}", headers=headers)
+    assert resp.status_code == 204
+    assert resp.content == b""  # 204 sem corpo
+
+
 def test_delete_stage_with_clients_blocked(client: TestClient, headers):
     stages = client.get("/crm/stages", headers=headers).json()
     entrada = stages[0]
