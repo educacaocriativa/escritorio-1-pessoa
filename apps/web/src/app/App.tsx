@@ -4,6 +4,9 @@ import AgendaPage from "../features/agenda/AgendaPage";
 import LoginPage from "../features/auth/LoginPage";
 import CockpitPage from "../features/cockpit/CockpitPage";
 import CobrancasPage from "../features/cobrancas/CobrancasPage";
+import ContractBuilderPage from "../features/contratos/ContractBuilderPage";
+import ContratosPage from "../features/contratos/ContratosPage";
+import PublicContractPage from "../features/contratos/PublicContractPage";
 import CrmPage from "../features/crm/CrmPage";
 import FinanceiroPage from "../features/financeiro/FinanceiroPage";
 import PagarPage from "../features/pagar/PagarPage";
@@ -21,6 +24,7 @@ export default function App() {
       <Routes>
         <Route path="/login" element={<LoginRoute />} />
         <Route path="/orcamento/:slug" element={<PublicProposalPage />} />
+        <Route path="/contrato/:slug" element={<PublicContractPage />} />
         <Route element={<ProtectedLayout />}>
           <Route path="/" element={<CockpitPage />} />
           <Route path="/agenda" element={<AgendaPage />} />
@@ -32,6 +36,9 @@ export default function App() {
           <Route path="/orcamentos" element={<OrcamentosPage />} />
           <Route path="/orcamentos/novo" element={<QuoteBuilderPage />} />
           <Route path="/orcamentos/:id" element={<QuoteBuilderPage />} />
+          <Route path="/contratos" element={<ContratosPage />} />
+          <Route path="/contratos/novo" element={<ContractBuilderPage />} />
+          <Route path="/contratos/:id" element={<ContractBuilderPage />} />
           <Route path="/admin" element={<AdminOnly />} />
           <Route path="*" element={<ComingSoon />} />
         </Route>

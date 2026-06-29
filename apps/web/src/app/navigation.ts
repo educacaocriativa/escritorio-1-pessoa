@@ -1,6 +1,7 @@
 import {
   CalendarDays,
   CreditCard,
+  FileSignature,
   FileText,
   Globe,
   LayoutDashboard,
@@ -43,6 +44,7 @@ export const navSections: NavSection[] = [
     title: "Ferramentas de Produtividade",
     items: [
       { label: "Orçamentos", to: "/orcamentos", icon: FileText, ready: true },
+      { label: "Contratos", to: "/contratos", icon: FileSignature, ready: true },
       { label: "Produtos", to: "/produtos", icon: ShoppingBag, ready: true },
       { label: "Marketing", to: "/marketing", icon: Megaphone },
       { label: "Sites", to: "/sites", icon: Globe },

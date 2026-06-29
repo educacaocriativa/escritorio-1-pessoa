@@ -428,3 +428,49 @@ export interface QuotesSummary {
   approved_cents: number;
   approved_count: number;
 }
+
+// ── Contratos & Assinatura ─────────────────────────────
+export type ContractStatus = "draft" | "sent" | "signed" | "cancelled";
+
+export interface Clause {
+  title: string;
+  text: string;
+}
+
+export interface ContractTemplate {
+  id: UUID;
+  name: string;
+  clauses: Clause[];
+  created_at: string;
+}
+
+export interface Contract {
+  id: UUID;
+  tenant_id: UUID;
+  client_id: UUID | null;
+  client_name: string | null;
+  quote_id: UUID | null;
+  title: string;
+  clauses: Clause[];
+  status: ContractStatus;
+  public_slug: string | null;
+  signer_name: string;
+  signer_document: string;
+  signed_at: string | null;
+  created_at: string;
+}
+
+export interface ContractsSummary {
+  draft_count: number;
+  sent_count: number;
+  signed_count: number;
+}
+
+export interface PublicContract {
+  title: string;
+  company_name: string;
+  clauses: Clause[];
+  status: ContractStatus;
+  signer_name: string;
+  signed_at: string | null;
+}
