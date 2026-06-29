@@ -51,7 +51,7 @@ def create_payable(db: Session, *, tenant_id: str, actor: str, data: PayableCrea
     day_start = datetime.combine(data.due_date, time.min, tzinfo=UTC)
     event = AgendaEvent(
         tenant_id=tenant_id,
-        title=f"A pagar: {data.description or data.supplier or 'conta'}",
+        title=f"A pagar: {data.supplier or data.description or 'conta'}",
         kind=KIND_COBRANCA_PAGAR,
         status=STATUS_SCHEDULED,
         priority=PRIORITY_NORMAL,

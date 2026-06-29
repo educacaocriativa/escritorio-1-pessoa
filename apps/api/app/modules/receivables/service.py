@@ -66,11 +66,15 @@ def create_charge(db: Session, *, tenant_id: str, actor: str, data: ChargeCreate
     db.flush()  # popula charge.id (default aplicado no flush)
     charge.payment_code = _payment_code(data.method, charge.id)
 
+    # Nome do cliente/empresa no título do evento (cai p/ a descrição se não houver cliente).
+    client = db.get(Client, data.client_id) if data.client_id else None
+    who = client.name if client else (data.description or "cobrança")
+
     # Injeta o vencimento na Agenda (marcador, não ocupa horário).
     day_start = datetime.combine(data.due_date, time.min, tzinfo=UTC)
     event = AgendaEvent(
         tenant_id=tenant_id,
-        title=f"A receber: {data.description or 'cobrança'}",
+        title=f"A receber: {who}",
         kind=KIND_COBRANCA_RECEBER,
         status=STATUS_SCHEDULED,
         priority=PRIORITY_NORMAL,

@@ -76,7 +76,10 @@ export default function CockpitPage() {
               <li key={o.charge_id} className="flex items-center gap-3 py-2.5">
                 <div className="min-w-0 flex-1">
                   <span className="font-medium text-neutral-800">{o.client_name}</span>
-                  <span className="ml-2 text-xs text-neutral-400">
+                  {o.description && o.description !== o.client_name && (
+                    <span className="ml-2 text-xs text-neutral-500">{o.description}</span>
+                  )}
+                  <span className="block text-xs text-neutral-400">
                     {brl(o.amount_cents)} · venceu {new Date(o.due_date + "T00:00").toLocaleDateString("pt-BR")}
                   </span>
                 </div>

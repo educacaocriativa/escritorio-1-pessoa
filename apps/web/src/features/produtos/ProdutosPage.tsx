@@ -7,7 +7,12 @@ import { usePrimaryAction } from "../../store/pageActions";
 
 const brl = (c: number) => (c / 100).toLocaleString("pt-BR", { style: "currency", currency: "BRL" });
 
-type Tab = "produtos" | "cupons" | "alunos";
+type Tab = "produtos" | "cupons" | "compradores";
+const TAB_LABELS: Record<Tab, string> = {
+  produtos: "Produtos",
+  cupons: "Cupons",
+  compradores: "Compradores",
+};
 
 const KINDS = [
   ["membership", "Área de membros"],
@@ -59,15 +64,15 @@ export default function ProdutosPage() {
       </div>
 
       <div className="flex gap-1 rounded-pill bg-neutral-100 p-1 text-sm">
-        {(["produtos", "cupons", "alunos"] as Tab[]).map((t) => (
+        {(["produtos", "cupons", "compradores"] as Tab[]).map((t) => (
           <button
             key={t}
             onClick={() => setTab(t)}
-            className={`rounded-pill px-4 py-1.5 font-medium capitalize transition ${
+            className={`rounded-pill px-4 py-1.5 font-medium transition ${
               tab === t ? "bg-white text-primary-700 shadow-sm" : "text-neutral-500"
             }`}
           >
-            {t}
+            {TAB_LABELS[t]}
           </button>
         ))}
       </div>
@@ -92,7 +97,7 @@ export default function ProdutosPage() {
                 </div>
                 <p className="text-xl font-bold text-neutral-800">{brl(p.price_cents)}</p>
                 <p className="mt-1 text-xs text-neutral-400">
-                  {p.students} aluno(s){p.stock != null && ` · estoque ${p.stock}`}
+                  {p.students} comprador(es){p.stock != null && ` · estoque ${p.stock}`}
                 </p>
                 <div className="mt-3 flex items-center gap-2">
                   <button
@@ -160,13 +165,13 @@ export default function ProdutosPage() {
         </Card>
       )}
 
-      {tab === "alunos" && (
+      {tab === "compradores" && (
         <Card>
           {alunos.length === 0 ? (
-            <Empty text="Nenhum aluno/comprador ainda." />
+            <Empty text="Nenhum comprador ainda." />
           ) : (
             <table className="w-full text-sm">
-              <Head cols={["Aluno", "Produto", "Valor", "Status"]} />
+              <Head cols={["Comprador", "Produto", "Valor", "Status"]} />
               <tbody>
                 {alunos.map((a) => (
                   <tr key={a.id} className="border-b border-neutral-50 last:border-0">
