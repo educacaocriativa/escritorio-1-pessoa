@@ -52,6 +52,51 @@ const KIND_VERB: Record<string, string> = {
   generic: "Configurar conteúdo",
 };
 
+/** Mockup de página que muda conforme o "Modelo de página" escolhido. */
+function PageMockup({ model, color }: { model?: string; color: string }) {
+  const cta = (text: string) => (
+    <div className="mt-1 h-5 w-full rounded-md text-center text-[9px] font-bold leading-5 text-white" style={{ background: color }}>
+      {text}
+    </div>
+  );
+  const line = (w: string, light = false) => (
+    <div className={`h-2 rounded ${light ? "bg-neutral-100" : "bg-neutral-200"}`} style={{ width: w }} />
+  );
+  switch (model) {
+    case "Captura":
+      return (<>{line("60%")}<div className="h-4 rounded border border-neutral-200" /><div className="h-4 rounded border border-neutral-200" />{cta("QUERO!")}</>);
+    case "Obrigado":
+      return (
+        <div className="flex flex-col items-center gap-1.5 py-1">
+          <div className="flex h-7 w-7 items-center justify-center rounded-full text-sm font-bold text-white" style={{ background: color }}>✓</div>
+          {line("70%")}{line("45%", true)}
+        </div>
+      );
+    case "Checkout":
+      return (
+        <>
+          <div className="flex justify-between gap-2">{line("50%")}{line("18%")}</div>
+          <div className="flex justify-between gap-2">{line("40%", true)}{line("18%", true)}</div>
+          {cta("PAGAR")}
+        </>
+      );
+    case "Download":
+      return (<><div className="mx-auto h-8 w-10 rounded" style={{ background: `${color}33` }} /><div className="mx-auto h-2 w-2/3 rounded bg-neutral-100" />{cta("BAIXAR")}</>);
+    case "Webinar":
+      return (
+        <>
+          <div className="flex h-9 items-center justify-center rounded bg-neutral-800 text-[11px] text-white">▶</div>
+          {line("70%", true)}
+          {cta("ASSISTIR")}
+        </>
+      );
+    case "Vendas":
+      return (<><div className="h-6 rounded" style={{ background: `${color}33` }} />{line("75%")}{line("100%", true)}{cta("COMPRAR")}</>);
+    default: // Conteúdo
+      return (<>{line("75%")}{line("100%", true)}{line("85%", true)}<div className="mt-1 h-5 w-2/3 rounded-md" style={{ background: color }} /></>);
+  }
+}
+
 function FunnelNode({ data, selected }: NodeProps<NodeData>) {
   const configured = !!(data.config?.body || data.config?.model);
   const handleStyle = { background: "#fff", border: `2px solid ${data.color}`, width: 10, height: 10 };
@@ -73,10 +118,7 @@ function FunnelNode({ data, selected }: NodeProps<NodeData>) {
           </span>
         </div>
         <div className="space-y-1.5 p-3">
-          <div className="h-2.5 w-3/4 rounded bg-neutral-200" />
-          <div className="h-2 w-full rounded bg-neutral-100" />
-          <div className="h-2 w-5/6 rounded bg-neutral-100" />
-          <div className="mt-1.5 h-5 w-2/3 rounded-md" style={{ background: data.color }} />
+          <PageMockup model={data.config?.model} color={data.color} />
         </div>
         <p className="truncate border-t border-neutral-100 px-3 py-1.5 text-xs font-semibold text-neutral-800">
           {data.label}
