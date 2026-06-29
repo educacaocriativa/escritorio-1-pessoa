@@ -1,4 +1,5 @@
 import { Navigate, Outlet, Route, Routes } from "react-router-dom";
+import AdminDashboard from "../features/admin/AdminDashboard";
 import AgendaPage from "../features/agenda/AgendaPage";
 import LoginPage from "../features/auth/LoginPage";
 import CockpitPage from "../features/cockpit/CockpitPage";
@@ -16,6 +17,7 @@ export default function App() {
           <Route path="/" element={<CockpitPage />} />
           <Route path="/agenda" element={<AgendaPage />} />
           <Route path="/crm" element={<CrmPage />} />
+          <Route path="/admin" element={<AdminOnly />} />
           <Route path="*" element={<ComingSoon />} />
         </Route>
       </Routes>
@@ -38,6 +40,12 @@ function ProtectedLayout() {
       </AppShell>
     </PageActionsProvider>
   );
+}
+
+function AdminOnly() {
+  const { user } = useAuth();
+  if (!user?.is_platform_admin) return <Navigate to="/" replace />;
+  return <AdminDashboard />;
 }
 
 function ComingSoon() {

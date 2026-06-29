@@ -9,7 +9,7 @@ from pydantic import BaseModel, EmailStr, Field, field_validator
 
 SLUG_RE = re.compile(r"^[a-z0-9](?:[a-z0-9-]{1,61}[a-z0-9])?$")
 RESERVED_SLUGS = {
-    "www", "api", "admin", "app", "mail", "e1p", "static", "cdn",
+    "www", "api", "admin", "app", "mail", "e1p", "static", "cdn", "platform",
     "support", "billing", "auth", "status", "assets", "help", "blog",
 }
 
@@ -66,6 +66,7 @@ class UserOut(BaseModel):
     role: Literal["owner", "sub_user"]
     allowed_modules: list[str]
     is_active: bool
+    is_platform_admin: bool = False
     created_at: datetime
 
     model_config = {"from_attributes": True}

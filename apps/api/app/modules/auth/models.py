@@ -37,5 +37,7 @@ class User(Base, TimestampMixin):
     # RBAC: módulos liberados p/ sub-usuário. Vazio = todos (owner).
     allowed_modules: Mapped[list[str]] = mapped_column(JSON, default=list, nullable=False)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+    # Nível 1 (Master/plataforma): gerencia todas as contas. NÃO é o owner de um tenant comum.
+    is_platform_admin: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
 
     tenant: Mapped[Tenant] = relationship(back_populates="users")

@@ -22,8 +22,18 @@ def test_production_requires_anthropic_key():
         Settings(environment="production", jwt_secret=STRONG, anthropic_api_key="")
 
 
+def test_production_rejects_default_admin_password():
+    with pytest.raises(ValidationError):
+        Settings(environment="production", jwt_secret=STRONG, anthropic_api_key="sk-ant-x")
+
+
 def test_production_ok_with_strong_secret():
-    s = Settings(environment="production", jwt_secret=STRONG, anthropic_api_key="sk-ant-x")
+    s = Settings(
+        environment="production",
+        jwt_secret=STRONG,
+        anthropic_api_key="sk-ant-x",
+        super_admin_password="uma-senha-de-admin-forte",
+    )
     assert s.is_production
 
 

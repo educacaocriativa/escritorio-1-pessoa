@@ -27,7 +27,15 @@ export interface User {
   /** Módulos que um sub-usuário pode acessar (RBAC). Vazio = todos (owner). */
   allowed_modules: string[];
   is_active: boolean;
+  /** Nível 1 (Master): gerencia todas as contas da plataforma. */
+  is_platform_admin: boolean;
   created_at: string;
+}
+
+/** Conta gerenciada pelo Super Admin: tenant + seu owner. */
+export interface Account {
+  tenant: Tenant;
+  owner: User;
 }
 
 /** Retorno de GET /auth/me — só identidade, sem credencial. */

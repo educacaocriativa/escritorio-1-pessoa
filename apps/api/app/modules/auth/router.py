@@ -28,6 +28,7 @@ def _build_token(tenant: Tenant, user: User) -> AuthToken:
             "tenant_id": tenant.id,
             "role": user.role,
             "allowed_modules": user.allowed_modules,
+            "is_platform_admin": user.is_platform_admin,
         }
     )
     return AuthToken(

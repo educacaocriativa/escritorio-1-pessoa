@@ -12,7 +12,7 @@ from fastapi import Depends, Header, HTTPException, status
 from sqlalchemy.orm import Session
 
 from app.core.security import decode_access_token
-from app.db.session import SessionLocal, tenant_session
+from app.db.session import SessionLocal, get_db, tenant_session
 
 
 @dataclass
@@ -21,6 +21,7 @@ class CurrentUser:
     tenant_id: str
     role: str
     allowed_modules: list[str]
+    is_platform_admin: bool = False
 
     @property
     def is_ai(self) -> bool:
@@ -38,7 +39,24 @@ def get_current_user(authorization: str | None = Header(default=None)) -> Curren
         tenant_id=payload["tenant_id"],
         role=payload.get("role", "owner"),
         allowed_modules=payload.get("allowed_modules", []),
+        is_platform_admin=bool(payload.get("is_platform_admin", False)),
     )
+
+
+def require_platform_admin(
+    user: CurrentUser = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> CurrentUser:
+    """Bloqueia quem não é Master (Nível 1). Revalida no banco — não confia só no claim do
+    token (que vive 7 dias); um admin rebaixado/desativado perde acesso imediatamente."""
+    from app.modules.auth.models import User
+
+    db_user = db.get(User, user.user_id)
+    if db_user is None or not db_user.is_active or not db_user.is_platform_admin:
+        raise HTTPException(
+            status.HTTP_403_FORBIDDEN, "Acesso restrito ao administrador da plataforma"
+        )
+    return user
 
 
 def get_tenant_db(user: CurrentUser = Depends(get_current_user)) -> Iterator[Session]:
@@ -58,4 +76,11 @@ def require_module(module: str):
     return _checker
 
 
-__all__ = ["CurrentUser", "get_current_user", "get_tenant_db", "require_module", "SessionLocal"]
+__all__ = [
+    "CurrentUser",
+    "get_current_user",
+    "get_tenant_db",
+    "require_module",
+    "require_platform_admin",
+    "SessionLocal",
+]

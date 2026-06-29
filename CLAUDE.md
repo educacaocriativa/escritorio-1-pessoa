@@ -59,6 +59,8 @@ Ao criar/alterar qualquer funcionalidade:
 - [x] **Módulo Agenda** (eventos, detecção de conflitos, CRUD, transições de status, paginação; migration 0002). 43 testes no total.
 - [x] **Módulo CRM & Kanban** (clientes, estágios dinâmicos, board, mover card, segmentação; barramento de eventos `core/events`; migration 0003). 61 testes no total.
 - [x] **Cockpit** (agregador read-only de Agenda + CRM: contagem do dia, críticos pendentes, funil/conversão; financeiro como placeholder). 70 testes no total. **→ Fase 1 COMPLETA.**
+- [x] **Frontend ligado à API** (login só-acesso, telas Agenda/CRM/Cockpit funcionais, botões criam de verdade). Cor `#5D44F8` + sidebar no formato "Portal" + logout.
+- [x] **Super Admin (Master)** — dashboard de plataforma: criar/listar/suspender/excluir contas; `is_platform_admin` (migration 0004); seed via env; delete atômico com purga dinâmica de tabelas de negócio. 77 testes.
 - [ ] Próximo: **Fase 2 — dinheiro entra/sai** (Carteira & Split → Contas a Receber → Contas a Pagar → Produtos & Checkout). O placeholder `finance` do Cockpit e o evento `crm.client.moved` já estão prontos para ligar.
 - [ ] Migrar módulo **Assistente Jurídico** do app existente (`~/lex-intelligentia-app`) — Fase 5.
 
@@ -85,6 +87,13 @@ Ao criar/alterar qualquer funcionalidade:
 - **Múltiplos estágios `is_won`/`is_lost`:** permitido; o consumidor do evento `crm.client.moved` deve tolerar. Avaliar regra de no máx. 1 de cada.
 - **Filtro por tag carrega em memória:** feito em Python p/ portabilidade; trocar por operador JSON do Postgres (`tags @> [tag]`) em escala.
 - **Validação de CPF (`document`):** reutiliza a dívida global (sem dígito verificador).
+
+**Super Admin — pendências (de revisão QA):**
+- **Log de exclusão (LGPD):** o delete de conta purga também `audit_entries` do tenant — não sobra registro da própria exclusão. Criar um log de plataforma (fora do tenant) da operação destrutiva.
+- **Inconsistência de id:** `PATCH /admin/accounts/{user_id}` (id de usuário) vs `DELETE /admin/accounts/{tenant_id}` (id de tenant). Documentado; alinhar quando houver UI de sub-usuários.
+- **Forçar troca de senha no 1º login** do super admin (hoje a senha semeada vale até ser trocada manualmente).
+
+> Já corrigidos no Super Admin (revisão QA): guarda de produção p/ senha default do admin; delete ATÔMICO (transação única, sem conta-zumbi); purga de tabelas **dinâmica** (descobre subclasses de TenantMixin — módulos futuros purgados automaticamente); `WHERE tenant_id` explícito na purga (defesa-em-profundidade); `require_platform_admin` revalida no banco (não confia no claim por 7 dias); slug "platform" reservado; guard de exclusão checa qualquer admin no tenant (não só o owner).
 
 **Cockpit — pendência (de revisão QA):**
 - **Janela do dia ancorada em meia-noite UTC**, não no fuso do tenant. Para -03:00 (Brasil), eventos entre 00:00–03:00 UTC caem no dia errado. O frontend deve passar `day` correto, mas o offset de 3h da janela só some quando passarmos o fuso/offset do tenant. Resolver junto com a dívida geral de fuso por tenant.

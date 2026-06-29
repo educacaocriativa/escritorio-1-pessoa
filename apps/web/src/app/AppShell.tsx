@@ -1,5 +1,5 @@
 import clsx from "clsx";
-import { Bell, ChevronDown, LogOut, Plus, Search, X } from "lucide-react";
+import { Bell, ChevronDown, LogOut, Plus, Search, ShieldCheck, X } from "lucide-react";
 import { type ReactNode, useState } from "react";
 import { NavLink } from "react-router-dom";
 import { useAuth } from "../store/auth";
@@ -25,7 +25,7 @@ export default function AppShell({ children }: { children: ReactNode }) {
 }
 
 function Sidebar({ onClose }: { onClose: () => void }) {
-  const { logout } = useAuth();
+  const { logout, user } = useAuth();
   return (
     <aside className="flex w-64 flex-col bg-primary-500 py-6 pl-4 text-white">
       {/* Botão de fechar/colapsar (como no anexo) */}
@@ -76,6 +76,26 @@ function Sidebar({ onClose }: { onClose: () => void }) {
             </ul>
           </div>
         ))}
+
+        {user?.is_platform_admin && (
+          <div>
+            <div className="mb-5 mr-4 border-t border-dashed border-white/35" />
+            <NavLink
+              to="/admin"
+              className={({ isActive }) =>
+                clsx(
+                  "flex items-center gap-3 py-3 pl-4 text-[15px] font-medium transition",
+                  isActive
+                    ? "-mr-4 rounded-l-full bg-white text-primary-700 shadow-sm"
+                    : "mr-4 rounded-l-full text-white/90 hover:bg-white/10",
+                )
+              }
+            >
+              <ShieldCheck size={20} strokeWidth={2} />
+              <span>Admin</span>
+            </NavLink>
+          </div>
+        )}
       </nav>
 
       <button

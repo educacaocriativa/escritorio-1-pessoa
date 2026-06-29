@@ -2,6 +2,7 @@ from pydantic import model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 _DEV_SECRET = "dev-secret-change-in-production"  # noqa: S105 (sentinela do default de dev)
+_DEFAULT_ADMIN_PASSWORD = "trocar-no-primeiro-acesso"  # noqa: S105 (sentinela do default de dev)
 
 
 class Settings(BaseSettings):
@@ -21,6 +22,11 @@ class Settings(BaseSettings):
     jwt_algorithm: str = "HS256"
     jwt_expire_minutes: int = 10080  # 7 dias
     session_idle_timeout_minutes: int = 30  # LGPD
+
+    # Super Admin (Master) — semeado no start. Em produção, defina por env.
+    super_admin_email: str = "admin@e1p.com"
+    super_admin_password: str = _DEFAULT_ADMIN_PASSWORD
+    super_admin_name: str = "Administrador e1p"
 
     # App
     root_domain: str = "e1p.com"
@@ -43,6 +49,10 @@ class Settings(BaseSettings):
                 )
             if not self.anthropic_api_key:
                 raise ValueError("ANTHROPIC_API_KEY ausente em produção")
+            if self.super_admin_password == _DEFAULT_ADMIN_PASSWORD:
+                raise ValueError(
+                    "SUPER_ADMIN_PASSWORD default em produção: defina uma senha forte"
+                )
         return self
 
 
