@@ -31,6 +31,8 @@ const startOfWeek = (d: Date) => addDays(d, -d.getDay()); // semana começa no d
 const sameDay = (a: Date, b: Date) => a.toDateString() === b.toDateString();
 const ymd = (d: Date) =>
   `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+// só a primeira letra maiúscula (ex.: "junho de 2026" -> "Junho de 2026")
+const sentenceCase = (s: string) => (s ? s.charAt(0).toUpperCase() + s.slice(1) : s);
 
 function rangeFor(view: View, anchor: Date): { start: Date; end: Date; days: Date[] } {
   if (view === "day") {
@@ -83,12 +85,13 @@ export default function AgendaPage() {
     else setAnchor(addDays(anchor, dir * (step as number)));
   }
 
-  const title =
+  const title = sentenceCase(
     view === "day"
       ? anchor.toLocaleDateString("pt-BR", { weekday: "long", day: "2-digit", month: "long" })
       : view === "week"
         ? `${days[0].toLocaleDateString("pt-BR", { day: "2-digit", month: "short" })} – ${days[6].toLocaleDateString("pt-BR", { day: "2-digit", month: "short" })}`
-        : anchor.toLocaleDateString("pt-BR", { month: "long", year: "numeric" });
+        : anchor.toLocaleDateString("pt-BR", { month: "long", year: "numeric" }),
+  );
 
   function openOnDay(d: Date) {
     setModalDate(d);
@@ -111,7 +114,7 @@ export default function AgendaPage() {
           >
             Hoje
           </button>
-          <h1 className="ml-2 text-lg font-bold capitalize text-neutral-800">{title}</h1>
+          <h1 className="ml-2 text-lg font-bold text-neutral-800">{title}</h1>
         </div>
         <div className="flex rounded-pill bg-neutral-100 p-1 text-sm">
           {(["month", "week", "day"] as View[]).map((v) => (
@@ -154,11 +157,15 @@ export default function AgendaPage() {
   );
 }
 
-// ── cor por prioridade/tipo ────────────────────────────
+// ── cor por tipo/situação ──────────────────────────────
+// a receber = verde · a pagar = laranja · atrasada (não paga e vencida) = vermelho
 function eventColor(e: AgendaEvent): string {
+  const overdue =
+    e.status !== "done" && e.status !== "cancelled" && new Date(e.starts_at) < startOfDay(new Date());
+  if (e.kind === "cobranca_receber") return overdue ? "bg-red-100 text-red-700" : "bg-accent-100 text-accent-700";
+  if (e.kind === "cobranca_pagar") return overdue ? "bg-red-100 text-red-700" : "bg-orange-100 text-orange-700";
   if (e.priority === "critical") return "bg-red-100 text-red-700";
   if (e.kind === "prazo") return "bg-amber-100 text-amber-700";
-  if (e.kind === "cobranca_receber" || e.kind === "cobranca_pagar") return "bg-blue-100 text-blue-700";
   return "bg-primary-100 text-primary-700";
 }
 const hhmm = (iso: string) =>

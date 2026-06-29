@@ -10,6 +10,7 @@ from app.core import audit
 from app.modules.agenda.models import (
     KIND_COBRANCA_PAGAR,
     PRIORITY_NORMAL,
+    STATUS_DONE,
     STATUS_SCHEDULED,
     AgendaEvent,
 )
@@ -98,6 +99,10 @@ def mark_paid(db: Session, *, payable_id: str, tenant_id: str, actor: str) -> Pa
         raise PayableError("Conta cancelada não pode ser paga", 409)
     p.status = STATUS_PAID
     p.paid_at = datetime.now(UTC)
+    if p.agenda_event_id:
+        ev = db.get(AgendaEvent, p.agenda_event_id)
+        if ev is not None:
+            ev.status = STATUS_DONE  # não fica "atrasado" na agenda
     audit.record(db, tenant_id=tenant_id, actor=actor, action="payable.paid", target=p.id)
     db.commit()
     db.refresh(p)

@@ -15,6 +15,7 @@ from app.core import ai, audit, whatsapp
 from app.modules.agenda.models import (
     KIND_COBRANCA_RECEBER,
     PRIORITY_NORMAL,
+    STATUS_DONE,
     STATUS_SCHEDULED,
     AgendaEvent,
 )
@@ -129,6 +130,10 @@ def mark_paid(db: Session, *, charge_id: str, tenant_id: str, actor: str, by_ai:
     )
     charge.status = STATUS_PAID
     charge.transaction_id = tx.id
+    if charge.agenda_event_id:
+        ev = db.get(AgendaEvent, charge.agenda_event_id)
+        if ev is not None:
+            ev.status = STATUS_DONE  # não fica "atrasado" na agenda
     audit.record(db, tenant_id=tenant_id, actor=actor, action="receivable.paid", target=charge.id)
     db.commit()
     db.refresh(charge)
