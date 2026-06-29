@@ -1,0 +1,43 @@
+# Ambiente de desenvolvimento local. Em produção, ver docs/AWS-DEPLOYMENT.md.
+services:
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: e1pdb
+      POSTGRES_USER: e1puser
+      POSTGRES_PASSWORD: e1ppass
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U e1puser -d e1pdb"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  api:
+    build: ../apps/api
+    restart: unless-stopped
+    environment:
+      DATABASE_URL: postgresql+psycopg://e1puser:e1ppass@postgres:5432/e1pdb
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      JWT_SECRET: ${JWT_SECRET:-dev-secret-change-me}
+      ENVIRONMENT: development
+    ports:
+      - "8000:8000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  web:
+    build: ../apps/web
+    restart: unless-stopped
+    ports:
+      - "5173:80"
+    depends_on:
+      - api
+
+volumes:
+  postgres_data:

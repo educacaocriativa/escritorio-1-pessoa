@@ -1,0 +1,48 @@
+# Dependencies
+node_modules/
+.pnpm-store/
+**/__pycache__/
+*.py[cod]
+.venv/
+venv/
+
+# Build
+dist/
+build/
+*.egg-info/
+.vite/
+
+# Env & secrets
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+
+# Uploads / generated (local dev)
+apps/api/uploads/
+apps/api/generated/
+*.sqlite3
+
+# OS / editor
+.DS_Store
+._*
+.idea/
+.vscode/*
+!.vscode/extensions.json
+
+# Terraform
+infra/terraform/.terraform/
+*.tfstate
+*.tfstate.*
+*.tfvars
+!*.tfvars.example
+
+# Logs / coverage
+*.log
+coverage/
+.pytest_cache/
+.ruff_cache/
+htmlcov/
+playwright-report/
+test-results/

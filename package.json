@@ -1,0 +1,17 @@
+{
+  "name": "e1p",
+  "version": "0.0.0",
+  "private": true,
+  "description": "e1p — SaaS multi-tenant para profissionais autônomos",
+  "packageManager": "pnpm@9.12.0",
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "dev:web": "pnpm --filter @e1p/web dev",
+    "build:web": "pnpm --filter @e1p/web build",
+    "lint": "pnpm -r --if-present lint",
+    "typecheck": "pnpm -r --if-present typecheck",
+    "test": "pnpm -r --if-present test"
+  }
+}
