@@ -13,6 +13,7 @@ import {
   ShoppingBag,
   Users,
   Wallet,
+  Workflow,
 } from "lucide-react";
 
 export interface NavItem {
@@ -47,6 +48,7 @@ export const navSections: NavSection[] = [
       { label: "Contratos", to: "/contratos", icon: FileSignature, ready: true },
       { label: "Produtos", to: "/produtos", icon: ShoppingBag, ready: true },
       { label: "Marketing", to: "/marketing", icon: Megaphone, ready: true },
+      { label: "Funil de Vendas", to: "/funis", icon: Workflow, ready: true },
       { label: "Sites", to: "/sites", icon: Globe },
       { label: "Jurídico", to: "/juridico", icon: Scale },
       { label: "Configurações", to: "/config", icon: Settings },

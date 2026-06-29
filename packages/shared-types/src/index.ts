@@ -467,6 +467,37 @@ export interface ContractsSummary {
   signed_count: number;
 }
 
+// ── Funil de Vendas ────────────────────────────────────
+export interface FunnelComponentItem {
+  key: string;
+  label: string;
+  description: string;
+}
+
+export interface FunnelComponentCategory {
+  category: string;
+  label: string;
+  color: string;
+  items: FunnelComponentItem[];
+}
+
+export interface FunnelSummary {
+  id: UUID;
+  name: string;
+  node_count: number;
+  created_at: string;
+}
+
+export interface Funnel {
+  id: UUID;
+  tenant_id: UUID;
+  name: string;
+  // nós/arestas no formato do React Flow
+  nodes: unknown[];
+  edges: unknown[];
+  created_at: string;
+}
+
 export interface PublicContract {
   title: string;
   company_name: string;

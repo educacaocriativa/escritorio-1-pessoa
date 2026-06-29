@@ -10,6 +10,8 @@ import PublicContractPage from "../features/contratos/PublicContractPage";
 import ClientDetailPage from "../features/crm/ClientDetailPage";
 import CrmPage from "../features/crm/CrmPage";
 import FinanceiroPage from "../features/financeiro/FinanceiroPage";
+import FunisPage from "../features/funis/FunisPage";
+import FunnelBuilderPage from "../features/funis/FunnelBuilderPage";
 import CarrosselBuilderPage from "../features/marketing/CarrosselBuilderPage";
 import MarketingPage from "../features/marketing/MarketingPage";
 import PagarPage from "../features/pagar/PagarPage";
@@ -46,6 +48,9 @@ export default function App() {
           <Route path="/marketing" element={<MarketingPage />} />
           <Route path="/marketing/novo" element={<CarrosselBuilderPage />} />
           <Route path="/marketing/:id" element={<CarrosselBuilderPage />} />
+          <Route path="/funis" element={<FunisPage />} />
+          <Route path="/funis/novo" element={<FunnelBuilderPage />} />
+          <Route path="/funis/:id" element={<FunnelBuilderPage />} />
           <Route path="/admin" element={<AdminOnly />} />
           <Route path="*" element={<ComingSoon />} />
         </Route>
