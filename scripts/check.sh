@@ -6,6 +6,10 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT"
 
+# SSD exFAT (macOS) cria arquivos AppleDouble '._*' que quebram tooling que varre *.py.
+# No Linux (Docker/AWS) não existem; aqui removemos antes de rodar.
+find . -name '._*' -not -path './.git/*' -delete 2>/dev/null || true
+
 echo "▶ Backend: lint (ruff)"
 ( cd apps/api && ruff check . )
 

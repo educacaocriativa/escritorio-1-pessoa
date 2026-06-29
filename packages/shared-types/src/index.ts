@@ -59,4 +59,43 @@ export interface ApiError {
   code?: string;
 }
 
-// Os tipos de cada módulo (agenda, crm, financeiro...) entram aqui conforme forem construídos.
+// ── Agenda ─────────────────────────────────────────────
+export type AgendaKind =
+  | "atendimento"
+  | "reuniao"
+  | "audiencia"
+  | "bloqueio"
+  | "prazo"
+  | "cobranca_receber"
+  | "cobranca_pagar"
+  | "lembrete";
+
+export type AgendaStatus = "scheduled" | "confirmed" | "cancelled" | "done";
+export type AgendaPriority = "normal" | "high" | "critical";
+
+export interface AgendaEvent {
+  id: UUID;
+  tenant_id: UUID;
+  title: string;
+  description: string;
+  kind: AgendaKind;
+  status: AgendaStatus;
+  priority: AgendaPriority;
+  source: string;
+  starts_at: string;
+  ends_at: string;
+  all_day: boolean;
+  /** Valor em centavos (inteiro) para eventos de cobrança. */
+  amount_cents: number | null;
+  external_ref: string | null;
+  created_by_ai: boolean;
+  created_at: string;
+}
+
+/** Resposta de criar/remarcar evento: a 'Guardiã da Agenda' devolve conflitos detectados. */
+export interface CreateEventResult {
+  event: AgendaEvent;
+  conflicts: AgendaEvent[];
+}
+
+// Os tipos de cada módulo (crm, financeiro...) entram aqui conforme forem construídos.

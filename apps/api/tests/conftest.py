@@ -11,6 +11,7 @@ from sqlalchemy import create_engine
 from sqlalchemy.orm import Session, sessionmaker
 from sqlalchemy.pool import StaticPool
 
+from app.core.tenancy import get_tenant_db
 from app.db.registry import Base
 from app.db.session import get_db
 from app.main import app
@@ -39,7 +40,10 @@ def client(db: Session) -> Iterator[TestClient]:
     def _override_get_db() -> Iterator[Session]:
         yield db
 
+    # get_tenant_db usa set_config (Postgres) — em SQLite trocamos pela sessão de teste.
+    # (RLS não é exercida aqui; é validada em ambiente Postgres — ver docs/AWS-DEPLOYMENT.md.)
     app.dependency_overrides[get_db] = _override_get_db
+    app.dependency_overrides[get_tenant_db] = _override_get_db
     with TestClient(app) as c:
         yield c
     app.dependency_overrides.clear()

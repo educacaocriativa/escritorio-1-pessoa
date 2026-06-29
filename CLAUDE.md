@@ -54,7 +54,8 @@ Ao criar/alterar qualquer funcionalidade:
 - [x] Core do backend: tenancy (RLS) + anonimizador + camada de IA + auditoria.
 - [x] Shell do frontend (sidebar/topbar/layout do design "Portal") + Cockpit (esqueleto).
 - [x] **Módulo auth + tenant** (register/login/me, JWT, RBAC, RLS na migration 0001). 24 testes.
-- [ ] Próximo (Fase 1): Agenda → CRM/Kanban → Cockpit com dados reais. Depois Fase 2 (financeiro/split).
+- [x] **Módulo Agenda** (eventos, detecção de conflitos, CRUD, transições de status, paginação; migration 0002). 43 testes no total.
+- [ ] Próximo (Fase 1): CRM/Kanban → Cockpit com dados reais. Depois Fase 2 (financeiro/split).
 - [ ] Migrar módulo **Assistente Jurídico** do app existente (`~/lex-intelligentia-app`) — Fase 5.
 
 ## 6.1 Dívida técnica / TODO de segurança (de revisão QA — endereçar antes de produção)
@@ -64,6 +65,13 @@ Ao criar/alterar qualquer funcionalidade:
 - **Idle timeout LGPD (30min):** configurado mas não implementado (JWT é stateless, expira em 7 dias). Implementar tracking de atividade / refresh curto quando o frontend de auth entrar.
 - **Truncagem bcrypt por bytes (72):** pode cortar caractere multibyte; documentado, aceitável.
 - **Geração de tipos:** `shared-types` é mantido à mão espelhando os schemas. Avaliar gerar TS a partir do OpenAPI do FastAPI para eliminar divergência.
+- **Rastro da IA não propagado (Agenda):** `CurrentUser.is_ai` é placeholder fixo `False` — nenhum evento é criado pela IA ainda (não há endpoint/ator de IA). Quando a camada de ações da IA existir, propagar `is_ai` em create/update/cancel/reschedule (Regra de Ouro nº 3).
+- **Semântica de `all_day` (Agenda):** hoje o campo é só armazenado; o conflito usa starts_at/ends_at crus. Definir normalização (ex.: `[00:00, 24:00)` no fuso do tenant) quando a UI de calendário entrar.
+- **Teste de isolamento cross-tenant:** RLS é Postgres-only; os testes usam SQLite e não a exercem. Adicionar suíte de integração com Postgres (testcontainers) provando que um tenant não vê dados de outro.
+
+> **Decisão de arquitetura (mantida):** seguimos RLS como ÚNICA garantia de isolamento — o código NÃO adiciona filtro manual de tenant (Regra de Ouro nº 1). Defesa-em-profundidade (filtro explícito redundante) foi considerada e rejeitada para não criar o padrão "algumas queries filtram, outras não" (onde esquecer uma vira vazamento). A RLS é fail-closed inclusive em escrita (WITH CHECK). Revisitar via ADR se necessário.
+
+> Já corrigidos no módulo Agenda (revisão QA): validação de status/priority no update; guarda de transição (não cancelar/remarcar evento terminal); paginação obrigatória em list; `amount_cents >= 0`; duração positiva (rejeita zero); coerção de datetime naive→UTC.
 
 > Já corrigidos na fundação: guarda de boot p/ JWT_SECRET fraco em produção; RLS fail-closed (valida tenant_id); IntegrityError→409 no register (race); /me revalida is_active e não reemite token; e-mail case-insensitive; alinhamento de `created_at`/`role` com shared-types.
 

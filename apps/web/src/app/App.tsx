@@ -1,4 +1,5 @@
 import { Route, Routes } from "react-router-dom";
+import AgendaPage from "../features/agenda/AgendaPage";
 import CockpitPage from "../features/cockpit/CockpitPage";
 import AppShell from "./AppShell";
 
@@ -11,6 +12,7 @@ export default function App() {
     <AppShell>
       <Routes>
         <Route path="/" element={<CockpitPage />} />
+        <Route path="/agenda" element={<AgendaPage />} />
         <Route path="*" element={<ComingSoon />} />
       </Routes>
     </AppShell>
