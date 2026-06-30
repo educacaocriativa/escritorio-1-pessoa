@@ -17,6 +17,7 @@ from app.modules.crm.models import Client, PipelineStage  # noqa: F401
 from app.modules.funnels.models import Funnel  # noqa: F401
 from app.modules.marketing.models import Carousel  # noqa: F401
 from app.modules.notifications.models import Notification  # noqa: F401
+from app.modules.pages.models import Page, PublishedPage  # noqa: F401
 from app.modules.payables.models import Payable  # noqa: F401
 from app.modules.products.models import Coupon, Enrollment, Product  # noqa: F401
 from app.modules.quotes.models import PublishedProposal, Quote  # noqa: F401

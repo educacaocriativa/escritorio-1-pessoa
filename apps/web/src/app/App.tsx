@@ -21,6 +21,9 @@ import OrcamentosPage from "../features/orcamentos/OrcamentosPage";
 import PublicProposalPage from "../features/orcamentos/PublicProposalPage";
 import QuoteBuilderPage from "../features/orcamentos/QuoteBuilderPage";
 import ProdutosPage from "../features/produtos/ProdutosPage";
+import PageBuilderPage from "../features/sites/PageBuilderPage";
+import PublicPage from "../features/sites/PublicPage";
+import SitesPage from "../features/sites/SitesPage";
 import { AuthProvider, useAuth } from "../store/auth";
 import { PageActionsProvider } from "../store/pageActions";
 import AppShell from "./AppShell";
@@ -32,6 +35,7 @@ export default function App() {
         <Route path="/login" element={<LoginRoute />} />
         <Route path="/orcamento/:slug" element={<PublicProposalPage />} />
         <Route path="/contrato/:slug" element={<PublicContractPage />} />
+        <Route path="/p/:slug" element={<PublicPage />} />
         <Route element={<ProtectedLayout />}>
           <Route path="/" element={<CockpitPage />} />
           <Route path="/agenda" element={<AgendaPage />} />
@@ -43,6 +47,8 @@ export default function App() {
           <Route path="/produtos" element={<ProdutosPage />} />
           <Route path="/estoque" element={<EstoquePage />} />
           <Route path="/config" element={<ConfiguracoesPage />} />
+          <Route path="/sites" element={<SitesPage />} />
+          <Route path="/sites/:id" element={<PageBuilderPage />} />
           <Route path="/orcamentos" element={<OrcamentosPage />} />
           <Route path="/orcamentos/novo" element={<QuoteBuilderPage />} />
           <Route path="/orcamentos/:id" element={<QuoteBuilderPage />} />

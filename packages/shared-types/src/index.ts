@@ -467,6 +467,43 @@ export interface ContractsSummary {
   signed_count: number;
 }
 
+// ── Sites / Páginas ────────────────────────────────────
+export type PageBlock = { type: string; [key: string]: unknown };
+
+export interface PageStyle {
+  primary_color: string;
+  bg_color: string;
+  text_color: string;
+  accent_color: string;
+  font: string;
+  logo_url: string;
+}
+
+export interface PageSummary {
+  id: UUID;
+  title: string;
+  model: string;
+  status: string;
+  public_slug: string | null;
+  created_at: string;
+}
+
+export interface Page extends PageStyle {
+  id: UUID;
+  tenant_id: UUID;
+  title: string;
+  model: string;
+  blocks: PageBlock[];
+  status: string;
+  public_slug: string | null;
+  created_at: string;
+}
+
+export interface PublicPage extends PageStyle {
+  title: string;
+  blocks: PageBlock[];
+}
+
 // ── Configurações / Brand Kit ──────────────────────────
 export interface TenantProfile {
   display_name: string;

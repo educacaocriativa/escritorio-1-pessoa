@@ -13,6 +13,8 @@ from app.modules.crm.router import router as crm_router
 from app.modules.funnels.router import router as funnels_router
 from app.modules.marketing.router import router as marketing_router
 from app.modules.notifications.router import router as notifications_router
+from app.modules.pages.router import public_router as pages_public_router
+from app.modules.pages.router import router as pages_router
 from app.modules.payables.router import router as payables_router
 from app.modules.platform.router import router as platform_router
 from app.modules.products.router import router as products_router
@@ -42,4 +44,6 @@ ALL_ROUTERS: list[APIRouter] = [
     funnels_router,
     stock_router,
     settings_router,
+    pages_router,
+    pages_public_router,
 ]
