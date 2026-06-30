@@ -12,6 +12,8 @@ from sqlalchemy.orm import Session
 
 from app.config import settings
 from app.core import ai, audit, whatsapp
+from app.core.recurrence import advance, occurrences
+from app.db.base import _uuid
 from app.modules.agenda.models import (
     KIND_COBRANCA_RECEBER,
     PRIORITY_NORMAL,
@@ -99,10 +101,22 @@ def build_charge(db: Session, *, tenant_id: str, actor: str, data: ChargeCreate)
 
 
 def create_charge(db: Session, *, tenant_id: str, actor: str, data: ChargeCreate) -> Charge:
-    charge = build_charge(db, tenant_id=tenant_id, actor=actor, data=data)
+    """Cria a cobrança. Se recorrente, gera N cobranças (uma por vencimento), cada uma com seu
+    código e seu evento na Agenda — assim cada repetição recebe seu próprio boleto."""
+    n = occurrences(data.recurrence, data.recurrence_count)
+    group = _uuid() if n > 1 else None
+    first: Charge | None = None
+    for i in range(n):
+        occ = data.model_copy(update={"due_date": advance(data.due_date, data.recurrence, i)})
+        charge = build_charge(db, tenant_id=tenant_id, actor=actor, data=occ)
+        charge.recurrence = data.recurrence
+        charge.recurrence_count = n
+        charge.recurrence_group = group
+        if i == 0:
+            first = charge
     db.commit()
-    db.refresh(charge)
-    return charge
+    db.refresh(first)
+    return first
 
 
 def get_charge(db: Session, charge_id: str) -> Charge:

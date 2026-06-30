@@ -16,6 +16,15 @@ class ChargeCreate(BaseModel):
     method: str
     amount_cents: int = Field(gt=0)
     due_date: date
+    recurrence: str = "none"  # none/weekly/monthly/yearly
+    recurrence_count: int = Field(default=1, ge=1, le=60)
+
+    @field_validator("recurrence")
+    @classmethod
+    def _recur(cls, v: str) -> str:
+        if v not in {"none", "weekly", "monthly", "yearly"}:
+            raise ValueError(f"recorrência inválida: {v}")
+        return v
 
     @field_validator("kind")
     @classmethod
@@ -45,6 +54,8 @@ class ChargeOut(BaseModel):
     status: str
     is_overdue: bool
     protested_at: datetime | None
+    recurrence: str
+    recurrence_group: str | None
     payment_code: str
     transaction_id: str | None
     created_at: datetime

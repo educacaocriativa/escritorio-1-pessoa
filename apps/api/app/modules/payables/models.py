@@ -7,7 +7,7 @@ from __future__ import annotations
 
 from datetime import date, datetime
 
-from sqlalchemy import BigInteger, Date, DateTime, String, Text
+from sqlalchemy import BigInteger, Date, DateTime, Integer, String, Text
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.db.base import Base, TenantMixin, TimestampMixin, _uuid
@@ -38,6 +38,9 @@ class Payable(Base, TenantMixin, TimestampMixin):
     status: Mapped[str] = mapped_column(String(12), default=STATUS_OPEN, nullable=False)
     paid_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     recurrence: Mapped[str] = mapped_column(String(8), default=RECUR_NONE, nullable=False)
+    # nº de repetições geradas e o grupo que liga as ocorrências da mesma recorrência
+    recurrence_count: Mapped[int] = mapped_column(Integer, default=1, nullable=False)
+    recurrence_group: Mapped[str | None] = mapped_column(String(36), nullable=True)
 
     # Boleto/Pix recebido: linha digitável do boleto OU código Pix copia-e-cola.
     payment_code: Mapped[str] = mapped_column(Text, default="", nullable=False)

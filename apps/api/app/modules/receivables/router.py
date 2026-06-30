@@ -39,6 +39,8 @@ def _out(charge: Charge, db: Session) -> ChargeOut:
         status=charge.status,
         is_overdue=service.is_overdue(charge),
         protested_at=charge.protested_at,
+        recurrence=charge.recurrence,
+        recurrence_group=charge.recurrence_group,
         payment_code=charge.payment_code,
         transaction_id=charge.transaction_id,
         created_at=charge.created_at,

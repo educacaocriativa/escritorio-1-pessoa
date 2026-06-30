@@ -113,6 +113,10 @@ Ao criar/alterar qualquer funcionalidade:
   - **Contas a Receber:** ação "Contrato" por cobrança → anexa **Contrato** (e Boleto) da cobrança.
   - **Dívida:** mover storage p/ S3 (hoje bytes no Postgres); preview inline (hoje abre em nova aba); antivírus/scan; limite por tenant.
 
+## Financeiro: recorrência + nome do cliente na agenda
+- [x] **Recorrência gera ocorrências** — Contas a Pagar e a Receber: ao marcar recorrência (semanal/mensal/anual) define-se **quantas vezes repete** (`recurrence_count`, 1–60). O backend GERA uma conta/cobrança por período (`core/recurrence.advance` com clamp de dia no mês), cada uma com **seu vencimento, seu evento na Agenda e seu boleto** — assim cada repetição recebe o boleto certo. Ocorrências ligadas por `recurrence_group`. Charges ganharam `recurrence`/`count`/`group` (antes só payables tinha o tipo, sem gerar). Migration 0026.
+- [x] **Nome do cliente no card da Agenda** — `EventOut.client_name` resolvido no `list/get` (cobrança→cliente, conta a pagar→fornecedor); o chip da agenda mostra o nome quando houver, senão o título.
+
 ## Financeiro: editar + agenda (reverberar)
 - [x] **Editar cobrança e conta a pagar** (botão "Editar" por linha, só em aberto): `PATCH /receivables/charges/{id}` (descrição/valor/vencimento) e `PATCH /payables/bills/{id}` (descrição/categoria/fornecedor/valor/vencimento/recorrência + boleto/Pix). **Reverbera na Agenda**: ao mudar o vencimento o evento MOVE junto; valor e título do evento também sincronizam. Pago/cancelado não edita (409).
 - [x] **Detalhe do evento na Agenda** mostra a descrição completa + **anexos (boleto/contrato)** via o componente `Attachments` (owner = charge/payable do `external_ref`); para conta a pagar mostra também o código Pix/boleto.

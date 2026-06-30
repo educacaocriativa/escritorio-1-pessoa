@@ -175,6 +175,8 @@ function eventColor(e: AgendaEvent): string {
 }
 const hhmm = (iso: string) =>
   new Date(iso).toLocaleTimeString("pt-BR", { hour: "2-digit", minute: "2-digit" });
+// Card: mostra o nome do cliente/fornecedor quando houver (cobranças/contas), senão o título.
+const chipLabel = (e: AgendaEvent) => e.client_name || e.title;
 // Eventos de dia inteiro (cobranças, contas a pagar, prazos) são gravados à meia-noite UTC:
 // casamos pela DATA do calendário (sem fuso) para não "voltar" um dia em fuso negativo.
 // Eventos com horário usam a data local normalmente.
@@ -238,7 +240,7 @@ function MonthGrid({
                     className={`cursor-pointer truncate rounded px-1 py-0.5 text-[11px] hover:opacity-80 ${eventColor(e)}`}
                   >
                     {!e.all_day && <span className="tabular-nums">{hhmm(e.starts_at)} </span>}
-                    {e.title}
+                    {chipLabel(e)}
                   </div>
                 ))}
                 {dayEvents.length > 3 && (
@@ -292,7 +294,7 @@ function WeekView({
                   className={`cursor-pointer rounded px-1.5 py-1 text-[11px] hover:opacity-80 ${eventColor(e)}`}
                 >
                   {!e.all_day && <div className="tabular-nums opacity-70">{hhmm(e.starts_at)}</div>}
-                  <div className="truncate font-medium">{e.title}</div>
+                  <div className="truncate font-medium">{chipLabel(e)}</div>
                 </div>
               ))}
             </div>
@@ -329,7 +331,7 @@ function DayView({
                 {e.all_day ? "Dia inteiro" : `${hhmm(e.starts_at)}–${hhmm(e.ends_at)}`}
               </span>
               <div className="min-w-0 flex-1">
-                <span className="font-medium text-neutral-800">{e.title}</span>
+                <span className="font-medium text-neutral-800">{chipLabel(e)}</span>
                 {e.location && <span className="ml-2 text-xs text-neutral-400">· {e.location}</span>}
               </div>
               {e.meeting_url && (

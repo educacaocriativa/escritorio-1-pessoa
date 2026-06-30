@@ -7,6 +7,8 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.core import audit
+from app.core.recurrence import advance, occurrences
+from app.db.base import _uuid
 from app.modules.agenda.models import (
     KIND_COBRANCA_PAGAR,
     PRIORITY_NORMAL,
@@ -35,43 +37,48 @@ def is_overdue(p: Payable, today: date | None = None) -> bool:
 
 
 def create_payable(db: Session, *, tenant_id: str, actor: str, data: PayableCreate) -> Payable:
-    payable = Payable(
-        tenant_id=tenant_id,
-        description=data.description,
-        category=data.category,
-        supplier=data.supplier,
-        amount_cents=data.amount_cents,
-        due_date=data.due_date,
-        recurrence=data.recurrence,
-        payment_code=data.payment_code,
-        attachment_url=data.attachment_url,
-        status=STATUS_OPEN,
-    )
-    db.add(payable)
-    db.flush()
+    """Cria a conta. Se recorrente, gera N ocorrências — cada uma com seu vencimento e seu
+    evento na Agenda (assim cada repetição pode receber seu próprio boleto)."""
+    n = occurrences(data.recurrence, data.recurrence_count)
+    group = _uuid() if n > 1 else None
+    title = f"A pagar: {data.supplier or data.description or 'conta'}"
+    first: Payable | None = None
+    for i in range(n):
+        due = advance(data.due_date, data.recurrence, i)
+        payable = Payable(
+            tenant_id=tenant_id,
+            description=data.description,
+            category=data.category,
+            supplier=data.supplier,
+            amount_cents=data.amount_cents,
+            due_date=due,
+            recurrence=data.recurrence,
+            recurrence_count=n,
+            recurrence_group=group,
+            # boleto/anexo informados na criação só na 1ª ocorrência (as demais anexa-se depois)
+            payment_code=data.payment_code if i == 0 else "",
+            attachment_url=data.attachment_url if i == 0 else "",
+            status=STATUS_OPEN,
+        )
+        db.add(payable)
+        db.flush()
+        day_start = datetime.combine(due, time.min, tzinfo=UTC)
+        event = AgendaEvent(
+            tenant_id=tenant_id, title=title, kind=KIND_COBRANCA_PAGAR, status=STATUS_SCHEDULED,
+            priority=PRIORITY_NORMAL, source="payables", starts_at=day_start,
+            ends_at=day_start.replace(hour=23, minute=59), all_day=True,
+            amount_cents=data.amount_cents, external_ref=payable.id,
+        )
+        db.add(event)
+        db.flush()
+        payable.agenda_event_id = event.id
+        if i == 0:
+            first = payable
 
-    day_start = datetime.combine(data.due_date, time.min, tzinfo=UTC)
-    event = AgendaEvent(
-        tenant_id=tenant_id,
-        title=f"A pagar: {data.supplier or data.description or 'conta'}",
-        kind=KIND_COBRANCA_PAGAR,
-        status=STATUS_SCHEDULED,
-        priority=PRIORITY_NORMAL,
-        source="payables",
-        starts_at=day_start,
-        ends_at=day_start.replace(hour=23, minute=59),
-        all_day=True,
-        amount_cents=data.amount_cents,
-        external_ref=payable.id,
-    )
-    db.add(event)
-    db.flush()
-    payable.agenda_event_id = event.id
-
-    audit.record(db, tenant_id=tenant_id, actor=actor, action="payable.create", target=payable.id)
+    audit.record(db, tenant_id=tenant_id, actor=actor, action="payable.create", target=first.id)
     db.commit()
-    db.refresh(payable)
-    return payable
+    db.refresh(first)
+    return first
 
 
 def get_payable(db: Session, payable_id: str) -> Payable:

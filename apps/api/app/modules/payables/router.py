@@ -32,6 +32,8 @@ def _out(p: Payable) -> PayableOut:
         is_overdue=service.is_overdue(p),
         paid_at=p.paid_at,
         recurrence=p.recurrence,
+        recurrence_count=p.recurrence_count,
+        recurrence_group=p.recurrence_group,
         payment_code=p.payment_code,
         attachment_url=p.attachment_url,
         created_at=p.created_at,

@@ -15,6 +15,7 @@ class PayableCreate(BaseModel):
     amount_cents: int = Field(gt=0)
     due_date: date
     recurrence: str = RECUR_NONE
+    recurrence_count: int = Field(default=1, ge=1, le=60)  # quantas vezes repete
     payment_code: str = ""  # linha digitável do boleto OU Pix copia-e-cola
     attachment_url: str = Field(default="", max_length=1024)  # URL do boleto anexado
 
@@ -56,6 +57,8 @@ class PayableOut(BaseModel):
     is_overdue: bool
     paid_at: datetime | None
     recurrence: str
+    recurrence_count: int
+    recurrence_group: str | None
     payment_code: str
     attachment_url: str
     created_at: datetime

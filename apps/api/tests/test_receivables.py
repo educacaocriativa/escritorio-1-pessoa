@@ -29,6 +29,23 @@ def _charge(**over):
     return {**base, **over}
 
 
+def test_recurring_charge_generates_occurrences(client: TestClient, headers):
+    client.post(
+        "/receivables/charges",
+        json=_charge(due_date="2026-08-10", method="boleto", recurrence="monthly",
+                     recurrence_count=4),
+        headers=headers,
+    )
+    charges = client.get("/receivables/charges", headers=headers).json()
+    assert len(charges) == 4
+    dues = sorted(c["due_date"] for c in charges)
+    assert dues == ["2026-08-10", "2026-09-10", "2026-10-10", "2026-11-10"]
+    groups = {c["recurrence_group"] for c in charges}
+    assert len(groups) == 1 and None not in groups
+    # cada uma com seu código de boleto próprio
+    assert all(c["payment_code"] for c in charges)
+
+
 def test_edit_charge_moves_agenda(client: TestClient, headers):
     c = client.post(
         "/receivables/charges", json=_charge(due_date="2026-08-10"), headers=headers

@@ -48,6 +48,24 @@ def test_create_bill_with_payment_code(client: TestClient, headers):
     assert b["attachment_url"] == "https://x.com/boleto.pdf"
 
 
+def test_recurring_generates_occurrences(client: TestClient, headers):
+    client.post(
+        "/payables/bills",
+        json=_bill(due_date="2026-08-05", recurrence="monthly", recurrence_count=3),
+        headers=headers,
+    )
+    bills = client.get("/payables/bills", headers=headers).json()
+    assert len(bills) == 3  # 3 contas geradas
+    dues = sorted(b["due_date"] for b in bills)
+    assert dues == ["2026-08-05", "2026-09-05", "2026-10-05"]  # vencimentos mensais
+    groups = {b["recurrence_group"] for b in bills}
+    assert len(groups) == 1 and None not in groups  # mesma recorrência
+    # cada ocorrência tem seu evento na agenda (3 datas distintas)
+    events = [e for e in client.get("/agenda/events?limit=500", headers=headers).json()
+              if e["kind"] == "cobranca_pagar"]
+    assert len(events) == 3
+
+
 def test_edit_payable_moves_agenda(client: TestClient, headers):
     b = client.post("/payables/bills", json=_bill(due_date="2026-08-01"), headers=headers).json()
     resp = client.patch(

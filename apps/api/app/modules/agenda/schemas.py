@@ -108,6 +108,8 @@ class EventOut(BaseModel):
     guests: list[str]
     amount_cents: int | None
     external_ref: str | None
+    # Nome do cliente (cobrança) ou fornecedor (conta a pagar) — resolvido no list/get.
+    client_name: str | None = None
     created_by_ai: bool
     created_at: datetime
 

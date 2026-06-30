@@ -112,6 +112,8 @@ export interface AgendaEvent {
   /** Valor em centavos (inteiro) para eventos de cobrança. */
   amount_cents: number | null;
   external_ref: string | null;
+  /** Nome do cliente (cobrança) ou fornecedor (conta a pagar), resolvido no list/get. */
+  client_name: string | null;
   created_by_ai: boolean;
   created_at: string;
 }
@@ -261,6 +263,8 @@ export interface Charge {
   status: ChargeStatus;
   is_overdue: boolean;
   protested_at: string | null;
+  recurrence: Recurrence;
+  recurrence_group: string | null;
   payment_code: string;
   transaction_id: UUID | null;
   created_at: string;
@@ -290,6 +294,8 @@ export interface Payable {
   is_overdue: boolean;
   paid_at: string | null;
   recurrence: Recurrence;
+  recurrence_count: number;
+  recurrence_group: string | null;
   payment_code: string;
   attachment_url: string;
   created_at: string;

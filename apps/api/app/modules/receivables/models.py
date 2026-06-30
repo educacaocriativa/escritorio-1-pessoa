@@ -7,7 +7,7 @@ from __future__ import annotations
 
 from datetime import date, datetime
 
-from sqlalchemy import BigInteger, Date, DateTime, String, Text
+from sqlalchemy import BigInteger, Date, DateTime, Integer, String, Text
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.db.base import Base, TenantMixin, TimestampMixin, _uuid
@@ -45,3 +45,7 @@ class Charge(Base, TenantMixin, TimestampMixin):
     external_ref: Mapped[str | None] = mapped_column(String(64), nullable=True)
     # quando protestada (cobrança vencida levada a protesto); None = não protestada
     protested_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    # recorrência: gera N cobranças (uma por vencimento) ligadas por recurrence_group
+    recurrence: Mapped[str] = mapped_column(String(8), default="none", nullable=False)
+    recurrence_count: Mapped[int] = mapped_column(Integer, default=1, nullable=False)
+    recurrence_group: Mapped[str | None] = mapped_column(String(36), nullable=True)

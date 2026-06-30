@@ -322,6 +322,7 @@ function NewBillModal({
   const [value, setValue] = useState("");
   const [dueDate, setDueDate] = useState("");
   const [recurrence, setRecurrence] = useState("none");
+  const [recurrenceCount, setRecurrenceCount] = useState("12");
   const [paymentCode, setPaymentCode] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
@@ -338,6 +339,7 @@ function NewBillModal({
         amount_cents,
         due_date: dueDate,
         recurrence,
+        recurrence_count: recurrence === "none" ? 1 : Math.max(1, Math.min(60, parseInt(recurrenceCount, 10) || 1)),
         payment_code: paymentCode,
       });
       onCreated();
@@ -366,14 +368,24 @@ function NewBillModal({
           <Field label="Valor (R$)" value={value} onChange={setValue} placeholder="2500,00" />
           <Field label="Vencimento" type="date" value={dueDate} onChange={setDueDate} />
         </div>
-        <label className="block">
-          <span className="mb-1 block text-xs font-medium text-neutral-600">Recorrência</span>
-          <select value={recurrence} onChange={(e) => setRecurrence(e.target.value)} className="w-full rounded-lg border border-neutral-200 px-3 py-2 text-sm outline-none focus:border-primary-400">
-            {RECUR.map(([v, l]) => (
-              <option key={v} value={v}>{l}</option>
-            ))}
-          </select>
-        </label>
+        <div className="flex gap-2">
+          <label className="flex-1">
+            <span className="mb-1 block text-xs font-medium text-neutral-600">Recorrência</span>
+            <select value={recurrence} onChange={(e) => setRecurrence(e.target.value)} className="w-full rounded-lg border border-neutral-200 px-3 py-2 text-sm outline-none focus:border-primary-400">
+              {RECUR.map(([v, l]) => (
+                <option key={v} value={v}>{l}</option>
+              ))}
+            </select>
+          </label>
+          {recurrence !== "none" && (
+            <Field label="Repetir (vezes)" value={recurrenceCount} onChange={setRecurrenceCount} />
+          )}
+        </div>
+        {recurrence !== "none" && (
+          <p className="-mt-1 text-xs text-neutral-400">
+            Gera uma conta por período, cada uma com seu vencimento (para anexar o boleto certo).
+          </p>
+        )}
         <div className="rounded-lg bg-neutral-50 p-3">
           <p className="mb-2 text-xs font-medium text-neutral-600">Pix copia-e-cola / linha do boleto (opcional)</p>
           <textarea value={paymentCode} onChange={(e) => setPaymentCode(e.target.value)} rows={2} placeholder="Cole o código aqui (os arquivos do boleto/contrato você anexa depois, em Boleto/Pix)" className="w-full rounded-lg border border-neutral-200 px-3 py-2 text-sm outline-none focus:border-primary-400" />

@@ -280,6 +280,8 @@ function NewChargeModal({
   const [dueDate, setDueDate] = useState("");
   const [description, setDescription] = useState("");
   const [clientId, setClientId] = useState("");
+  const [recurrence, setRecurrence] = useState("none");
+  const [recurrenceCount, setRecurrenceCount] = useState("12");
   const [clients, setClients] = useState<Client[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
@@ -300,6 +302,8 @@ function NewChargeModal({
         due_date: dueDate,
         description,
         client_id: clientId || null,
+        recurrence,
+        recurrence_count: recurrence === "none" ? 1 : Math.max(1, Math.min(60, parseInt(recurrenceCount, 10) || 1)),
       });
       onCreated();
       setValue("");
@@ -354,6 +358,25 @@ function NewChargeModal({
           <Field label="Vencimento" type="date" value={dueDate} onChange={setDueDate} />
         </div>
         <Field label="Descrição" value={description} onChange={setDescription} placeholder="Mensalidade" />
+        <div className="flex gap-2">
+          <label className="flex-1">
+            <span className="mb-1 block text-xs font-medium text-neutral-600">Recorrência</span>
+            <select value={recurrence} onChange={(e) => setRecurrence(e.target.value)} className="w-full rounded-lg border border-neutral-200 px-3 py-2 text-sm outline-none focus:border-primary-400">
+              <option value="none">Não repete</option>
+              <option value="weekly">Semanal</option>
+              <option value="monthly">Mensal</option>
+              <option value="yearly">Anual</option>
+            </select>
+          </label>
+          {recurrence !== "none" && (
+            <Field label="Repetir (vezes)" value={recurrenceCount} onChange={setRecurrenceCount} />
+          )}
+        </div>
+        {recurrence !== "none" && (
+          <p className="-mt-1 text-xs text-neutral-400">
+            Gera uma cobrança por período, cada uma com seu vencimento e boleto.
+          </p>
+        )}
         {error && <p className="rounded-lg bg-red-50 p-2 text-sm text-danger">{error}</p>}
         <button
           onClick={save}

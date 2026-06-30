@@ -4,10 +4,12 @@ from __future__ import annotations
 from datetime import datetime
 
 from fastapi import APIRouter, Depends, HTTPException, Query
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.core.tenancy import CurrentUser, get_tenant_db, require_module
 from app.modules.agenda import service
+from app.modules.agenda.models import AgendaEvent
 from app.modules.agenda.schemas import (
     CreateEventResult,
     EventCreate,
@@ -15,6 +17,38 @@ from app.modules.agenda.schemas import (
     EventUpdate,
     RescheduleRequest,
 )
+from app.modules.crm.models import Client
+from app.modules.payables.models import Payable
+from app.modules.receivables.models import Charge
+
+
+def _events_out(db: Session, events: list[AgendaEvent]) -> list[EventOut]:
+    """Resolve o nome do cliente (cobrança) / fornecedor (conta a pagar) para o card."""
+    receber_refs = [
+        e.external_ref for e in events if e.kind == "cobranca_receber" and e.external_ref
+    ]
+    pagar_refs = [e.external_ref for e in events if e.kind == "cobranca_pagar" and e.external_ref]
+    names: dict[str, str] = {}
+    if receber_refs:
+        charges = db.scalars(select(Charge).where(Charge.id.in_(receber_refs))).all()
+        client_ids = {c.client_id for c in charges if c.client_id}
+        cmap = {}
+        if client_ids:
+            rows = db.scalars(select(Client).where(Client.id.in_(client_ids)))
+            cmap = {c.id: c.name for c in rows}
+        for c in charges:
+            if c.client_id and c.client_id in cmap:
+                names[c.id] = cmap[c.client_id]
+    if pagar_refs:
+        for p in db.scalars(select(Payable).where(Payable.id.in_(pagar_refs))):
+            if p.supplier:
+                names[p.id] = p.supplier
+    out = []
+    for e in events:
+        eo = EventOut.model_validate(e)
+        eo.client_name = names.get(e.external_ref) if e.external_ref else None
+        out.append(eo)
+    return out
 
 router = APIRouter(prefix="/agenda", tags=["agenda"])
 
@@ -47,7 +81,7 @@ def list_events(
     db: Session = Depends(get_tenant_db),
 ) -> list[EventOut]:
     events = service.list_events(db, start=start, end=end, kinds=kind, limit=limit, offset=offset)
-    return [EventOut.model_validate(e) for e in events]
+    return _events_out(db, events)
 
 
 @router.get("/events/{event_id}", response_model=EventOut)
