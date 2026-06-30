@@ -113,6 +113,12 @@ Ao criar/alterar qualquer funcionalidade:
   - **Contas a Receber:** ação "Contrato" por cobrança → anexa **Contrato** (e Boleto) da cobrança.
   - **Dívida:** mover storage p/ S3 (hoje bytes no Postgres); preview inline (hoje abre em nova aba); antivírus/scan; limite por tenant.
 
+## Financeiro: boleto gera arquivo + pagamento automático (sem marcar à mão)
+- [x] **Boleto gera o arquivo (PDF) e anexa** — criar cobrança com `method=boleto` (escolhido no próprio formulário de Nova cobrança) gera um **PDF de boleto** (`core/boleto.py`, fpdf2) com beneficiário/pagador/valor/**vencimento**/linha digitável, e o anexa à cobrança (`Attachment` label=boleto). Aparece na Agenda no dia do vencimento e nos anexos do evento. Cada ocorrência recorrente gera seu próprio boleto.
+- [x] **Pagamento reconhecido AUTOMATICAMENTE (sem botão "marcar pago")** — removidos os botões "Marcar paga" de Cobranças e Ficha 360°. Pagamento entra por `POST /receivables/webhook` (gateway: Pix/cartão/boleto compensado), público, protegido por `GATEWAY_WEBHOOK_SECRET` (vazio em dev = aberto p/ teste; definido em prod = só o gateway confirma). A baixa credita a Carteira (split) e libera p/ **saque** no Financeiro. O dono só saca o que o sistema reconhece como pago.
+  - Dev/teste: link discreto "simular pgto" nas cobranças chama o webhook (some quando o segredo for definido em prod). Endpoint `/pay` mantido só para testes internos.
+  - **Dívida:** gateway real (Asaas/Mercado Pago) — gerar boleto/Pix com registro e receber o webhook de verdade; boleto atual é layout-stub sem registro bancário.
+
 ## Financeiro: recorrência + nome do cliente na agenda
 - [x] **Recorrência gera ocorrências** — Contas a Pagar e a Receber: ao marcar recorrência (semanal/mensal/anual) define-se **quantas vezes repete** (`recurrence_count`, 1–60). O backend GERA uma conta/cobrança por período (`core/recurrence.advance` com clamp de dia no mês), cada uma com **seu vencimento, seu evento na Agenda e seu boleto** — assim cada repetição recebe o boleto certo. Ocorrências ligadas por `recurrence_group`. Charges ganharam `recurrence`/`count`/`group` (antes só payables tinha o tipo, sem gerar). Migration 0026.
 - [x] **Nome do cliente no card da Agenda** — `EventOut.client_name` resolvido no `list/get` (cobrança→cliente, conta a pagar→fornecedor); o chip da agenda mostra o nome quando houver, senão o título.

@@ -96,8 +96,33 @@ def build_charge(db: Session, *, tenant_id: str, actor: str, data: ChargeCreate)
     db.flush()  # popula event.id
     charge.agenda_event_id = event.id
 
+    # Boleto: já gera o arquivo (PDF) e anexa à cobrança, com o vencimento certo.
+    if data.method == "boleto":
+        _attach_boleto(db, tenant_id=tenant_id, charge=charge)
+
     audit.record(db, tenant_id=tenant_id, actor=actor, action="receivable.create", target=charge.id)
     return charge
+
+
+def _attach_boleto(db: Session, *, tenant_id: str, charge: Charge) -> None:
+    from app.core.boleto import generate_boleto_pdf
+    from app.modules.attachments.models import Attachment
+    from app.modules.auth.models import Tenant
+
+    tenant = db.get(Tenant, tenant_id)
+    client = db.get(Client, charge.client_id) if charge.client_id else None
+    pdf = generate_boleto_pdf(
+        payee=tenant.legal_name if tenant else "",
+        payer=client.name if client else (charge.description or "Cliente"),
+        amount_cents=charge.amount_cents,
+        due_date=charge.due_date,
+        code=charge.payment_code,
+    )
+    db.add(Attachment(
+        tenant_id=tenant_id, owner_type="charge", owner_id=charge.id, label="boleto",
+        filename=f"boleto-{charge.id[:8]}.pdf", content_type="application/pdf",
+        size=len(pdf), data=pdf,
+    ))
 
 
 def create_charge(db: Session, *, tenant_id: str, actor: str, data: ChargeCreate) -> Charge:
@@ -246,6 +271,16 @@ def mark_paid(db: Session, *, charge_id: str, tenant_id: str, actor: str, by_ai:
     db.commit()
     db.refresh(charge)
     return charge
+
+
+def webhook_confirm(*, session_factory, tenant_id: str, charge_id: str) -> str:
+    """Reconhecimento AUTOMÁTICO de pagamento (gateway). Abre a sessão do tenant e dá baixa —
+    o que credita a Carteira (split) e libera o valor para saque. Sem ação manual do dono."""
+    with session_factory(tenant_id) as db:
+        charge = mark_paid(
+            db, charge_id=charge_id, tenant_id=tenant_id, actor="gateway:webhook", by_ai=False
+        )
+        return charge.status
 
 
 def cancel_charge(db: Session, *, charge_id: str, tenant_id: str, actor: str) -> Charge:

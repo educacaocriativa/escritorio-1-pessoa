@@ -39,10 +39,6 @@ export default function ClientDetailPage() {
   const overdueSum = charges.filter((c) => c.is_overdue).reduce((a, c) => a + c.amount_cents, 0);
   const paidSum = charges.filter((c) => c.status === "paid").reduce((a, c) => a + c.amount_cents, 0);
 
-  async function pay(cid: string) {
-    await api.post(`/receivables/charges/${cid}/pay`);
-    load();
-  }
   async function protest(cid: string) {
     await api.post(`/receivables/charges/${cid}/protest`);
     load();
@@ -96,7 +92,7 @@ export default function ClientDetailPage() {
         ) : (
           <ul className="divide-y divide-neutral-100">
             {charges.map((c) => (
-              <ChargeRow key={c.id} c={c} onPay={pay} onProtest={protest} onReschedule={reschedule} />
+              <ChargeRow key={c.id} c={c} onProtest={protest} onReschedule={reschedule} />
             ))}
           </ul>
         )}
@@ -147,12 +143,10 @@ export default function ClientDetailPage() {
 
 function ChargeRow({
   c,
-  onPay,
   onProtest,
   onReschedule,
 }: {
   c: Charge;
-  onPay: (id: string) => void;
   onProtest: (id: string) => void;
   onReschedule: (id: string, due: string) => void;
 }) {
@@ -192,9 +186,7 @@ function ChargeRow({
                 <Gavel size={12} /> Protestar
               </button>
             )}
-            <button onClick={() => onPay(c.id)} className="rounded-pill bg-accent-400 px-3 py-1 text-xs font-semibold text-white hover:bg-accent-500">
-              Receber
-            </button>
+            <span className="text-[11px] text-neutral-300">aguardando pgto</span>
           </>
         )}
       </div>

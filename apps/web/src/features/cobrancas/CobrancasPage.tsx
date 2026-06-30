@@ -1,9 +1,9 @@
 import type { Charge, ChargesSummary, Client } from "@e1p/shared-types";
-import { Barcode, Copy, Paperclip } from "lucide-react";
+import { Copy, Paperclip } from "lucide-react";
 import { useCallback, useEffect, useState } from "react";
 import Attachments from "../../components/Attachments";
 import Modal, { Field } from "../../components/Modal";
-import { api, apiErrorMessage } from "../../lib/api";
+import { api, apiErrorMessage, publicApi } from "../../lib/api";
 import { usePrimaryAction } from "../../store/pageActions";
 
 const brl = (c: number) => (c / 100).toLocaleString("pt-BR", { style: "currency", currency: "BRL" });
@@ -37,7 +37,6 @@ export default function CobrancasPage() {
   const [summary, setSummary] = useState<ChargesSummary>(empty);
   const [charges, setCharges] = useState<Charge[]>([]);
   const [open, setOpen] = useState(false);
-  const [preset, setPreset] = useState("pix");
   const [docs, setDocs] = useState<Charge | null>(null);
   const [edit, setEdit] = useState<Charge | null>(null);
 
@@ -54,16 +53,17 @@ export default function CobrancasPage() {
     load();
   }, [load]);
 
-  usePrimaryAction(
-    "Nova cobrança",
-    useCallback(() => {
-      setPreset("pix");
-      setOpen(true);
-    }, []),
-  );
+  usePrimaryAction("Nova cobrança", useCallback(() => setOpen(true), []));
 
-  async function pay(id: string) {
-    await api.post(`/receivables/charges/${id}/pay`);
+  // Em produção, o pagamento é reconhecido pelo gateway (webhook). Aqui é só simulação de teste
+  // do gateway (Pix/cartão/boleto) — o dono NÃO marca pago manualmente.
+  async function simulatePayment(c: Charge) {
+    if (!confirm("Simular o pagamento do cliente (gateway de teste)?")) return;
+    await publicApi.post("/receivables/webhook", {
+      tenant_id: c.tenant_id,
+      charge_id: c.id,
+      status: "paid",
+    });
     load();
   }
   async function cancel(id: string) {
@@ -74,20 +74,13 @@ export default function CobrancasPage() {
 
   return (
     <div className="space-y-6">
-      <div className="flex items-start justify-between">
-        <div>
-          <p className="text-sm text-neutral-500">Página / Cobranças</p>
-          <h1 className="text-2xl font-bold text-neutral-800">Contas a Receber</h1>
-        </div>
-        <button
-          onClick={() => {
-            setPreset("boleto");
-            setOpen(true);
-          }}
-          className="flex items-center gap-1.5 rounded-pill bg-primary-500 px-4 py-2 text-sm font-semibold text-white hover:bg-primary-600"
-        >
-          <Barcode size={15} /> Criar boleto
-        </button>
+      <div>
+        <p className="text-sm text-neutral-500">Página / Cobranças</p>
+        <h1 className="text-2xl font-bold text-neutral-800">Contas a Receber</h1>
+        <p className="mt-1 text-sm text-neutral-500">
+          O pagamento é reconhecido automaticamente (Pix/cartão/boleto). Você saca o que entra no
+          Financeiro.
+        </p>
       </div>
 
       <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
@@ -151,8 +144,8 @@ export default function CobrancasPage() {
                             <button onClick={() => setEdit(c)} className="text-xs font-medium text-neutral-500 hover:text-primary-600">
                               Editar
                             </button>
-                            <button onClick={() => pay(c.id)} className="text-xs font-medium text-accent-600 hover:underline">
-                              Marcar paga
+                            <button onClick={() => simulatePayment(c)} title="Apenas teste do gateway — em produção o pagamento entra sozinho" className="text-[11px] text-neutral-300 hover:text-accent-600">
+                              simular pgto
                             </button>
                             <button onClick={() => cancel(c.id)} className="text-xs text-neutral-400 hover:text-danger">
                               Cancelar
@@ -169,7 +162,7 @@ export default function CobrancasPage() {
         )}
       </div>
 
-      <NewChargeModal open={open} initialMethod={preset} onClose={() => setOpen(false)} onCreated={load} />
+      <NewChargeModal open={open} onClose={() => setOpen(false)} onCreated={load} />
       {edit && (
         <EditChargeModal
           charge={edit}
@@ -261,21 +254,15 @@ function EditChargeModal({
 
 function NewChargeModal({
   open,
-  initialMethod = "pix",
   onClose,
   onCreated,
 }: {
   open: boolean;
-  initialMethod?: string;
   onClose: () => void;
   onCreated: () => void;
 }) {
   const [kind, setKind] = useState("service");
-  const [method, setMethod] = useState(initialMethod);
-
-  useEffect(() => {
-    if (open) setMethod(initialMethod);
-  }, [open, initialMethod]);
+  const [method, setMethod] = useState("pix");
   const [value, setValue] = useState("");
   const [dueDate, setDueDate] = useState("");
   const [description, setDescription] = useState("");
@@ -318,7 +305,7 @@ function NewChargeModal({
   }
 
   return (
-    <Modal title={initialMethod === "boleto" ? "Criar boleto" : "Nova cobrança"} open={open} onClose={onClose}>
+    <Modal title="Nova cobrança" open={open} onClose={onClose}>
       <div className="space-y-3">
         <label className="block">
           <span className="mb-1 block text-xs font-medium text-neutral-600">Cliente</span>
@@ -383,7 +370,7 @@ function NewChargeModal({
           disabled={saving || !value || !dueDate}
           className="w-full rounded-pill bg-accent-400 py-2.5 font-semibold text-white transition hover:bg-accent-500 disabled:opacity-60"
         >
-          {saving ? "Gerando..." : "Gerar cobrança"}
+          {saving ? "Gerando..." : method === "boleto" ? "Gerar boleto" : "Gerar cobrança"}
         </button>
       </div>
     </Modal>

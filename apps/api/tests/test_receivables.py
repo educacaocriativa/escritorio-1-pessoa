@@ -29,6 +29,32 @@ def _charge(**over):
     return {**base, **over}
 
 
+def test_boleto_charge_generates_pdf_attachment(client: TestClient, headers):
+    c = client.post("/receivables/charges", json=_charge(method="boleto"), headers=headers).json()
+    atts = client.get(
+        f"/attachments?owner_type=charge&owner_id={c['id']}", headers=headers
+    ).json()
+    boleto = [a for a in atts if a["label"] == "boleto"]
+    assert boleto and boleto[0]["content_type"] == "application/pdf"
+    assert boleto[0]["size"] > 0
+
+
+def test_webhook_recognizes_payment_and_credits_wallet(client: TestClient, headers):
+    c = client.post("/receivables/charges", json=_charge(method="boleto"), headers=headers).json()
+    # gateway confirma o pagamento (sem login, sem ação do dono)
+    resp = client.post(
+        "/receivables/webhook",
+        json={"tenant_id": c["tenant_id"], "charge_id": c["id"], "status": "paid"},
+    )
+    assert resp.status_code == 200
+    assert resp.json()["status"] == "paid"
+    # cobrança paga e Carteira creditada (disponível para saque)
+    got = client.get(f"/receivables/charges/{c['id']}", headers=headers).json()
+    assert got["status"] == "paid"
+    wallet = client.get("/wallet/summary", headers=headers).json()
+    assert wallet["available_cents"] > 0
+
+
 def test_recurring_charge_generates_occurrences(client: TestClient, headers):
     client.post(
         "/receivables/charges",

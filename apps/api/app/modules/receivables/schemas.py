@@ -71,6 +71,14 @@ class ChargeUpdate(BaseModel):
     due_date: date | None = None
 
 
+class WebhookPayment(BaseModel):
+    """Confirmação de pagamento vinda do gateway (Pix/cartão/boleto compensado)."""
+    tenant_id: str
+    charge_id: str
+    status: str = "paid"
+    secret: str = ""
+
+
 class DunningResult(BaseModel):
     message: str
     status: str  # sent / logged / failed
