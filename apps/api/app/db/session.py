@@ -25,33 +25,40 @@ def tenant_session(tenant_id: str) -> Iterator[Session]:
     Valida o tenant_id antes de setar a GUC: um tenant vazio/None faria a policy RLS casar
     com `tenant_id = ''`/NULL (fail-open). Aqui é fail-closed explícito.
 
-    O GUC é setado em escopo de SESSÃO (is_local=false), não de transação. Motivo: queries
-    que rodam APÓS o commit (ex.: db.refresh() para popular created_at) iniciam uma nova
-    transação — com is_local=true o tenant já teria sumido e a RLS esconderia a própria linha.
-    Em escopo de sessão ele sobrevive ao commit; resetamos no finally para não vazar o tenant
-    para a próxima requisição que reaproveitar a conexão do pool.
+    CRÍTICO — conexão DEDICADA: a Session é presa a UMA conexão física (`engine.connect()`),
+    não ao pool da Engine. Motivo: ao commitar, uma Session ligada à Engine devolve a conexão
+    ao pool, e o `db.refresh()` seguinte pega OUTRA conexão — sem a GUC `app.current_tenant_id`
+    setada — e a RLS esconde a própria linha ("Could not refresh instance"). Presa a uma
+    conexão única, todas as queries (inclusive o refresh pós-commit) usam a MESMA conexão, onde
+    a GUC (escopo de sessão, is_local=false) permanece setada. No fim, reseta a GUC e devolve a
+    conexão limpa ao pool.
     """
     if not tenant_id or not isinstance(tenant_id, str) or len(tenant_id) < 8:
         raise ValueError("tenant_id inválido para abrir sessão de tenant")
-    db = SessionLocal()
+    conn = engine.connect()
     try:
-        db.execute(
+        conn.execute(
             text("SELECT set_config('app.current_tenant_id', :tid, false)"),
             {"tid": tenant_id},
         )
-        yield db
-        db.commit()
-    except Exception:
-        db.rollback()
-        raise
-    finally:
-        # Reseta o tenant na conexão antes de devolvê-la ao pool (fail-closed entre requests).
+        conn.commit()  # fixa a GUC na conexão (escopo de sessão, sobrevive aos próximos commits)
+        db = Session(bind=conn, autoflush=False, expire_on_commit=False)
         try:
-            db.execute(text("SELECT set_config('app.current_tenant_id', '', false)"))
+            yield db
             db.commit()
         except Exception:
             db.rollback()
-        db.close()
+            raise
+        finally:
+            db.close()
+    finally:
+        # Reseta o tenant na conexão antes de devolvê-la ao pool (fail-closed entre requests).
+        try:
+            conn.execute(text("SELECT set_config('app.current_tenant_id', '', false)"))
+            conn.commit()
+        except Exception:
+            conn.rollback()
+        conn.close()
 
 
 def get_db() -> Iterator[Session]:
