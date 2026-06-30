@@ -61,8 +61,10 @@ export default function AgendaPage() {
   const { start, end, days } = useMemo(() => rangeFor(view, anchor), [view, anchor]);
 
   const load = useCallback(async () => {
+    // Fronteiras em UTC-date (meia-noite UTC da data do grid), não o local→UTC: assim os
+    // eventos de dia inteiro (gravados à meia-noite UTC) não caem fora do range nas bordas.
     const { data } = await api.get<AgendaEvent[]>("/agenda/events", {
-      params: { start: start.toISOString(), end: end.toISOString(), limit: 500 },
+      params: { start: `${ymd(start)}T00:00:00.000Z`, end: `${ymd(end)}T00:00:00.000Z`, limit: 500 },
     });
     setEvents(data);
   }, [start, end]);
@@ -160,8 +162,10 @@ export default function AgendaPage() {
 // ── cor por tipo/situação ──────────────────────────────
 // a receber = verde · a pagar = laranja · atrasada (não paga e vencida) = vermelho
 function eventColor(e: AgendaEvent): string {
+  // Atrasado = não pago/cancelado e com data ANTERIOR a hoje. Compara por data de calendário
+  // (eventYmd trata o all-day em UTC sem "voltar" um dia no fuso).
   const overdue =
-    e.status !== "done" && e.status !== "cancelled" && new Date(e.starts_at) < startOfDay(new Date());
+    e.status !== "done" && e.status !== "cancelled" && eventYmd(e) < ymd(new Date());
   if (e.kind === "cobranca_receber") return overdue ? "bg-red-100 text-red-700" : "bg-accent-100 text-accent-700";
   if (e.kind === "cobranca_pagar") return overdue ? "bg-red-100 text-red-700" : "bg-orange-100 text-orange-700";
   if (e.priority === "critical") return "bg-red-100 text-red-700";
@@ -170,9 +174,14 @@ function eventColor(e: AgendaEvent): string {
 }
 const hhmm = (iso: string) =>
   new Date(iso).toLocaleTimeString("pt-BR", { hour: "2-digit", minute: "2-digit" });
+// Eventos de dia inteiro (cobranças, contas a pagar, prazos) são gravados à meia-noite UTC:
+// casamos pela DATA do calendário (sem fuso) para não "voltar" um dia em fuso negativo.
+// Eventos com horário usam a data local normalmente.
+const eventYmd = (e: AgendaEvent) =>
+  e.all_day ? e.starts_at.slice(0, 10) : ymd(new Date(e.starts_at));
 const eventsOfDay = (events: AgendaEvent[], d: Date) =>
   events
-    .filter((e) => sameDay(new Date(e.starts_at), d))
+    .filter((e) => eventYmd(e) === ymd(d))
     .sort((a, b) => +new Date(a.starts_at) - +new Date(b.starts_at));
 
 function MonthGrid({
