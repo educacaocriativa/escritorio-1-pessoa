@@ -39,6 +39,7 @@ class ComponentItem(BaseModel):
     label: str
     description: str
     shape: str = "node"  # "page" (quadrado, com mockup) | "node" (redondo)
+    action: str = ""  # tipo de ação executável (vazio = só diagrama)
 
 
 class ComponentCategory(BaseModel):
@@ -56,3 +57,15 @@ class ComposeRequest(BaseModel):
 class ComposeResult(BaseModel):
     subject: str = ""
     body: str = ""
+
+
+class RunNodeRequest(BaseModel):
+    action: str = Field(min_length=1)  # create_client | add_tag | create_quote | ...
+    client_id: str | None = None
+    params: dict = Field(default_factory=dict)
+
+
+class RunNodeResult(BaseModel):
+    message: str
+    kind: str = ""
+    ref_id: str | None = None

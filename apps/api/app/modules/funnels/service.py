@@ -146,9 +146,29 @@ PAGE_KEYS = {
     "pesquisa-seg", "avaliacao", "blog", "ebook", "certificado", "comunidade", "briefing",
 }
 
+# Componentes que EXECUTAM uma ação interna de verdade (sem integração externa).
+ACTION_BY_KEY = {
+    "lead": "create_client",
+    "add-crm": "create_client",
+    "tag": "add_tag",
+    "emissao-proposta": "create_quote",
+    "emissao-boleto": "create_charge",
+    "gerou-pix": "create_charge",
+    "enviar-email": "send_email",
+    "sequencia-email": "send_email",
+    "email-base": "send_email",
+    "whatsapp": "send_message",
+    "sequencia-whatsapp": "send_message",
+    "dm-instagram": "send_message",
+    "telegram": "send_message",
+    "manychat": "send_message",
+    "sms": "send_message",
+}
+
 for _cat in CATALOG:
     for _item in _cat["items"]:
         _item["shape"] = "page" if _item["key"] in PAGE_KEYS else "node"
+        _item["action"] = ACTION_BY_KEY.get(_item["key"], "")
 
 
 class FunnelError(Exception):
@@ -242,3 +262,111 @@ def delete_funnel(db: Session, *, funnel_id: str, tenant_id: str, actor: str) ->
     audit.record(db, tenant_id=tenant_id, actor=actor, action="funnel.delete", target=f.id)
     db.delete(f)
     db.commit()
+
+
+# ── Execução de um nó: dispara a AÇÃO REAL interna (CRM/Proposta/Cobrança/Mensagem) ──
+MAX_CENTS = 100_000_000_00  # teto defensivo: R$ 100 milhões (evita estouro/valor absurdo)
+
+
+def _cents(params: dict) -> int:
+    try:
+        return int(params.get("amount_cents") or 0)
+    except (TypeError, ValueError):
+        return 0
+
+
+def _valid_amount(params: dict) -> int:
+    amount = _cents(params)
+    if amount <= 0 or amount > MAX_CENTS:
+        raise FunnelError("Informe um valor válido (acima de zero e abaixo do limite)", 422)
+    return amount
+
+
+def run_node(
+    db: Session, *, tenant_id: str, actor: str, action: str, client_id: str | None, params: dict
+) -> dict:
+    from datetime import UTC, datetime, timedelta
+
+    from app.core import whatsapp
+    from app.modules.crm import service as crm_service
+    from app.modules.crm.models import Client
+    from app.modules.crm.schemas import ClientCreate
+    from app.modules.notifications.models import Notification
+    from app.modules.quotes import service as quotes_service
+    from app.modules.quotes.schemas import QuoteCreate, QuoteItem
+    from app.modules.receivables import service as receivables_service
+    from app.modules.receivables.schemas import ChargeCreate
+
+    def _client() -> Client:
+        c = db.get(Client, client_id) if client_id else None
+        if c is None:
+            raise FunnelError("Selecione um cliente para executar esta ação", 422)
+        return c
+
+    if action == "create_client":
+        name = (params.get("name") or "").strip()
+        if not name:
+            raise FunnelError("Informe o nome do contato", 422)
+        c = crm_service.create_client(
+            db, tenant_id=tenant_id, actor=actor, data=ClientCreate(name=name)
+        )
+        return {"message": f"Contato “{name}” criado no CRM", "kind": "client", "ref_id": c.id}
+
+    if action == "add_tag":
+        c = _client()
+        tag = (params.get("tag") or "").strip()
+        if not tag:
+            raise FunnelError("Informe a tag", 422)
+        if tag not in c.tags:
+            c.tags = [*c.tags, tag]
+        audit.record(db, tenant_id=tenant_id, actor=actor, action="funnel.run.tag", target=c.id)
+        db.commit()
+        return {"message": f"Tag “{tag}” aplicada a {c.name}", "kind": "client", "ref_id": c.id}
+
+    if action == "create_quote":
+        c = _client()
+        amount = _valid_amount(params)
+        title = (params.get("title") or "Proposta").strip()
+        q = quotes_service.create_quote(
+            db, tenant_id=tenant_id, actor=actor,
+            data=QuoteCreate(
+                client_id=c.id, title=title,
+                items=[QuoteItem(description=title, quantity=1, unit_price_cents=amount)],
+            ),
+        )
+        return {"message": f"Orçamento “{title}” criado para {c.name}", "kind": "quote",
+                "ref_id": q.id}
+
+    if action == "create_charge":
+        c = _client()
+        amount = _valid_amount(params)
+        method = params.get("method") if params.get("method") in {"boleto", "pix"} else "boleto"
+        desc = (params.get("description") or "Cobrança do funil").strip()
+        ch = receivables_service.create_charge(
+            db, tenant_id=tenant_id, actor=actor,
+            data=ChargeCreate(
+                client_id=c.id, description=desc, kind="service", method=method,
+                amount_cents=amount, due_date=datetime.now(UTC).date() + timedelta(days=7),
+            ),
+        )
+        return {"message": f"Cobrança ({method}) criada para {c.name}", "kind": "charge",
+                "ref_id": ch.id}
+
+    if action in ("send_email", "send_message"):
+        c = _client()
+        msg = (params.get("message") or "").strip()
+        if not msg:
+            raise FunnelError("Escreva a mensagem (ou gere com IA) antes de enviar", 422)
+        channel = "email" if action == "send_email" else "whatsapp"
+        recipient = (c.email if channel == "email" else c.phone) or c.name
+        status = whatsapp.send_text(to=recipient, text=msg)
+        db.add(Notification(
+            tenant_id=tenant_id, channel=channel, recipient=recipient,
+            client_id=c.id, message=msg, status=status,
+        ))
+        audit.record(db, tenant_id=tenant_id, actor=actor, action="funnel.run.message", target=c.id)
+        db.commit()
+        return {"message": f"Mensagem registrada para {c.name} ({channel})", "kind": "message",
+                "ref_id": c.id}
+
+    raise FunnelError("Este componente ainda não executa uma ação automática", 400)

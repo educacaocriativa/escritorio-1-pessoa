@@ -473,6 +473,7 @@ export interface FunnelComponentItem {
   label: string;
   description: string;
   shape: "page" | "node";
+  action: string; // "" = só diagrama; senão executa ação (create_client, create_quote, ...)
 }
 
 export interface FunnelComponentCategory {

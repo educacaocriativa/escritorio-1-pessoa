@@ -1,8 +1,8 @@
-import type { FunnelComponentCategory } from "@e1p/shared-types";
+import type { Client, FunnelComponentCategory } from "@e1p/shared-types";
 import html2canvas from "html2canvas";
 import {
   ArrowLeft, Download, GitBranch, type LucideIcon, Maximize2, MessageCircle, MousePointerClick,
-  Save, Share2, Sparkles, Trash2, TrendingUp, Zap,
+  Play, Save, Share2, Sparkles, Trash2, TrendingUp, Zap,
 } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
@@ -28,6 +28,7 @@ type NodeConfig = { subject?: string; body?: string; model?: string };
 type NodeData = {
   label: string; description: string; color: string; category: string; key: string;
   shape?: "page" | "node";
+  action?: string;
   config?: NodeConfig;
 };
 
@@ -162,6 +163,7 @@ function Builder() {
   const [saving, setSaving] = useState(false);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [editing, setEditing] = useState<string | null>(null);
+  const [running, setRunning] = useState<string | null>(null);
   const [toast, setToast] = useState<{ msg: string; type: "ok" | "err" } | null>(null);
 
   const [nodes, setNodes, onNodesChange] = useNodesState([]);
@@ -198,7 +200,7 @@ function Builder() {
   );
 
   const makeNode = useCallback(
-    (item: { key: string; label: string; description: string; shape?: "page" | "node" },
+    (item: { key: string; label: string; description: string; shape?: "page" | "node"; action?: string },
      color: string, category: string,
      position: { x: number; y: number }): Node<NodeData> => ({
       id: crypto.randomUUID(),
@@ -206,7 +208,7 @@ function Builder() {
       position,
       data: {
         label: item.label, description: item.description, color, category, key: item.key,
-        shape: item.shape ?? "node",
+        shape: item.shape ?? "node", action: item.action ?? "",
       },
     }),
     [],
@@ -415,6 +417,14 @@ function Builder() {
                   : KIND_VERB[contentKind(selectedNode.data.key)]}
                 {selectedNode.data.config?.body || selectedNode.data.config?.model ? " ✓" : ""}
               </button>
+              {selectedNode.data.action && (
+                <button
+                  onClick={() => setRunning(selectedNode.id)}
+                  className="mb-2 flex w-full items-center justify-center gap-1.5 rounded-pill bg-accent-500 py-2 text-sm font-semibold text-white hover:bg-accent-600"
+                >
+                  <Play size={14} /> Executar ação
+                </button>
+              )}
               <p className="mb-3 text-[11px] text-neutral-400">
                 ID e Chave: <span className="font-mono text-neutral-500">{selectedNode.data.key || selectedNode.id.slice(0, 8)}</span>
               </p>
@@ -443,6 +453,20 @@ function Builder() {
             );
           })()}
 
+          {/* Executar ação do nó */}
+          {running && (() => {
+            const node = nodes.find((n) => n.id === running) as Node<NodeData> | undefined;
+            if (!node) return null;
+            return (
+              <RunNodeModal
+                node={node}
+                onClose={() => setRunning(null)}
+                onDone={(msg) => { setRunning(null); notify(msg); }}
+                onError={(msg) => notify(msg, "err")}
+              />
+            );
+          })()}
+
           {/* Toast */}
           {toast && (
             <div
@@ -454,6 +478,140 @@ function Builder() {
         </div>
       </div>
     </div>
+  );
+}
+
+const ACTION_TITLE: Record<string, string> = {
+  create_client: "Criar contato no CRM",
+  add_tag: "Aplicar tag ao cliente",
+  create_quote: "Gerar orçamento",
+  create_charge: "Gerar cobrança",
+  send_email: "Enviar e-mail",
+  send_message: "Enviar mensagem",
+};
+
+function RunNodeModal({
+  node,
+  onClose,
+  onDone,
+  onError,
+}: {
+  node: Node<NodeData>;
+  onClose: () => void;
+  onDone: (msg: string) => void;
+  onError: (msg: string) => void;
+}) {
+  const action = node.data.action ?? "";
+  const needsClient = action !== "create_client";
+  const [clients, setClients] = useState<Client[]>([]);
+  const [clientId, setClientId] = useState("");
+  const [name, setName] = useState("");
+  const [tag, setTag] = useState("");
+  const [title, setTitle] = useState(node.data.label);
+  const [amount, setAmount] = useState("");
+  const [method, setMethod] = useState(node.data.key === "gerou-pix" ? "pix" : "boleto");
+  const [description, setDescription] = useState(node.data.label);
+  const [message, setMessage] = useState(node.data.config?.body ?? "");
+  const [busy, setBusy] = useState(false);
+
+  useEffect(() => {
+    if (needsClient) api.get<Client[]>("/crm/clients").then(({ data }) => setClients(data));
+  }, [needsClient]);
+
+  async function run() {
+    setBusy(true);
+    const params: Record<string, unknown> = {};
+    if (action === "create_client") params.name = name;
+    if (action === "add_tag") params.tag = tag;
+    if (action === "create_quote") {
+      params.title = title;
+      params.amount_cents = Math.round(parseFloat(amount.replace(",", ".") || "0") * 100);
+    }
+    if (action === "create_charge") {
+      params.method = method;
+      params.description = description;
+      params.amount_cents = Math.round(parseFloat(amount.replace(",", ".") || "0") * 100);
+    }
+    if (action === "send_email" || action === "send_message") params.message = message;
+    try {
+      const { data } = await api.post<{ message: string }>("/funnels/run-node", {
+        action, client_id: needsClient ? clientId || null : null, params,
+      });
+      onDone(data.message);
+    } catch (err) {
+      onError(apiErrorMessage(err));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  const money = action === "create_quote" || action === "create_charge";
+  const msg = action === "send_email" || action === "send_message";
+
+  return (
+    <div className="absolute inset-0 z-30 flex items-center justify-center bg-black/30 p-4" onClick={onClose}>
+      <div className="w-full max-w-md rounded-2xl bg-white p-6 shadow-card" onClick={(e) => e.stopPropagation()}>
+        <div className="mb-1 flex items-center gap-2">
+          <span className="h-3 w-3 rounded-full" style={{ background: node.data.color }} />
+          <h3 className="text-lg font-bold text-neutral-800">{ACTION_TITLE[action] ?? "Executar ação"}</h3>
+        </div>
+        <p className="mb-4 text-xs text-neutral-400">{node.data.label} — executa de verdade agora.</p>
+
+        <div className="space-y-3">
+          {action === "create_client" && (
+            <Field label="Nome do contato" value={name} onChange={setName} />
+          )}
+          {needsClient && (
+            <label className="block">
+              <span className="mb-1 block text-xs font-medium text-neutral-600">Cliente</span>
+              <select value={clientId} onChange={(e) => setClientId(e.target.value)} className="w-full rounded-lg border border-neutral-200 px-3 py-2 text-sm outline-none focus:border-primary-400">
+                <option value="">Selecione um cliente</option>
+                {clients.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
+              </select>
+            </label>
+          )}
+          {action === "add_tag" && <Field label="Tag" value={tag} onChange={setTag} />}
+          {action === "create_quote" && <Field label="Título do orçamento" value={title} onChange={setTitle} />}
+          {action === "create_charge" && (
+            <>
+              <label className="block">
+                <span className="mb-1 block text-xs font-medium text-neutral-600">Forma</span>
+                <select value={method} onChange={(e) => setMethod(e.target.value)} className="w-full rounded-lg border border-neutral-200 px-3 py-2 text-sm outline-none focus:border-primary-400">
+                  <option value="boleto">Boleto</option>
+                  <option value="pix">Pix</option>
+                </select>
+              </label>
+              <Field label="Descrição" value={description} onChange={setDescription} />
+            </>
+          )}
+          {money && <Field label="Valor (R$)" value={amount} onChange={setAmount} placeholder="0,00" />}
+          {msg && (
+            <label className="block">
+              <span className="mb-1 block text-xs font-medium text-neutral-600">Mensagem</span>
+              <textarea value={message} onChange={(e) => setMessage(e.target.value)} rows={4} className="w-full rounded-lg border border-neutral-200 px-3 py-2 text-sm outline-none focus:border-primary-400" />
+            </label>
+          )}
+        </div>
+
+        <div className="mt-5 flex gap-2">
+          <button onClick={onClose} className="flex-1 rounded-pill bg-neutral-100 py-2.5 font-semibold text-neutral-600 hover:bg-neutral-200">Cancelar</button>
+          <button onClick={run} disabled={busy} className="flex flex-1 items-center justify-center gap-1.5 rounded-pill bg-accent-500 py-2.5 font-semibold text-white hover:bg-accent-600 disabled:opacity-60">
+            <Play size={14} /> {busy ? "Executando..." : "Executar agora"}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function Field({ label, value, onChange, placeholder }: {
+  label: string; value: string; onChange: (s: string) => void; placeholder?: string;
+}) {
+  return (
+    <label className="block">
+      <span className="mb-1 block text-xs font-medium text-neutral-600">{label}</span>
+      <input value={value} onChange={(e) => onChange(e.target.value)} placeholder={placeholder} className="w-full rounded-lg border border-neutral-200 px-3 py-2 text-sm outline-none focus:border-primary-400" />
+    </label>
   );
 }
 

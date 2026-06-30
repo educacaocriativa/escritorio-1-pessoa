@@ -96,5 +96,74 @@ def test_ai_compose_whatsapp(client: TestClient, headers):
     assert resp.json()["body"]
 
 
+def test_catalog_marks_actions(client: TestClient, headers):
+    d = client.get("/funnels/components", headers=headers).json()
+    by_key = {i["key"]: i for c in d for i in c["items"]}
+    assert by_key["emissao-proposta"]["action"] == "create_quote"
+    assert by_key["emissao-boleto"]["action"] == "create_charge"
+    assert by_key["whatsapp"]["action"] == "send_message"
+    assert by_key["pagina-vendas"]["action"] == ""  # página não executa ação
+
+
+def test_run_create_client(client: TestClient, headers):
+    resp = client.post(
+        "/funnels/run-node",
+        json={"action": "create_client", "params": {"name": "Lead do Funil"}},
+        headers=headers,
+    )
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["ref_id"]
+    clients = client.get("/crm/clients", headers=headers).json()
+    assert any(c["name"] == "Lead do Funil" for c in clients)
+
+
+def test_run_create_quote(client: TestClient, headers):
+    cl = client.post("/crm/clients", json={"name": "Cliente Funil"}, headers=headers).json()
+    resp = client.post(
+        "/funnels/run-node",
+        json={"action": "create_quote", "client_id": cl["id"],
+              "params": {"title": "Serviço X", "amount_cents": 150000}},
+        headers=headers,
+    )
+    assert resp.status_code == 200, resp.text
+    quotes = client.get("/quotes", headers=headers).json()
+    assert any(q["total_cents"] == 150000 for q in quotes)
+
+
+def test_run_create_charge(client: TestClient, headers):
+    cl = client.post("/crm/clients", json={"name": "Pagador"}, headers=headers).json()
+    resp = client.post(
+        "/funnels/run-node",
+        json={"action": "create_charge", "client_id": cl["id"],
+              "params": {"method": "boleto", "amount_cents": 9900, "description": "Boleto funil"}},
+        headers=headers,
+    )
+    assert resp.status_code == 200, resp.text
+    charges = client.get(f"/receivables/charges?client_id={cl['id']}", headers=headers).json()
+    assert any(c["amount_cents"] == 9900 and c["method"] == "boleto" for c in charges)
+
+
+def test_run_send_message(client: TestClient, headers):
+    cl = client.post("/crm/clients", json={"name": "Contato"}, headers=headers).json()
+    resp = client.post(
+        "/funnels/run-node",
+        json={"action": "send_message", "client_id": cl["id"],
+              "params": {"message": "Olá! Tudo bem?"}},
+        headers=headers,
+    )
+    assert resp.status_code == 200
+    notifs = client.get("/notifications", headers=headers).json()
+    assert any(n["message"] == "Olá! Tudo bem?" for n in notifs)
+
+
+def test_run_requires_client(client: TestClient, headers):
+    resp = client.post(
+        "/funnels/run-node",
+        json={"action": "create_quote", "params": {"amount_cents": 1000, "title": "x"}},
+        headers=headers,
+    )
+    assert resp.status_code == 422
+
+
 def test_requires_auth(client: TestClient):
     assert client.get("/funnels").status_code == 401

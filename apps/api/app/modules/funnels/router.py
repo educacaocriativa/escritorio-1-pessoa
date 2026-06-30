@@ -15,6 +15,8 @@ from app.modules.funnels.schemas import (
     FunnelOut,
     FunnelSummary,
     FunnelUpdate,
+    RunNodeRequest,
+    RunNodeResult,
 )
 
 router = APIRouter(prefix="/funnels", tags=["funnels"])
@@ -45,6 +47,22 @@ def ai_compose(
     _db: Session = Depends(get_tenant_db),
 ) -> ComposeResult:
     return ComposeResult(**service.ai_compose(data.kind, data.prompt))
+
+
+@router.post("/run-node", response_model=RunNodeResult)
+def run_node(
+    data: RunNodeRequest,
+    user: CurrentUser = Depends(_guard),
+    db: Session = Depends(get_tenant_db),
+) -> RunNodeResult:
+    try:
+        result = service.run_node(
+            db, tenant_id=user.tenant_id, actor=user.user_id,
+            action=data.action, client_id=data.client_id, params=data.params,
+        )
+    except service.FunnelError as e:
+        raise _err(e) from e
+    return RunNodeResult(**result)
 
 
 @router.get("", response_model=list[FunnelSummary])
