@@ -44,6 +44,18 @@ export default function CarrosselBuilderPage() {
     api.get<CarouselTemplate[]>("/marketing/carousels/templates").then(({ data }) => setTemplates(data));
   }, []);
 
+  // Carrossel novo herda a cor da marca + fonte do Brand Kit (mantém o fundo editorial).
+  useEffect(() => {
+    if (!isNew) return;
+    api.get("/settings/profile").then(({ data }) => {
+      setPrimary(data.primary_color);
+      setAccent(data.accent_color);
+      setFont(data.font);
+      if (!handle && data.website) setHandle(data.website);
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isNew]);
+
   const hydrate = useCallback((c: Carousel) => {
     setCarouselId(c.id);
     setTopic(c.topic);

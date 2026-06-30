@@ -3,6 +3,7 @@ import AdminDashboard from "../features/admin/AdminDashboard";
 import AgendaPage from "../features/agenda/AgendaPage";
 import LoginPage from "../features/auth/LoginPage";
 import CockpitPage from "../features/cockpit/CockpitPage";
+import ConfiguracoesPage from "../features/config/ConfiguracoesPage";
 import CobrancasPage from "../features/cobrancas/CobrancasPage";
 import ContractBuilderPage from "../features/contratos/ContractBuilderPage";
 import ContratosPage from "../features/contratos/ContratosPage";
@@ -41,6 +42,7 @@ export default function App() {
           <Route path="/pagar" element={<PagarPage />} />
           <Route path="/produtos" element={<ProdutosPage />} />
           <Route path="/estoque" element={<EstoquePage />} />
+          <Route path="/config" element={<ConfiguracoesPage />} />
           <Route path="/orcamentos" element={<OrcamentosPage />} />
           <Route path="/orcamentos/novo" element={<QuoteBuilderPage />} />
           <Route path="/orcamentos/:id" element={<QuoteBuilderPage />} />

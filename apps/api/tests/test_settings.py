@@ -1,0 +1,62 @@
+"""Testes de Configurações + Brand Kit."""
+import pytest
+from fastapi.testclient import TestClient
+
+REGISTER = {
+    "legal_name": "Brand SA",
+    "document": "39393939000111",
+    "slug": "brandsa",
+    "email": "brand@example.com",
+    "name": "Br",
+    "password": "senha-bem-comprida",
+}
+
+
+@pytest.fixture()
+def headers(client: TestClient) -> dict[str, str]:
+    token = client.post("/auth/register", json=REGISTER).json()["access_token"]
+    return {"Authorization": f"Bearer {token}"}
+
+
+def test_profile_created_with_defaults(client: TestClient, headers):
+    resp = client.get("/settings/profile", headers=headers)
+    assert resp.status_code == 200
+    p = resp.json()
+    assert p["display_name"] == "Brand SA"  # vem do legal_name
+    assert p["document"] == "39393939000111"
+    assert p["primary_color"] == "#5D44F8"
+    assert p["font"] == "Inter"
+
+
+def test_update_brand_kit(client: TestClient, headers):
+    resp = client.patch(
+        "/settings/profile",
+        json={
+            "display_name": "Minha Marca",
+            "primary_color": "#FF0000",
+            "font": "Poppins",
+            "logo_url": "https://x.com/logo.png",
+            "phone": "+5511999998888",
+        },
+        headers=headers,
+    )
+    assert resp.status_code == 200
+    p = resp.json()
+    assert p["display_name"] == "Minha Marca"
+    assert p["primary_color"] == "#FF0000"
+    assert p["font"] == "Poppins"
+    # persiste
+    again = client.get("/settings/profile", headers=headers).json()
+    assert again["logo_url"] == "https://x.com/logo.png"
+    assert again["phone"] == "+5511999998888"
+
+
+def test_profile_is_singleton(client: TestClient, headers):
+    client.get("/settings/profile", headers=headers)
+    client.patch("/settings/profile", json={"display_name": "A"}, headers=headers)
+    client.patch("/settings/profile", json={"display_name": "B"}, headers=headers)
+    assert client.get("/settings/profile", headers=headers).json()["display_name"] == "B"
+
+
+def test_requires_auth(client: TestClient):
+    assert client.get("/settings/profile").status_code == 401

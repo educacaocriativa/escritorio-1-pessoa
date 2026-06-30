@@ -53,7 +53,7 @@ export const navSections: NavSection[] = [
       { label: "Funil de Vendas", to: "/funis", icon: Workflow, ready: true },
       { label: "Sites", to: "/sites", icon: Globe },
       { label: "Jurídico", to: "/juridico", icon: Scale },
-      { label: "Configurações", to: "/config", icon: Settings },
+      { label: "Configurações", to: "/config", icon: Settings, ready: true },
     ],
   },
 ];

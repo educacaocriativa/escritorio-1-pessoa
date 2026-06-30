@@ -68,6 +68,18 @@ export default function QuoteBuilderPage() {
     api.get<Client[]>("/crm/clients").then(({ data }) => setClients(data));
   }, []);
 
+  // Proposta nova já nasce com o Brand Kit do tenant (logo + cores + fonte).
+  useEffect(() => {
+    if (!isNew) return;
+    api.get("/settings/profile").then(({ data }) => {
+      if (data.logo_url) setLogoUrl(data.logo_url);
+      setPrimaryColor(data.primary_color);
+      setBgColor(data.bg_color);
+      setTextColor(data.text_color);
+      setAccentColor(data.accent_color);
+    });
+  }, [isNew]);
+
   const hydrate = useCallback((q: Quote) => {
     setQuoteId(q.id);
     setSlug(q.public_slug);

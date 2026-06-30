@@ -467,6 +467,24 @@ export interface ContractsSummary {
   signed_count: number;
 }
 
+// ── Configurações / Brand Kit ──────────────────────────
+export interface TenantProfile {
+  display_name: string;
+  document: string;
+  email: string;
+  phone: string;
+  address: string;
+  website: string;
+  about: string;
+  logo_url: string;
+  primary_color: string;
+  secondary_color: string;
+  accent_color: string;
+  text_color: string;
+  bg_color: string;
+  font: string;
+}
+
 // ── Controle de Estoque ────────────────────────────────
 export interface StockItem {
   id: UUID;
