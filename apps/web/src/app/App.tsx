@@ -9,6 +9,7 @@ import ContratosPage from "../features/contratos/ContratosPage";
 import PublicContractPage from "../features/contratos/PublicContractPage";
 import ClientDetailPage from "../features/crm/ClientDetailPage";
 import CrmPage from "../features/crm/CrmPage";
+import EstoquePage from "../features/estoque/EstoquePage";
 import FinanceiroPage from "../features/financeiro/FinanceiroPage";
 import FunisPage from "../features/funis/FunisPage";
 import FunnelBuilderPage from "../features/funis/FunnelBuilderPage";
@@ -39,6 +40,7 @@ export default function App() {
           <Route path="/cobrancas" element={<CobrancasPage />} />
           <Route path="/pagar" element={<PagarPage />} />
           <Route path="/produtos" element={<ProdutosPage />} />
+          <Route path="/estoque" element={<EstoquePage />} />
           <Route path="/orcamentos" element={<OrcamentosPage />} />
           <Route path="/orcamentos/novo" element={<QuoteBuilderPage />} />
           <Route path="/orcamentos/:id" element={<QuoteBuilderPage />} />

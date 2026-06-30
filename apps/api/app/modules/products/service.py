@@ -180,6 +180,11 @@ def sell(
         product.stock -= 1
     if coupon is not None:
         coupon.uses += 1
+    # Baixa automática no Controle de Estoque (se houver item ligado a este produto).
+    from app.modules.stock import service as stock_service
+    stock_service.consume_for_product(
+        db, tenant_id=tenant_id, product_id=product_id, qty=1, actor=actor
+    )
     audit.record(db, tenant_id=tenant_id, actor=actor, action="product.sell", target=product_id)
     db.commit()
     db.refresh(enrollment)

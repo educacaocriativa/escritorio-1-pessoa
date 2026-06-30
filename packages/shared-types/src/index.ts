@@ -467,6 +467,38 @@ export interface ContractsSummary {
   signed_count: number;
 }
 
+// ── Controle de Estoque ────────────────────────────────
+export interface StockItem {
+  id: UUID;
+  tenant_id: UUID;
+  name: string;
+  sku: string;
+  product_id: UUID | null;
+  quantity: number;
+  unit_cost_cents: number;
+  min_quantity: number;
+  unit: string;
+  active: boolean;
+  low: boolean;
+  value_cents: number;
+  created_at: string;
+}
+
+export interface StockMovement {
+  id: UUID;
+  item_id: UUID;
+  delta: number;
+  reason: string;
+  note: string;
+  created_at: string;
+}
+
+export interface StockSummary {
+  item_count: number;
+  total_value_cents: number;
+  low_stock_count: number;
+}
+
 // ── Funil de Vendas ────────────────────────────────────
 export interface FunnelComponentItem {
   key: string;
