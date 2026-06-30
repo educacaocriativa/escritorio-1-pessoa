@@ -39,5 +39,10 @@ class Payable(Base, TenantMixin, TimestampMixin):
     paid_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     recurrence: Mapped[str] = mapped_column(String(8), default=RECUR_NONE, nullable=False)
 
+    # Boleto/Pix recebido: linha digitável do boleto OU código Pix copia-e-cola.
+    payment_code: Mapped[str] = mapped_column(Text, default="", nullable=False)
+    # Anexo do boleto recebido (URL do PDF/imagem).
+    attachment_url: Mapped[str] = mapped_column(String(1024), default="", nullable=False)
+
     agenda_event_id: Mapped[str | None] = mapped_column(String(36), nullable=True)
     external_ref: Mapped[str | None] = mapped_column(String(64), nullable=True)

@@ -38,6 +38,30 @@ def test_create_bill(client: TestClient, headers):
     assert b["is_overdue"] is False
 
 
+def test_create_bill_with_payment_code(client: TestClient, headers):
+    b = client.post(
+        "/payables/bills",
+        json=_bill(payment_code="00020126-PIX", attachment_url="https://x.com/boleto.pdf"),
+        headers=headers,
+    ).json()
+    assert b["payment_code"] == "00020126-PIX"
+    assert b["attachment_url"] == "https://x.com/boleto.pdf"
+
+
+def test_attach_boleto_after_creation(client: TestClient, headers):
+    b = client.post("/payables/bills", json=_bill(), headers=headers).json()
+    assert b["payment_code"] == ""
+    resp = client.patch(
+        f"/payables/bills/{b['id']}",
+        json={"payment_code": "34191.79001 01043", "attachment_url": "https://x.com/b.pdf"},
+        headers=headers,
+    )
+    assert resp.status_code == 200
+    out = resp.json()
+    assert out["payment_code"].startswith("34191")
+    assert out["attachment_url"] == "https://x.com/b.pdf"
+
+
 def test_create_bill_injects_agenda(client: TestClient, headers):
     client.post("/payables/bills", json=_bill(due_date="2099-08-05"), headers=headers)
     events = client.get(

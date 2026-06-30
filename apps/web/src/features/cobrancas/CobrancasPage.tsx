@@ -1,5 +1,5 @@
 import type { Charge, ChargesSummary, Client } from "@e1p/shared-types";
-import { Copy } from "lucide-react";
+import { Barcode, Copy } from "lucide-react";
 import { useCallback, useEffect, useState } from "react";
 import Modal, { Field } from "../../components/Modal";
 import { api, apiErrorMessage } from "../../lib/api";
@@ -36,6 +36,7 @@ export default function CobrancasPage() {
   const [summary, setSummary] = useState<ChargesSummary>(empty);
   const [charges, setCharges] = useState<Charge[]>([]);
   const [open, setOpen] = useState(false);
+  const [preset, setPreset] = useState("pix");
 
   const load = useCallback(async () => {
     const [s, c] = await Promise.all([
@@ -50,7 +51,13 @@ export default function CobrancasPage() {
     load();
   }, [load]);
 
-  usePrimaryAction("Nova cobrança", useCallback(() => setOpen(true), []));
+  usePrimaryAction(
+    "Nova cobrança",
+    useCallback(() => {
+      setPreset("pix");
+      setOpen(true);
+    }, []),
+  );
 
   async function pay(id: string) {
     await api.post(`/receivables/charges/${id}/pay`);
@@ -64,9 +71,20 @@ export default function CobrancasPage() {
 
   return (
     <div className="space-y-6">
-      <div>
-        <p className="text-sm text-neutral-500">Página / Cobranças</p>
-        <h1 className="text-2xl font-bold text-neutral-800">Contas a Receber</h1>
+      <div className="flex items-start justify-between">
+        <div>
+          <p className="text-sm text-neutral-500">Página / Cobranças</p>
+          <h1 className="text-2xl font-bold text-neutral-800">Contas a Receber</h1>
+        </div>
+        <button
+          onClick={() => {
+            setPreset("boleto");
+            setOpen(true);
+          }}
+          className="flex items-center gap-1.5 rounded-pill bg-primary-500 px-4 py-2 text-sm font-semibold text-white hover:bg-primary-600"
+        >
+          <Barcode size={15} /> Criar boleto
+        </button>
       </div>
 
       <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
@@ -140,7 +158,7 @@ export default function CobrancasPage() {
         )}
       </div>
 
-      <NewChargeModal open={open} onClose={() => setOpen(false)} onCreated={load} />
+      <NewChargeModal open={open} initialMethod={preset} onClose={() => setOpen(false)} onCreated={load} />
     </div>
   );
 }
@@ -157,15 +175,21 @@ function Stat({ label, value, hint, tone }: { label: string; value: string; hint
 
 function NewChargeModal({
   open,
+  initialMethod = "pix",
   onClose,
   onCreated,
 }: {
   open: boolean;
+  initialMethod?: string;
   onClose: () => void;
   onCreated: () => void;
 }) {
   const [kind, setKind] = useState("service");
-  const [method, setMethod] = useState("pix");
+  const [method, setMethod] = useState(initialMethod);
+
+  useEffect(() => {
+    if (open) setMethod(initialMethod);
+  }, [open, initialMethod]);
   const [value, setValue] = useState("");
   const [dueDate, setDueDate] = useState("");
   const [description, setDescription] = useState("");
@@ -204,7 +228,7 @@ function NewChargeModal({
   }
 
   return (
-    <Modal title="Nova cobrança" open={open} onClose={onClose}>
+    <Modal title={initialMethod === "boleto" ? "Criar boleto" : "Nova cobrança"} open={open} onClose={onClose}>
       <div className="space-y-3">
         <label className="block">
           <span className="mb-1 block text-xs font-medium text-neutral-600">Cliente</span>

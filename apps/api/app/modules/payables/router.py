@@ -7,7 +7,12 @@ from sqlalchemy.orm import Session
 from app.core.tenancy import CurrentUser, get_tenant_db, require_module
 from app.modules.payables import service
 from app.modules.payables.models import Payable
-from app.modules.payables.schemas import PayableCreate, PayableOut, PayablesSummary
+from app.modules.payables.schemas import (
+    PayableCreate,
+    PayableOut,
+    PayablesSummary,
+    PayableUpdate,
+)
 
 router = APIRouter(prefix="/payables", tags=["payables"])
 
@@ -27,6 +32,8 @@ def _out(p: Payable) -> PayableOut:
         is_overdue=service.is_overdue(p),
         paid_at=p.paid_at,
         recurrence=p.recurrence,
+        payment_code=p.payment_code,
+        attachment_url=p.attachment_url,
         created_at=p.created_at,
     )
 
@@ -79,6 +86,22 @@ def create_bill(
     db: Session = Depends(get_tenant_db),
 ) -> PayableOut:
     p = service.create_payable(db, tenant_id=user.tenant_id, actor=user.user_id, data=data)
+    return _out(p)
+
+
+@router.patch("/bills/{payable_id}", response_model=PayableOut)
+def update_bill(
+    payable_id: str,
+    data: PayableUpdate,
+    user: CurrentUser = Depends(_guard),
+    db: Session = Depends(get_tenant_db),
+) -> PayableOut:
+    try:
+        p = service.update_payable(
+            db, payable_id=payable_id, tenant_id=user.tenant_id, actor=user.user_id, data=data
+        )
+    except service.PayableError as e:
+        raise _err(e) from e
     return _out(p)
 
 

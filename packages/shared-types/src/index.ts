@@ -290,6 +290,8 @@ export interface Payable {
   is_overdue: boolean;
   paid_at: string | null;
   recurrence: Recurrence;
+  payment_code: string;
+  attachment_url: string;
   created_at: string;
 }
 

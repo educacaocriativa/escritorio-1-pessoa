@@ -15,6 +15,8 @@ class PayableCreate(BaseModel):
     amount_cents: int = Field(gt=0)
     due_date: date
     recurrence: str = RECUR_NONE
+    payment_code: str = ""  # linha digitável do boleto OU Pix copia-e-cola
+    attachment_url: str = Field(default="", max_length=1024)  # URL do boleto anexado
 
     @field_validator("recurrence")
     @classmethod
@@ -22,6 +24,11 @@ class PayableCreate(BaseModel):
         if v not in ALL_RECURRENCES:
             raise ValueError(f"recorrência inválida: {v}")
         return v
+
+
+class PayableUpdate(BaseModel):
+    payment_code: str | None = None
+    attachment_url: str | None = Field(default=None, max_length=1024)
 
 
 class PayableOut(BaseModel):
@@ -36,6 +43,8 @@ class PayableOut(BaseModel):
     is_overdue: bool
     paid_at: datetime | None
     recurrence: str
+    payment_code: str
+    attachment_url: str
     created_at: datetime
 
 

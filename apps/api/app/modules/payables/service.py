@@ -43,6 +43,8 @@ def create_payable(db: Session, *, tenant_id: str, actor: str, data: PayableCrea
         amount_cents=data.amount_cents,
         due_date=data.due_date,
         recurrence=data.recurrence,
+        payment_code=data.payment_code,
+        attachment_url=data.attachment_url,
         status=STATUS_OPEN,
     )
     db.add(payable)
@@ -76,6 +78,19 @@ def get_payable(db: Session, payable_id: str) -> Payable:
     p = db.get(Payable, payable_id)
     if p is None:
         raise PayableError("Conta não encontrada", 404)
+    return p
+
+
+def update_payable(db: Session, *, payable_id: str, tenant_id: str, actor: str, data) -> Payable:
+    """Atualiza o boleto/Pix recebido (código e/ou anexo) de uma conta."""
+    p = get_payable(db, payable_id)
+    if data.payment_code is not None:
+        p.payment_code = data.payment_code
+    if data.attachment_url is not None:
+        p.attachment_url = data.attachment_url
+    audit.record(db, tenant_id=tenant_id, actor=actor, action="payable.update", target=p.id)
+    db.commit()
+    db.refresh(p)
     return p
 
 
