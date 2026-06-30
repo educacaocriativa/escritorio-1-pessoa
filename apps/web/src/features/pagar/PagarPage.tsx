@@ -34,6 +34,7 @@ export default function PagarPage() {
   const [bills, setBills] = useState<Payable[]>([]);
   const [open, setOpen] = useState(false);
   const [attach, setAttach] = useState<Payable | null>(null);
+  const [edit, setEdit] = useState<Payable | null>(null);
 
   const load = useCallback(async () => {
     const [s, b] = await Promise.all([
@@ -124,6 +125,9 @@ export default function PagarPage() {
                         )}
                         {p.status === "open" && (
                           <>
+                            <button onClick={() => setEdit(p)} className="text-xs font-medium text-neutral-500 hover:text-primary-600">
+                              Editar
+                            </button>
                             <button onClick={() => pay(p.id)} className="text-xs font-medium text-accent-600 hover:underline">
                               Marcar paga
                             </button>
@@ -143,6 +147,16 @@ export default function PagarPage() {
       </div>
 
       <NewBillModal open={open} onClose={() => setOpen(false)} onCreated={load} />
+      {edit && (
+        <EditBillModal
+          bill={edit}
+          onClose={() => setEdit(null)}
+          onSaved={() => {
+            setEdit(null);
+            load();
+          }}
+        />
+      )}
       {attach && (
         <AttachModal
           bill={attach}
@@ -154,6 +168,74 @@ export default function PagarPage() {
         />
       )}
     </div>
+  );
+}
+
+function EditBillModal({
+  bill,
+  onClose,
+  onSaved,
+}: {
+  bill: Payable;
+  onClose: () => void;
+  onSaved: () => void;
+}) {
+  const [description, setDescription] = useState(bill.description);
+  const [category, setCategory] = useState(bill.category);
+  const [supplier, setSupplier] = useState(bill.supplier);
+  const [value, setValue] = useState((bill.amount_cents / 100).toFixed(2).replace(".", ","));
+  const [dueDate, setDueDate] = useState(bill.due_date);
+  const [recurrence, setRecurrence] = useState(bill.recurrence);
+  const [error, setError] = useState<string | null>(null);
+  const [saving, setSaving] = useState(false);
+
+  async function save() {
+    setError(null);
+    setSaving(true);
+    try {
+      await api.patch(`/payables/bills/${bill.id}`, {
+        description,
+        category,
+        supplier,
+        amount_cents: Math.round(parseFloat(value.replace(",", ".")) * 100),
+        due_date: dueDate,
+        recurrence,
+      });
+      onSaved();
+    } catch (err) {
+      setError(apiErrorMessage(err));
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  return (
+    <Modal title="Editar conta" open onClose={onClose}>
+      <div className="space-y-3">
+        <Field label="Descrição" value={description} onChange={setDescription} />
+        <div className="flex gap-2">
+          <Field label="Categoria" value={category} onChange={setCategory} />
+          <Field label="Fornecedor" value={supplier} onChange={setSupplier} />
+        </div>
+        <div className="flex gap-2">
+          <Field label="Valor (R$)" value={value} onChange={setValue} />
+          <Field label="Vencimento" type="date" value={dueDate} onChange={setDueDate} />
+        </div>
+        <label className="block">
+          <span className="mb-1 block text-xs font-medium text-neutral-600">Recorrência</span>
+          <select value={recurrence} onChange={(e) => setRecurrence(e.target.value as Payable["recurrence"])} className="w-full rounded-lg border border-neutral-200 px-3 py-2 text-sm outline-none focus:border-primary-400">
+            {RECUR.map(([v, l]) => (
+              <option key={v} value={v}>{l}</option>
+            ))}
+          </select>
+        </label>
+        <p className="text-xs text-neutral-400">Mudar o vencimento move o evento na Agenda.</p>
+        {error && <p className="rounded-lg bg-red-50 p-2 text-sm text-danger">{error}</p>}
+        <button onClick={save} disabled={saving || !value || !dueDate} className="w-full rounded-pill bg-accent-400 py-2.5 font-semibold text-white hover:bg-accent-500 disabled:opacity-60">
+          {saving ? "Salvando..." : "Salvar alterações"}
+        </button>
+      </div>
+    </Modal>
   );
 }
 

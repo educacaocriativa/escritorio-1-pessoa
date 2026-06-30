@@ -1,6 +1,7 @@
 import type { AgendaEvent, Charge, CreateEventResult, Notification, Payable } from "@e1p/shared-types";
 import { ChevronLeft, ChevronRight, MapPin, Sparkles, Users, Video } from "lucide-react";
 import { useCallback, useEffect, useMemo, useState } from "react";
+import Attachments from "../../components/Attachments";
 import Modal, { Field } from "../../components/Modal";
 import { api, apiErrorMessage } from "../../lib/api";
 import { usePrimaryAction } from "../../store/pageActions";
@@ -426,6 +427,22 @@ function EventDetailModal({ event, onClose }: { event: AgendaEvent; onClose: () 
             <p className="mt-1 text-xs">
               Status: <strong>{payable.status === "paid" ? "Pago" : payable.is_overdue ? "Atrasado" : "A pagar"}</strong>
             </p>
+            {payable.payment_code && (
+              <p className="mt-1 break-all text-[11px] text-neutral-500">
+                Código: {payable.payment_code}
+              </p>
+            )}
+          </div>
+        )}
+
+        {(isPagar || isReceber) && event.external_ref && (
+          <div className="border-t border-neutral-100 pt-3">
+            <h3 className="mb-2 text-xs font-semibold uppercase text-neutral-400">Anexos</h3>
+            <Attachments
+              ownerType={isPagar ? "payable" : "charge"}
+              ownerId={event.external_ref}
+              slots={[{ key: "boleto", label: "Boleto" }, { key: "contrato", label: "Contrato" }]}
+            />
           </div>
         )}
 

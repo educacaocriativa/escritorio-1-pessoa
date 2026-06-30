@@ -54,6 +54,12 @@ class RescheduleRequest(BaseModel):
     due_date: date
 
 
+class ChargeUpdate(BaseModel):
+    description: str | None = None
+    amount_cents: int | None = Field(default=None, gt=0)
+    due_date: date | None = None
+
+
 class DunningResult(BaseModel):
     message: str
     status: str  # sent / logged / failed

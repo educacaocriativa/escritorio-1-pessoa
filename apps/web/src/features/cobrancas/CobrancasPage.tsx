@@ -39,6 +39,7 @@ export default function CobrancasPage() {
   const [open, setOpen] = useState(false);
   const [preset, setPreset] = useState("pix");
   const [docs, setDocs] = useState<Charge | null>(null);
+  const [edit, setEdit] = useState<Charge | null>(null);
 
   const load = useCallback(async () => {
     const [s, c] = await Promise.all([
@@ -147,6 +148,9 @@ export default function CobrancasPage() {
                         </button>
                         {c.status === "open" && (
                           <>
+                            <button onClick={() => setEdit(c)} className="text-xs font-medium text-neutral-500 hover:text-primary-600">
+                              Editar
+                            </button>
                             <button onClick={() => pay(c.id)} className="text-xs font-medium text-accent-600 hover:underline">
                               Marcar paga
                             </button>
@@ -166,6 +170,16 @@ export default function CobrancasPage() {
       </div>
 
       <NewChargeModal open={open} initialMethod={preset} onClose={() => setOpen(false)} onCreated={load} />
+      {edit && (
+        <EditChargeModal
+          charge={edit}
+          onClose={() => setEdit(null)}
+          onSaved={() => {
+            setEdit(null);
+            load();
+          }}
+        />
+      )}
       {docs && (
         <Modal title="Contrato / documentos da cobrança" open onClose={() => setDocs(null)}>
           <div className="space-y-3">
@@ -192,6 +206,56 @@ function Stat({ label, value, hint, tone }: { label: string; value: string; hint
       <p className={`text-xl font-bold ${tone}`}>{value}</p>
       <p className="text-xs text-neutral-400">{hint}</p>
     </div>
+  );
+}
+
+function EditChargeModal({
+  charge,
+  onClose,
+  onSaved,
+}: {
+  charge: Charge;
+  onClose: () => void;
+  onSaved: () => void;
+}) {
+  const [description, setDescription] = useState(charge.description);
+  const [value, setValue] = useState((charge.amount_cents / 100).toFixed(2).replace(".", ","));
+  const [dueDate, setDueDate] = useState(charge.due_date);
+  const [error, setError] = useState<string | null>(null);
+  const [saving, setSaving] = useState(false);
+
+  async function save() {
+    setError(null);
+    setSaving(true);
+    try {
+      await api.patch(`/receivables/charges/${charge.id}`, {
+        description,
+        amount_cents: Math.round(parseFloat(value.replace(",", ".")) * 100),
+        due_date: dueDate,
+      });
+      onSaved();
+    } catch (err) {
+      setError(apiErrorMessage(err));
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  return (
+    <Modal title="Editar cobrança" open onClose={onClose}>
+      <div className="space-y-3">
+        <Field label="Descrição" value={description} onChange={setDescription} />
+        <div className="flex gap-2">
+          <Field label="Valor (R$)" value={value} onChange={setValue} />
+          <Field label="Vencimento" type="date" value={dueDate} onChange={setDueDate} />
+        </div>
+        <p className="text-xs text-neutral-400">Mudar o vencimento move o evento na Agenda.</p>
+        {error && <p className="rounded-lg bg-red-50 p-2 text-sm text-danger">{error}</p>}
+        <button onClick={save} disabled={saving || !value || !dueDate} className="w-full rounded-pill bg-accent-400 py-2.5 font-semibold text-white hover:bg-accent-500 disabled:opacity-60">
+          {saving ? "Salvando..." : "Salvar alterações"}
+        </button>
+      </div>
+    </Modal>
   );
 }
 

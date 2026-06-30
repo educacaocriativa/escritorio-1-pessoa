@@ -152,6 +152,38 @@ def reschedule_charge(
     return charge
 
 
+def update_charge(db: Session, *, charge_id: str, tenant_id: str, actor: str, data) -> Charge:
+    """Edita a cobrança (descrição/valor/vencimento) em aberto e reverbera no evento da Agenda."""
+    charge = get_charge(db, charge_id)
+    if charge.status != STATUS_OPEN:
+        raise ReceivableError("Só cobranças em aberto podem ser editadas", 409)
+    if data.description is not None:
+        charge.description = data.description
+    if data.amount_cents is not None:
+        charge.amount_cents = data.amount_cents
+    if data.due_date is not None:
+        charge.due_date = data.due_date
+
+    ev = db.get(AgendaEvent, charge.agenda_event_id) if charge.agenda_event_id else None
+    if ev is not None:
+        if data.due_date is not None:
+            day_start = datetime.combine(charge.due_date, time.min, tzinfo=UTC)
+            ev.starts_at = day_start
+            ev.ends_at = day_start.replace(hour=23, minute=59)
+            ev.status = STATUS_SCHEDULED
+        if data.amount_cents is not None:
+            ev.amount_cents = charge.amount_cents
+        if data.description is not None:
+            client = db.get(Client, charge.client_id) if charge.client_id else None
+            who = client.name if client else (charge.description or "cobrança")
+            ev.title = f"A receber: {who}"
+
+    audit.record(db, tenant_id=tenant_id, actor=actor, action="receivable.update", target=charge.id)
+    db.commit()
+    db.refresh(charge)
+    return charge
+
+
 def protest_charge(db: Session, *, charge_id: str, tenant_id: str, actor: str) -> Charge:
     """Protesta uma cobrança VENCIDA e em aberto (registra o protesto; cartório real é dívida)."""
     charge = get_charge(db, charge_id)

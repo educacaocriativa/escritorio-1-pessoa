@@ -82,12 +82,45 @@ def get_payable(db: Session, payable_id: str) -> Payable:
 
 
 def update_payable(db: Session, *, payable_id: str, tenant_id: str, actor: str, data) -> Payable:
-    """Atualiza o boleto/Pix recebido (código e/ou anexo) de uma conta."""
+    """Edita a conta (dados + boleto/Pix). Mexer em valor/vencimento exige conta em aberto e
+    sincroniza o evento da Agenda (move o vencimento, atualiza valor/título)."""
     p = get_payable(db, payable_id)
+    core = (data.description, data.category, data.supplier, data.amount_cents,
+            data.due_date, data.recurrence)
+    if any(v is not None for v in core) and p.status != STATUS_OPEN:
+        raise PayableError("Só contas em aberto podem ter os dados editados", 409)
+
+    # boleto/Pix podem ser ajustados a qualquer momento
     if data.payment_code is not None:
         p.payment_code = data.payment_code
     if data.attachment_url is not None:
         p.attachment_url = data.attachment_url
+    # dados principais
+    if data.description is not None:
+        p.description = data.description
+    if data.category is not None:
+        p.category = data.category
+    if data.supplier is not None:
+        p.supplier = data.supplier
+    if data.amount_cents is not None:
+        p.amount_cents = data.amount_cents
+    if data.recurrence is not None:
+        p.recurrence = data.recurrence
+    if data.due_date is not None:
+        p.due_date = data.due_date
+
+    # reverbera na Agenda (evento de vencimento vinculado)
+    ev = db.get(AgendaEvent, p.agenda_event_id) if p.agenda_event_id else None
+    if ev is not None:
+        if data.due_date is not None:
+            day_start = datetime.combine(p.due_date, time.min, tzinfo=UTC)
+            ev.starts_at = day_start
+            ev.ends_at = day_start.replace(hour=23, minute=59)
+        if data.amount_cents is not None:
+            ev.amount_cents = p.amount_cents
+        if data.description is not None or data.supplier is not None:
+            ev.title = f"A pagar: {p.supplier or p.description or 'conta'}"
+
     audit.record(db, tenant_id=tenant_id, actor=actor, action="payable.update", target=p.id)
     db.commit()
     db.refresh(p)

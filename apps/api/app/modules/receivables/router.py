@@ -13,6 +13,7 @@ from app.modules.receivables.schemas import (
     ChargeCreate,
     ChargeOut,
     ChargesSummary,
+    ChargeUpdate,
     DunningResult,
     MessageRequest,
     RescheduleRequest,
@@ -101,6 +102,22 @@ def get_charge(
         return _out(service.get_charge(db, charge_id), db)
     except service.ReceivableError as e:
         raise _err(e) from e
+
+
+@router.patch("/charges/{charge_id}", response_model=ChargeOut)
+def update_charge(
+    charge_id: str,
+    data: ChargeUpdate,
+    user: CurrentUser = Depends(_guard),
+    db: Session = Depends(get_tenant_db),
+) -> ChargeOut:
+    try:
+        charge = service.update_charge(
+            db, charge_id=charge_id, tenant_id=user.tenant_id, actor=user.user_id, data=data
+        )
+    except service.ReceivableError as e:
+        raise _err(e) from e
+    return _out(charge, db)
 
 
 @router.get("/charges/{charge_id}/messages", response_model=list[NotificationOut])

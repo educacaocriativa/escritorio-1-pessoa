@@ -27,8 +27,21 @@ class PayableCreate(BaseModel):
 
 
 class PayableUpdate(BaseModel):
+    description: str | None = None
+    category: str | None = None
+    supplier: str | None = None
+    amount_cents: int | None = Field(default=None, gt=0)
+    due_date: date | None = None
+    recurrence: str | None = None
     payment_code: str | None = None
     attachment_url: str | None = Field(default=None, max_length=1024)
+
+    @field_validator("recurrence")
+    @classmethod
+    def _recur(cls, v: str | None) -> str | None:
+        if v is not None and v not in ALL_RECURRENCES:
+            raise ValueError(f"recorrência inválida: {v}")
+        return v
 
 
 class PayableOut(BaseModel):

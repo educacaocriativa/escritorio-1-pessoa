@@ -48,6 +48,31 @@ def test_create_bill_with_payment_code(client: TestClient, headers):
     assert b["attachment_url"] == "https://x.com/boleto.pdf"
 
 
+def test_edit_payable_moves_agenda(client: TestClient, headers):
+    b = client.post("/payables/bills", json=_bill(due_date="2026-08-01"), headers=headers).json()
+    resp = client.patch(
+        f"/payables/bills/{b['id']}",
+        json={"description": "Editado", "amount_cents": 99900, "due_date": "2026-08-20"},
+        headers=headers,
+    )
+    assert resp.status_code == 200
+    out = resp.json()
+    assert out["description"] == "Editado"
+    assert out["amount_cents"] == 99900
+    assert out["due_date"] == "2026-08-20"
+    ev = [e for e in client.get("/agenda/events?limit=500", headers=headers).json()
+          if e["kind"] == "cobranca_pagar"][0]
+    assert ev["starts_at"].startswith("2026-08-20")  # evento moveu junto
+    assert ev["amount_cents"] == 99900
+
+
+def test_cannot_edit_paid_payable(client: TestClient, headers):
+    b = client.post("/payables/bills", json=_bill(), headers=headers).json()
+    client.post(f"/payables/bills/{b['id']}/pay", headers=headers)
+    resp = client.patch(f"/payables/bills/{b['id']}", json={"amount_cents": 5000}, headers=headers)
+    assert resp.status_code == 409
+
+
 def test_attach_boleto_after_creation(client: TestClient, headers):
     b = client.post("/payables/bills", json=_bill(), headers=headers).json()
     assert b["payment_code"] == ""

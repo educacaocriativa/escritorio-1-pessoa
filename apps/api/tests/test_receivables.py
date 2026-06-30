@@ -29,6 +29,34 @@ def _charge(**over):
     return {**base, **over}
 
 
+def test_edit_charge_moves_agenda(client: TestClient, headers):
+    c = client.post(
+        "/receivables/charges", json=_charge(due_date="2026-08-10"), headers=headers
+    ).json()
+    resp = client.patch(
+        f"/receivables/charges/{c['id']}",
+        json={"description": "Nova descrição", "amount_cents": 33300, "due_date": "2026-09-05"},
+        headers=headers,
+    )
+    assert resp.status_code == 200
+    out = resp.json()
+    assert out["amount_cents"] == 33300
+    assert out["due_date"] == "2026-09-05"
+    ev = [e for e in client.get("/agenda/events?limit=500", headers=headers).json()
+          if e["kind"] == "cobranca_receber"][0]
+    assert ev["starts_at"].startswith("2026-09-05")  # evento moveu junto
+    assert ev["amount_cents"] == 33300
+
+
+def test_cannot_edit_paid_charge(client: TestClient, headers):
+    c = client.post("/receivables/charges", json=_charge(), headers=headers).json()
+    client.post(f"/receivables/charges/{c['id']}/pay", headers=headers)
+    resp = client.patch(
+        f"/receivables/charges/{c['id']}", json={"amount_cents": 5000}, headers=headers
+    )
+    assert resp.status_code == 409
+
+
 def test_create_charge_generates_code(client: TestClient, headers):
     resp = client.post("/receivables/charges", json=_charge(), headers=headers)
     assert resp.status_code == 201, resp.text
