@@ -1,6 +1,7 @@
 import type { Charge, ChargesSummary, Client } from "@e1p/shared-types";
-import { Barcode, Copy } from "lucide-react";
+import { Barcode, Copy, Paperclip } from "lucide-react";
 import { useCallback, useEffect, useState } from "react";
+import Attachments from "../../components/Attachments";
 import Modal, { Field } from "../../components/Modal";
 import { api, apiErrorMessage } from "../../lib/api";
 import { usePrimaryAction } from "../../store/pageActions";
@@ -37,6 +38,7 @@ export default function CobrancasPage() {
   const [charges, setCharges] = useState<Charge[]>([]);
   const [open, setOpen] = useState(false);
   const [preset, setPreset] = useState("pix");
+  const [docs, setDocs] = useState<Charge | null>(null);
 
   const load = useCallback(async () => {
     const [s, c] = await Promise.all([
@@ -139,16 +141,21 @@ export default function CobrancasPage() {
                       <span className={`rounded-pill px-2 py-0.5 text-xs ${st.cls}`}>{st.label}</span>
                     </td>
                     <td className="px-4 py-3 text-right">
-                      {c.status === "open" && (
-                        <div className="flex justify-end gap-3">
-                          <button onClick={() => pay(c.id)} className="text-xs font-medium text-accent-600 hover:underline">
-                            Marcar paga
-                          </button>
-                          <button onClick={() => cancel(c.id)} className="text-xs text-neutral-400 hover:text-danger">
-                            Cancelar
-                          </button>
-                        </div>
-                      )}
+                      <div className="flex items-center justify-end gap-3">
+                        <button onClick={() => setDocs(c)} className="flex items-center gap-1 text-xs font-medium text-neutral-500 hover:text-primary-600">
+                          <Paperclip size={12} /> Contrato
+                        </button>
+                        {c.status === "open" && (
+                          <>
+                            <button onClick={() => pay(c.id)} className="text-xs font-medium text-accent-600 hover:underline">
+                              Marcar paga
+                            </button>
+                            <button onClick={() => cancel(c.id)} className="text-xs text-neutral-400 hover:text-danger">
+                              Cancelar
+                            </button>
+                          </>
+                        )}
+                      </div>
                     </td>
                   </tr>
                 );
@@ -159,6 +166,21 @@ export default function CobrancasPage() {
       </div>
 
       <NewChargeModal open={open} initialMethod={preset} onClose={() => setOpen(false)} onCreated={load} />
+      {docs && (
+        <Modal title="Contrato / documentos da cobrança" open onClose={() => setDocs(null)}>
+          <div className="space-y-3">
+            <p className="text-sm text-neutral-500">
+              {docs.client_name ?? docs.description ?? "Cobrança"} — {brl(docs.amount_cents)}
+            </p>
+            <p className="text-xs font-medium text-neutral-600">Anexar arquivos (PDF, JPEG ou PNG)</p>
+            <Attachments
+              ownerType="charge"
+              ownerId={docs.id}
+              slots={[{ key: "contrato", label: "Contrato" }, { key: "boleto", label: "Boleto" }]}
+            />
+          </div>
+        </Modal>
+      )}
     </div>
   );
 }

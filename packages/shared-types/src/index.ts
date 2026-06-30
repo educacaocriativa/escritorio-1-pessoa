@@ -469,6 +469,18 @@ export interface ContractsSummary {
   signed_count: number;
 }
 
+// ── Anexos (upload de arquivos) ────────────────────────
+export interface Attachment {
+  id: UUID;
+  owner_type: string;
+  owner_id: string;
+  label: string;
+  filename: string;
+  content_type: string;
+  size: number;
+  created_at: string;
+}
+
 // ── Sites / Páginas ────────────────────────────────────
 export type PageBlock = { type: string; [key: string]: unknown };
 

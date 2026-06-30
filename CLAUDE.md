@@ -107,6 +107,12 @@ Ao criar/alterar qualquer funcionalidade:
   - **Dívida:** rate-limit/anti-spam no formulário público; mais blocos (depoimentos, FAQ, preço); subdomínio/domínio próprio; ligar a página ao nó-página do funil (referência mútua); A/B; analytics.
 - [ ] Migrar módulo **Assistente Jurídico** do app existente (`~/lex-intelligentia-app`) — Fase 5.
 
+## Anexos (upload de arquivos)
+- [x] **Módulo de Anexos** — `/attachments` (RLS): upload REAL de arquivos (PDF/JPEG/PNG, ≤10MB) ligados a uma entidade por `owner_type`+`owner_id` (ex.: payable, charge) e `label` (boleto/contrato/outro). Bytes no Postgres (`LargeBinary`) — simples e isolado por tenant; migrar p/ S3 é dívida. POST multipart (UploadFile), GET lista por owner, GET `/{id}/download` (Response com content-type + Content-Disposition; baixado via axios blob no front por causa do Bearer), DELETE. Migration 0025. Componente React reutilizável `components/Attachments.tsx` (upload/listar/ver/remover). 212 testes.
+  - **Contas a Pagar:** modal "Boleto/Pix" agora sobe **Boleto** e **Contrato** (arquivo, não URL) + mantém o código Pix/boleto (texto). Campo `payment_code` é texto; o antigo `attachment_url` (URL) saiu da UI (coluna mantida, sem uso).
+  - **Contas a Receber:** ação "Contrato" por cobrança → anexa **Contrato** (e Boleto) da cobrança.
+  - **Dívida:** mover storage p/ S3 (hoje bytes no Postgres); preview inline (hoje abre em nova aba); antivírus/scan; limite por tenant.
+
 ## 6.0 Correções importantes
 - **[CRÍTICO, CORRIGIDO] RLS perdia o tenant no refresh pós-commit (afetava TODOS os módulos).** A `Session` ligada à Engine devolvia a conexão ao pool no `commit()`; o `db.refresh()` seguinte pegava outra conexão sem a GUC `app.current_tenant_id` → RLS escondia a linha → 500 "Could not refresh instance". Funcionava só quando o pool reusava a mesma conexão. **Fix:** `tenant_session` agora prende a Session a UMA conexão dedicada (`engine.connect()`) por todo o request; o refresh pós-commit usa a mesma conexão (GUC setada). Validado: criar em tenant novo OK em todos os módulos + isolamento entre tenants intacto. Regra: qualquer novo helper de sessão de tenant DEVE usar conexão dedicada, nunca a Engine direto.
 

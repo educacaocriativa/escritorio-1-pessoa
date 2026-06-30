@@ -1,6 +1,7 @@
 import type { Payable, PayablesSummary } from "@e1p/shared-types";
 import { Copy, Paperclip } from "lucide-react";
 import { useCallback, useEffect, useState } from "react";
+import Attachments from "../../components/Attachments";
 import Modal, { Field } from "../../components/Modal";
 import { api, apiErrorMessage } from "../../lib/api";
 import { usePrimaryAction } from "../../store/pageActions";
@@ -116,14 +117,9 @@ export default function PagarPage() {
                             <Copy size={14} />
                           </button>
                         )}
-                        {p.attachment_url && (
-                          <a href={p.attachment_url} target="_blank" rel="noreferrer" title="Ver boleto anexado" className="text-neutral-400 hover:text-primary-600">
-                            <Paperclip size={14} />
-                          </a>
-                        )}
                         {p.status !== "canceled" && (
-                          <button onClick={() => setAttach(p)} className="text-xs font-medium text-neutral-500 hover:text-primary-600">
-                            Boleto/Pix
+                          <button onClick={() => setAttach(p)} className="flex items-center gap-1 text-xs font-medium text-neutral-500 hover:text-primary-600">
+                            <Paperclip size={12} /> Boleto/Pix
                           </button>
                         )}
                         {p.status === "open" && (
@@ -171,18 +167,14 @@ function AttachModal({
   onSaved: () => void;
 }) {
   const [paymentCode, setPaymentCode] = useState(bill.payment_code);
-  const [attachmentUrl, setAttachmentUrl] = useState(bill.attachment_url);
   const [error, setError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
 
-  async function save() {
+  async function saveCode() {
     setError(null);
     setSaving(true);
     try {
-      await api.patch(`/payables/bills/${bill.id}`, {
-        payment_code: paymentCode,
-        attachment_url: attachmentUrl,
-      });
+      await api.patch(`/payables/bills/${bill.id}`, { payment_code: paymentCode });
       onSaved();
     } catch (err) {
       setError(apiErrorMessage(err));
@@ -192,28 +184,32 @@ function AttachModal({
   }
 
   return (
-    <Modal title="Boleto / Pix da conta" open onClose={onClose}>
-      <div className="space-y-3">
+    <Modal title="Boleto / Contrato / Pix" open onClose={onClose}>
+      <div className="space-y-4">
         <p className="text-sm text-neutral-500">{bill.description || bill.supplier || "Conta"}</p>
+
+        <div>
+          <p className="mb-2 text-xs font-medium text-neutral-600">Anexar arquivos (PDF, JPEG ou PNG)</p>
+          <Attachments
+            ownerType="payable"
+            ownerId={bill.id}
+            slots={[{ key: "boleto", label: "Boleto" }, { key: "contrato", label: "Contrato" }]}
+          />
+        </div>
+
         <label className="block">
           <span className="mb-1 block text-xs font-medium text-neutral-600">
-            Linha digitável do boleto OU Pix copia-e-cola
+            Pix copia-e-cola / linha do boleto (opcional)
           </span>
-          <textarea value={paymentCode} onChange={(e) => setPaymentCode(e.target.value)} rows={3} placeholder="Cole aqui o código" className="w-full rounded-lg border border-neutral-200 px-3 py-2 text-sm outline-none focus:border-primary-400" />
+          <textarea value={paymentCode} onChange={(e) => setPaymentCode(e.target.value)} rows={2} placeholder="Cole aqui o código" className="w-full rounded-lg border border-neutral-200 px-3 py-2 text-sm outline-none focus:border-primary-400" />
         </label>
-        <Field label="Anexo do boleto (URL do PDF/imagem)" value={attachmentUrl} onChange={setAttachmentUrl} placeholder="https://..." />
-        {attachmentUrl && (
-          <a href={attachmentUrl} target="_blank" rel="noreferrer" className="inline-flex items-center gap-1 text-xs font-medium text-primary-600">
-            <Paperclip size={12} /> abrir anexo atual
-          </a>
-        )}
         {error && <p className="rounded-lg bg-red-50 p-2 text-sm text-danger">{error}</p>}
         <button
-          onClick={save}
+          onClick={saveCode}
           disabled={saving}
           className="w-full rounded-pill bg-accent-400 py-2.5 font-semibold text-white hover:bg-accent-500 disabled:opacity-60"
         >
-          {saving ? "Salvando..." : "Salvar"}
+          {saving ? "Salvando..." : "Salvar código"}
         </button>
       </div>
     </Modal>
@@ -245,7 +241,6 @@ function NewBillModal({
   const [dueDate, setDueDate] = useState("");
   const [recurrence, setRecurrence] = useState("none");
   const [paymentCode, setPaymentCode] = useState("");
-  const [attachmentUrl, setAttachmentUrl] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
 
@@ -262,7 +257,6 @@ function NewBillModal({
         due_date: dueDate,
         recurrence,
         payment_code: paymentCode,
-        attachment_url: attachmentUrl,
       });
       onCreated();
       setDescription("");
@@ -270,7 +264,6 @@ function NewBillModal({
       setValue("");
       setDueDate("");
       setPaymentCode("");
-      setAttachmentUrl("");
       onClose();
     } catch (err) {
       setError(apiErrorMessage(err));
@@ -300,9 +293,8 @@ function NewBillModal({
           </select>
         </label>
         <div className="rounded-lg bg-neutral-50 p-3">
-          <p className="mb-2 text-xs font-medium text-neutral-600">Boleto recebido / Pix (opcional)</p>
-          <textarea value={paymentCode} onChange={(e) => setPaymentCode(e.target.value)} rows={2} placeholder="Cole a linha digitável do boleto ou o Pix copia-e-cola" className="mb-2 w-full rounded-lg border border-neutral-200 px-3 py-2 text-sm outline-none focus:border-primary-400" />
-          <Field label="Anexo do boleto (URL do PDF/imagem)" value={attachmentUrl} onChange={setAttachmentUrl} placeholder="https://..." />
+          <p className="mb-2 text-xs font-medium text-neutral-600">Pix copia-e-cola / linha do boleto (opcional)</p>
+          <textarea value={paymentCode} onChange={(e) => setPaymentCode(e.target.value)} rows={2} placeholder="Cole o código aqui (os arquivos do boleto/contrato você anexa depois, em Boleto/Pix)" className="w-full rounded-lg border border-neutral-200 px-3 py-2 text-sm outline-none focus:border-primary-400" />
         </div>
         {error && <p className="rounded-lg bg-red-50 p-2 text-sm text-danger">{error}</p>}
         <button

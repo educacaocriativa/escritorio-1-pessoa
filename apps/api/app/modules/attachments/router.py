@@ -1,0 +1,84 @@
+"""Rotas de Anexos: upload (multipart), listar, baixar, remover."""
+from __future__ import annotations
+
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, Response, UploadFile
+from sqlalchemy.orm import Session
+
+from app.core.tenancy import CurrentUser, get_tenant_db, require_module
+from app.modules.attachments import service
+from app.modules.attachments.models import Attachment
+from app.modules.attachments.schemas import AttachmentOut
+
+router = APIRouter(prefix="/attachments", tags=["attachments"])
+
+_guard = require_module("attachments")
+
+
+def _out(a: Attachment) -> AttachmentOut:
+    return AttachmentOut(
+        id=a.id, owner_type=a.owner_type, owner_id=a.owner_id, label=a.label,
+        filename=a.filename, content_type=a.content_type, size=a.size, created_at=a.created_at,
+    )
+
+
+def _err(e: service.AttachmentError) -> HTTPException:
+    return HTTPException(status_code=e.status_code, detail=str(e))
+
+
+@router.get("", response_model=list[AttachmentOut])
+def list_attachments(
+    owner_type: str = Query(...),
+    owner_id: str = Query(...),
+    _u: CurrentUser = Depends(_guard),
+    db: Session = Depends(get_tenant_db),
+) -> list[AttachmentOut]:
+    return [_out(a) for a in service.list_for(db, owner_type=owner_type, owner_id=owner_id)]
+
+
+@router.post("", response_model=AttachmentOut, status_code=201)
+async def upload_attachment(
+    owner_type: str = Form(...),
+    owner_id: str = Form(...),
+    label: str = Form("outro"),
+    file: UploadFile = File(...),
+    user: CurrentUser = Depends(_guard),
+    db: Session = Depends(get_tenant_db),
+) -> AttachmentOut:
+    data = await file.read()
+    try:
+        att = service.create_attachment(
+            db, tenant_id=user.tenant_id, actor=user.user_id,
+            owner_type=owner_type, owner_id=owner_id, label=label,
+            filename=file.filename or "arquivo", content_type=file.content_type or "", data=data,
+        )
+    except service.AttachmentError as e:
+        raise _err(e) from e
+    return _out(att)
+
+
+@router.get("/{attachment_id}/download")
+def download_attachment(
+    attachment_id: str, _u: CurrentUser = Depends(_guard), db: Session = Depends(get_tenant_db)
+) -> Response:
+    try:
+        att = service.get_attachment(db, attachment_id)
+    except service.AttachmentError as e:
+        raise _err(e) from e
+    return Response(
+        content=att.data,
+        media_type=att.content_type,
+        headers={"Content-Disposition": f'inline; filename="{att.filename}"'},
+    )
+
+
+@router.delete("/{attachment_id}", status_code=204)
+def delete_attachment(
+    attachment_id: str, user: CurrentUser = Depends(_guard), db: Session = Depends(get_tenant_db)
+) -> Response:
+    try:
+        service.delete_attachment(
+            db, attachment_id=attachment_id, tenant_id=user.tenant_id, actor=user.user_id
+        )
+    except service.AttachmentError as e:
+        raise _err(e) from e
+    return Response(status_code=204)
