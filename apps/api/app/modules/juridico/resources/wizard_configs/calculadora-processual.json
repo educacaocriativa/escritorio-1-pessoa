@@ -1,0 +1,31 @@
+{
+  "skill": "calculadora-processual",
+  "label": "Calculadora Processual",
+  "category": "core",
+  "description": "Tabelas e fórmulas para juros, correção monetária, honorários, custas e multas processuais.",
+  "output_type": "Memória de Cálculo (.docx)",
+  "steps": [
+    {
+      "id": "tipo_calculo",
+      "title": "Tipo de Cálculo",
+      "fields": [
+        {"key": "tipo", "label": "O que calcular?", "type": "select", "required": true, "options": ["Juros de mora + Correção monetária", "Honorários advocatícios (art. 85 CPC)", "Custas processuais", "Multa por litigância de má-fé (art. 80 CPC)", "Astreintes (multa coercitiva)", "Dano material + lucros cessantes", "Pensão mensal por ato ilícito", "Cálculo completo da condenação"]},
+        {"key": "natureza_obrigacao", "label": "Natureza da obrigação", "type": "select", "options": ["Contratual (responsabilidade subjetiva)", "Extracontratual (ato ilícito)", "Contra a Fazenda Pública (EC 113/2021)", "Trabalhista"]},
+        {"key": "valor_principal", "label": "Valor principal da condenação (R$)", "type": "text", "required": true, "placeholder": "R$ 0,00"},
+        {"key": "data_evento", "label": "Data do evento / fato gerador", "type": "text", "placeholder": "DD/MM/AAAA"},
+        {"key": "data_calculo", "label": "Data-base do cálculo", "type": "text", "placeholder": "DD/MM/AAAA (deixe em branco para hoje)"}
+      ]
+    },
+    {
+      "id": "parametros",
+      "title": "Parâmetros Específicos",
+      "fields": [
+        {"key": "indice_correcao", "label": "Índice de correção monetária", "type": "select", "options": ["IPCA-E (padrão cível privado)", "SELIC (Fazenda Pública — EC 113/2021)", "INPC", "IGP-M", "A definir pela decisão"]},
+        {"key": "taxa_juros", "label": "Taxa de juros de mora", "type": "select", "options": ["1% ao mês (Código Civil — extracontratual)", "Taxa SELIC (Fazenda Pública)", "Taxa contratual", "Outra"]},
+        {"key": "resultado_processo", "label": "Resultado do processo (para honorários)", "type": "select", "options": ["Procedência total", "Procedência parcial", "Improcedência", "Acordo", "Não se aplica"]},
+        {"key": "valor_causa_honorarios", "label": "Valor da causa ou condenação (para honorários)", "type": "text", "placeholder": "R$ 0,00"},
+        {"key": "observacoes", "label": "Observações adicionais", "type": "textarea"}
+      ]
+    }
+  ]
+}

@@ -1,5 +1,12 @@
-import type { Charge, Client, Contract, Quote } from "@e1p/shared-types";
-import { ArrowLeft, FileSignature, FileText, Gavel, Pencil, Receipt } from "lucide-react";
+import type {
+  Charge,
+  Client,
+  Contract,
+  FunnelRunSummary,
+  LegalDocumentSummary,
+  Quote,
+} from "@e1p/shared-types";
+import { ArrowLeft, FileSignature, FileText, Gavel, Pencil, Receipt, Workflow } from "lucide-react";
 import { useCallback, useEffect, useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
 import { api, apiErrorMessage } from "../../lib/api";
@@ -14,19 +21,25 @@ export default function ClientDetailPage() {
   const [charges, setCharges] = useState<Charge[]>([]);
   const [contracts, setContracts] = useState<Contract[]>([]);
   const [quotes, setQuotes] = useState<Quote[]>([]);
+  const [legalDocs, setLegalDocs] = useState<LegalDocumentSummary[]>([]);
+  const [journeys, setJourneys] = useState<FunnelRunSummary[]>([]);
   const [editing, setEditing] = useState(false);
 
   const load = useCallback(async () => {
-    const [c, ch, co, qu] = await Promise.all([
+    const [c, ch, co, qu, ld, jr] = await Promise.all([
       api.get<Client>(`/crm/clients/${id}`),
       api.get<Charge[]>(`/receivables/charges?client_id=${id}`),
       api.get<Contract[]>(`/contracts?client_id=${id}`),
       api.get<Quote[]>(`/quotes?client_id=${id}`),
+      api.get<LegalDocumentSummary[]>(`/juridico/documents?client_id=${id}`),
+      api.get<FunnelRunSummary[]>(`/funnels/runs?client_id=${id}`),
     ]);
     setClient(c.data);
     setCharges(ch.data);
     setContracts(co.data);
     setQuotes(qu.data);
+    setLegalDocs(ld.data);
+    setJourneys(jr.data);
   }, [id]);
 
   useEffect(() => {
@@ -130,6 +143,44 @@ export default function ClientDetailPage() {
                   <span className="ml-2 text-xs text-neutral-400">{brl(q.total_cents)}</span>
                 </button>
                 <StatusBadge status={q.status} />
+              </li>
+            ))}
+          </ul>
+        )}
+      </Section>
+
+      {/* Documentos jurídicos */}
+      <Section icon={<Gavel size={16} />} title={`Documentos jurídicos (${legalDocs.length})`}>
+        {legalDocs.length === 0 ? (
+          <Empty text="Nenhum documento jurídico vinculado." />
+        ) : (
+          <ul className="divide-y divide-neutral-100">
+            {legalDocs.map((d) => (
+              <li key={d.id} className="flex items-center justify-between py-2.5">
+                <button onClick={() => navigate(`/juridico/${d.id}`)} className="text-left text-sm font-medium text-neutral-700 hover:text-primary-600">
+                  {d.title}
+                  <span className="ml-2 text-xs text-neutral-400">{dt(d.created_at)}</span>
+                </button>
+                <StatusBadge status={d.status} />
+              </li>
+            ))}
+          </ul>
+        )}
+      </Section>
+
+      {/* Jornadas no funil (automação) */}
+      <Section icon={<Workflow size={16} />} title={`Jornadas no funil (${journeys.length})`}>
+        {journeys.length === 0 ? (
+          <Empty text="Este contato não está em nenhum funil." />
+        ) : (
+          <ul className="divide-y divide-neutral-100">
+            {journeys.map((j) => (
+              <li key={j.id} className="flex items-center justify-between py-2.5">
+                <button onClick={() => navigate(`/funis/${j.funnel_id}`)} className="text-left text-sm font-medium text-neutral-700 hover:text-primary-600">
+                  Funil
+                  <span className="ml-2 text-xs text-neutral-400">{j.step_count} passo(s) · {dt(j.created_at)}</span>
+                </button>
+                <StatusBadge status={j.status} />
               </li>
             ))}
           </ul>

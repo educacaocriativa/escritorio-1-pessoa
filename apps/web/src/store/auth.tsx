@@ -8,6 +8,7 @@ interface AuthContextValue {
   tenant: Tenant | null;
   isAuthenticated: boolean;
   login: (token: string, user: User, tenant: Tenant) => void;
+  updateUser: (user: User) => void;
   logout: () => void;
 }
 
@@ -40,6 +41,11 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     setTenant(tn);
   }, []);
 
+  const updateUser = useCallback((u: User) => {
+    localStorage.setItem(USER_KEY, JSON.stringify(u));
+    setUser(u);
+  }, []);
+
   const logout = useCallback(() => {
     localStorage.removeItem(TOKEN_KEY);
     localStorage.removeItem(USER_KEY);
@@ -63,7 +69,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   return (
     <AuthContext.Provider
-      value={{ token, user, tenant, isAuthenticated: Boolean(token), login, logout }}
+      value={{ token, user, tenant, isAuthenticated: Boolean(token), login, updateUser, logout }}
     >
       {children}
     </AuthContext.Provider>

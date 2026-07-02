@@ -1,0 +1,27 @@
+{
+  "skill": "prompt-forge-juridico",
+  "label": "Criador de Prompts Jurídicos",
+  "category": "magistrado",
+  "description": "Gera prompts otimizados para automatizar tarefas jurídicas com IA.",
+  "output_type": "Prompts Otimizados para IA (.docx)",
+  "steps": [
+    {
+      "id": "caso_uso",
+      "title": "Caso de Uso",
+      "fields": [
+        {"key": "tarefa", "label": "Que tarefa jurídica quer automatizar?", "type": "textarea", "required": true, "placeholder": "Ex: quero um prompt para gerar contestações em ações revisionais de financiamento"},
+        {"key": "tipo_documento", "label": "Tipo de documento a gerar", "type": "select", "options": ["Sentença / Decisão", "Despacho", "Petição / Contestação", "Recurso", "Análise / Parecer", "Relatório", "Outro"]},
+        {"key": "nivel_detalhe", "label": "Nível de detalhe do prompt", "type": "select", "options": ["Básico (uso geral)", "Avançado (com frameworks e protocolos)", "Expert (chain-of-thought + anti-alucinação"]}
+      ]
+    },
+    {
+      "id": "contexto",
+      "title": "Contexto Jurídico",
+      "fields": [
+        {"key": "area_direito", "label": "Área do Direito", "type": "text", "placeholder": "Ex: Direito do Consumidor, Bancário..."},
+        {"key": "exemplos", "label": "Exemplos de inputs que o prompt receberá", "type": "textarea", "placeholder": "Descreva que tipo de texto/dado será passado ao prompt..."},
+        {"key": "output_esperado", "label": "Formato do output esperado", "type": "textarea", "placeholder": "Ex: JSON com campos X, Y e Z; texto formatado com seções A, B e C..."}
+      ]
+    }
+  ]
+}

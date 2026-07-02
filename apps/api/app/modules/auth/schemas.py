@@ -81,9 +81,17 @@ class UserOut(BaseModel):
     allowed_modules: list[str]
     is_active: bool
     is_platform_admin: bool = False
+    document: str | None = None
+    address: str | None = None
+    phone: str | None = None
+    must_reset_password: bool = False
     created_at: datetime
 
     model_config = {"from_attributes": True}
+
+
+class ChangePasswordRequest(BaseModel):
+    new_password: str = Field(min_length=8, max_length=128)
 
 
 class SessionInfo(BaseModel):

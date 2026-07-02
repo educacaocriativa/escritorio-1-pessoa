@@ -2,9 +2,10 @@ import type { Client, FunnelComponentCategory } from "@e1p/shared-types";
 import html2canvas from "html2canvas";
 import {
   ArrowLeft, Download, GitBranch, type LucideIcon, Maximize2, MessageCircle, MousePointerClick,
-  Play, Save, Share2, Sparkles, Trash2, TrendingUp, Zap,
+  Play, Save, Share2, Sparkles, Trash2, TrendingUp, Workflow, Zap,
 } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
+import { AutomationFields, FunnelAutomationDrawer } from "./FunnelAutomation";
 import { useNavigate, useParams } from "react-router-dom";
 import ReactFlow, {
   addEdge,
@@ -24,7 +25,13 @@ import ReactFlow, {
 import "reactflow/dist/style.css";
 import { api, apiErrorMessage } from "../../lib/api";
 
-type NodeConfig = { subject?: string; body?: string; model?: string };
+type NodeConfig = {
+  subject?: string; body?: string; model?: string;
+  // Automação (lidos pelo motor): espera, condição (se-ou), valor e tag.
+  delay_value?: number; delay_unit?: "minutes" | "hours" | "days";
+  field?: "always" | "has_tag" | "is_paid"; value?: string;
+  amount_cents?: number; method?: "boleto" | "pix"; tag?: string;
+};
 type NodeData = {
   label: string; description: string; color: string; category: string; key: string;
   shape?: "page" | "node";
@@ -164,6 +171,7 @@ function Builder() {
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [editing, setEditing] = useState<string | null>(null);
   const [running, setRunning] = useState<string | null>(null);
+  const [showRuns, setShowRuns] = useState(false);
   const [toast, setToast] = useState<{ msg: string; type: "ok" | "err" } | null>(null);
 
   const [nodes, setNodes, onNodesChange] = useNodesState([]);
@@ -244,6 +252,15 @@ function Builder() {
       nds.map((n) => (n.id === selectedId ? { ...n, data: { ...n.data, ...patch } } : n)),
     );
   }
+  function updateSelectedConfig(patch: Partial<NodeConfig>) {
+    setNodes((nds) =>
+      nds.map((n) =>
+        n.id === selectedId
+          ? { ...n, data: { ...n.data, config: { ...n.data.config, ...patch } } }
+          : n,
+      ),
+    );
+  }
   function removeNode(nid: string) {
     setNodes((nds) => nds.filter((n) => n.id !== nid));
     setEdges((eds) => eds.filter((e) => e.source !== nid && e.target !== nid));
@@ -310,6 +327,12 @@ function Builder() {
             </button>
             <button onClick={() => setPresent(true)} className="flex items-center gap-1.5 rounded-pill bg-neutral-100 px-3 py-2 text-sm font-semibold text-neutral-600 hover:bg-neutral-200">
               <Maximize2 size={14} /> Apresentação
+            </button>
+            <button
+              onClick={async () => { if (!funnelId) await save(); setShowRuns(true); }}
+              className="flex items-center gap-1.5 rounded-pill bg-primary-50 px-3 py-2 text-sm font-semibold text-primary-600 hover:bg-primary-100"
+            >
+              <Workflow size={14} /> Automação
             </button>
             <button onClick={save} disabled={saving} className="flex items-center gap-1.5 rounded-pill bg-accent-400 px-4 py-2 text-sm font-semibold text-white hover:bg-accent-500 disabled:opacity-50">
               <Save size={14} /> {saving ? "Salvando..." : "Salvar"}
@@ -407,6 +430,9 @@ function Builder() {
                 <span className="mb-1 block text-xs font-medium text-neutral-600">Descrição</span>
                 <textarea value={selectedNode.data.description} onChange={(e) => updateSelected({ description: e.target.value })} rows={3} className="w-full rounded-lg border border-neutral-200 px-2 py-1.5 text-sm outline-none focus:border-primary-400" />
               </label>
+
+              <AutomationFields data={selectedNode.data} onChange={updateSelectedConfig} />
+
               <button
                 onClick={() => setEditing(selectedNode.id)}
                 className="mb-2 flex w-full items-center justify-center gap-1.5 rounded-pill bg-primary-500 py-2 text-sm font-semibold text-white hover:bg-primary-600"
@@ -466,6 +492,15 @@ function Builder() {
               />
             );
           })()}
+
+          {/* Drawer de automação: inscrever contato, jornadas e agendador */}
+          {showRuns && funnelId && (
+            <FunnelAutomationDrawer
+              funnelId={funnelId}
+              onClose={() => setShowRuns(false)}
+              onNotify={notify}
+            />
+          )}
 
           {/* Toast */}
           {toast && (

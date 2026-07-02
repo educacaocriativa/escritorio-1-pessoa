@@ -42,6 +42,13 @@ class User(Base, TimestampMixin):
     # Nível 1 (Master/plataforma): gerencia todas as contas. NÃO é o owner de um tenant comum.
     is_platform_admin: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
 
+    # Cadastro completo (usado no convite de novos usuários).
+    document: Mapped[str | None] = mapped_column(String(18), nullable=True)  # CPF
+    address: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    phone: Mapped[str | None] = mapped_column(String(32), nullable=True)  # WhatsApp
+    # True quando a senha foi gerada pela plataforma e o usuário deve trocá-la no 1º acesso.
+    must_reset_password: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+
     # Recuperação de senha: guardamos o HASH (sha256) do token, nunca o token cru.
     reset_token_hash: Mapped[str | None] = mapped_column(String(64), index=True, nullable=True)
     reset_token_expires: Mapped[datetime | None] = mapped_column(

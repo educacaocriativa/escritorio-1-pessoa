@@ -1,0 +1,35 @@
+{
+  "skill": "conciliacao-assistant",
+  "label": "Assistente de Conciliação",
+  "category": "magistrado",
+  "description": "Estratégia de acordo baseada em precedentes, cálculo de ZOPA/BATNA e minuta de termo de acordo.",
+  "output_type": "Estratégia de Conciliação + Minuta de Acordo (.docx)",
+  "steps": [
+    {
+      "id": "processo",
+      "title": "Dados do Processo",
+      "fields": [
+        {"key": "numero_processo", "label": "Número do processo", "type": "text"},
+        {"key": "tipo_acao", "label": "Tipo de ação", "type": "select", "required": true, "options": ["Indenização por danos morais/materiais", "Revisional de contrato", "Cobrança", "Acidente de trânsito", "Relação de consumo", "Locação", "Família (alimentos, guarda)", "Trabalhista", "Outra"]},
+        {"key": "fase_processual", "label": "Fase processual", "type": "select", "options": ["Inicial — antes da contestação", "Após contestação / Saneamento", "Instrução / Pós-AIJ", "Execução"]}
+      ]
+    },
+    {
+      "id": "valores",
+      "title": "Valores e Pedidos",
+      "fields": [
+        {"key": "pedido_autor", "label": "Valor total pedido pelo autor (R$)", "type": "text", "required": true, "placeholder": "R$ 0,00"},
+        {"key": "resistencia_reu", "label": "Posição do réu (valor que aceita pagar, se conhecido)", "type": "text", "placeholder": "R$ 0,00 (ou descreva a posição)"},
+        {"key": "probabilidade_procedencia", "label": "Estimativa de probabilidade de procedência", "type": "select", "options": ["Alta (>70%)", "Média (40-70%)", "Baixa (<40%)", "Incerta"]},
+        {"key": "fatos_relevantes", "label": "Fatos relevantes para a negociação", "type": "textarea", "required": true, "placeholder": "Descreva os pontos fortes e fracos de cada parte..."}
+      ]
+    },
+    {
+      "id": "uploads",
+      "title": "Peças do Processo",
+      "fields": [
+        {"key": "files", "label": "Petição inicial, contestação ou documentos relevantes", "type": "upload", "accept": ".pdf,.docx,.doc,.jpg,.jpeg,.png", "multiple": true}
+      ]
+    }
+  ]
+}

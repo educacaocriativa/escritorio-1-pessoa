@@ -1,0 +1,58 @@
+{
+  "skill": "sentenca-judicial-br",
+  "label": "Sentença Judicial",
+  "category": "core",
+  "description": "Gera minutas de sentença e decisões judiciais no padrão FIRAC-JB com anti-alucinação.",
+  "output_type": "Minuta de Sentença (.docx)",
+  "steps": [
+    {
+      "id": "processo",
+      "title": "Identificação do Processo",
+      "fields": [
+        {"key": "numero_processo", "label": "Número do processo (CNJ)", "type": "text", "required": true, "placeholder": "0000000-00.0000.0.00.0000"},
+        {"key": "vara", "label": "Vara / Juízo", "type": "text", "required": true, "placeholder": "2ª Vara Cível de ..."},
+        {"key": "comarca", "label": "Comarca / Subseção", "type": "text", "required": true},
+        {"key": "tipo_acao", "label": "Tipo de ação", "type": "select", "required": true, "options": ["Ação de Indenização por Danos Morais/Materiais", "Ação Revisional de Contrato", "Ação de Cobrança", "Ação de Obrigação de Fazer/Não Fazer", "Ação de Rescisão Contratual", "Ação Consumerista", "Ação de Locação", "Outra"]}
+      ]
+    },
+    {
+      "id": "partes",
+      "title": "Partes do Processo",
+      "fields": [
+        {"key": "autor_nome", "label": "Nome do Autor / Requerente", "type": "text", "required": true},
+        {"key": "autor_qualificacao", "label": "Qualificação do Autor (CPF/CNPJ, endereço)", "type": "text"},
+        {"key": "reu_nome", "label": "Nome do Réu / Requerido", "type": "text", "required": true},
+        {"key": "reu_qualificacao", "label": "Qualificação do Réu (CPF/CNPJ, endereço)", "type": "text"},
+        {"key": "advogados", "label": "Advogados das partes (nome e OAB)", "type": "textarea"}
+      ]
+    },
+    {
+      "id": "fatos",
+      "title": "Relatório dos Fatos",
+      "fields": [
+        {"key": "fatos", "label": "Descreva os fatos do caso (relatório completo)", "type": "textarea", "required": true, "placeholder": "Descreva cronologicamente o que aconteceu, incluindo datas relevantes..."},
+        {"key": "pedidos_autor", "label": "Pedidos do Autor", "type": "textarea", "required": true, "placeholder": "Liste todos os pedidos feitos pelo autor na petição inicial..."},
+        {"key": "defesa_reu", "label": "Defesa do Réu / Contestação", "type": "textarea", "placeholder": "Resuma os argumentos de defesa apresentados pelo réu..."},
+        {"key": "provas_produzidas", "label": "Provas produzidas nos autos", "type": "textarea", "placeholder": "Ex: documentos, testemunhas, perícia laudo X, depoimento pessoal..."}
+      ]
+    },
+    {
+      "id": "juridico",
+      "title": "Questões Jurídicas",
+      "fields": [
+        {"key": "questoes_direito", "label": "Principais questões de direito a decidir", "type": "textarea", "required": true, "placeholder": "Ex: responsabilidade civil, cláusula abusiva, dano moral configurado..."},
+        {"key": "tutela_urgencia", "label": "Há tutela de urgência deferida/indeferida nos autos?", "type": "select", "options": ["Não", "Sim — deferida (confirmar)", "Sim — deferida (revogar)", "Sim — indeferida (manter)", "Sim — indeferida (deferir agora"]},
+        {"key": "valor_causa", "label": "Valor da causa", "type": "text", "placeholder": "R$ 0,00"},
+        {"key": "observacoes", "label": "Observações adicionais para o juiz de IA", "type": "textarea"}
+      ]
+    },
+    {
+      "id": "uploads",
+      "title": "Documentos dos Autos",
+      "description": "Envie a petição inicial, contestação e principais provas. O sistema extrai o texto automaticamente.",
+      "fields": [
+        {"key": "files", "label": "Petição inicial, contestação, laudos, provas (PDF, Word, imagens)", "type": "upload", "accept": ".pdf,.docx,.doc,.jpg,.jpeg,.png", "multiple": true}
+      ]
+    }
+  ]
+}

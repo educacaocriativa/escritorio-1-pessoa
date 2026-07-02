@@ -1,0 +1,26 @@
+{
+  "skill": "n8n-workflow-generator",
+  "label": "Gerador de Workflows n8n",
+  "category": "automacao",
+  "description": "Gera workflows n8n em JSON para automação de processos jurídicos.",
+  "output_type": "Workflow n8n (JSON + documentação) (.docx)",
+  "steps": [
+    {
+      "id": "workflow",
+      "title": "Descrição do Workflow",
+      "fields": [
+        {"key": "objetivo", "label": "O que o workflow deve fazer?", "type": "textarea", "required": true, "placeholder": "Ex: monitorar DJE diariamente, extrair publicações, enviar por e-mail para os advogados"},
+        {"key": "trigger", "label": "Como o workflow é acionado?", "type": "select", "options": ["Cron (agendamento automático)", "Webhook (chamada externa)", "Manual", "Email recebido", "Outro"]},
+        {"key": "integrações", "label": "Sistemas integrados", "type": "textarea", "placeholder": "Ex: Gmail, Google Sheets, Notion, WhatsApp, sistema do tribunal..."}
+      ]
+    },
+    {
+      "id": "detalhes",
+      "title": "Detalhes Técnicos",
+      "fields": [
+        {"key": "nodes_necessarios", "label": "Nodes n8n que quer usar (se souber)", "type": "textarea", "placeholder": "Ex: HTTP Request, Google Sheets, AI Agent, IF, Loop..."},
+        {"key": "nivel_complexidade", "label": "Nível de complexidade", "type": "select", "options": ["Simples (3-5 nodes)", "Médio (6-15 nodes)", "Avançado (15+ nodes com ramificações"]}
+      ]
+    }
+  ]
+}

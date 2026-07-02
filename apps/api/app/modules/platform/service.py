@@ -7,15 +7,21 @@ as linhas globais.
 from __future__ import annotations
 
 from sqlalchemy import select, text
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
+from app.core.security import hash_password
 from app.db.base import TenantMixin
 from app.db.registry import Base  # importa todos os modelos -> registra as tabelas
 from app.db.session import tenant_session
 from app.modules.auth.models import Tenant, User
-from app.modules.auth.schemas import RegisterRequest
-from app.modules.auth.service import register_tenant
-from app.modules.platform.schemas import UpdateAccountRequest
+from app.modules.auth.service import AuthError
+from app.modules.platform.schemas import (
+    CreateAccountRequest,
+    CreateStaffRequest,
+    UpdateAccountRequest,
+    UpdateUserRequest,
+)
 
 
 def _business_table_names() -> set[str]:
@@ -67,8 +73,44 @@ def list_accounts(db: Session) -> list[tuple[Tenant, User | None]]:
     return out
 
 
-def create_account(db: Session, data: RegisterRequest) -> tuple[Tenant, User]:
-    return register_tenant(db, data)
+def create_account(db: Session, data: CreateAccountRequest) -> tuple[Tenant, User, str, str]:
+    """Cria escritório + dono via CONVITE: gera senha temporária, marca troca no 1º acesso e a
+    envia por e-mail/WhatsApp. Devolve (tenant, dono, senha_temporária, status_do_envio)."""
+    email = str(data.email).lower()
+    if db.scalar(select(Tenant).where(Tenant.slug == data.slug)):
+        raise AuthError("Este subdomínio já está em uso", 409)
+    if db.scalar(select(User).where(User.email == email)):
+        raise AuthError("Este e-mail já está cadastrado", 409)
+
+    temp = _temp_password()
+    tenant = Tenant(slug=data.slug, legal_name=data.legal_name, document=data.document)
+    db.add(tenant)
+    db.flush()
+    owner = User(
+        tenant_id=tenant.id,
+        email=email,
+        name=data.name,
+        password_hash=hash_password(temp),
+        role="owner",
+        allowed_modules=[],
+        document=data.document,
+        address=data.address,
+        phone=data.phone,
+        must_reset_password=True,
+    )
+    db.add(owner)
+    try:
+        db.commit()
+    except IntegrityError as e:
+        db.rollback()
+        raise AuthError("Subdomínio ou e-mail já cadastrado", 409) from e
+    db.refresh(tenant)
+    db.refresh(owner)
+    status = _send_invite(
+        name=data.name, email=email, phone=data.phone, temp=temp,
+        delivery=data.delivery, company=tenant.legal_name,
+    )
+    return tenant, owner, temp, status
 
 
 def get_user(db: Session, user_id: str) -> User:
@@ -114,3 +156,153 @@ def delete_account(db: Session, tenant_id: str) -> None:
                 )
         tdb.execute(text("DELETE FROM users WHERE tenant_id = :tid"), {"tid": tenant_id})
         tdb.execute(text("DELETE FROM tenants WHERE id = :tid"), {"tid": tenant_id})
+
+
+# ── Hierarquia de usuários: Super Admin vê/edita/exclui todos ────────────────
+def _customers_of(db: Session, tenant_id: str) -> list[dict]:
+    """Clientes compradores de um escritório, vindos das matrículas (Enrollment), deduplicados.
+
+    Hoje o comprador vive em Enrollment (não é um User de login). Agregamos por e-mail (ou nome,
+    quando não há e-mail) e contamos quantas compras cada um fez.
+    """
+    from app.modules.products.models import Enrollment
+
+    rows = db.scalars(
+        select(Enrollment).where(Enrollment.tenant_id == tenant_id)
+    ).all()
+    by_key: dict[str, dict] = {}
+    for e in rows:
+        key = (e.email or e.name or "").strip().lower()
+        if not key:
+            continue
+        if key in by_key:
+            by_key[key]["purchases"] += 1
+        else:
+            by_key[key] = {"name": e.name, "email": e.email, "purchases": 1}
+    return sorted(by_key.values(), key=lambda c: c["name"].lower())
+
+
+def list_tenant_users(db: Session) -> list[dict]:
+    """Hierarquia completa: cada escritório (Admin) com seus funcionários e clientes.
+
+    Exclui as contas internas da plataforma (Master). Estrutura espelha o que o Super Admin vê:
+    escritório → Admin (dono) → funcionários (sub_user) + clientes (compradores).
+    """
+    tenants = list(db.scalars(select(Tenant).order_by(Tenant.created_at.desc())).all())
+    out: list[dict] = []
+    for t in tenants:
+        users = list(db.scalars(select(User).where(User.tenant_id == t.id)).all())
+        admin = next((u for u in users if u.role == "owner"), None)
+        if admin and admin.is_platform_admin:
+            continue  # conta interna da plataforma, não aparece na lista
+        staff = [u for u in users if u.role != "owner" and not u.is_platform_admin]
+        customers = _customers_of(db, t.id)
+        out.append({
+            "tenant": t,
+            "admin": admin,
+            "staff": staff,
+            "customers": customers,
+            "staff_count": len(staff),
+            "customer_count": len(customers),
+        })
+    return out
+
+
+def list_customers(db: Session) -> list[dict]:
+    """Todos os clientes compradores da plataforma (visão do Master), com o escritório de origem."""
+    tenants = list(db.scalars(select(Tenant).order_by(Tenant.legal_name)).all())
+    out: list[dict] = []
+    for t in tenants:
+        owner = _owner_of(db, t.id)
+        if owner and owner.is_platform_admin:
+            continue
+        for c in _customers_of(db, t.id):
+            out.append({**c, "tenant_id": t.id, "tenant_name": t.legal_name})
+    return out
+
+
+def _temp_password() -> str:
+    """Senha temporária legível (~12 chars). O usuário a troca no 1º acesso."""
+    import secrets
+
+    return secrets.token_urlsafe(9)
+
+
+def _send_invite(
+    *, name: str, email: str, phone: str, temp: str, delivery: str, company: str
+) -> str:
+    """Entrega a senha temporária por e-mail ou WhatsApp. Devolve o status do envio."""
+    from app.core import whatsapp
+    from app.core.email import send_email
+
+    msg = (
+        f"Olá, {name}! Seu acesso à plataforma ({company}) foi criado.\n"
+        f"Login (e-mail): {email}\n"
+        f"Senha temporária: {temp}\n\n"
+        "Por segurança, você deverá definir uma nova senha no primeiro acesso."
+    )
+    if delivery == "whatsapp":
+        return whatsapp.send_text(to=phone, text=msg)
+    return send_email(to=email, subject="Seu acesso à plataforma", body=msg)
+
+
+def create_staff(db: Session, tenant_id: str, data: CreateStaffRequest) -> tuple[User, str, str]:
+    """Cria um funcionário (sub_user) com cadastro completo, gera senha temporária e a envia
+    por e-mail/WhatsApp. Devolve (usuário, senha_temporária, status_do_envio). E-mail é único."""
+    tenant = db.get(Tenant, tenant_id)
+    if tenant is None:
+        raise PlatformError("Conta não encontrada", 404)
+    email = str(data.email).lower()
+    if db.scalar(select(User).where(User.email == email)):
+        raise AuthError("Este e-mail já está cadastrado", 409)
+
+    temp = _temp_password()
+    user = User(
+        tenant_id=tenant_id,
+        email=email,
+        name=data.name,
+        password_hash=hash_password(temp),
+        role="sub_user",
+        allowed_modules=data.allowed_modules,
+        document=data.document,
+        address=data.address,
+        phone=data.phone,
+        must_reset_password=True,
+    )
+    db.add(user)
+    db.commit()
+    db.refresh(user)
+
+    status = _send_invite(
+        name=data.name, email=email, phone=data.phone, temp=temp,
+        delivery=data.delivery, company=tenant.legal_name,
+    )
+    return user, temp, status
+
+
+def update_user(db: Session, user_id: str, data: UpdateUserRequest) -> User:
+    user = get_user(db, user_id)
+    if user.is_platform_admin:
+        raise PlatformError("Não é possível editar o administrador da plataforma por aqui", 400)
+    if data.name is not None:
+        user.name = data.name
+    if data.is_active is not None:
+        user.is_active = data.is_active
+    if data.allowed_modules is not None:
+        user.allowed_modules = data.allowed_modules
+    db.commit()
+    db.refresh(user)
+    return user
+
+
+def delete_user(db: Session, user_id: str) -> None:
+    """Exclui UM usuário. O dono (owner) só sai junto com a conta inteira (delete_account)."""
+    user = get_user(db, user_id)
+    if user.is_platform_admin:
+        raise PlatformError("Não é possível excluir o administrador da plataforma", 400)
+    if user.role == "owner":
+        raise PlatformError(
+            "Este é o dono da conta — exclua a conta inteira para removê-lo", 400
+        )
+    db.delete(user)
+    db.commit()

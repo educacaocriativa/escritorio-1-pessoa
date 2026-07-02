@@ -1,0 +1,38 @@
+{
+  "skill": "checklist-saneamento",
+  "label": "Checklist de Saneamento",
+  "category": "magistrado",
+  "description": "Checklist completo art. 357 CPC e gerador de decisão saneadora com todos os 5 incisos.",
+  "output_type": "Decisão Saneadora (art. 357 CPC) (.docx)",
+  "steps": [
+    {
+      "id": "processo",
+      "title": "Dados do Processo",
+      "fields": [
+        {"key": "numero_processo", "label": "Número do processo", "type": "text", "required": true},
+        {"key": "partes", "label": "Partes", "type": "text", "required": true},
+        {"key": "tipo_acao", "label": "Tipo de ação", "type": "text", "required": true}
+      ]
+    },
+    {
+      "id": "saneamento",
+      "title": "Elementos do Saneamento (art. 357 CPC)",
+      "fields": [
+        {"key": "preliminares_pendentes", "label": "Há preliminares pendentes de análise? (art. 337 CPC)", "type": "textarea", "placeholder": "Ex: ilegitimidade passiva alegada, inépcia da inicial, prescrição..."},
+        {"key": "fatos_controvertidos", "label": "Fatos controvertidos que precisam de prova", "type": "textarea", "required": true, "placeholder": "Liste os pontos que ainda precisam ser provados por cada parte..."},
+        {"key": "fatos_incontroversos", "label": "Fatos incontroversos (admitidos ou incontroversos)", "type": "textarea"},
+        {"key": "provas_deferidas", "label": "Provas a deferir", "type": "textarea", "placeholder": "Ex: pericia contabil, oitiva de 2 testemunhas por parte, depoimento pessoal do réu..."},
+        {"key": "peritos_auxiliares", "label": "Necessita de perito? Qual área?", "type": "text"},
+        {"key": "questoes_direito", "label": "Questões de direito que delimitarão a instrução", "type": "textarea"},
+        {"key": "distribuicao_onus", "label": "Distribuição do ônus da prova (art. 373 CPC)", "type": "textarea", "placeholder": "Especifique se haverá inversão ou distribuição dinâmica..."}
+      ]
+    },
+    {
+      "id": "uploads",
+      "title": "Peças do Processo",
+      "fields": [
+        {"key": "files", "label": "Petição inicial e contestação (para análise automática do CAPPD)", "type": "upload", "accept": ".pdf,.docx,.doc,.jpg,.jpeg,.png", "multiple": true}
+      ]
+    }
+  ]
+}

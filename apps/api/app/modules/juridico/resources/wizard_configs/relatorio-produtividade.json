@@ -1,0 +1,43 @@
+{
+  "skill": "relatorio-produtividade",
+  "label": "Relatório de Produtividade (CNJ)",
+  "category": "magistrado",
+  "description": "Relatório com métricas CNJ (Metas 1/2/4), análise de acervo, gargalos e plano de ação.",
+  "output_type": "Relatório de Produtividade Judicial (.docx)",
+  "steps": [
+    {
+      "id": "identificacao",
+      "title": "Identificação da Unidade",
+      "fields": [
+        {"key": "vara", "label": "Vara / Unidade Judiciária", "type": "text", "required": true},
+        {"key": "tribunal", "label": "Tribunal", "type": "text", "required": true},
+        {"key": "periodo", "label": "Período de referência", "type": "text", "required": true, "placeholder": "Ex: Janeiro a Junho/2026"},
+        {"key": "magistrado", "label": "Nome do magistrado", "type": "text"}
+      ]
+    },
+    {
+      "id": "metricas",
+      "title": "Dados de Produtividade",
+      "fields": [
+        {"key": "acervo_inicio", "label": "Acervo no início do período", "type": "text", "placeholder": "Número de processos"},
+        {"key": "acervo_fim", "label": "Acervo no fim do período", "type": "text"},
+        {"key": "sentencas_proferidas", "label": "Sentenças proferidas no período", "type": "text"},
+        {"key": "decisoes_interlocutorias", "label": "Decisões interlocutórias", "type": "text"},
+        {"key": "despachos", "label": "Despachos proferidos", "type": "text"},
+        {"key": "audiencias_realizadas", "label": "Audiências realizadas", "type": "text"},
+        {"key": "acordos_homologados", "label": "Acordos homologados", "type": "text"},
+        {"key": "processos_baixados", "label": "Processos baixados (arquivados)", "type": "text"},
+        {"key": "meta_cnj", "label": "Metas CNJ a reportar", "type": "select", "options": ["Meta 1 (julgamentos > distribuições)", "Meta 2 (processos mais antigos)", "Meta 4 (celeridade na execução)", "Todas as Metas"], "multiple": true}
+      ]
+    },
+    {
+      "id": "analise",
+      "title": "Gargalos e Observações",
+      "fields": [
+        {"key": "gargalos", "label": "Principais gargalos identificados", "type": "textarea", "placeholder": "Ex: acúmulo em fase de execução, pendência de laudos periciais..."},
+        {"key": "acoes_realizadas", "label": "Ações realizadas para melhora de desempenho", "type": "textarea"},
+        {"key": "metas_proximo_periodo", "label": "Metas para o próximo período", "type": "textarea"}
+      ]
+    }
+  ]
+}

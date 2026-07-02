@@ -12,6 +12,7 @@ from app.modules.contracts.router import public_router as contracts_public_route
 from app.modules.contracts.router import router as contracts_router
 from app.modules.crm.router import router as crm_router
 from app.modules.funnels.router import router as funnels_router
+from app.modules.juridico.router import router as juridico_router
 from app.modules.marketing.router import router as marketing_router
 from app.modules.notifications.router import router as notifications_router
 from app.modules.pages.router import public_router as pages_public_router
@@ -42,6 +43,7 @@ ALL_ROUTERS: list[APIRouter] = [
     contracts_router,
     contracts_public_router,
     marketing_router,
+    juridico_router,
     funnels_router,
     stock_router,
     settings_router,

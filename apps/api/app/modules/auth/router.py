@@ -11,6 +11,7 @@ from app.db.session import get_db
 from app.modules.auth.models import Tenant, User
 from app.modules.auth.schemas import (
     AuthToken,
+    ChangePasswordRequest,
     ForgotPasswordRequest,
     LoginRequest,
     RegisterRequest,
@@ -25,6 +26,7 @@ from app.modules.auth.service import (
     register_tenant,
     request_password_reset,
     reset_password,
+    set_own_password,
 )
 
 router = APIRouter(prefix="/auth", tags=["auth"])
@@ -84,6 +86,21 @@ def reset_password_route(data: ResetPasswordRequest, db: Session = Depends(get_d
     except AuthError as e:
         raise HTTPException(status_code=e.status_code, detail=str(e)) from e
     return {"message": "Senha redefinida com sucesso."}
+
+
+@router.post("/change-password", response_model=SessionInfo)
+def change_password(
+    data: ChangePasswordRequest,
+    current: CurrentUser = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> SessionInfo:
+    """Troca a própria senha (usado no 1º acesso, com senha temporária). Limpa o flag."""
+    try:
+        user = set_own_password(db, current.user_id, data.new_password)
+    except AuthError as e:
+        raise HTTPException(status_code=e.status_code, detail=str(e)) from e
+    tenant = db.get(Tenant, user.tenant_id)
+    return SessionInfo(user=UserOut.model_validate(user), tenant=TenantOut.model_validate(tenant))
 
 
 @router.get("/me", response_model=SessionInfo)

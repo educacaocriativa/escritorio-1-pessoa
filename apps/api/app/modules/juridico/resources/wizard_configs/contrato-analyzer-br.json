@@ -1,0 +1,26 @@
+{
+  "skill": "contrato-analyzer-br",
+  "label": "Análise de Contrato",
+  "category": "magistrado",
+  "description": "Analisa contratos com checklists por tipo, identifica cláusulas abusivas e pontos de atenção.",
+  "output_type": "Análise Contratual Estruturada (.docx)",
+  "steps": [
+    {
+      "id": "contrato",
+      "title": "Dados do Contrato",
+      "fields": [
+        {"key": "tipo_contrato", "label": "Tipo de contrato", "type": "select", "required": true, "options": ["Contrato de Consumo (CDC)", "Contrato de Financiamento / Crédito", "Contrato de Locação (Lei 8.245/91)", "Contrato de Prestação de Serviços", "Contrato de Compra e Venda", "Contrato de Trabalho", "Contrato de Seguro", "Contrato Societário", "Outro"]},
+        {"key": "partes", "label": "Partes contratantes", "type": "text", "placeholder": "Ex: Empresa X (contratante) e Fulano (contratado)"},
+        {"key": "valor_contrato", "label": "Valor do contrato", "type": "text"},
+        {"key": "finalidade_analise", "label": "Finalidade da análise", "type": "select", "options": ["Identificar cláusulas abusivas (CDC)", "Subsidiar sentença", "Elaborar petição", "Due diligence / Revisão prévia", "Rescisão contratual"]}
+      ]
+    },
+    {
+      "id": "uploads",
+      "title": "Contrato para Análise",
+      "fields": [
+        {"key": "files", "label": "Contrato completo (PDF ou Word)", "type": "upload", "accept": ".pdf,.docx,.doc,.jpg,.jpeg,.png", "multiple": true, "required": true}
+      ]
+    }
+  ]
+}

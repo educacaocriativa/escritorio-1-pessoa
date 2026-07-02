@@ -1,0 +1,35 @@
+{
+  "skill": "jurisprudencia-miner",
+  "label": "Pesquisa Jurisprudencial",
+  "category": "core",
+  "description": "Pesquisa precedentes do STJ, STF e TJs com protocolo anti-alucinação de 3 níveis.",
+  "output_type": "Relatório de Jurisprudência (.docx)",
+  "steps": [
+    {
+      "id": "tema",
+      "title": "Tema da Pesquisa",
+      "fields": [
+        {"key": "tema_principal", "label": "Tema jurídico principal", "type": "text", "required": true, "placeholder": "Ex: dano moral por negativação indevida"},
+        {"key": "area_direito", "label": "Área do Direito", "type": "select", "required": true, "options": ["Direito do Consumidor", "Direito Civil — Responsabilidade Civil", "Direito Contratual", "Direito Bancário", "Direito de Família", "Direito Trabalhista", "Direito Tributário", "Direito Ambiental", "Direito Penal", "Direito Administrativo", "Direito Processual Civil", "Outra"]},
+        {"key": "tribunais", "label": "Tribunais de interesse", "type": "select", "options": ["STJ + STF (preferencial)", "STJ", "STF", "TJ do Estado", "TRF (Federal)", "Todos"]},
+        {"key": "contexto_uso", "label": "Para que será usada a pesquisa?", "type": "select", "options": ["Fundamentar sentença/decisão", "Elaborar petição", "Validar tese", "Parecer / Consulta", "Artigo acadêmico"]}
+      ]
+    },
+    {
+      "id": "refinamento",
+      "title": "Refinamento da Pesquisa",
+      "fields": [
+        {"key": "questoes_especificas", "label": "Questões específicas a responder", "type": "textarea", "placeholder": "Ex: qual o valor médio de dano moral para negativação indevida? Há súmula aplicável?"},
+        {"key": "fatos_caso", "label": "Resumo dos fatos do caso concreto (para contextualizar)", "type": "textarea", "placeholder": "Descreva brevemente os fatos para que a pesquisa seja direcionada..."},
+        {"key": "tese_pretendida", "label": "Tese que pretende sustentar (opcional)", "type": "textarea"}
+      ]
+    },
+    {
+      "id": "uploads",
+      "title": "Documentos de Referência (Opcional)",
+      "fields": [
+        {"key": "files", "label": "Peças ou decisões relevantes para contextualizar a pesquisa", "type": "upload", "accept": ".pdf,.docx,.doc,.jpg,.jpeg,.png", "multiple": true}
+      ]
+    }
+  ]
+}

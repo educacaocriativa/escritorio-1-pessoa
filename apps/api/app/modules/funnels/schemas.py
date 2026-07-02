@@ -69,3 +69,49 @@ class RunNodeResult(BaseModel):
     message: str
     kind: str = ""
     ref_id: str | None = None
+
+
+# ── Automação: jornadas (FunnelRun) ─────────────────────────────────────────
+class EnrollRequest(BaseModel):
+    client_id: str | None = None
+    start_node_id: str | None = None  # opcional; se ausente, usa o nó de entrada do funil
+
+
+class RunStep(BaseModel):
+    node_id: str | None = None
+    key: str = ""
+    action: str = ""
+    status: str = ""
+    message: str = ""
+    at: str = ""
+
+
+class FunnelRunOut(BaseModel):
+    id: str
+    tenant_id: str
+    funnel_id: str
+    client_id: str | None
+    client_name: str | None = None
+    status: str
+    current_node_id: str | None
+    resume_at: datetime | None
+    steps: list[RunStep]
+    error: str
+    created_at: datetime
+    updated_at: datetime
+
+
+class FunnelRunSummary(BaseModel):
+    id: str
+    funnel_id: str
+    client_id: str | None
+    client_name: str | None = None
+    status: str
+    resume_at: datetime | None
+    step_count: int
+    created_at: datetime
+
+
+class TickResult(BaseModel):
+    resumed: int
+    checked: int

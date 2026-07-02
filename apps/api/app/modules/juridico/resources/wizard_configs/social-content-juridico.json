@@ -1,0 +1,28 @@
+{
+  "skill": "social-content-juridico",
+  "label": "Conteúdo Jurídico para Redes Sociais",
+  "category": "criacao",
+  "description": "Cria posts, carrosséis e scripts de Reels jurídicos para LinkedIn e Instagram.",
+  "output_type": "Conteúdo para Redes Sociais (.docx)",
+  "steps": [
+    {
+      "id": "conteudo",
+      "title": "Sobre o Conteúdo",
+      "fields": [
+        {"key": "tema", "label": "Tema jurídico do conteúdo", "type": "text", "required": true, "placeholder": "Ex: direitos do consumidor, prazo para reclamar vício, multa de trânsito..."},
+        {"key": "plataforma", "label": "Plataforma de destino", "type": "select", "required": true, "options": ["LinkedIn (texto longo + imagem)", "Instagram — Post (legenda)", "Instagram — Carrossel (slides)", "Instagram / TikTok — Reels (script)", "Todas as plataformas"]},
+        {"key": "publico", "label": "Público-alvo", "type": "select", "options": ["Advogados e operadores do Direito", "Cidadãos / consumidores em geral", "Empresários / gestores", "Estudantes de Direito", "Misto"]},
+        {"key": "tom", "label": "Tom do conteúdo", "type": "select", "options": ["Educativo e didático", "Profissional e técnico", "Descontraído e acessível", "Alerta / Cuidado jurídico"]}
+      ]
+    },
+    {
+      "id": "detalhes",
+      "title": "Detalhes do Conteúdo",
+      "fields": [
+        {"key": "mensagem_principal", "label": "Mensagem principal a transmitir", "type": "textarea", "required": true, "placeholder": "O que você quer que o leitor aprenda ou faça após ler o conteúdo?"},
+        {"key": "cta", "label": "Call to Action (CTA)", "type": "text", "placeholder": "Ex: Consulte um advogado, Salve este post, Siga para mais dicas..."},
+        {"key": "numero_slides", "label": "Número de slides (para carrossel)", "type": "text", "placeholder": "Ex: 8 slides"}
+      ]
+    }
+  ]
+}

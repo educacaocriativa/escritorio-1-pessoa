@@ -1,0 +1,27 @@
+{
+  "skill": "lex-rag-builder",
+  "label": "RAG Jurídico (Base de Conhecimento)",
+  "category": "automacao",
+  "description": "Pipeline para construção de base vetorial jurídica com documentos do escritório/tribunal.",
+  "output_type": "Plano de Implementação RAG + Documentação (.docx)",
+  "steps": [
+    {
+      "id": "projeto",
+      "title": "Projeto RAG",
+      "fields": [
+        {"key": "tipo_base", "label": "Tipo de base de conhecimento", "type": "select", "required": true, "options": ["Jurisprudência do tribunal", "Legislação e normas", "Contratos do escritório", "Pareceres e memorandos", "Base mista (múltiplas fontes)"]},
+        {"key": "volume_documentos", "label": "Volume estimado de documentos", "type": "select", "options": ["Pequeno (< 100 docs)", "Médio (100-1000 docs)", "Grande (> 1000 docs)"]},
+        {"key": "plataforma", "label": "Plataforma de vector store", "type": "select", "options": ["Supabase (pgvector)", "Qdrant", "Pinecone", "ChromaDB (local)", "Outro / A definir"]}
+      ]
+    },
+    {
+      "id": "configuracao",
+      "title": "Configuração Técnica",
+      "fields": [
+        {"key": "modelo_embedding", "label": "Modelo de embedding", "type": "select", "options": ["text-embedding-3-small (OpenAI)", "text-embedding-3-large (OpenAI)", "voyage-law-2 (Voyage AI)", "Outro"]},
+        {"key": "chunking_strategy", "label": "Estratégia de chunking", "type": "select", "options": ["Por parágrafo", "Por seção/artigo", "Tamanho fixo (512 tokens)", "Semântico (auto)"]},
+        {"key": "requisitos_adicionais", "label": "Requisitos adicionais do projeto", "type": "textarea"}
+      ]
+    }
+  ]
+}

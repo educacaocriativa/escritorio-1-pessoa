@@ -1,0 +1,18 @@
+{
+  "skill": "n8n-legal-config",
+  "label": "Configuração de Nodes n8n Jurídicos",
+  "category": "automacao",
+  "description": "Configuração otimizada de nodes n8n para fluxos jurídicos com AI Agent node.",
+  "output_type": "Guia de Configuração n8n (.docx)",
+  "steps": [
+    {
+      "id": "node",
+      "title": "Node a Configurar",
+      "fields": [
+        {"key": "tipo_node", "label": "Tipo de node n8n", "type": "select", "required": true, "options": ["AI Agent node (LangChain)", "HTTP Request (API de tribunal)", "Google Sheets (controle de prazos)", "Send Email (notificações)", "Webhook (receber dados)", "Code node (JavaScript)", "IF / Switch (lógica condicional)", "Loop Over Items", "Outro"]},
+        {"key": "objetivo_node", "label": "O que este node deve fazer?", "type": "textarea", "required": true},
+        {"key": "contexto_workflow", "label": "Contexto do workflow em que está inserido", "type": "textarea"}
+      ]
+    }
+  ]
+}

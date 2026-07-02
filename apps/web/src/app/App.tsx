@@ -1,6 +1,7 @@
 import { Navigate, Outlet, Route, Routes } from "react-router-dom";
 import AdminDashboard from "../features/admin/AdminDashboard";
 import AgendaPage from "../features/agenda/AgendaPage";
+import FirstAccessPage from "../features/auth/FirstAccessPage";
 import LoginPage from "../features/auth/LoginPage";
 import CockpitPage from "../features/cockpit/CockpitPage";
 import ConfiguracoesPage from "../features/config/ConfiguracoesPage";
@@ -14,6 +15,9 @@ import EstoquePage from "../features/estoque/EstoquePage";
 import FinanceiroPage from "../features/financeiro/FinanceiroPage";
 import FunisPage from "../features/funis/FunisPage";
 import FunnelBuilderPage from "../features/funis/FunnelBuilderPage";
+import JuridicoDocumentPage from "../features/juridico/JuridicoDocumentPage";
+import JuridicoPage from "../features/juridico/JuridicoPage";
+import JuridicoWizardPage from "../features/juridico/JuridicoWizardPage";
 import CarrosselBuilderPage from "../features/marketing/CarrosselBuilderPage";
 import MarketingPage from "../features/marketing/MarketingPage";
 import PagarPage from "../features/pagar/PagarPage";
@@ -58,6 +62,9 @@ export default function App() {
           <Route path="/marketing" element={<MarketingPage />} />
           <Route path="/marketing/novo" element={<CarrosselBuilderPage />} />
           <Route path="/marketing/:id" element={<CarrosselBuilderPage />} />
+          <Route path="/juridico" element={<JuridicoPage />} />
+          <Route path="/juridico/novo" element={<JuridicoWizardPage />} />
+          <Route path="/juridico/:id" element={<JuridicoDocumentPage />} />
           <Route path="/funis" element={<FunisPage />} />
           <Route path="/funis/novo" element={<FunnelBuilderPage />} />
           <Route path="/funis/:id" element={<FunnelBuilderPage />} />
@@ -75,8 +82,10 @@ function LoginRoute() {
 }
 
 function ProtectedLayout() {
-  const { isAuthenticated } = useAuth();
+  const { isAuthenticated, user } = useAuth();
   if (!isAuthenticated) return <Navigate to="/login" replace />;
+  // 1º acesso: bloqueia o app até o usuário trocar a senha temporária.
+  if (user?.must_reset_password) return <FirstAccessPage />;
   return (
     <PageActionsProvider>
       <AppShell>

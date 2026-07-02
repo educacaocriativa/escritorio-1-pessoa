@@ -1,0 +1,37 @@
+{
+  "skill": "academic-writer-br",
+  "label": "Escritor Acadêmico Jurídico",
+  "category": "pesquisador",
+  "description": "Escrita acadêmica jurídica com normas ABNT completas. Artigos, dissertações, monografias.",
+  "output_type": "Artigo / Trabalho Acadêmico (.docx)",
+  "steps": [
+    {
+      "id": "trabalho",
+      "title": "Identificação do Trabalho",
+      "fields": [
+        {"key": "tipo_trabalho", "label": "Tipo de trabalho", "type": "select", "required": true, "options": ["Artigo científico (Qualis CAPES)", "Monografia / TCC", "Dissertação de Mestrado", "Tese de Doutorado", "Capítulo de livro", "Resumo expandido / Anais"]},
+        {"key": "titulo", "label": "Título do trabalho", "type": "text", "required": true},
+        {"key": "area_direito", "label": "Área do Direito", "type": "text", "required": true, "placeholder": "Ex: Direito Constitucional, Processo Civil, Direito do Consumidor..."},
+        {"key": "autor", "label": "Autor(es)", "type": "text"},
+        {"key": "instituicao", "label": "Instituição / Periódico de destino", "type": "text"}
+      ]
+    },
+    {
+      "id": "conteudo",
+      "title": "Conteúdo e Tese",
+      "fields": [
+        {"key": "tese_central", "label": "Tese / argumento central do trabalho", "type": "textarea", "required": true, "placeholder": "Qual é a tese que o trabalho defende?"},
+        {"key": "estrutura", "label": "Estrutura desejada / seções do trabalho", "type": "textarea", "placeholder": "Ex: Introdução, 1. Contexto normativo, 2. Análise jurisprudencial, 3. Conclusão"},
+        {"key": "referencias_chave", "label": "Referências bibliográficas chave (autores, obras)", "type": "textarea", "placeholder": "Ex: Marinoni, Didier, STJ REsp 12345..."},
+        {"key": "extensao", "label": "Extensão aproximada (páginas)", "type": "text", "placeholder": "Ex: 15 páginas"}
+      ]
+    },
+    {
+      "id": "uploads",
+      "title": "Material de Pesquisa",
+      "fields": [
+        {"key": "files", "label": "Notas de pesquisa, decisões, artigos base (PDF/Word)", "type": "upload", "accept": ".pdf,.docx,.doc,.txt", "multiple": true}
+      ]
+    }
+  ]
+}

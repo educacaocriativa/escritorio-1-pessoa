@@ -1,0 +1,33 @@
+{
+  "skill": "lex-pkm-juridico",
+  "label": "PKM Jurídico (Zettelkasten)",
+  "category": "pesquisador",
+  "description": "Sistema Zettelkasten jurídico — organiza notas, insights e pesquisas em segundo cérebro do magistrado.",
+  "output_type": "Notas Atômicas Zettelkasten (.docx)",
+  "steps": [
+    {
+      "id": "tipo_nota",
+      "title": "Tipo de Nota a Criar",
+      "fields": [
+        {"key": "tipo", "label": "Tipo de nota Zettelkasten", "type": "select", "required": true, "options": ["Nota de Literatura (síntese de leitura)", "Nota Permanente (insight próprio)", "Nota de Estrutura (índice temático)", "Nota de Jurisprudência", "Nota de Doutrina", "Nota de Projeto (em andamento)"]},
+        {"key": "tema", "label": "Tema jurídico da nota", "type": "text", "required": true},
+        {"key": "fonte", "label": "Fonte / origem do conteúdo", "type": "text", "placeholder": "Ex: Livro X, Acórdão REsp 12345, aula..."}
+      ]
+    },
+    {
+      "id": "conteudo",
+      "title": "Conteúdo da Nota",
+      "fields": [
+        {"key": "conteudo_bruto", "label": "Conteúdo bruto / anotações / highlights", "type": "textarea", "required": true, "placeholder": "Cole o texto bruto, highlights, grifos ou anotações que deseja transformar em notas atômicas..."},
+        {"key": "conexoes", "label": "Conexões com outros temas ou notas já existentes", "type": "textarea", "placeholder": "Ex: relacionar com nota sobre responsabilidade civil, Súmula 479 STJ..."}
+      ]
+    },
+    {
+      "id": "uploads",
+      "title": "Material de Origem",
+      "fields": [
+        {"key": "files", "label": "Capítulo de livro, decisão, artigo (PDF/Word)", "type": "upload", "accept": ".pdf,.docx,.doc,.txt", "multiple": true}
+      ]
+    }
+  ]
+}

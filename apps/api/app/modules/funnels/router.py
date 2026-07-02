@@ -5,18 +5,23 @@ from fastapi import APIRouter, Depends, HTTPException, Response
 from sqlalchemy.orm import Session
 
 from app.core.tenancy import CurrentUser, get_tenant_db, require_module
-from app.modules.funnels import service
-from app.modules.funnels.models import Funnel
+from app.modules.crm.models import Client
+from app.modules.funnels import engine, service
+from app.modules.funnels.models import Funnel, FunnelRun
 from app.modules.funnels.schemas import (
     ComponentCategory,
     ComposeRequest,
     ComposeResult,
+    EnrollRequest,
     FunnelCreate,
     FunnelOut,
+    FunnelRunOut,
+    FunnelRunSummary,
     FunnelSummary,
     FunnelUpdate,
     RunNodeRequest,
     RunNodeResult,
+    TickResult,
 )
 
 router = APIRouter(prefix="/funnels", tags=["funnels"])
@@ -63,6 +68,96 @@ def run_node(
     except service.FunnelError as e:
         raise _err(e) from e
     return RunNodeResult(**result)
+
+
+# ── Automação: inscrever contato, jornadas e agendador ──────────────────────
+# (declarado ANTES de /{funnel_id} para "runs" não ser capturado como funnel_id)
+def _run_out(run: FunnelRun, db: Session) -> FunnelRunOut:
+    client = db.get(Client, run.client_id) if run.client_id else None
+    return FunnelRunOut(
+        id=run.id, tenant_id=run.tenant_id, funnel_id=run.funnel_id, client_id=run.client_id,
+        client_name=client.name if client else None, status=run.status,
+        current_node_id=run.current_node_id, resume_at=run.resume_at, steps=run.steps,
+        error=run.error, created_at=run.created_at, updated_at=run.updated_at,
+    )
+
+
+@router.post("/runs/tick", response_model=TickResult)
+def tick(user: CurrentUser = Depends(_guard), db: Session = Depends(get_tenant_db)) -> TickResult:
+    """Retoma as jornadas com espera vencida. Idempotente — chamável por cron ou pela tela."""
+    return TickResult(**engine.tick(db, tenant_id=user.tenant_id, actor=user.user_id))
+
+
+@router.get("/runs", response_model=list[FunnelRunSummary])
+def list_runs(
+    client_id: str | None = None,
+    _u: CurrentUser = Depends(_guard),
+    db: Session = Depends(get_tenant_db),
+) -> list[FunnelRunSummary]:
+    runs = engine.list_runs(db, client_id=client_id)
+    out = []
+    for r in runs:
+        client = db.get(Client, r.client_id) if r.client_id else None
+        out.append(FunnelRunSummary(
+            id=r.id, funnel_id=r.funnel_id, client_id=r.client_id,
+            client_name=client.name if client else None, status=r.status,
+            resume_at=r.resume_at, step_count=len(r.steps), created_at=r.created_at,
+        ))
+    return out
+
+
+@router.get("/runs/{run_id}", response_model=FunnelRunOut)
+def get_run(
+    run_id: str, _u: CurrentUser = Depends(_guard), db: Session = Depends(get_tenant_db)
+) -> FunnelRunOut:
+    try:
+        return _run_out(engine.get_run(db, run_id), db)
+    except service.FunnelError as e:
+        raise _err(e) from e
+
+
+@router.post("/runs/{run_id}/cancel", response_model=FunnelRunOut)
+def cancel_run(
+    run_id: str, user: CurrentUser = Depends(_guard), db: Session = Depends(get_tenant_db)
+) -> FunnelRunOut:
+    try:
+        run = engine.cancel_run(db, run_id=run_id, tenant_id=user.tenant_id, actor=user.user_id)
+    except service.FunnelError as e:
+        raise _err(e) from e
+    return _run_out(run, db)
+
+
+@router.post("/{funnel_id}/enroll", response_model=FunnelRunOut, status_code=201)
+def enroll(
+    funnel_id: str,
+    data: EnrollRequest,
+    user: CurrentUser = Depends(_guard),
+    db: Session = Depends(get_tenant_db),
+) -> FunnelRunOut:
+    try:
+        run = engine.enroll(
+            db, tenant_id=user.tenant_id, actor=user.user_id, funnel_id=funnel_id,
+            client_id=data.client_id, start_node_id=data.start_node_id,
+        )
+    except service.FunnelError as e:
+        raise _err(e) from e
+    return _run_out(run, db)
+
+
+@router.get("/{funnel_id}/runs", response_model=list[FunnelRunSummary])
+def list_funnel_runs(
+    funnel_id: str, _u: CurrentUser = Depends(_guard), db: Session = Depends(get_tenant_db)
+) -> list[FunnelRunSummary]:
+    runs = engine.list_runs(db, funnel_id=funnel_id)
+    out = []
+    for r in runs:
+        client = db.get(Client, r.client_id) if r.client_id else None
+        out.append(FunnelRunSummary(
+            id=r.id, funnel_id=r.funnel_id, client_id=r.client_id,
+            client_name=client.name if client else None, status=r.status,
+            resume_at=r.resume_at, step_count=len(r.steps), created_at=r.created_at,
+        ))
+    return out
 
 
 @router.get("", response_model=list[FunnelSummary])

@@ -12,7 +12,11 @@ services:
     volumes:
       - postgres_data:/var/lib/postgresql/data
       # Demove o usuário da app a NÃO-superusuário p/ que a RLS valha (ver script).
-      - ./docker/initdb:/docker-entrypoint-initdb.d:ro
+      # DESATIVADO: bind mount de caminho em SSD externo com espaço ("Extreme SSD") quebra o
+      # file-sharing do Docker Desktop no macOS (mkdir /host_mnt/Volumes/Extreme SSD: file exists).
+      # O script initdb só roda no PRIMEIRO boot (data dir vazio); o papel e1p_app já está no volume.
+      # Para reabilitar num setup limpo (ou em caminho sem espaço), descomente a linha abaixo.
+      # - ./docker/initdb:/docker-entrypoint-initdb.d:ro
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U e1puser -d e1pdb"]
       interval: 10s
@@ -41,12 +45,16 @@ services:
 
   web:
     # Contexto = raiz do monorepo (o Dockerfile precisa de packages/ e pnpm-workspace.yaml).
+    # Build de PRODUÇÃO (nginx estático, SEM proxy /api). Em DEV o front é o Vite (`pnpm dev`)
+    # na 5173, que faz proxy /api -> :8000. Por isso este container NÃO usa a 5173: senão ele
+    # roubaria a porta do Vite ao subir e a app "cairia" (chamadas /api voltariam como HTML).
+    # Acesse o build de produção em http://localhost:8081 quando quiser testá-lo.
     build:
       context: ..
       dockerfile: apps/web/Dockerfile
     restart: unless-stopped
     ports:
-      - "5173:80"
+      - "8081:80"
     depends_on:
       - api
 

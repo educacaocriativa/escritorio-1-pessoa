@@ -1,0 +1,29 @@
+{
+  "skill": "ficao-digital-juvenil",
+  "label": "Ficção Digital Juvenil (YA)",
+  "category": "criacao",
+  "description": "Escrita de ficção Young Adult sobre crimes digitais e direito, com precisão jurídica.",
+  "output_type": "Capítulo(s) de Ficção YA (.docx)",
+  "steps": [
+    {
+      "id": "historia",
+      "title": "Sobre a História",
+      "fields": [
+        {"key": "titulo", "label": "Título do livro / capítulo", "type": "text"},
+        {"key": "personagem_principal", "label": "Personagem principal", "type": "text", "required": true, "placeholder": "Ex: Ana, 17 anos, hacker ética..."},
+        {"key": "tema_juridico", "label": "Tema jurídico-digital da história", "type": "select", "required": true, "options": ["Crime cibernético (invasão, phishing)", "Cyberbullying e crimes digitais contra menores", "Privacidade e LGPD", "Fake news e direito à informação", "Crimes contra a honra online", "Fraude digital", "Outro"]},
+        {"key": "sinopse", "label": "Sinopse / premissa da história", "type": "textarea", "required": true}
+      ]
+    },
+    {
+      "id": "capitulo",
+      "title": "O Capítulo",
+      "fields": [
+        {"key": "numero_capitulo", "label": "Número do capítulo", "type": "text", "placeholder": "Ex: 1"},
+        {"key": "o_que_acontece", "label": "O que acontece neste capítulo?", "type": "textarea", "required": true},
+        {"key": "ponto_vista", "label": "Ponto de vista narrativo", "type": "select", "options": ["1ª pessoa (eu, narrador-personagem)", "3ª pessoa limitada", "3ª pessoa onisciente"]},
+        {"key": "tom", "label": "Tom do capítulo", "type": "select", "options": ["Suspense / tensão", "Ação", "Reflexivo / filosófico", "Drama emocional", "Humor / leveza"]}
+      ]
+    }
+  ]
+}

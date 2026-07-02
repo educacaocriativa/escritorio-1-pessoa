@@ -31,6 +31,7 @@ class Settings(BaseSettings):
     # Integrações (vazio = stub/log; preencher quando conectar)
     whatsapp_token: str = ""
     whatsapp_phone_id: str = ""
+    smtp_host: str = ""  # vazio = e-mail vira log (dev); preencher p/ entrega real
     # Segredo do webhook do gateway de pagamento. Vazio (dev) = webhook aberto p/ testes;
     # em produção, defina para que SÓ o gateway confirme pagamentos (o dono nunca marca à mão).
     gateway_webhook_secret: str = ""

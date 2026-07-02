@@ -1,0 +1,34 @@
+{
+  "skill": "peticao-analyzer",
+  "label": "Análise de Petição (CAPPD)",
+  "category": "core",
+  "description": "Analisa petições e peças processuais extraindo Causas, Argumentos, Pedidos, Provas e Defesas.",
+  "output_type": "Mapa CAPPD + Análise (.docx)",
+  "steps": [
+    {
+      "id": "processo",
+      "title": "Dados do Processo",
+      "fields": [
+        {"key": "numero_processo", "label": "Número do processo", "type": "text", "placeholder": "0000000-00.0000.0.00.0000"},
+        {"key": "tipo_peca", "label": "Tipo de peça a analisar", "type": "select", "required": true, "options": ["Petição Inicial", "Contestação", "Réplica / Impugnação", "Recurso de Apelação", "Agravo de Instrumento", "Laudo Pericial", "Recurso Especial / Ordinário", "Manifestação / Memorial", "Outra"]},
+        {"key": "fase_processual", "label": "Fase processual atual", "type": "select", "options": ["Conhecimento — Postulatória", "Conhecimento — Saneamento", "Conhecimento — Instrução", "Sentença/Julgamento", "Recursal", "Execução"]},
+        {"key": "finalidade", "label": "Finalidade da análise", "type": "select", "options": ["Preparar despacho/decisão", "Preparar pauta de audiência", "Elaborar pontos controvertidos", "Preparar contestação / réplica", "Análise geral"]}
+      ]
+    },
+    {
+      "id": "contexto",
+      "title": "Contexto Adicional",
+      "fields": [
+        {"key": "contexto_extra", "label": "Informações adicionais relevantes (opcional)", "type": "textarea", "placeholder": "Ex: há precedente específico relevante, tese já fixada no processo, etc."}
+      ]
+    },
+    {
+      "id": "uploads",
+      "title": "Peças Processuais",
+      "description": "Envie a peça ou peças a serem analisadas. Formatos aceitos: PDF, Word, imagens.",
+      "fields": [
+        {"key": "files", "label": "Peças processuais para análise (PDF, Word, imagens)", "type": "upload", "accept": ".pdf,.docx,.doc,.jpg,.jpeg,.png", "multiple": true, "required": true}
+      ]
+    }
+  ]
+}

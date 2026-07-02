@@ -1,0 +1,34 @@
+{
+  "skill": "tese-juridica-validator",
+  "label": "Validador de Tese Jurídica",
+  "category": "core",
+  "description": "Valida a solidez de teses e argumentos jurídicos em 5 dimensões: normativa, jurisprudencial, doutrinária, fática e processual.",
+  "output_type": "Relatório de Validação da Tese (.docx)",
+  "steps": [
+    {
+      "id": "tese",
+      "title": "A Tese a Validar",
+      "fields": [
+        {"key": "tese", "label": "Enuncie a tese jurídica a ser validada", "type": "textarea", "required": true, "placeholder": "Ex: O fornecedor responde objetivamente pelos danos causados por produto defeituoso, independentemente de culpa, nos termos do art. 12 do CDC."},
+        {"key": "area_direito", "label": "Área do Direito", "type": "select", "required": true, "options": ["Direito do Consumidor", "Responsabilidade Civil", "Contratos", "Direito Bancário", "Família", "Trabalhista", "Tributário", "Penal", "Administrativo", "Processual Civil", "Outra"]},
+        {"key": "contexto_uso", "label": "Onde será usada a tese?", "type": "select", "options": ["Petição inicial", "Contestação / Defesa", "Recurso", "Sustentação oral", "Sentença / Decisão", "Artigo acadêmico"]}
+      ]
+    },
+    {
+      "id": "contexto",
+      "title": "Contexto do Caso",
+      "fields": [
+        {"key": "fatos", "label": "Fatos do caso concreto", "type": "textarea", "required": true, "placeholder": "Descreva os fatos para que a tese seja validada no contexto real..."},
+        {"key": "argumentos_contrarios", "label": "Argumentos contrários que espera enfrentar", "type": "textarea", "placeholder": "Ex: parte contrária alega prescrição, ausência de dano, excludente de responsabilidade..."},
+        {"key": "normas_invocadas", "label": "Normas legais que fundamentam a tese", "type": "textarea", "placeholder": "Ex: art. 14 CDC, Súmula 479 STJ..."}
+      ]
+    },
+    {
+      "id": "uploads",
+      "title": "Documentos de Suporte",
+      "fields": [
+        {"key": "files", "label": "Peças, contratos ou documentos relevantes", "type": "upload", "accept": ".pdf,.docx,.doc,.jpg,.jpeg,.png", "multiple": true}
+      ]
+    }
+  ]
+}

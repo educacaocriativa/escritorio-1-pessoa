@@ -1,0 +1,35 @@
+{
+  "skill": "despacho-generator",
+  "label": "Gerador de Despachos",
+  "category": "magistrado",
+  "description": "16+ modelos de despacho por fase processual com placeholders preenchidos automaticamente.",
+  "output_type": "Despacho Judicial (.docx)",
+  "steps": [
+    {
+      "id": "processo",
+      "title": "Dados do Processo",
+      "fields": [
+        {"key": "numero_processo", "label": "Número do processo", "type": "text", "required": true},
+        {"key": "partes", "label": "Partes (autor x réu)", "type": "text", "required": true},
+        {"key": "vara", "label": "Vara / Juízo", "type": "text"}
+      ]
+    },
+    {
+      "id": "despacho",
+      "title": "Tipo de Despacho",
+      "fields": [
+        {"key": "tipo_despacho", "label": "Selecione o tipo de despacho", "type": "select", "required": true, "options": ["Cite-se (recebimento da petição inicial)", "Intime-se (notificação genérica)", "Emende a petição inicial", "Dê-se vista para manifestação", "Designação de audiência de conciliação", "Designação de AIJ (Instrução e Julgamento)", "Determinação de perícia", "Intimação para apresentar documentos", "Abertura de prazo para réplica", "Juntada aos autos / Vista", "Saneamento do processo (art. 357 CPC)", "Extinção por abandono (art. 485, II CPC)", "Cumprimento de sentença — citação", "Impugnação ao cumprimento — prazo", "Penhora e avaliação", "Outro (descrever)"]},
+        {"key": "fase_processual", "label": "Fase processual", "type": "select", "options": ["Fase inicial / Postulatória", "Saneamento", "Instrução", "Pós-sentença / Execução"]},
+        {"key": "prazo", "label": "Prazo a conceder (em dias úteis)", "type": "text", "placeholder": "Ex: 15"},
+        {"key": "descricao_adicional", "label": "Detalhes adicionais para o despacho", "type": "textarea", "placeholder": "Ex: especifique o que deve ser emendado, qual documento solicitar, datas relevantes..."}
+      ]
+    },
+    {
+      "id": "uploads",
+      "title": "Última Petição (Opcional)",
+      "fields": [
+        {"key": "files", "label": "Petição que motiva o despacho", "type": "upload", "accept": ".pdf,.docx,.doc,.jpg,.jpeg,.png", "multiple": false}
+      ]
+    }
+  ]
+}

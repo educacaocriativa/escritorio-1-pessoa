@@ -1,0 +1,25 @@
+{
+  "skill": "lex-document-ocr",
+  "label": "OCR de Documentos Jurídicos",
+  "category": "automacao",
+  "description": "Extração estruturada de texto de documentos jurídicos em PDF, imagens e digitalizações.",
+  "output_type": "Documento Extraído e Estruturado (.docx)",
+  "steps": [
+    {
+      "id": "configuracao",
+      "title": "Configuração da Extração",
+      "fields": [
+        {"key": "tipo_documento", "label": "Tipo de documento a processar", "type": "select", "required": true, "options": ["Petição inicial / Contestação", "Certidão (nascimento, casamento, óbito)", "Contrato", "Laudo Pericial", "Apólice de Seguro", "Comprovante de Pagamento / Extrato", "Identificação (RG, CNH, CPF)", "Decisão Judicial / Sentença", "Escritura / Registro de Imóvel", "Outro"]},
+        {"key": "formato_saida", "label": "Formato de saída desejado", "type": "select", "options": ["Texto bruto estruturado", "JSON com campos extraídos", "Tabela de dados", "Resumo do documento"]},
+        {"key": "campos_especificos", "label": "Campos específicos a extrair (opcional)", "type": "textarea", "placeholder": "Ex: nome das partes, datas, valores, números de processo..."}
+      ]
+    },
+    {
+      "id": "uploads",
+      "title": "Documentos para OCR",
+      "fields": [
+        {"key": "files", "label": "Documentos para processar (PDF, imagens digitalizadas)", "type": "upload", "accept": ".pdf,.jpg,.jpeg,.png,.tiff,.bmp", "multiple": true, "required": true}
+      ]
+    }
+  ]
+}

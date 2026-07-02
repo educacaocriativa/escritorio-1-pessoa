@@ -1,0 +1,35 @@
+{
+  "skill": "audiencia-analyzer",
+  "label": "Análise de Audiência",
+  "category": "magistrado",
+  "description": "Transcreve, estrutura e analisa audiências judiciais. Extrai depoimentos, contradições e pontos probatórios.",
+  "output_type": "Ata Estruturada + Análise Probatória (.docx)",
+  "steps": [
+    {
+      "id": "audiencia",
+      "title": "Dados da Audiência",
+      "fields": [
+        {"key": "numero_processo", "label": "Número do processo", "type": "text", "placeholder": "0000000-00.0000.0.00.0000"},
+        {"key": "tipo_audiencia", "label": "Tipo de audiência", "type": "select", "required": true, "options": ["Audiência de Conciliação / Mediação", "Audiência de Instrução e Julgamento (AIJ)", "Audiência Una (JECRIM / JEC)", "Audiência de Custódia", "Audiência de Saneamento e Organização (art. 357, §3°, CPC)"]},
+        {"key": "data_audiencia", "label": "Data da audiência", "type": "text", "placeholder": "DD/MM/AAAA"},
+        {"key": "partes_presentes", "label": "Partes presentes na audiência", "type": "textarea", "placeholder": "Ex: autor e advogado, réu representado por preposto e advogado, testemunha João..."}
+      ]
+    },
+    {
+      "id": "conteudo",
+      "title": "Conteúdo da Audiência",
+      "fields": [
+        {"key": "transcricao", "label": "Transcrição ou resumo dos depoimentos", "type": "textarea", "required": true, "placeholder": "Cole a transcrição ou resumo dos depoimentos e declarações colhidos na audiência..."},
+        {"key": "tentativa_conciliacao", "label": "Resultado da tentativa de conciliação", "type": "select", "options": ["Não tentada", "Tentada e frustrada", "Acordo parcial", "Acordo total"]},
+        {"key": "pontos_controvertidos", "label": "Pontos controvertidos já fixados", "type": "textarea"}
+      ]
+    },
+    {
+      "id": "uploads",
+      "title": "Gravação ou Documento da Audiência",
+      "fields": [
+        {"key": "files", "label": "Ata anterior, notas taquigráficas ou transcrição em texto (PDF/Word)", "type": "upload", "accept": ".pdf,.docx,.doc,.txt,.jpg,.jpeg,.png", "multiple": true}
+      ]
+    }
+  ]
+}

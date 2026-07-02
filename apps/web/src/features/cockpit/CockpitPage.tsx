@@ -20,7 +20,11 @@ export default function CockpitPage() {
 
   useEffect(() => {
     const day = new Date().toISOString().slice(0, 10);
-    api.get<CockpitSummary>(`/cockpit/summary?day=${day}`).then(({ data }) => setSummary(data));
+    api
+      .get<CockpitSummary>(`/cockpit/summary?day=${day}`)
+      // mescla sobre os defaults: uma resposta parcial/antiga nunca derruba a tela toda
+      .then(({ data }) => setSummary({ ...EMPTY, ...data }))
+      .catch(() => setSummary(EMPTY));
   }, []);
 
   async function collect(chargeId: string) {
@@ -35,9 +39,9 @@ export default function CockpitPage() {
     }
   }
 
-  const conv = `${Math.round(summary.crm.conversion_rate * 100)}%`;
+  const conv = `${Math.round((summary.crm?.conversion_rate ?? 0) * 100)}%`;
   const brl = (c: number) => (c / 100).toLocaleString("pt-BR", { style: "currency", currency: "BRL" });
-  const faturamento = summary.finance.net_revenue_cents != null
+  const faturamento = summary.finance?.net_revenue_cents != null
     ? brl(summary.finance.net_revenue_cents)
     : "R$ —";
 

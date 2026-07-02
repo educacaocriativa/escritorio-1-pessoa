@@ -1,0 +1,27 @@
+{
+  "skill": "dje-monitor",
+  "label": "Monitor de DJE / Prazos",
+  "category": "core",
+  "description": "Extrai publicações do Diário da Justiça e calcula prazos processuais.",
+  "output_type": "Relatório de Publicações e Prazos (.docx)",
+  "steps": [
+    {
+      "id": "configuracao",
+      "title": "Configuração do Monitoramento",
+      "fields": [
+        {"key": "diario", "label": "Diário a monitorar", "type": "select", "required": true, "options": ["DJE — Diário da Justiça Eletrônico (Estadual)", "DJe — TJ-SP", "DJe — TJ-RJ", "DJe — TJ-MG", "DJe — TJ-ES", "DOU — Diário Oficial da União", "DJe Federal (TRF)", "Outro"]},
+        {"key": "data_publicacao", "label": "Data da publicação", "type": "text", "placeholder": "DD/MM/AAAA"},
+        {"key": "termos_busca", "label": "Termos de busca / nomes das partes / número de processo", "type": "textarea", "required": true, "placeholder": "Ex: João da Silva, 0000000-00.2024.8.08.0001"}
+      ]
+    },
+    {
+      "id": "uploads",
+      "title": "Texto do Diário",
+      "description": "Cole o texto ou envie o PDF do trecho relevante do diário oficial.",
+      "fields": [
+        {"key": "texto_dje", "label": "Texto bruto do DJE (cole aqui)", "type": "textarea", "placeholder": "Cole o texto extraído do diário oficial..."},
+        {"key": "files", "label": "Ou envie o PDF do trecho do diário", "type": "upload", "accept": ".pdf,.jpg,.jpeg,.png", "multiple": false}
+      ]
+    }
+  ]
+}

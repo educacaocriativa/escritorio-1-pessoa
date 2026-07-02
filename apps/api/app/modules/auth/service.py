@@ -92,6 +92,18 @@ def reset_password(db: Session, token: str, new_password: str) -> None:
     db.commit()
 
 
+def set_own_password(db: Session, user_id: str, new_password: str) -> User:
+    """Troca a própria senha (1º acesso ou a pedido). Limpa o flag de troca obrigatória."""
+    user = db.get(User, user_id)
+    if user is None:
+        raise AuthError("Usuário não encontrado", 404)
+    user.password_hash = hash_password(new_password)
+    user.must_reset_password = False
+    db.commit()
+    db.refresh(user)
+    return user
+
+
 def authenticate(db: Session, email: str, password: str) -> tuple[Tenant, User]:
     """Valida credenciais. Mensagem genérica para não revelar se o e-mail existe."""
     user = db.scalar(select(User).where(User.email == email.lower()))

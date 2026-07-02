@@ -29,13 +29,58 @@ export interface User {
   is_active: boolean;
   /** Nível 1 (Master): gerencia todas as contas da plataforma. */
   is_platform_admin: boolean;
+  document: string | null;
+  address: string | null;
+  phone: string | null;
+  /** True = senha temporária; deve ser trocada no primeiro acesso. */
+  must_reset_password: boolean;
   created_at: string;
+}
+
+/** Resultado do convite de um novo usuário: a senha temporária e como foi entregue. */
+export interface StaffInvite {
+  user: User;
+  temp_password: string;
+  delivery: "email" | "whatsapp";
+  delivery_status: "sent" | "logged" | "failed";
 }
 
 /** Conta gerenciada pelo Super Admin: tenant + seu owner. */
 export interface Account {
   tenant: Tenant;
   owner: User;
+}
+
+/** Cliente comprador (matrícula) — ainda não é um User de login. */
+export interface PlatformCustomer {
+  name: string;
+  email: string | null;
+  purchases: number;
+}
+
+/** Cliente na visão do Master: inclui o escritório de origem. */
+export interface PlatformCustomerCard extends PlatformCustomer {
+  tenant_id: UUID;
+  tenant_name: string;
+}
+
+/** Conta criada por convite: dono + senha temporária e como foi entregue. */
+export interface AccountInvite {
+  tenant: Tenant;
+  owner: User;
+  temp_password: string;
+  delivery: "email" | "whatsapp";
+  delivery_status: "sent" | "logged" | "failed";
+}
+
+/** Nó da hierarquia que o Super Admin vê: escritório → Admin → funcionários + clientes. */
+export interface TenantUsers {
+  tenant: Tenant;
+  admin: User | null;
+  staff: User[];
+  customers: PlatformCustomer[];
+  staff_count: number;
+  customer_count: number;
 }
 
 /** Retorno de GET /auth/me — só identidade, sem credencial. */
@@ -607,6 +652,44 @@ export interface Funnel {
   created_at: string;
 }
 
+// Automação do funil: jornada (FunnelRun) de um contato.
+export type FunnelRunStatus = "running" | "waiting" | "done" | "failed" | "cancelled";
+
+export interface FunnelRunStep {
+  node_id: string | null;
+  key: string;
+  action: string;
+  status: string;
+  message: string;
+  at: string;
+}
+
+export interface FunnelRunSummary {
+  id: UUID;
+  funnel_id: UUID;
+  client_id: UUID | null;
+  client_name: string | null;
+  status: FunnelRunStatus;
+  resume_at: string | null;
+  step_count: number;
+  created_at: string;
+}
+
+export interface FunnelRun {
+  id: UUID;
+  tenant_id: UUID;
+  funnel_id: UUID;
+  client_id: UUID | null;
+  client_name: string | null;
+  status: FunnelRunStatus;
+  current_node_id: string | null;
+  resume_at: string | null;
+  steps: FunnelRunStep[];
+  error: string;
+  created_at: string;
+  updated_at: string;
+}
+
 export interface PublicContract {
   title: string;
   company_name: string;
@@ -655,5 +738,69 @@ export interface Carousel {
   text_color: string;
   accent_color: string;
   font: string;
+  created_at: string;
+}
+
+// ── Jurídico (Assistente Jurídico) ──────────────────────────────────────────
+export interface LegalSkillSummary {
+  skill: string;
+  label: string;
+  category: string;
+  description: string;
+  output_type: string;
+}
+
+export interface LegalWizardField {
+  key: string;
+  label: string;
+  type: "text" | "textarea" | "select" | "upload";
+  placeholder?: string;
+  required?: boolean;
+  options?: string[];
+  accept?: string;
+  multiple?: boolean;
+}
+
+export interface LegalWizardStep {
+  id: string;
+  title: string;
+  description?: string;
+  fields: LegalWizardField[];
+}
+
+export interface LegalWizardConfig {
+  skill: string;
+  label: string;
+  category: string;
+  description: string;
+  output_type: string;
+  steps: LegalWizardStep[];
+}
+
+export interface LegalDocumentSummary {
+  id: UUID;
+  skill: string;
+  category: string;
+  title: string;
+  client_id: UUID | null;
+  client_name: string | null;
+  status: string;
+  created_at: string;
+}
+
+export interface LegalDocument {
+  id: UUID;
+  tenant_id: UUID;
+  skill: string;
+  category: string;
+  title: string;
+  client_id: UUID | null;
+  client_name: string | null;
+  content: string;
+  metadata_raw: string;
+  answers: Record<string, unknown>;
+  input_tokens: number;
+  output_tokens: number;
+  status: string;
   created_at: string;
 }

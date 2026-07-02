@@ -15,7 +15,8 @@ from app.modules.contracts.models import (  # noqa: F401
     PublishedContract,
 )
 from app.modules.crm.models import Client, PipelineStage  # noqa: F401
-from app.modules.funnels.models import Funnel  # noqa: F401
+from app.modules.funnels.models import Funnel, FunnelRun  # noqa: F401
+from app.modules.juridico.models import LegalDocument  # noqa: F401
 from app.modules.marketing.models import Carousel  # noqa: F401
 from app.modules.notifications.models import Notification  # noqa: F401
 from app.modules.pages.models import Page, PublishedPage  # noqa: F401
