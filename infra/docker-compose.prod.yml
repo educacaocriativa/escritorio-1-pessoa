@@ -1,0 +1,79 @@
+# Deploy em VPS único (ex.: Hostinger KVM) — ver docs/HOSTINGER-DEPLOY.md.
+# Diferenças do docker-compose.yml (dev): sem portas de Postgres/API expostas ao host,
+# segredos via .env.prod (nunca hardcoded), RLS role criada via env (initdb-prod),
+# reverse proxy Caddy na frente com TLS automático (Let's Encrypt).
+services:
+  postgres:
+    image: postgres:16-alpine
+    restart: always
+    environment:
+      POSTGRES_DB: e1pdb
+      POSTGRES_USER: e1p_root
+      POSTGRES_PASSWORD: ${POSTGRES_ROOT_PASSWORD:?defina no .env.prod}
+      APP_DB_PASSWORD: ${APP_DB_PASSWORD:?defina no .env.prod}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./docker/initdb-prod:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U e1p_root -d e1pdb"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks: [internal]
+
+  api:
+    build: ../apps/api
+    restart: always
+    env_file:
+      - .env.prod
+    environment:
+      # App conecta como papel NÃO-superusuário (Regra de Ouro nº 1 — ver CLAUDE.md).
+      DATABASE_URL: postgresql+psycopg://e1p_app:${APP_DB_PASSWORD}@postgres:5432/e1pdb
+      ENVIRONMENT: production
+    volumes:
+      - uploads_data:/app/uploads
+      - generated_data:/app/generated
+    depends_on:
+      postgres:
+        condition: service_healthy
+    command: >
+      sh -c "alembic upgrade head &&
+             python -m app.seed &&
+             uvicorn app.main:app --host 0.0.0.0 --port 8000"
+    networks: [internal]
+
+  web:
+    build:
+      context: ..
+      dockerfile: apps/web/Dockerfile
+    restart: always
+    depends_on:
+      - api
+    networks: [internal]
+
+  caddy:
+    image: caddy:2-alpine
+    restart: always
+    env_file:
+      - .env.prod
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    depends_on:
+      - api
+      - web
+    networks: [internal]
+
+networks:
+  internal:
+
+volumes:
+  postgres_data:
+  uploads_data:
+  generated_data:
+  caddy_data:
+  caddy_config:

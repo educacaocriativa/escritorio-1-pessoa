@@ -1,0 +1,100 @@
+# Deploy na VPS Hostinger com Traefik COMPARTILHADO da VPS (infra separada em
+# /opt/infra/proxy/ no host, fora deste repo — ver /opt/infra/proxy/README.md lá).
+# Diferente de docker-compose.prod.yml (que sobe um Caddy PRÓPRIO e publica 80/443):
+# aqui NÃO existe serviço de proxy neste compose — só o Traefik compartilhado pode
+# publicar 80/443 nesta VPS (outros projetos já rodam atrás dele: nexus-publica,
+# doro-site1, axisgov-stg). api/web só entram na rede externa `edge` e declaram
+# labels Traefik; descoberta via socket-proxy (provider docker do Traefik).
+#
+# Confirmado via SSH na VPS: rede externa `edge`, certresolver `letsencrypt`,
+# middleware genérica `security-headers@file` (dynamic/security-headers.yml do
+# repo de infra do Traefik).
+#
+# Subir (a partir de infra/, com .env.prod preenchido — ver .env.prod.example):
+#   docker compose --env-file .env.prod -f docker-compose.traefik.yml up -d --build
+services:
+  postgres:
+    image: postgres:16-alpine
+    restart: always
+    environment:
+      POSTGRES_DB: e1pdb
+      POSTGRES_USER: e1p_root
+      POSTGRES_PASSWORD: ${POSTGRES_ROOT_PASSWORD:?defina no .env.prod}
+      APP_DB_PASSWORD: ${APP_DB_PASSWORD:?defina no .env.prod}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./docker/initdb-prod:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U e1p_root -d e1pdb"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks: [db_internal]
+
+  api:
+    build: ../apps/api
+    restart: always
+    env_file:
+      - .env.prod
+    environment:
+      # App conecta como papel NÃO-superusuário (Regra de Ouro nº 1 — ver CLAUDE.md).
+      DATABASE_URL: postgresql+psycopg://e1p_app:${APP_DB_PASSWORD}@postgres:5432/e1pdb
+      ENVIRONMENT: production
+    volumes:
+      - uploads_data:/app/uploads
+      - generated_data:/app/generated
+    depends_on:
+      postgres:
+        condition: service_healthy
+    command: >
+      sh -c "alembic upgrade head &&
+             python -m app.seed &&
+             uvicorn app.main:app --host 0.0.0.0 --port 8000"
+    # db_internal fala com o Postgres; edge é alcançado pelo Traefik compartilhado
+    # E dá saída à internet (chamadas à API da Anthropic) — só db_internal é isolada.
+    networks: [db_internal, edge]
+    labels:
+      - traefik.enable=true
+      - traefik.docker.network=edge
+      # Front chama sempre /api/... (ver apps/web/src/lib/api.ts); os routers da API
+      # (app/main.py) NÃO esperam esse prefixo — por isso o stripprefix abaixo, que
+      # substitui o `handle_path` do Caddyfile antigo (ver infra/Caddyfile).
+      - traefik.http.routers.e1p-api.rule=Host(`${DOMAIN}`) && PathPrefix(`/api`)
+      - traefik.http.routers.e1p-api.entrypoints=websecure
+      - traefik.http.routers.e1p-api.tls.certresolver=letsencrypt
+      # Precisa casar ANTES do catch-all do `web` (priority=1).
+      - traefik.http.routers.e1p-api.priority=20
+      - traefik.http.routers.e1p-api.middlewares=security-headers@file,e1p-api-stripprefix
+      - traefik.http.middlewares.e1p-api-stripprefix.stripprefix.prefixes=/api
+      - traefik.http.services.e1p-api.loadbalancer.server.port=8000
+
+  web:
+    build:
+      context: ..
+      dockerfile: apps/web/Dockerfile
+    restart: always
+    depends_on:
+      - api
+    networks: [edge]
+    labels:
+      - traefik.enable=true
+      - traefik.docker.network=edge
+      - traefik.http.routers.e1p-web.rule=Host(`${DOMAIN}`)
+      - traefik.http.routers.e1p-web.entrypoints=websecure
+      - traefik.http.routers.e1p-web.tls.certresolver=letsencrypt
+      # Catch-all — casa por último, depois do router /api acima.
+      - traefik.http.routers.e1p-web.priority=1
+      - traefik.http.routers.e1p-web.middlewares=security-headers@file
+      - traefik.http.services.e1p-web.loadbalancer.server.port=80
+
+networks:
+  db_internal:
+    internal: true
+  edge:
+    external: true
+    name: edge
+
+volumes:
+  postgres_data:
+  uploads_data:
+  generated_data:

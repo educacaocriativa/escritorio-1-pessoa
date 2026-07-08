@@ -1,0 +1,13 @@
+{$DOMAIN} {
+	encode gzip
+
+	# Front chama sempre /api/... (ver apps/web/src/lib/api.ts) — handle_path remove o
+	# prefixo antes de repassar, igual ao proxy do Vite em dev (vite.config.ts).
+	handle_path /api/* {
+		reverse_proxy api:8000
+	}
+
+	handle {
+		reverse_proxy web:80
+	}
+}
