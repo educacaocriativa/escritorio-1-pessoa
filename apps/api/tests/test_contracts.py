@@ -4,7 +4,7 @@ from fastapi.testclient import TestClient
 
 REGISTER = {
     "legal_name": "Contratos SA",
-    "document": "23232323000144",
+    "document": "23232323000106",
     "slug": "contratosa",
     "email": "contr@example.com",
     "name": "Co",
@@ -60,7 +60,7 @@ def test_public_view_and_sign(client: TestClient, headers):
     # assinar (KYC: nome + documento)
     sign = client.post(
         f"/public/contracts/{slug}/sign",
-        json={"name": "João Cliente", "document": "123.456.789-00", "accept": True},
+        json={"name": "João Cliente", "document": "529.982.247-25", "accept": True},
     )
     assert sign.status_code == 200, sign.text
     assert sign.json()["status"] == "signed"
@@ -68,14 +68,15 @@ def test_public_view_and_sign(client: TestClient, headers):
     got = client.get(f"/contracts/{c['id']}", headers=headers).json()
     assert got["status"] == "signed"
     assert got["signer_name"] == "João Cliente"
-    assert got["signer_document"] == "123.456.789-00"
+    # KYC: documento validado (CPF real) e gravado NORMALIZADO (só-dígitos).
+    assert got["signer_document"] == "52998224725"
     assert got["signed_at"]
 
 
 def test_cannot_sign_twice(client: TestClient, headers):
     c = client.post("/contracts", json=_contract(), headers=headers).json()
     slug = c["public_slug"]
-    body = {"name": "A B", "document": "111", "accept": True}
+    body = {"name": "A B", "document": "52998224725", "accept": True}
     assert client.post(f"/public/contracts/{slug}/sign", json=body).status_code == 200
     assert client.post(f"/public/contracts/{slug}/sign", json=body).status_code == 409
 
@@ -84,7 +85,7 @@ def test_sign_requires_accept(client: TestClient, headers):
     c = client.post("/contracts", json=_contract(), headers=headers).json()
     resp = client.post(
         f"/public/contracts/{c['public_slug']}/sign",
-        json={"name": "A B", "document": "111", "accept": False},
+        json={"name": "A B", "document": "52998224725", "accept": False},
     )
     assert resp.status_code == 400
 
@@ -106,7 +107,7 @@ def test_cannot_edit_after_sent(client: TestClient, headers):
 def test_summary(client: TestClient, headers):
     c = client.post("/contracts", json=_contract(), headers=headers).json()
     client.post(f"/public/contracts/{c['public_slug']}/sign",
-                json={"name": "X Y", "document": "12345678900", "accept": True})
+                json={"name": "X Y", "document": "52998224725", "accept": True})
     client.post("/contracts", json=_contract(), headers=headers)  # draft
     s = client.get("/contracts/summary", headers=headers).json()
     assert s["signed_count"] == 1

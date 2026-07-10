@@ -3,8 +3,9 @@ from __future__ import annotations
 
 from typing import Literal
 
-from pydantic import BaseModel, EmailStr, Field
+from pydantic import BaseModel, EmailStr, Field, field_validator
 
+from app.core.validators import validate_document
 from app.modules.auth.schemas import RegisterRequest, TenantOut, UserOut
 
 
@@ -71,6 +72,12 @@ class CreateStaffRequest(BaseModel):
     phone: str = Field(min_length=8, max_length=32)  # WhatsApp
     allowed_modules: list[str] = Field(default_factory=list)
     delivery: Literal["email", "whatsapp"] = "email"  # canal de envio da senha
+
+    @field_validator("document")
+    @classmethod
+    def valid_document(cls, v: str) -> str:
+        # Valida CPF/CNPJ (dígito verificador) e normaliza para só-dígitos antes de persistir.
+        return validate_document(v)
 
 
 class StaffInviteOut(BaseModel):

@@ -3,7 +3,7 @@ from fastapi.testclient import TestClient
 
 VALID = {
     "legal_name": "João Silva Advocacia",
-    "document": "12345678000190",
+    "document": "12345678000195",
     "slug": "joaosilva",
     "email": "joao@example.com",
     "name": "João Silva",
@@ -54,6 +54,19 @@ def test_invalid_slug_rejected(client: TestClient):
 def test_reserved_slug_rejected(client: TestClient):
     resp = _register(client, slug="api")
     assert resp.status_code == 422
+
+
+def test_invalid_document_rejected(client: TestClient):
+    # CNPJ com dígito verificador errado -> 422 (validação real de CPF/CNPJ, Story 1.1)
+    resp = _register(client, document="12345678000190")
+    assert resp.status_code == 422
+
+
+def test_document_is_normalized(client: TestClient):
+    # documento formatado é aceito e persistido só-dígitos
+    resp = _register(client, document="11.222.333/0001-81")
+    assert resp.status_code == 201, resp.text
+    assert resp.json()["tenant"]["document"] == "11222333000181"
 
 
 def test_login_success(client: TestClient):

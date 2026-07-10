@@ -4,7 +4,7 @@ from fastapi.testclient import TestClient
 
 REGISTER = {
     "legal_name": "Pag Co",
-    "document": "10101010000111",
+    "document": "10101010000177",
     "slug": "pagco",
     "email": "pag@example.com",
     "name": "Pag",

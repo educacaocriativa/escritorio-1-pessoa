@@ -5,6 +5,7 @@ from datetime import date, datetime
 
 from pydantic import BaseModel, EmailStr, Field, field_validator, model_validator
 
+from app.core.validators import validate_document
 from app.modules.crm.models import GENDER_VALUES, SOURCE_VALUES
 
 # ── Estágios (colunas do Kanban) ───────────────────────
@@ -52,6 +53,14 @@ class ClientBase(BaseModel):
     notes: str = ""
     tags: list[str] = Field(default_factory=list)
     source: str = "manual"
+
+    @field_validator("document")
+    @classmethod
+    def _document(cls, v: str | None) -> str | None:
+        # CPF/CNPJ do cliente é OPCIONAL: só valida (e normaliza) quando informado.
+        if v is None or not v.strip():
+            return None
+        return validate_document(v)
 
     @field_validator("gender")
     @classmethod
@@ -103,6 +112,13 @@ class ClientUpdate(BaseModel):
     birthdate: date | None = None
     notes: str | None = None
     tags: list[str] | None = None
+
+    @field_validator("document")
+    @classmethod
+    def _document(cls, v: str | None) -> str | None:
+        if v is None or not v.strip():
+            return None
+        return validate_document(v)
 
     @field_validator("gender")
     @classmethod
