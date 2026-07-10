@@ -54,6 +54,14 @@ Campos obrigatórios (o backend recusa subir sem eles em produção — ver
 `ANTHROPIC_API_KEY`, `SUPER_ADMIN_PASSWORD` (!= default). Preencha também `DOMAIN` e
 `FRONTEND_URL=https://app.seudominio.com`.
 
+Campos **opcionais** de integração (vazios = o app funciona, só registra em log —
+graceful degradation, mesmo padrão de `SMTP_HOST`/`GATEWAY_WEBHOOK_SECRET`):
+- **WhatsApp Cloud API (Story 2.3)** — `WHATSAPP_TOKEN` e `WHATSAPP_PHONE_ID` (Meta Cloud
+  API). Preenchidos, as notificações (mover card no Kanban, cobrança com IA, funil) são
+  **entregues de verdade** ao telefone configurado em **Configurações → Telefone** de cada
+  escritório. Vazios, as notificações ficam apenas `logged` (nada quebra). Já listados em
+  `infra/.env.prod.example`.
+
 ## 3. Subir
 ```bash
 cd /opt/e1p/infra
@@ -87,6 +95,15 @@ pro IP da VPS (`dig +short app.seudominio.com`) e se a porta 80 está mesmo aces
     o app exibe a `FirstAccessPage` e só libera após a troca (`must_reset_password=True` no
     Super Admin semeado; ver `apps/api/tests/test_seed.py`). Confirme que **não** consegue
     navegar antes de trocar a senha.
+- **WhatsApp Cloud API (Story 2.3):**
+  - **Com** `WHATSAPP_TOKEN`/`WHATSAPP_PHONE_ID` no `.env.prod`: em Configurações preencha
+    o campo **Telefone** do escritório, mova um card no Kanban (ou dispare "Cobrar com IA")
+    e confirme que a mensagem chega no WhatsApp configurado. Nos logs a Notification fica
+    com status `sent` (`docker compose -f docker-compose.prod.yml logs api`).
+  - **Sem** essas variáveis: o app **não quebra** — as notificações ficam apenas em log.
+    Confirme com `docker compose -f docker-compose.prod.yml logs api | grep '[whatsapp:logged]'`
+    (a Notification é gravada com status `logged`). Validação end-to-end com número real
+    exige uma conta/número aprovados na Meta Cloud API (não coberto por testes automatizados).
 
 ## 5. Atualizações (deploy de uma nova versão)
 > **Antes de dar `git pull` + rebuild em produção, confirme que o CI está VERDE** no
@@ -210,5 +227,94 @@ lá `SEED_SYNTHETIC_DATA` fica vazio/false, então `app.seed_staging` é um no-o
   em GitHub → Settings → Branches marcando `test-in-prod-image` e `cross-tenant-rls` como checks
   obrigatórios (transforma o workflow num gate que BLOQUEIA merge, não só um status vermelho).
   **CD (deploy automático)** ainda não existe — o deploy segue `git pull` + rebuild manual na VPS.
-- Monitoramento/alertas (hoje não há; considerar `docker compose logs` + algo simples
-  tipo Uptime Kuma, ou migrar para AWS Fase B quando o tráfego justificar).
+- Monitoramento/alertas: **implementado** na Story 3.4 com Uptime Kuma self-hosted —
+  ver **§9** abaixo. (Migração para observabilidade gerenciada na AWS Fase B fica para
+  quando o tráfego justificar.)
+
+## 9. Monitoramento e alertas (Story 3.4)
+
+Monitoramento self-hosted de disponibilidade com **Uptime Kuma** (gratuito, 1 container,
+sem serviço pago — respeita o guard-rail de custo NFR3). Cobre: health da API, validade do
+TLS, reinícios de container e uso de disco, com alerta acionável por **Telegram**.
+
+> **Por que Uptime Kuma (e não Prometheus/Grafana ou SaaS pago):** já era a sugestão
+> registrada aqui; é self-hosted/gratuito, roda no mesmo VPS já contratado (sem novo custo,
+> NFR3), e tem monitores nativos de HTTP(s), Certificate Expiry e Docker Container — cobre
+> todos os ACs sem escrever código de aplicação.
+
+### 9.1 Subir a stack
+
+O monitoramento fica num compose **separado** do da app (`docker-compose.monitoring.yml`),
+para não acoplar o release do monitoramento ao release da aplicação (12-factor).
+
+**Topologia A — Traefik compartilhado (produção real, `e1p.doroeventos.com.br`):**
+```bash
+cd /opt/e1p/infra
+# DOMAIN vem do .env.prod; o painel sobe em https://monitor.<DOMAIN> via Traefik.
+docker compose --env-file .env.prod -f docker-compose.monitoring.yml up -d
+```
+Crie um registro DNS **A** `monitor.<DOMAIN>` → IP da VPS antes de subir (o Traefik emite
+o TLS Let's Encrypt via label `certresolver=letsencrypt`, como em api/web).
+
+**Topologia B — Caddy próprio (`docker-compose.prod.yml`):** siga as instruções no cabeçalho
+do `docker-compose.monitoring.yml` (troque a rede `edge` por `default`, remova as labels
+Traefik e suba junto do compose da app); a rota `monitor.{$DOMAIN}` já está no `Caddyfile`.
+
+No primeiro acesso ao painel, **crie usuário/senha** do Kuma (autenticação nativa) — não
+deixe o painel sem login, pois ele expõe topologia/portas internas.
+
+### 9.2 Configurar os monitores (na UI do Kuma)
+
+| Monitor | Tipo | Alvo | Cobre |
+|---|---|---|---|
+| API health | HTTP(s) | `https://<DOMAIN>/api/health` (esperar JSON `{"status":"ok",...}`), intervalo **60s** | AC1 (uptime/health) |
+| TLS | Certificate Expiry | `https://<DOMAIN>` | AC1 (validade do TLS) |
+| Containers | Docker Container | `api`, `web`, `postgres`, proxy — via `docker.sock` (montado `:ro`) | AC2 (reinícios) |
+| Disco | Push | URL única gerada pelo Kuma, alimentada pelo `disk-check.sh` | AC2 (disco) |
+
+O intervalo de **60s** no HTTP(s) mantém o check leve (IV1): `/health` não toca o banco
+(`apps/api/app/main.py`), então não introduz carga perceptível.
+
+**Monitor de disco (Push):** ao criar o monitor tipo Push, copie a Push URL para
+`KUMA_PUSH_URL_DISK` (ver `infra/.env.monitoring.example`) e agende o script no cron do host
+(mesmo padrão do backup em §6):
+```bash
+# /etc/cron.d/e1p-disk-monitor
+*/5 * * * * root KUMA_PUSH_URL="https://monitor.<DOMAIN>/api/push/XXXXXXXX" \
+  DISK_THRESHOLD=85 CHECK_PATH=/var/lib/docker \
+  /opt/e1p/infra/scripts/monitoring/disk-check.sh
+```
+**Limiar de disco: 85%** de uso aciona alerta — valor conservador que deixa margem para
+picos de backup/geração de PDF antes de o disco encher. Ajuste via `DISK_THRESHOLD` se
+necessário.
+
+### 9.3 Canal de alerta (Telegram)
+
+Em **Settings → Notifications** do Kuma, adicione um canal **Telegram** (bot token do
+`@BotFather` + chat id) e **vincule-o a todos os monitores** acima. Guarde os valores em
+`infra/.env.monitoring` (copiado de `.env.monitoring.example`, nunca commitado).
+
+> Telegram foi escolhido por ser gratuito e não depender de SMTP (`SMTP_HOST` vazio hoje)
+> nem da WhatsApp Cloud API (integração ainda PENDENTE). O canal WhatsApp da app
+> (`apps/api/app/core/whatsapp.py`) é do **produto para o cliente do tenant** e **não** deve
+> ser reaproveitado para este alerta operacional (domínios diferentes: infra vs. tenant).
+
+### 9.4 Teste de queda simulada (IV2)
+
+Procedimento reproduzível para provar que o alerta funciona ponta a ponta:
+```bash
+docker stop $(docker ps -qf "name=api")     # derruba a API
+# → no Kuma, os monitores "API health" (HTTP) e "Containers/api" viram DOWN
+# → confirmar a chegada do alerta no Telegram
+docker start $(docker ps -qf "name=api")    # restaura
+# → monitores voltam a UP; opcionalmente confirmar o alerta de recuperação
+```
+
+### 9.5 Validação e custo
+
+- **IV1 (checks leves):** HTTP a cada 60s em `/health` (sem query ao banco) — carga
+  desprezível.
+- **IV3 (custo, NFR3):** Uptime Kuma é gratuito/self-hosted e roda no mesmo VPS já
+  contratado — **nenhum serviço pago novo** foi introduzido.
+- **Sintaxe do compose:** valide antes de subir com
+  `docker compose -f docker-compose.monitoring.yml config`.
