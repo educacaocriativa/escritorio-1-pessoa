@@ -262,3 +262,72 @@ def test_reschedule_detects_conflict(client: TestClient, headers):
     assert resp.status_code == 200
     assert len(resp.json()["conflicts"]) == 1
     assert resp.json()["event"]["starts_at"].startswith("2026-07-01T15:30")
+
+
+# ── Geração automática de Meet via Google (Story 4.1) ────────────────────────
+def test_meet_not_generated_without_google(client: TestClient, headers):
+    """Sem Google conectado, evento de reunião sai sem meeting_url (IV1/AC3 — hoje preservado)."""
+    resp = client.post("/agenda/events", json=_event(kind="reuniao"), headers=headers)
+    assert resp.status_code == 201
+    ev = resp.json()["event"]
+    assert ev["meeting_url"] is None
+    assert ev["google_event_id"] is None
+
+
+def test_meet_generated_when_google_connected(client: TestClient, headers, monkeypatch):
+    from app.modules.google_calendar import service as gcal
+
+    monkeypatch.setattr(
+        gcal, "create_meet_event",
+        lambda *a, **k: ("https://meet.google.com/abc-defg-hij", "gcal-evt-1"),
+    )
+    resp = client.post("/agenda/events", json=_event(kind="reuniao"), headers=headers)
+    assert resp.status_code == 201
+    ev = resp.json()["event"]
+    assert ev["meeting_url"] == "https://meet.google.com/abc-defg-hij"
+    assert ev["google_event_id"] == "gcal-evt-1"
+
+
+def test_manual_meeting_url_preserved_google_not_called(client: TestClient, headers, monkeypatch):
+    from app.modules.google_calendar import service as gcal
+
+    calls = {"n": 0}
+
+    def _spy(*a, **k):
+        calls["n"] += 1
+        return ("https://meet.google.com/should-not-win", "x")
+
+    monkeypatch.setattr(gcal, "create_meet_event", _spy)
+    resp = client.post(
+        "/agenda/events",
+        json=_event(kind="reuniao", meeting_url="https://zoom.us/j/12345"),
+        headers=headers,
+    )
+    assert resp.status_code == 201
+    assert resp.json()["event"]["meeting_url"] == "https://zoom.us/j/12345"
+    assert calls["n"] == 0  # link manual (Zoom) tem prioridade — Google nem é chamado
+
+
+def test_meet_failure_does_not_break_event(client: TestClient, headers, monkeypatch):
+    """Falha na integração (create_meet_event retorna None) NÃO derruba a criação (IV1)."""
+    from app.modules.google_calendar import service as gcal
+
+    monkeypatch.setattr(gcal, "create_meet_event", lambda *a, **k: None)
+    resp = client.post("/agenda/events", json=_event(kind="reuniao"), headers=headers)
+    assert resp.status_code == 201
+    assert resp.json()["event"]["meeting_url"] is None
+
+
+def test_bloqueio_kind_never_calls_google(client: TestClient, headers, monkeypatch):
+    from app.modules.google_calendar import service as gcal
+
+    calls = {"n": 0}
+
+    def _spy(*a, **k):
+        calls["n"] += 1
+        return None
+
+    monkeypatch.setattr(gcal, "create_meet_event", _spy)
+    resp = client.post("/agenda/events", json=_event(kind="bloqueio"), headers=headers)
+    assert resp.status_code == 201
+    assert calls["n"] == 0  # bloqueio não gera Meet

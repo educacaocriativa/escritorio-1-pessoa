@@ -157,10 +157,22 @@ export interface AgendaEvent {
   /** Valor em centavos (inteiro) para eventos de cobrança. */
   amount_cents: number | null;
   external_ref: string | null;
+  /** Id do evento espelhado no Google Calendar (quando o Meet foi gerado via OAuth). */
+  google_event_id: string | null;
   /** Nome do cliente (cobrança) ou fornecedor (conta a pagar), resolvido no list/get. */
   client_name: string | null;
   created_by_ai: boolean;
   created_at: string;
+}
+
+/** Estado da integração Google (Meet/Calendar) para a tela de Configurações. */
+export interface GoogleCalendarStatus {
+  /** App OAuth configurado na plataforma (mostra/esconde o botão "Conectar Google"). */
+  configured: boolean;
+  /** Este tenant já conectou uma conta Google. */
+  connected: boolean;
+  /** E-mail da conta Google conectada (null se não conectado). */
+  email: string | null;
 }
 
 /** Resposta de criar/remarcar evento: a 'Guardiã da Agenda' devolve conflitos detectados. */

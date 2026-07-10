@@ -12,6 +12,9 @@ from sqlalchemy.orm import Session
 
 from app.core import audit
 from app.modules.agenda.models import (
+    KIND_ATENDIMENTO,
+    KIND_AUDIENCIA,
+    KIND_REUNIAO,
     OCCUPYING_KINDS,
     STATUS_CANCELLED,
     STATUS_DONE,
@@ -21,6 +24,8 @@ from app.modules.agenda.schemas import EventCreate, EventUpdate
 
 # Estados terminais: não podem ser cancelados de novo nem remarcados.
 TERMINAL_STATUSES = {STATUS_CANCELLED, STATUS_DONE}
+# Tipos onde "reunião" faz sentido → candidatos a gerar Meet automático (Story 4.1).
+MEET_KINDS = {KIND_REUNIAO, KIND_ATENDIMENTO, KIND_AUDIENCIA}
 DEFAULT_LIST_LIMIT = 200
 MAX_LIST_LIMIT = 500
 
@@ -79,6 +84,20 @@ def create_event(
         external_ref=data.external_ref,
         created_by_ai=by_ai,
     )
+    # Geração automática de Meet (Story 4.1): só quando é um evento de reunião, o usuário NÃO
+    # informou um link manual (Zoom/etc. tem prioridade) e o tenant conectou o Google. Import
+    # lazy do módulo de integração para não acoplar a Agenda-núcleo a uma extensão opcional
+    # (mesmo padrão de quotes → contracts). Falha do Google não derruba a criação (IV1/IV2):
+    # create_meet_event captura a exceção e retorna None.
+    if event.kind in MEET_KINDS and not data.meeting_url:
+        from app.modules.google_calendar import service as gcal
+
+        result = gcal.create_meet_event(db, tenant_id=tenant_id, event=event)
+        if result is not None:
+            meeting_url, google_event_id = result
+            if meeting_url:
+                event.meeting_url = meeting_url
+            event.google_event_id = google_event_id
     db.add(event)
     audit.record(
         db, tenant_id=tenant_id, actor=actor, action="agenda.event.create",
