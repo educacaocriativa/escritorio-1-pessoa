@@ -143,6 +143,9 @@ def cancel_contract(
 # ── Público (sem login) ─────────────────────────────────────────────────────
 @public_router.get("/{slug}", response_model=PublicContract)
 def public_view(slug: str, db: Session = Depends(get_db)) -> PublicContract:
+    """Uso LEGÍTIMO de `get_db` (sem tenant): rota pública lê `published_contracts`, um snapshot
+    GLOBAL sem RLS. NÃO toca `users` nem tabelas de negócio por tenant — seguro por design
+    (guarda explícita exigida pela Story 1.2, AC1)."""
     try:
         return PublicContract(**service.public_view(db, slug=slug))
     except service.ContractError as e:
