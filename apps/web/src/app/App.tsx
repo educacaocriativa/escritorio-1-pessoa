@@ -28,7 +28,9 @@ import ProdutosPage from "../features/produtos/ProdutosPage";
 import PageBuilderPage from "../features/sites/PageBuilderPage";
 import PublicPage from "../features/sites/PublicPage";
 import SitesPage from "../features/sites/SitesPage";
+import IdleWarningModal from "../components/IdleWarningModal";
 import { AuthProvider, useAuth } from "../store/auth";
+import { useIdleTimeout } from "../store/useIdleTimeout";
 import { PageActionsProvider } from "../store/pageActions";
 import AppShell from "./AppShell";
 
@@ -83,6 +85,8 @@ function LoginRoute() {
 
 function ProtectedLayout() {
   const { isAuthenticated, user } = useAuth();
+  // Idle timeout LGPD (Story 1.3): hook sempre chamado (regra dos hooks); no-op quando deslogado.
+  const { showWarning, stayConnected } = useIdleTimeout();
   if (!isAuthenticated) return <Navigate to="/login" replace />;
   // 1º acesso: bloqueia o app até o usuário trocar a senha temporária.
   if (user?.must_reset_password) return <FirstAccessPage />;
@@ -91,6 +95,7 @@ function ProtectedLayout() {
       <AppShell>
         <Outlet />
       </AppShell>
+      <IdleWarningModal open={showWarning} onStay={stayConnected} />
     </PageActionsProvider>
   );
 }

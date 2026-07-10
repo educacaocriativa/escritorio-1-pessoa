@@ -1,11 +1,11 @@
 """Rotas de autenticação e onboarding de tenant."""
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, Header, HTTPException
 from sqlalchemy.orm import Session
 
 from app.config import settings
-from app.core.security import create_access_token
+from app.core.security import create_access_token, decode_access_token, refresh_access_token
 from app.core.tenancy import CurrentUser, get_current_user
 from app.db.session import get_db
 from app.modules.auth.models import Tenant, User
@@ -14,6 +14,7 @@ from app.modules.auth.schemas import (
     ChangePasswordRequest,
     ForgotPasswordRequest,
     LoginRequest,
+    RefreshedToken,
     RegisterRequest,
     ResetPasswordRequest,
     SessionInfo,
@@ -65,6 +66,27 @@ def login(data: LoginRequest, db: Session = Depends(get_db)) -> AuthToken:
     except AuthError as e:
         raise HTTPException(status_code=e.status_code, detail=str(e)) from e
     return _build_token(tenant, user)
+
+
+@router.post("/refresh", response_model=RefreshedToken)
+def refresh(
+    _current: CurrentUser = Depends(get_current_user),
+    authorization: str | None = Header(default=None),
+) -> RefreshedToken:
+    """Desliza a janela de inatividade da sessão (idle timeout LGPD — Story 1.3).
+
+    Depende de ``get_current_user``: um token já expirado por inatividade (>30 min sem chamar
+    /refresh) falha aqui com 401 (fail-closed), forçando novo login. O front chama isto enquanto
+    há atividade real do usuário. Não consulta o banco → leve, sem regressão de performance (IV3).
+    """
+    # get_current_user já validou header presente + token não expirado; decodificamos de novo
+    # apenas para ler ``abs_exp`` (não carregado em CurrentUser) e reemitir preservando o teto.
+    token = (authorization or "").split(" ", 1)[1]
+    payload = decode_access_token(token)
+    new_token = refresh_access_token(payload) if payload else None
+    if new_token is None:
+        raise HTTPException(status_code=401, detail="Sessão expirada — faça login novamente")
+    return RefreshedToken(access_token=new_token)
 
 
 @router.post("/forgot-password")
