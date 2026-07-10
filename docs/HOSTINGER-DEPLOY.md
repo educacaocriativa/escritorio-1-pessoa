@@ -114,6 +114,67 @@ não protege contra perda do servidor inteiro.
 | RLS role | `initdb/01-rls-enforce.sql` (senha fixa) | `initdb-prod/01-rls-enforce.sh` (lê `APP_DB_PASSWORD`) |
 | Uploads/gerados | bind local | volumes nomeados (`uploads_data`, `generated_data`) |
 
+## 8. Staging (validar antes de produção)
+
+Objetivo (Story 3.1): rodar a **mesma imagem/compose de produção** num ambiente separado,
+com **segredos próprios** e **dados sintéticos**, e validar cada deploy ali **antes** de
+promover à produção real — sem risco ao dado real.
+
+### 8.1 Isolamento (AC3 / IV3)
+- **Preferido:** uma **VPS dedicada e barata** só para staging (ex.: o menor plano Hostinger
+  KVM) — isolamento físico total de redes, volumes e segredos em relação à produção.
+- **Fallback de custo (mesma VPS de produção):** suba o staging com um **nome de projeto
+  Compose distinto** (`-p e1p-staging`) — o Compose prefixa redes e volumes nomeados com o
+  nome do projeto, isolando-os automaticamente **sem editar o YAML**:
+  ```bash
+  docker compose -p e1p-staging -f docker-compose.prod.yml up -d --build
+  ```
+- Staging **nunca** aponta para o `DATABASE_URL`/segredos de produção. Cada ambiente tem o
+  **seu próprio** `infra/.env.prod` (mesmo NOME de arquivo em disco, CONTEÚDO diferente,
+  diretórios/hosts diferentes). O `DATABASE_URL` é derivado do `APP_DB_PASSWORD` local no
+  próprio compose, então cada ambiente fala só com o seu Postgres.
+
+### 8.2 Subir o staging
+Num diretório/VPS **separado** do de produção:
+```bash
+git clone <url-do-repo> /opt/e1p-staging   # (ou outra VPS dedicada)
+cd /opt/e1p-staging/infra
+cp .env.staging.example .env.prod          # o arquivo em disco TEM que se chamar .env.prod
+```
+Preencha `.env.prod` com segredos/domínio **PRÓPRIOS de staging** (nunca os de produção).
+Detalhe do porquê o arquivo se chama `.env.prod`: `docker-compose.prod.yml`/
+`docker-compose.traefik.yml` têm `env_file: - .env.prod` como **string literal** — o Compose
+lê esse nome tal e qual (não é interpolado por `--env-file`); então é o **conteúdo** que muda
+entre staging e produção, não o nome. O `.env.staging.example` define `SEED_SYNTHETIC_DATA=true`
+e `ENVIRONMENT` segue `production` (staging espelha 100% o comportamento de produção — mesmo
+guard de segredos fortes; ver `docs/stories/3.1.story.md`). Suba:
+```bash
+docker compose -f docker-compose.prod.yml up -d --build      # VPS dedicada
+# ou, se compartilhando a VPS de produção:
+docker compose -p e1p-staging -f docker-compose.prod.yml up -d --build
+```
+No boot, o container `api` roda `alembic upgrade head` → `python -m app.seed` (Super Admin) →
+`python -m app.seed_staging` (dados sintéticos, só porque `SEED_SYNTHETIC_DATA=true` aqui) →
+`uvicorn`. O Postgres cria o papel não-superusuário `e1p_app` no primeiro boot (RLS válida —
+IV2), igual à produção.
+
+### 8.3 Smoke test dos módulos-chave (antes de promover)
+Login com o usuário sintético de staging (semeado por `app.seed_staging`):
+`owner@staging-demo.e1p.com` / senha `staging-demo-owner`. Verifique:
+- **Login** funciona (o app abre sem exigir troca de senha para essa conta sintética).
+- **Agenda** — a "Reunião Demo (staging)" aparece no calendário (amanhã, 14h).
+- **CRM / Kanban** — o "Cliente Demo" aparece no board (etapa Entrada).
+- **Cockpit** — os números batem com os dados sintéticos (1 cliente, cobrança a vencer).
+- **Contas a Receber** — a cobrança sintética (R$150,00, Pix, em aberto) aparece e o link
+  "simular pgto" (webhook de teste) funciona.
+- `https://staging.seudominio.com/api/health` → 200 (mesma topologia de dev/prod — IV1).
+
+### 8.4 Promover para produção
+Só **depois** do smoke test de staging passar, aplique o MESMO fluxo da seção
+[§5 Atualizações](#5-atualizacoes-deploy-de-uma-nova-versao) no diretório/VPS de **produção**
+real (`git pull` + `docker compose ... up -d --build`). Produção não semeia dados sintéticos:
+lá `SEED_SYNTHETIC_DATA` fica vazio/false, então `app.seed_staging` é um no-op.
+
 ## Dívida / próximos passos
 - Wildcard subdomínio por tenant (`*.seudominio.com`) — exige TLS via desafio DNS-01
   (Caddy suporta plugins de provedor de DNS; Cloudflare é o mais simples se você migrar

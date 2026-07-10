@@ -40,3 +40,15 @@ def test_production_ok_with_strong_secret():
 def test_development_allows_defaults():
     s = Settings(environment="development")
     assert not s.is_production
+
+
+def test_seed_synthetic_data_defaults_false():
+    # Default seguro (Story 3.1): produção NUNCA semeia dados sintéticos a menos que
+    # SEED_SYNTHETIC_DATA=true seja definido explicitamente (só no .env de staging).
+    assert Settings(environment="development").seed_synthetic_data is False
+    assert Settings(
+        environment="production",
+        jwt_secret=STRONG,
+        anthropic_api_key="sk-ant-x",
+        super_admin_password="uma-senha-de-admin-forte",
+    ).seed_synthetic_data is False

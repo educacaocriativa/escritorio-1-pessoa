@@ -36,6 +36,12 @@ class Settings(BaseSettings):
     # em produção, defina para que SÓ o gateway confirme pagamentos (o dono nunca marca à mão).
     gateway_webhook_secret: str = ""
 
+    # Staging: quando True, o boot semeia dados sintéticos (tenant/usuário/registros de demo)
+    # para o smoke test antes de promover à produção. Default False = produção NUNCA semeia
+    # (é o ÚNICO gate — ver app/seed_staging.py e docs/HOSTINGER-DEPLOY.md §8). Só o
+    # .env de staging define SEED_SYNTHETIC_DATA=true (Story 3.1).
+    seed_synthetic_data: bool = False
+
     # App
     root_domain: str = "e1p.com"
     frontend_url: str = "http://localhost:5173"
