@@ -105,6 +105,60 @@ Sem RDS aqui — backups são responsabilidade sua. Cron diário simples:
 Copie os `.sql.gz` para fora da VPS (S3, outro storage) — backup só na mesma máquina
 não protege contra perda do servidor inteiro.
 
+## 6.5 Migração de Anexos para S3 (Story 3.5)
+
+Os anexos (boletos/contratos) nasceram como bytes no Postgres (`attachments.data`, `LargeBinary`),
+o que incha o banco e o dump de backup. A Story 3.5 move os bytes para um object storage
+S3-compatível (`app/core/storage.py`), mantendo o isolamento por tenant também no path da chave
+(`tenants/{tenant_id}/attachments/{attachment_id}/{filename}`).
+
+**Comportamento faseável (não bloqueia o deploy):** enquanto `S3_BUCKET` estiver vazio, tudo
+continua no Postgres exatamente como antes. Configurar o S3 e rodar o backfill pode ser feito
+numa janela DEPOIS do go-live.
+
+### 1) Configurar as envs (uma vez)
+No `.env.prod`, preencha (ver `infra/.env.prod.example`):
+
+```
+S3_BUCKET=meu-bucket-e1p
+S3_ACCESS_KEY_ID=...
+S3_SECRET_ACCESS_KEY=...
+S3_REGION=auto                     # ou a região do provedor
+S3_ENDPOINT_URL=https://...        # vazio p/ AWS S3 real; defina p/ MinIO/B2/Wasabi
+```
+
+Pode ser AWS S3 real OU um provedor S3-compatível mais barato (MinIO self-hosted na própria VPS,
+Backblaze B2, Wasabi) — o código não muda, só a configuração. Reinicie a API (`docker compose
+-f infra/docker-compose.prod.yml up -d api`). A partir daí, **anexos NOVOS** já vão direto para
+o S3.
+
+### 2) Rodar o backfill dos anexos antigos (uma vez, idempotente)
+Move os anexos legados (bytes ainda no Postgres) para o bucket:
+
+```
+docker compose -f infra/docker-compose.prod.yml exec api \
+  python -m app.scripts.migrate_attachments_to_s3
+```
+
+É idempotente — rodar de novo não reprocessa o que já foi migrado. Anexos NÃO migrados continuam
+baixando normalmente pelo fallback (leitura resolve a origem por linha), então rodar é seguro e
+não é bloqueante.
+
+### 3) Validar (IV3 — o dump encolhe)
+Compare o tamanho do `pg_dump` antes/depois do backfill:
+
+```
+docker compose -f infra/docker-compose.prod.yml exec -T postgres \
+  pg_dump -U e1puser e1pdb | gzip | wc -c
+```
+
+O valor deve cair proporcionalmente ao volume de anexos migrados.
+
+> **Nota:** a migration `0039` é só estrutural (adiciona `storage_key`, torna `data` nullable) e
+> roda no boot sem tocar em rede/S3 — o backfill é este script operacional separado, rodado à
+> mão. A coluna `data` é mantida de propósito (compat. de leitura de anexos não migrados);
+> removê-la é limpeza futura, só depois do backfill 100% confirmado.
+
 ## 7. Diferenças em relação ao dev (`docker-compose.yml`)
 | | Dev | Prod (`docker-compose.prod.yml`) |
 |---|---|---|

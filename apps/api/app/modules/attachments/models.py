@@ -1,8 +1,9 @@
 """Anexos — upload real de arquivos (boleto, contrato) ligados a uma entidade.
 
-Os bytes ficam no Postgres (LargeBinary) com RLS — simples e isolado por tenant para o
-estágio atual; migrar para S3 é dívida. owner_type/owner_id ligam o anexo a um Payable,
-Charge, etc. Tabela de NEGÓCIO (RLS).
+Os bytes podem morar em duas camadas (Story 3.5): object storage S3-compatível (quando
+`storage_key` está setado) ou no Postgres (`data` LargeBinary — fallback legado / storage
+desligado). Ambas as colunas são nullable: exatamente uma delas carrega os bytes por linha.
+owner_type/owner_id ligam o anexo a um Payable, Charge, etc. Tabela de NEGÓCIO (RLS).
 """
 from __future__ import annotations
 
@@ -28,4 +29,8 @@ class Attachment(Base, TenantMixin, TimestampMixin):
     filename: Mapped[str] = mapped_column(String(255), nullable=False)
     content_type: Mapped[str] = mapped_column(String(100), nullable=False)
     size: Mapped[int] = mapped_column(Integer, nullable=False)
-    data: Mapped[bytes] = mapped_column(LargeBinary, nullable=False)
+    # Bytes no Postgres (fallback legado / storage S3 desligado). Nullable desde a Story 3.5:
+    # anexos migrados para o S3 têm `data=None` e `storage_key` setado.
+    data: Mapped[bytes | None] = mapped_column(LargeBinary, nullable=True)
+    # Chave do objeto no storage S3-compatível (Story 3.5). None = bytes ainda no Postgres.
+    storage_key: Mapped[str | None] = mapped_column(String(512), nullable=True)
