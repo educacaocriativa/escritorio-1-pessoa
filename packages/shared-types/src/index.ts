@@ -3,6 +3,14 @@
  * Deve espelhar os schemas Pydantic do backend (apps/api/app/.../schemas).
  * Quando um schema do backend mudar, atualize aqui — os agentes de QA (dedup-checker)
  * vigiam tipos que deveriam morar neste pacote.
+ *
+ * GERAÇÃO AUTOMÁTICA (Story 4.5): os tipos GERADOS a partir do OpenAPI do FastAPI agora vivem em
+ * `./generated.ts`. Rode `pnpm generate:types` na RAIZ do monorepo para regenerá-los (exporta o
+ * OpenAPI via `apps/api/scripts/export_openapi.py` → `openapi.json` → `openapi-typescript`).
+ * Os tipos deste arquivo (`index.ts`) continuam mantidos À MÃO por retrocompatibilidade e devem
+ * ser migrados incrementalmente para `generated.ts` em stories futuras (catalogar na Story 4.6).
+ * ATENÇÃO: sem CI, a regeneração é um passo MANUAL após qualquer mudança de schema no backend —
+ * `openapi.json`/`generated.ts` versionados podem sofrer drift se esquecerem de rodar o comando.
  */
 
 // ── Identidade / acesso ────────────────────────────────
@@ -585,6 +593,7 @@ export interface TenantProfile {
   text_color: string;
   bg_color: string;
   font: string;
+  timezone: string;
 }
 
 // ── Controle de Estoque ────────────────────────────────

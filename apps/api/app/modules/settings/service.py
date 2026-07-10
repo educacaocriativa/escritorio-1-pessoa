@@ -12,7 +12,7 @@ from app.modules.settings.schemas import ProfileUpdate
 _FIELDS = (
     "display_name", "document", "email", "phone", "address", "website", "about",
     "logo_url", "primary_color", "secondary_color", "accent_color", "text_color",
-    "bg_color", "font",
+    "bg_color", "font", "timezone",
 )
 
 

@@ -12,6 +12,7 @@ pydantic-settings==2.6.1
 python-dotenv==1.0.1
 aiofiles==24.1.0
 httpx==0.28.0
+tzdata==2024.2  # base IANA pura-Python p/ zoneinfo (python:3.13-slim/Windows não trazem a base do SO)
 
 # Documentos / OCR (módulos que precisam)
 python-docx==1.1.2

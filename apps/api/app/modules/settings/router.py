@@ -20,6 +20,7 @@ def _out(p: TenantProfile) -> ProfileOut:
         address=p.address, website=p.website, about=p.about, logo_url=p.logo_url,
         primary_color=p.primary_color, secondary_color=p.secondary_color,
         accent_color=p.accent_color, text_color=p.text_color, bg_color=p.bg_color, font=p.font,
+        timezone=p.timezone,
     )
 
 

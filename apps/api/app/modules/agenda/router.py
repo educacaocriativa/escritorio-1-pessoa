@@ -105,7 +105,8 @@ def update_event(
 ) -> EventOut:
     try:
         event = service.update_event(
-            db, event_id=event_id, tenant_id=user.tenant_id, actor=user.user_id, data=data
+            db, event_id=event_id, tenant_id=user.tenant_id, actor=user.user_id, data=data,
+            by_ai=user.is_ai,
         )
     except service.AgendaError as e:
         raise HTTPException(status_code=e.status_code, detail=str(e)) from e
@@ -120,7 +121,8 @@ def cancel_event(
 ) -> EventOut:
     try:
         event = service.cancel_event(
-            db, event_id=event_id, tenant_id=user.tenant_id, actor=user.user_id
+            db, event_id=event_id, tenant_id=user.tenant_id, actor=user.user_id,
+            by_ai=user.is_ai,
         )
     except service.AgendaError as e:
         raise HTTPException(status_code=e.status_code, detail=str(e)) from e
@@ -137,7 +139,7 @@ def reschedule_event(
     try:
         event, conflicts = service.reschedule_event(
             db, event_id=event_id, tenant_id=user.tenant_id, actor=user.user_id,
-            starts_at=data.starts_at, ends_at=data.ends_at,
+            starts_at=data.starts_at, ends_at=data.ends_at, by_ai=user.is_ai,
         )
     except service.AgendaError as e:
         raise HTTPException(status_code=e.status_code, detail=str(e)) from e

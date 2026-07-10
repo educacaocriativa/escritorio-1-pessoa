@@ -1,12 +1,14 @@
 """Regras de negócio do auth: registro de tenant e autenticação."""
 from __future__ import annotations
 
+import logging
 from datetime import UTC, datetime, timedelta
 
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
+from app.core.email import send_email
 from app.core.security import (
     generate_reset_token,
     hash_password,
@@ -16,7 +18,14 @@ from app.core.security import (
 from app.modules.auth.models import Tenant, User
 from app.modules.auth.schemas import RegisterRequest
 
+logger = logging.getLogger("e1p.auth")
+
 RESET_TOKEN_TTL = timedelta(hours=1)
+
+# Mensagem de conflito ÚNICA para slug OU e-mail: não revela QUAL campo colidiu, mitigando a
+# enumeração de e-mail no /register (CLAUDE.md §6.1). Contém as substrings "subdomínio" e "e-mail"
+# para os asserts existentes continuarem válidos sem distinguir o caso.
+CONFLICT_MESSAGE = "Subdomínio ou e-mail já cadastrado"
 
 
 class AuthError(Exception):
@@ -35,9 +44,9 @@ def register_tenant(db: Session, data: RegisterRequest) -> tuple[Tenant, User]:
     """
     email = str(data.email).lower()
     if db.scalar(select(Tenant).where(Tenant.slug == data.slug)):
-        raise AuthError("Este subdomínio já está em uso", 409)
+        raise AuthError(CONFLICT_MESSAGE, 409)
     if db.scalar(select(User).where(User.email == email)):
-        raise AuthError("Este e-mail já está cadastrado", 409)
+        raise AuthError(CONFLICT_MESSAGE, 409)
 
     tenant = Tenant(slug=data.slug, legal_name=data.legal_name, document=data.document)
     db.add(tenant)
@@ -56,9 +65,25 @@ def register_tenant(db: Session, data: RegisterRequest) -> tuple[Tenant, User]:
         db.commit()
     except IntegrityError as e:
         db.rollback()
-        raise AuthError("Subdomínio ou e-mail já cadastrado", 409) from e
+        raise AuthError(CONFLICT_MESSAGE, 409) from e
     db.refresh(tenant)
     db.refresh(owner)
+
+    # E-mail de boas-vindas best-effort: uma falha de envio NUNCA derruba o registro (mesmo
+    # princípio de core/whatsapp e Story 4.3). Em dev, sem smtp_host, send_email já loga e volta
+    # "logged" sem lançar; o try/except é defesa-em-profundidade para quando houver SMTP real.
+    try:
+        send_email(
+            to=email,
+            subject="Bem-vindo(a) ao e1p",
+            body=(
+                f"Olá, {owner.name}! Sua conta ({tenant.slug}.e1p.com) foi criada com sucesso. "
+                "Bom trabalho — a IA já está pronta para ajudar."
+            ),
+        )
+    except Exception:  # noqa: BLE001 (best-effort: envio nunca derruba o registro)
+        logger.warning("Falha ao enviar e-mail de boas-vindas para %s", email, exc_info=True)
+
     return tenant, owner
 
 
