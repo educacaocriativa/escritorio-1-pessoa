@@ -311,6 +311,42 @@ def test_users_requires_admin(client: TestClient):
     assert client.get("/admin/users").status_code == 401
 
 
+# ── Gating de temp_password em produção (Story 2.1 AC3) ──────────────────────
+def test_temp_password_hidden_in_production_account(client: TestClient, admin_headers, monkeypatch):
+    """Em produção, POST /admin/accounts NÃO retorna a senha no corpo (vai por e-mail)."""
+    from app.config import settings
+
+    monkeypatch.setattr(settings, "environment", "production")
+    resp = client.post(
+        "/admin/accounts",
+        json=_account_payload(slug="prodacc", email="prodacc@example.com"),
+        headers=admin_headers,
+    )
+    assert resp.status_code == 201, resp.text
+    body = resp.json()
+    assert body["temp_password"] is None  # AC3: não vaza no corpo em produção
+    # o envio continua acontecendo (delivery_status) e a conta é criada normalmente
+    assert body["delivery_status"] in ("sent", "logged", "failed")
+    assert body["owner"]["must_reset_password"] is True
+
+
+def test_temp_password_hidden_in_production_staff(client: TestClient, admin_headers, monkeypatch):
+    """Em produção, POST /admin/accounts/{tid}/users NÃO retorna a senha temporária no corpo."""
+    from app.config import settings
+
+    tid = _tenant_id(client, admin_headers, slug="prodstaff", email="prodstaff@example.com")
+    monkeypatch.setattr(settings, "environment", "production")
+    resp = client.post(
+        f"/admin/accounts/{tid}/users",
+        json=_staff_body(email="staffprod@example.com"),
+        headers=admin_headers,
+    )
+    assert resp.status_code == 201, resp.text
+    body = resp.json()
+    assert body["temp_password"] is None  # AC3: não vaza no corpo em produção
+    assert body["delivery_status"] in ("sent", "logged", "failed")
+
+
 # ── Exclusão de conta: purga atômica + log de plataforma sobrevivente (Story 1.2) ────
 # Baseline de regressão criada ANTES da mudança de comportamento (a story constatou que não
 # havia NENHUM teste automatizado para DELETE /admin/accounts/{tenant_id}). O delete real chama

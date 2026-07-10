@@ -31,7 +31,14 @@ class Settings(BaseSettings):
     # Integrações (vazio = stub/log; preencher quando conectar)
     whatsapp_token: str = ""
     whatsapp_phone_id: str = ""
-    smtp_host: str = ""  # vazio = e-mail vira log (dev); preencher p/ entrega real
+    # E-mail transacional (SMTP genérico; cobre também o endpoint SMTP do Amazon SES).
+    # SMTP_HOST vazio = e-mail vira log (dev/graceful degradation); preencher p/ entrega real.
+    smtp_host: str = ""
+    smtp_port: int = 587
+    smtp_user: str = ""
+    smtp_password: str = ""
+    smtp_from: str = ""  # remetente; vazio = usa smtp_user
+    smtp_use_tls: bool = True
     # Segredo do webhook do gateway de pagamento. Vazio (dev) = webhook aberto p/ testes;
     # em produção, defina para que SÓ o gateway confirme pagamentos (o dono nunca marca à mão).
     gateway_webhook_secret: str = ""

@@ -1,4 +1,6 @@
 """Testes do módulo auth: registro, login, /me e isolamento básico."""
+from unittest.mock import patch
+
 from fastapi.testclient import TestClient
 
 VALID = {
@@ -126,6 +128,29 @@ def test_password_reset_flow(client: TestClient):
     assert old.status_code == 401
     new = client.post("/auth/login", json={"email": VALID["email"], "password": nova})
     assert new.status_code == 200
+
+
+def test_forgot_password_sends_email_when_account_exists(client: TestClient):
+    # Story 2.1 (AC2/IV1): havendo conta válida, o token é entregue por e-mail (send_email chamado).
+    _register(client)
+    # forgot_password faz import tardio de send_email — patch no ponto de origem (core.email).
+    with patch("app.core.email.send_email", return_value="logged") as mock_send:
+        resp = client.post("/auth/forgot-password", json={"email": VALID["email"]})
+    assert resp.status_code == 200
+    mock_send.assert_called_once()
+    kwargs = mock_send.call_args.kwargs
+    assert kwargs["to"] == VALID["email"]
+    assert kwargs["subject"] == "Redefinição de senha"
+    # o token cru (dev_reset_token) vai no corpo do e-mail
+    assert resp.json()["dev_reset_token"] in kwargs["body"]
+
+
+def test_forgot_password_unknown_email_does_not_send(client: TestClient):
+    # Sem conta: nada é enviado (resposta continua genérica — não revela existência).
+    with patch("app.core.email.send_email", return_value="logged") as mock_send:
+        resp = client.post("/auth/forgot-password", json={"email": "ninguem@example.com"})
+    assert resp.status_code == 200
+    mock_send.assert_not_called()
 
 
 def test_reset_with_invalid_token_rejected(client: TestClient):
