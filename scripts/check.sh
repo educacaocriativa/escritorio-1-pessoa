@@ -14,7 +14,10 @@ echo "▶ Backend: lint (ruff)"
 ( cd apps/api && ruff check . )
 
 echo "▶ Backend: testes (pytest)"
-( cd apps/api && python -m pytest -q )
+# Exclui o teste rls_e2e: ele sobe um Postgres real via testcontainers (exige Docker daemon).
+# Roda separado no job cross-tenant-rls do CI ou manualmente com `pytest -m rls_e2e`. Sem o
+# filtro, um host sem Docker (ex.: o container python:3.13-slim usado p/ rodar a suíte) quebraria.
+( cd apps/api && python -m pytest -q -m "not rls_e2e" )
 
 echo "▶ Frontend: typecheck"
 if command -v pnpm >/dev/null 2>&1; then

@@ -89,6 +89,12 @@ pro IP da VPS (`dig +short app.seudominio.com`) e se a porta 80 está mesmo aces
     navegar antes de trocar a senha.
 
 ## 5. Atualizações (deploy de uma nova versão)
+> **Antes de dar `git pull` + rebuild em produção, confirme que o CI está VERDE** no
+> commit/branch que será deployado (`.github/workflows/ci.yml` — jobs `test-in-prod-image`
+> e `cross-tenant-rls`). O CI roda a suíte DENTRO da imagem de produção (pega drift
+> venv↔produção) e valida o isolamento RLS num Postgres real (Story 3.2). O deploy em si
+> continua manual (não há CD automático), mas por processo só suba versões com CI passando.
+
 ```bash
 cd /opt/e1p && git pull
 cd infra && docker compose -f docker-compose.prod.yml up -d --build
@@ -118,6 +124,10 @@ não protege contra perda do servidor inteiro.
 - Wildcard subdomínio por tenant (`*.seudominio.com`) — exige TLS via desafio DNS-01
   (Caddy suporta plugins de provedor de DNS; Cloudflare é o mais simples se você migrar
   o DNS pra lá). Reavaliar quando o white-label por subdomínio for pro ar.
-- CI/CD (hoje é `git pull` + rebuild manual na VPS).
+- **CI** já existe (`.github/workflows/ci.yml`, Story 3.2): testa a imagem de produção e o
+  isolamento RLS a cada push/PR na `main`. **Pendente (@devops):** habilitar branch protection
+  em GitHub → Settings → Branches marcando `test-in-prod-image` e `cross-tenant-rls` como checks
+  obrigatórios (transforma o workflow num gate que BLOQUEIA merge, não só um status vermelho).
+  **CD (deploy automático)** ainda não existe — o deploy segue `git pull` + rebuild manual na VPS.
 - Monitoramento/alertas (hoje não há; considerar `docker compose logs` + algo simples
   tipo Uptime Kuma, ou migrar para AWS Fase B quando o tráfego justificar).
