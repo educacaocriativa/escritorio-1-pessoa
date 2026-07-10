@@ -52,8 +52,15 @@ services:
     networks: [internal]
 
   caddy:
-    image: caddy:2-alpine
+    # Imagem custom com o plugin caddy-dns/cloudflare (necessário p/ o desafio DNS-01 do
+    # wildcard `*.${ROOT_DOMAIN}` — a imagem oficial `caddy:2-alpine` não traz módulos de
+    # DNS). Ver infra/caddy/Dockerfile e Story 4.4. O domínio único (${DOMAIN}) segue no
+    # HTTP-01 automático, sem regressão (IV1).
+    build: ./caddy
     restart: always
+    # env_file: injeta DOMAIN, ROOT_DOMAIN e CLOUDFLARE_API_TOKEN (lidos pelo Caddyfile via
+    # {$DOMAIN}/{$ROOT_DOMAIN}/{$CLOUDFLARE_API_TOKEN}). Preencha ROOT_DOMAIN e o token no
+    # .env.prod (ver .env.prod.example) — sem o token, o bloco wildcard não emite o cert.
     env_file:
       - .env.prod
     ports:

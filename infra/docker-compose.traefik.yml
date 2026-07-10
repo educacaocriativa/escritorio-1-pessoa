@@ -59,7 +59,13 @@ services:
       # Front chama sempre /api/... (ver apps/web/src/lib/api.ts); os routers da API
       # (app/main.py) NÃO esperam esse prefixo — por isso o stripprefix abaixo, que
       # substitui o `handle_path` do Caddyfile antigo (ver infra/Caddyfile).
-      - traefik.http.routers.e1p-api.rule=Host(`${DOMAIN}`) && PathPrefix(`/api`)
+      # Wildcard por tenant (Story 4.4): além do ${DOMAIN} único, aceita `<slug>.${ROOT_DOMAIN}`
+      # (HostRegexp). IMPORTANTE: a EMISSÃO do certificado wildcard depende de um certresolver
+      # DNS-01 no Traefik COMPARTILHADO (/opt/infra/proxy/, FORA deste repo) — este label só
+      # roteia; sem esse resolver externo o wildcard não recebe cert (ver docs/HOSTINGER-DEPLOY.md
+      # §8 e Dev Notes → Riscos da Story 4.4). Sintaxe HostRegexp do Traefik v2 (named group);
+      # no Traefik v3 use: HostRegexp(`^[a-z0-9-]+\.${ROOT_DOMAIN}$`).
+      - traefik.http.routers.e1p-api.rule=(Host(`${DOMAIN}`) || HostRegexp(`{subdomain:[a-z0-9-]+}.${ROOT_DOMAIN}`)) && PathPrefix(`/api`)
       - traefik.http.routers.e1p-api.entrypoints=websecure
       - traefik.http.routers.e1p-api.tls.certresolver=letsencrypt
       # Precisa casar ANTES do catch-all do `web` (priority=1).
@@ -79,7 +85,10 @@ services:
     labels:
       - traefik.enable=true
       - traefik.docker.network=edge
-      - traefik.http.routers.e1p-web.rule=Host(`${DOMAIN}`)
+      # Wildcard por tenant (Story 4.4): catch-all aceita ${DOMAIN} e `<slug>.${ROOT_DOMAIN}`.
+      # Mesma dependência externa do certresolver DNS-01 no Traefik compartilhado (ver router
+      # e1p-api acima). Prioridade 1 mantida: casa por último, depois do router /api.
+      - traefik.http.routers.e1p-web.rule=Host(`${DOMAIN}`) || HostRegexp(`{subdomain:[a-z0-9-]+}.${ROOT_DOMAIN}`)
       - traefik.http.routers.e1p-web.entrypoints=websecure
       - traefik.http.routers.e1p-web.tls.certresolver=letsencrypt
       # Catch-all — casa por último, depois do router /api acima.
