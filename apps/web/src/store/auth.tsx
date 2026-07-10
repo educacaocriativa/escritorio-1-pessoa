@@ -9,6 +9,7 @@ interface AuthContextValue {
   isAuthenticated: boolean;
   login: (token: string, user: User, tenant: Tenant) => void;
   updateUser: (user: User) => void;
+  updateToken: (token: string) => void;
   logout: () => void;
 }
 
@@ -46,6 +47,12 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     setUser(u);
   }, []);
 
+  // Substitui só a credencial (usado ao deslizar a sessão via /auth/refresh — idle timeout LGPD).
+  const updateToken = useCallback((t: string) => {
+    localStorage.setItem(TOKEN_KEY, t);
+    setToken(t);
+  }, []);
+
   const logout = useCallback(() => {
     localStorage.removeItem(TOKEN_KEY);
     localStorage.removeItem(USER_KEY);
@@ -69,7 +76,16 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   return (
     <AuthContext.Provider
-      value={{ token, user, tenant, isAuthenticated: Boolean(token), login, updateUser, logout }}
+      value={{
+        token,
+        user,
+        tenant,
+        isAuthenticated: Boolean(token),
+        login,
+        updateUser,
+        updateToken,
+        logout,
+      }}
     >
       {children}
     </AuthContext.Provider>

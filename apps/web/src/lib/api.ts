@@ -20,6 +20,20 @@ export const publicApi = axios.create({
   headers: { "Content-Type": "application/json" },
 });
 
+/**
+ * Desliza a sessão no backend (idle timeout LGPD — Story 1.3): reemite um access token com a
+ * janela de inatividade renovada. Retorna o novo token, ou `null` se a sessão não pôde ser
+ * renovada (401 → o interceptor já cuida do logout). Não lança.
+ */
+export async function refreshSession(): Promise<string | null> {
+  try {
+    const { data } = await api.post<{ access_token: string }>("/auth/refresh");
+    return data.access_token ?? null;
+  } catch {
+    return null;
+  }
+}
+
 export function apiErrorMessage(err: unknown): string {
   if (err instanceof AxiosError) {
     const data = err.response?.data as ApiError | undefined;
