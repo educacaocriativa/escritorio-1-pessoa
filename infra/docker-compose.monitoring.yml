@@ -1,0 +1,63 @@
+# Stack de monitoramento self-hosted (Story 3.4 — Monitoramento e alertas).
+# SEPARADO do compose da app (docker-compose.prod.yml / docker-compose.traefik.yml) de
+# propósito: assim o release do monitoramento não fica acoplado ao release da aplicação
+# (12-factor, mesmo princípio citado no Goal do Epic 3).
+#
+# Sobe o Uptime Kuma (louislam/uptime-kuma), que cobre:
+#   - HTTP(s) monitor  -> uptime/health da API (https://<DOMAIN>/api/health)   [AC1]
+#   - Certificate Expiry monitor -> validade do TLS Let's Encrypt              [AC1]
+#   - Docker Container monitor(s) -> reinícios/estado de api/web/postgres/proxy [AC2]
+#   - Push monitor de disco, alimentado por infra/scripts/monitoring/disk-check.sh (cron) [AC2]
+#   - Notification (Telegram) vinculada a todos os monitors                    [AC3]
+# Os monitors e a notificação são configurados na UI do Kuma (dados persistidos no
+# volume uptime_kuma_data) — ver runbook em docs/HOSTINGER-DEPLOY.md §8.
+#
+# --- Topologia A: Traefik compartilhado (PRODUÇÃO REAL, e1p.doroeventos.com.br) ---
+# O painel é publicado em https://monitor.${DOMAIN} pelo Traefik compartilhado da VPS,
+# via rede externa `edge` + labels Traefik (mesmo padrão de api/web em
+# docker-compose.traefik.yml). É a topologia default deste arquivo.
+# Subir (a partir de infra/, com .env.prod preenchido — DOMAIN vem de lá):
+#   docker compose --env-file .env.prod -f docker-compose.monitoring.yml up -d
+#
+# --- Topologia B: Caddy próprio (docker-compose.prod.yml) ---
+# 1) Troque `networks: [edge]` do serviço por `networks: [internal]` (rede definida no
+#    docker-compose.prod.yml — assim o container caddy alcança o uptime-kuma) e, no bloco
+#    `networks:` abaixo, troque `edge` (external) por `internal:` (mesma chave do prod).
+#    As labels Traefik ficam inertes no Caddy; pode removê-las para evitar confusão.
+# 2) Suba junto do compose da app para compartilhar a rede `internal` e deixar o Caddy
+#    alcançar o container (os dois -f são mesclados num único project):
+#      docker compose -f docker-compose.prod.yml -f docker-compose.monitoring.yml up -d
+# 3) A rota do subdomínio monitor.${DOMAIN} já está no infra/Caddyfile.
+services:
+  uptime-kuma:
+    image: louislam/uptime-kuma:1
+    restart: always
+    volumes:
+      - uptime_kuma_data:/app/data
+      # docker.sock montado SOMENTE LEITURA (:ro) — habilita o monitor tipo
+      # "Docker Container" (reinícios/estado de api, web, postgres e do proxy).
+      # Nunca montar :rw: o Kuma só precisa ler o estado dos containers.
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    networks: [edge]
+    labels:
+      # Topologia A (Traefik). Na topologia B (Caddy) estas labels ficam inertes.
+      - traefik.enable=true
+      - traefik.docker.network=edge
+      # Subdomínio dedicado p/ não colidir com o roteamento /api vs catch-all da app.
+      - traefik.http.routers.e1p-kuma.rule=Host(`monitor.${DOMAIN}`)
+      - traefik.http.routers.e1p-kuma.entrypoints=websecure
+      - traefik.http.routers.e1p-kuma.tls.certresolver=letsencrypt
+      - traefik.http.routers.e1p-kuma.middlewares=security-headers@file
+      # Porta interna default do Uptime Kuma.
+      - traefik.http.services.e1p-kuma.loadbalancer.server.port=3001
+
+networks:
+  # Rede externa compartilhada do Traefik da VPS (mesma usada por api/web).
+  # Topologia B (Caddy): troque este bloco por `internal:` (a rede definida no
+  # docker-compose.prod.yml, mesclada quando os dois -f sobem no mesmo project).
+  edge:
+    external: true
+    name: edge
+
+volumes:
+  uptime_kuma_data:
