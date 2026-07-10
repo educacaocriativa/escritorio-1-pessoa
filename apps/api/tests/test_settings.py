@@ -4,7 +4,7 @@ from fastapi.testclient import TestClient
 
 REGISTER = {
     "legal_name": "Brand SA",
-    "document": "39393939000111",
+    "document": "39393939000107",
     "slug": "brandsa",
     "email": "brand@example.com",
     "name": "Br",
@@ -23,7 +23,7 @@ def test_profile_created_with_defaults(client: TestClient, headers):
     assert resp.status_code == 200
     p = resp.json()
     assert p["display_name"] == "Brand SA"  # vem do legal_name
-    assert p["document"] == "39393939000111"
+    assert p["document"] == "39393939000107"
     assert p["primary_color"] == "#5D44F8"
     assert p["font"] == "Inter"
 

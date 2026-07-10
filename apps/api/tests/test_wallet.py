@@ -9,7 +9,7 @@ from app.modules.wallet.service import compute_split
 
 REGISTER = {
     "legal_name": "Loja Bia",
-    "document": "44555666000133",
+    "document": "44555666000181",
     "slug": "lojabia",
     "email": "bia@example.com",
     "name": "Bia",
