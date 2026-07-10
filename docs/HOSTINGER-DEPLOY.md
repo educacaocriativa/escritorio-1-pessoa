@@ -95,15 +95,35 @@ cd infra && docker compose -f docker-compose.prod.yml up -d --build
 ```
 Migrations rodam automaticamente no start do container `api` (mesmo comando do dev).
 
-## 6. Backup do Postgres
-Sem RDS aqui — backups são responsabilidade sua. Cron diário simples:
+## 6. Backup do Postgres (automatizado + offsite + restore testado)
+Sem RDS aqui — backups são responsabilidade sua, mas agora são **automatizados, copiados
+para fora da VPS e com restore testado** (Story 3.3). Os scripts vivem em `infra/scripts/`
+e o passo-a-passo completo (instalação/config do `rclone`, drill de restore, evidências)
+está em [`docs/RUNBOOK-BACKUP-RESTORE.md`](RUNBOOK-BACKUP-RESTORE.md).
+
+**Resumo:**
+- `infra/scripts/backup.sh` — faz `pg_dump | gzip` via `docker compose exec` (agnóstico ao
+  nome do container; funciona com `docker-compose.prod.yml` e `docker-compose.traefik.yml`),
+  salva em `/opt/e1p-backups`, envia a cópia **offsite** via `rclone copy` e aplica retenção
+  local. Falha (dump ou upload) fica logada com exit code != 0.
+- `infra/scripts/restore.sh` — restaura um dump local ou o mais recente do offsite
+  (`--latest-offsite`), exige `--force` (guarda de segurança) e mira um alvo descartável/staging.
+
+**Configuração (uma vez, na VPS):**
+```bash
+# Instale o rclone (host, fora do container) e configure o remote S3-compatível:
+curl https://rclone.org/install.sh | sudo bash
+rclone config              # crie um remote chamado "e1p-offsite" (S3/B2/Wasabi/...)
+# Preencha no infra/.env.prod: BACKUP_S3_BUCKET, BACKUP_RETENTION_DAYS_LOCAL/REMOTE
+```
+
+**Cron diário (substitui o cron inline antigo):**
 ```bash
 # /etc/cron.d/e1p-backup
-0 3 * * * root docker exec $(docker ps -qf "name=infra-postgres-1") \
-  pg_dump -U e1p_root e1pdb | gzip > /opt/e1p-backups/e1pdb-$(date +\%F).sql.gz
+0 3 * * * root /opt/e1p/infra/scripts/backup.sh >> /var/log/e1p-backup.log 2>&1
 ```
-Copie os `.sql.gz` para fora da VPS (S3, outro storage) — backup só na mesma máquina
-não protege contra perda do servidor inteiro.
+> A retenção **remota** é aplicada por uma *lifecycle rule* no próprio bucket do provedor
+> (`BACKUP_RETENTION_DAYS_REMOTE`), não pelo script — ver o runbook.
 
 ## 7. Diferenças em relação ao dev (`docker-compose.yml`)
 | | Dev | Prod (`docker-compose.prod.yml`) |

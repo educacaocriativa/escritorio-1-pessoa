@@ -1,0 +1,4 @@
+# Shell scripts DEVEM manter LF mesmo commitados a partir do Windows — CRLF quebra o
+# shebang ao rodar no Linux (VPS/containers): "bad interpreter: /usr/bin/env bash^M".
+# (Story 3.3 — infra/scripts/backup.sh, restore.sh rodam via cron na VPS Hostinger.)
+*.sh text eol=lf
