@@ -151,13 +151,15 @@ def delete_user(
 @router.delete("/accounts/{tenant_id}", status_code=204)
 def delete_account(
     tenant_id: str,
-    _admin: CurrentUser = Depends(require_platform_admin),
+    admin: CurrentUser = Depends(require_platform_admin),
     db: Session = Depends(get_db),
 ):
     from fastapi import Response
 
     try:
-        service.delete_account(db, tenant_id)
+        # `admin` (o Master autenticado) é repassado para gravar o log de plataforma da
+        # exclusão (quem/quando) — rastro que sobrevive à purga do tenant (LGPD, AC2).
+        service.delete_account(db, tenant_id, admin)
     except service.PlatformError as e:
         raise HTTPException(status_code=e.status_code, detail=str(e)) from e
     return Response(status_code=204)

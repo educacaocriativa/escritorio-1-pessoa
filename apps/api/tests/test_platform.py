@@ -1,10 +1,17 @@
 """Testes do Super Admin (Master). Delete real (purga) é coberto no e2e Docker (usa Postgres)."""
+from contextlib import contextmanager
+from datetime import UTC, datetime
+
 import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy.orm import Session
 
+from app.core.audit import PlatformAuditEntry
 from app.core.security import hash_password
+from app.modules.agenda.models import AgendaEvent
 from app.modules.auth.models import Tenant, User
+from app.modules.crm.models import Client
+from app.modules.platform import service as platform_service
 
 ADMIN_EMAIL = "master@e1p.com"
 ADMIN_PASS = "senha-do-master-123"
@@ -279,3 +286,95 @@ def test_users_requires_admin(client: TestClient):
     h = {"Authorization": f"Bearer {token}"}
     assert client.get("/admin/users", headers=h).status_code == 403
     assert client.get("/admin/users").status_code == 401
+
+
+# ── Exclusão de conta: purga atômica + log de plataforma sobrevivente (Story 1.2) ────
+# Baseline de regressão criada ANTES da mudança de comportamento (a story constatou que não
+# havia NENHUM teste automatizado para DELETE /admin/accounts/{tenant_id}). O delete real chama
+# `tenant_session` (Postgres, RLS) — em teste (SQLite) apontamos para a sessão compartilhada.
+
+
+@pytest.fixture()
+def _tenant_session_to_test_db(db: Session, monkeypatch):
+    """`delete_account` abre `tenant_session` (conexão Postgres dedicada) direto no service.
+
+    Em teste (SQLite, sem RLS) redirecionamos para a MESMA sessão compartilhada, exercitando a
+    purga + a gravação do log de plataforma sem precisar de Postgres real (RLS é validada no e2e).
+    """
+
+    @contextmanager
+    def _fake_tenant_session(_tenant_id: str):
+        yield db
+
+    monkeypatch.setattr(platform_service, "tenant_session", _fake_tenant_session)
+
+
+def _seed_business_data(db: Session, tenant_id: str) -> None:
+    """Dados em 2 módulos de negócio distintos, para provar que a purga por tenant funciona."""
+    db.add(Client(tenant_id=tenant_id, name="Lead a Purgar"))
+    db.add(
+        AgendaEvent(
+            tenant_id=tenant_id,
+            title="Reunião a Purgar",
+            kind="reuniao",
+            starts_at=datetime(2026, 7, 10, 10, 0, tzinfo=UTC),
+            ends_at=datetime(2026, 7, 10, 11, 0, tzinfo=UTC),
+        )
+    )
+    db.commit()
+
+
+def test_delete_account_purges_and_writes_platform_log(
+    client: TestClient, admin_headers, db: Session, _tenant_session_to_test_db
+):
+    created = client.post("/admin/accounts", json=_account_payload(), headers=admin_headers).json()
+    tid = created["tenant"]["id"]
+    _seed_business_data(db, tid)
+    assert db.query(Client).filter(Client.tenant_id == tid).count() == 1
+    assert db.query(AgendaEvent).filter(AgendaEvent.tenant_id == tid).count() == 1
+
+    resp = client.delete(f"/admin/accounts/{tid}", headers=admin_headers)
+    assert resp.status_code == 204, resp.text
+
+    # IV1 — purga: tabelas de negócio do tenant ficam vazias; tenant e usuários removidos
+    assert db.query(Client).filter(Client.tenant_id == tid).count() == 0
+    assert db.query(AgendaEvent).filter(AgendaEvent.tenant_id == tid).count() == 0
+    assert db.query(Tenant).filter(Tenant.id == tid).first() is None
+    assert db.query(User).filter(User.tenant_id == tid).count() == 0
+
+    # AC2 — log de plataforma criado com ator + snapshot do tenant corretos
+    master = db.query(User).filter(User.is_platform_admin.is_(True)).first()
+    logs = (
+        db.query(PlatformAuditEntry)
+        .filter(PlatformAuditEntry.target_tenant_id == tid)
+        .all()
+    )
+    assert len(logs) == 1
+    log = logs[0]
+    assert log.action == "account_deleted"
+    assert log.target_tenant_slug == "clientepagante"
+    assert log.actor_user_id == master.id
+    assert log.actor_email == ADMIN_EMAIL
+
+    # IV3 — o log SOBREVIVE à exclusão: continua consultável mesmo sem o tenant/users
+    assert db.query(PlatformAuditEntry).filter(
+        PlatformAuditEntry.target_tenant_id == tid
+    ).count() == 1
+
+
+def test_delete_account_blocks_tenant_with_platform_admin(
+    client: TestClient, admin_headers, db: Session, _tenant_session_to_test_db
+):
+    master = db.query(User).filter(User.is_platform_admin.is_(True)).first()
+    resp = client.delete(f"/admin/accounts/{master.tenant_id}", headers=admin_headers)
+    assert resp.status_code == 400
+    # exclusão bloqueada não gera log de exclusão
+    assert db.query(PlatformAuditEntry).count() == 0
+
+
+def test_delete_account_404_for_unknown_tenant(
+    client: TestClient, admin_headers, db: Session, _tenant_session_to_test_db
+):
+    resp = client.delete("/admin/accounts/tenant-inexistente-1234", headers=admin_headers)
+    assert resp.status_code == 404
+    assert db.query(PlatformAuditEntry).count() == 0

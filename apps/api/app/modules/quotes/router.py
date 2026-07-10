@@ -160,6 +160,9 @@ def reject_quote(
 def public_view(
     slug: str, password: str | None = Query(default=None), db: Session = Depends(get_db)
 ) -> PublicProposal:
+    """Uso LEGÍTIMO de `get_db` (sem tenant): rota pública lê `published_proposals`, um snapshot
+    GLOBAL sem RLS. NÃO toca `users` nem tabelas de negócio por tenant — seguro por design
+    (guarda explícita exigida pela Story 1.2, AC1)."""
     try:
         return PublicProposal(**service.public_view(db, slug=slug, password=password))
     except service.QuoteError as e:
