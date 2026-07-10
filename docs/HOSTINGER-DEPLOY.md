@@ -54,6 +54,14 @@ Campos obrigatórios (o backend recusa subir sem eles em produção — ver
 `ANTHROPIC_API_KEY`, `SUPER_ADMIN_PASSWORD` (!= default). Preencha também `DOMAIN` e
 `FRONTEND_URL=https://app.seudominio.com`.
 
+Campos **opcionais** de integração (vazios = o app funciona, só registra em log —
+graceful degradation, mesmo padrão de `SMTP_HOST`/`GATEWAY_WEBHOOK_SECRET`):
+- **WhatsApp Cloud API (Story 2.3)** — `WHATSAPP_TOKEN` e `WHATSAPP_PHONE_ID` (Meta Cloud
+  API). Preenchidos, as notificações (mover card no Kanban, cobrança com IA, funil) são
+  **entregues de verdade** ao telefone configurado em **Configurações → Telefone** de cada
+  escritório. Vazios, as notificações ficam apenas `logged` (nada quebra). Já listados em
+  `infra/.env.prod.example`.
+
 ## 3. Subir
 ```bash
 cd /opt/e1p/infra
@@ -87,8 +95,15 @@ pro IP da VPS (`dig +short app.seudominio.com`) e se a porta 80 está mesmo aces
     o app exibe a `FirstAccessPage` e só libera após a troca (`must_reset_password=True` no
     Super Admin semeado; ver `apps/api/tests/test_seed.py`). Confirme que **não** consegue
     navegar antes de trocar a senha.
-
-## 5. Atualizações (deploy de uma nova versão)
+- **WhatsApp Cloud API (Story 2.3):**
+  - **Com** `WHATSAPP_TOKEN`/`WHATSAPP_PHONE_ID` no `.env.prod`: em Configurações preencha
+    o campo **Telefone** do escritório, mova um card no Kanban (ou dispare "Cobrar com IA")
+    e confirme que a mensagem chega no WhatsApp configurado. Nos logs a Notification fica
+    com status `sent` (`docker compose -f docker-compose.prod.yml logs api`).
+  - **Sem** essas variáveis: o app **não quebra** — as notificações ficam apenas em log.
+    Confirme com `docker compose -f docker-compose.prod.yml logs api | grep '[whatsapp:logged]'`
+    (a Notification é gravada com status `logged`). Validação end-to-end com número real
+    exige uma conta/número aprovados na Meta Cloud API (não coberto por testes automatizados).
 ```bash
 cd /opt/e1p && git pull
 cd infra && docker compose -f docker-compose.prod.yml up -d --build
