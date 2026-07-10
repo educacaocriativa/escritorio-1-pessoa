@@ -2,6 +2,7 @@ import type { Carousel, CarouselTemplate, Slide } from "@e1p/shared-types";
 import { ArrowLeft, ChevronDown, ChevronUp, Copy, Plus, Save, Sparkles, Trash2 } from "lucide-react";
 import { useCallback, useEffect, useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
+import ImageUploadButton from "../../components/ImageUploadButton";
 import { api, apiErrorMessage } from "../../lib/api";
 import CarouselViewer from "./CarouselSlideView";
 
@@ -239,6 +240,9 @@ export default function CarrosselBuilderPage() {
                 <div className="flex gap-2">
                   <input value={s.highlight} onChange={(e) => setSlide(i, { highlight: e.target.value })} placeholder="Palavra em destaque" className="w-1/2 rounded-lg border border-neutral-200 px-2 py-1.5 text-xs outline-none" />
                   <input value={s.photo_url} onChange={(e) => setSlide(i, { photo_url: e.target.value })} placeholder="URL da foto (opcional)" className="w-1/2 rounded-lg border border-neutral-200 px-2 py-1.5 text-xs outline-none" />
+                </div>
+                <div className="mt-1">
+                  <ImageUploadButton label="Enviar foto" onUploaded={(url) => setSlide(i, { photo_url: url })} />
                 </div>
               </div>
             ))}

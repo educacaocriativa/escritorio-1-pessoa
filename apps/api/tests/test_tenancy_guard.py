@@ -9,12 +9,15 @@ Não substitui a RLS; é uma rede de segurança barata (sem ferramenta externa) 
 "alguém acessou `users`/dados sem escopo de tenant via get_db".
 
 Allowlist (usos legítimos, documentados com guarda explícita no próprio código):
-  - auth      → autenticação, inerentemente global sobre `users` (login por e-mail).
-  - platform  → Super Admin (Master), toda rota sob `require_platform_admin` (cross-tenant).
-  - contracts → só a rota pública `public_view` lê `published_contracts` (snapshot global).
-  - pages     → idem, `public_view` lê `published_pages`.
-  - quotes    → idem, aceite público lê `published_proposals`.
-  - wallet    → rotas de Master (earnings/split-rates) sob `require_platform_admin`.
+  - auth        → autenticação, inerentemente global sobre `users` (login por e-mail).
+  - platform    → Super Admin (Master), toda rota sob `require_platform_admin` (cross-tenant).
+  - contracts   → só a rota pública `public_view` lê `published_contracts` (snapshot global).
+  - pages       → idem, `public_view` lê `published_pages`.
+  - quotes      → idem, aceite público lê `published_proposals`.
+  - wallet      → rotas de Master (earnings/split-rates) sob `require_platform_admin`.
+  - attachments → só a rota pública `serve_public_image` lê `public_images` (tabela GLOBAL sem
+                  RLS, imagens intencionalmente públicas — Story 4.2). `Attachment` permanece
+                  100% RLS via `get_tenant_db`; nenhuma rota pública toca boletos/contratos.
 """
 from __future__ import annotations
 
@@ -23,7 +26,7 @@ import pathlib
 MODULES_DIR = pathlib.Path(__file__).resolve().parents[1] / "app" / "modules"
 
 # Módulos onde `get_db` (sessão global) é um uso legítimo e já auditado (ver docstring acima).
-ALLOWLIST = {"auth", "platform", "contracts", "pages", "quotes", "wallet"}
+ALLOWLIST = {"auth", "platform", "contracts", "pages", "quotes", "wallet", "attachments"}
 
 
 def _module_routers() -> list[pathlib.Path]:

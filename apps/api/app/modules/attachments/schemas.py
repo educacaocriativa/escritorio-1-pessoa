@@ -15,3 +15,11 @@ class AttachmentOut(BaseModel):
     content_type: str
     size: int
     created_at: datetime
+
+
+class PublicImageOut(BaseModel):
+    """Retorno do upload de imagem pública. ``url`` é o caminho da rota de leitura no backend
+    (``/public-images/{id}``); o frontend prefixa o proxy ``/api`` para obter a URL renderável."""
+
+    id: str
+    url: str

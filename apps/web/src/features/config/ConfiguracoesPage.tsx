@@ -1,6 +1,7 @@
 import type { TenantProfile } from "@e1p/shared-types";
 import { Check } from "lucide-react";
 import { useCallback, useEffect, useState } from "react";
+import ImageUploadButton from "../../components/ImageUploadButton";
 import { api, apiErrorMessage } from "../../lib/api";
 
 const FONTS = ["Inter", "Poppins", "Raleway", "Georgia", "Arial"];
@@ -86,6 +87,9 @@ export default function ConfiguracoesPage() {
               Usado como padrão em propostas, contratos e carrosséis.
             </p>
             <Inp label="Logo (URL)" value={p.logo_url} onChange={(v) => set({ logo_url: v })} placeholder="https://.../logo.png" />
+            <div className="mt-2">
+              <ImageUploadButton label="Enviar logo" onUploaded={(url) => set({ logo_url: url })} />
+            </div>
             <div className="mt-3 grid grid-cols-2 gap-3 sm:grid-cols-3">
               {colors.map(([label, key]) => (
                 <div key={key}>
