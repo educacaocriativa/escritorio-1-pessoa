@@ -3,7 +3,9 @@ from __future__ import annotations
 
 from datetime import datetime
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
+
+from app.core.validators import validate_document
 
 
 class Clause(BaseModel):
@@ -72,5 +74,11 @@ class PublicContract(BaseModel):
 
 class SignRequest(BaseModel):
     name: str = Field(min_length=2, max_length=255)
-    document: str = Field(min_length=3, max_length=32)  # CPF/CNPJ (KYC)
+    document: str = Field(min_length=11, max_length=32)  # CPF/CNPJ (KYC)
     accept: bool = True
+
+    @field_validator("document")
+    @classmethod
+    def valid_document(cls, v: str) -> str:
+        # KYC de assinatura: valida CPF/CNPJ e grava só-dígitos (normalizado) no contrato.
+        return validate_document(v)

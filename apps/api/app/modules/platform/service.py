@@ -301,7 +301,12 @@ def create_staff(db: Session, tenant_id: str, data: CreateStaffRequest) -> tuple
         must_reset_password=True,
     )
     db.add(user)
-    db.commit()
+    try:
+        db.commit()
+    except IntegrityError as e:
+        db.rollback()
+        # UNIQUE(tenant_id, document): documento já usado por outro usuário do mesmo escritório.
+        raise AuthError("Este documento (CPF/CNPJ) já está cadastrado neste escritório", 409) from e
     db.refresh(user)
 
     status = _send_invite(

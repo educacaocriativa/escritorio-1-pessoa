@@ -43,7 +43,7 @@ def admin_headers(client: TestClient, db: Session) -> dict[str, str]:
 def _account_payload(**over):
     base = {
         "legal_name": "Cliente Pagante",
-        "document": "12345678000190",
+        "document": "12345678000195",
         "slug": "clientepagante",
         "email": "cliente@example.com",
         "name": "Cliente",
@@ -156,7 +156,7 @@ def _staff_body(**over):
     base = {
         "name": "Contadora Completa",
         "email": "conta@esc2.com",
-        "document": "11122233344",
+        "document": "11122233396",
         "address": "Rua das Flores, 100 - Centro",
         "phone": "27999990000",
         "allowed_modules": ["wallet"],
@@ -175,7 +175,7 @@ def test_create_edit_delete_staff(client: TestClient, admin_headers):
     assert invite["delivery_status"] in ("sent", "logged")
     staff = invite["user"]
     assert staff["role"] == "sub_user" and staff["allowed_modules"] == ["wallet"]
-    assert staff["document"] == "11122233344" and staff["phone"] == "27999990000"
+    assert staff["document"] == "11122233396" and staff["phone"] == "27999990000"
     assert staff["must_reset_password"] is True  # deve trocar no 1º acesso
     # aparece na hierarquia
     node = next(n for n in client.get("/admin/users", headers=admin_headers).json()
@@ -236,6 +236,29 @@ def test_staff_duplicate_email_409(client: TestClient, admin_headers):
     url = f"/admin/accounts/{tid}/users"
     assert client.post(url, json=body, headers=admin_headers).status_code == 201
     assert client.post(url, json=body, headers=admin_headers).status_code == 409
+
+
+def test_staff_duplicate_document_409(client: TestClient, admin_headers):
+    # Story 1.1 AC3: UNIQUE(tenant_id, document) — mesmo CPF no mesmo escritório -> 409.
+    tid = _tenant_id(client, admin_headers, slug="escdup", email="escdup@example.com")
+    url = f"/admin/accounts/{tid}/users"
+    assert client.post(
+        url, json=_staff_body(email="a@escdup.com"), headers=admin_headers
+    ).status_code == 201
+    # e-mail diferente, MESMO documento -> rejeitado pela unicidade por tenant
+    resp = client.post(url, json=_staff_body(email="b@escdup.com"), headers=admin_headers)
+    assert resp.status_code == 409
+
+
+def test_staff_invalid_document_422(client: TestClient, admin_headers):
+    # Story 1.1 AC2: CPF com dígito verificador inválido -> 422.
+    tid = _tenant_id(client, admin_headers, slug="escinv", email="escinv@example.com")
+    resp = client.post(
+        f"/admin/accounts/{tid}/users",
+        json=_staff_body(email="inv@escinv.com", document="11122233344"),
+        headers=admin_headers,
+    )
+    assert resp.status_code == 422
 
 
 def test_cannot_delete_owner_via_users(client: TestClient, admin_headers):

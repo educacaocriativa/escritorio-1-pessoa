@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from datetime import datetime
 
-from sqlalchemy import JSON, Boolean, DateTime, ForeignKey, String
+from sqlalchemy import JSON, Boolean, DateTime, ForeignKey, String, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.db.base import Base, TimestampMixin, _uuid
@@ -27,6 +27,12 @@ class Tenant(Base, TimestampMixin):
 
 class User(Base, TimestampMixin):
     __tablename__ = "users"
+    # Documento (CPF/CNPJ) único DENTRO do tenant — nunca global: `users` é tabela sem RLS e
+    # tenants distintos podem legitimamente ter o mesmo documento. NULLs são distintos (owner
+    # via /register e o admin de plataforma têm document=None, então não colidem entre si).
+    __table_args__ = (
+        UniqueConstraint("tenant_id", "document", name="uq_user_tenant_document"),
+    )
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
     tenant_id: Mapped[str] = mapped_column(

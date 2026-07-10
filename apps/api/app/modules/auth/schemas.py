@@ -7,6 +7,8 @@ from typing import Literal
 
 from pydantic import BaseModel, EmailStr, Field, field_validator
 
+from app.core.validators import validate_document
+
 SLUG_RE = re.compile(r"^[a-z0-9](?:[a-z0-9-]{1,61}[a-z0-9])?$")
 RESERVED_SLUGS = {
     "www", "api", "admin", "app", "mail", "e1p", "static", "cdn", "platform",
@@ -21,6 +23,12 @@ class RegisterRequest(BaseModel):
     email: EmailStr
     name: str = Field(min_length=2, max_length=255)
     password: str = Field(min_length=8, max_length=128)
+
+    @field_validator("document")
+    @classmethod
+    def valid_document(cls, v: str) -> str:
+        # Valida CPF/CNPJ (dígito verificador) e normaliza para só-dígitos antes de persistir.
+        return validate_document(v)
 
     @field_validator("slug")
     @classmethod
