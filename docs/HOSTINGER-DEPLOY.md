@@ -77,6 +77,16 @@ pro IP da VPS (`dig +short app.seudominio.com`) e se a porta 80 está mesmo aces
 - `https://app.seudominio.com` → tela de login.
 - `https://app.seudominio.com/api/health` (ou endpoint equivalente) → 200.
 - Login com `SUPER_ADMIN_EMAIL` / `SUPER_ADMIN_PASSWORD` do `.env.prod`.
+- **Segurança de credenciais (Story 1.4):**
+  - Guard de segredos fracos: o boot **recusa** subir em produção com `JWT_SECRET`
+    fraco/default (<32 chars), `ANTHROPIC_API_KEY` ausente ou `SUPER_ADMIN_PASSWORD`
+    default (`apps/api/app/config.py::_guard_production_secrets`; coberto por 6 testes em
+    `apps/api/tests/test_config.py`). Se algum estiver fraco, o container `api` **não sobe** —
+    confira os logs (`docker compose -f docker-compose.prod.yml logs api`).
+  - 1º login do Master força troca de senha: no primeiro acesso com a senha do `.env.prod`,
+    o app exibe a `FirstAccessPage` e só libera após a troca (`must_reset_password=True` no
+    Super Admin semeado; ver `apps/api/tests/test_seed.py`). Confirme que **não** consegue
+    navegar antes de trocar a senha.
 
 ## 5. Atualizações (deploy de uma nova versão)
 ```bash

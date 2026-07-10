@@ -38,6 +38,9 @@ def seed_super_admin() -> None:
             allowed_modules=[],
             is_active=True,
             is_platform_admin=True,
+            # Força troca da senha semeada no 1º login (reusa o fluxo FirstAccessPage /
+            # POST /auth/change-password, igual aos usuários convidados). Story 1.4.
+            must_reset_password=True,
         )
         db.add(admin)
         db.commit()
