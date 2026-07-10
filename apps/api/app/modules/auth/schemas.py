@@ -112,3 +112,13 @@ class SessionInfo(BaseModel):
 class AuthToken(SessionInfo):
     access_token: str
     token_type: str = "bearer"  # noqa: S105 (não é senha, é o tipo do token OAuth)
+
+
+class RefreshedToken(BaseModel):
+    """Retorno de /auth/refresh — só a credencial renovada (desliza o idle timeout LGPD).
+
+    Não reenvia user/tenant (o cliente já os tem) nem toca o banco: mantém o refresh leve (IV3).
+    """
+
+    access_token: str
+    token_type: str = "bearer"  # noqa: S105 (não é senha, é o tipo do token OAuth)

@@ -10,7 +10,9 @@ from sqlalchemy import select, text
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
+from app.core import audit
 from app.core.security import hash_password
+from app.core.tenancy import CurrentUser
 from app.db.base import TenantMixin
 from app.db.registry import Base  # importa todos os modelos -> registra as tabelas
 from app.db.session import tenant_session
@@ -133,14 +135,26 @@ def update_account(db: Session, user_id: str, data: UpdateAccountRequest) -> Use
     return user
 
 
-def delete_account(db: Session, tenant_id: str) -> None:
+def delete_account(db: Session, tenant_id: str, actor: CurrentUser) -> None:
     """Exclui a conta de forma ATÔMICA: purga dados de negócio + remove tenant e usuários,
     tudo numa única transação. Bloqueia se houver qualquer administrador no tenant.
+
+    Ao final, grava um log de PLATAFORMA (fora do tenant) da exclusão — sobrevive à purga e
+    cumpre a exigência de rastro da LGPD (AC2). `actor` é o Master que executou a operação.
     """
-    if db.get(Tenant, tenant_id) is None:
+    tenant = db.get(Tenant, tenant_id)
+    if tenant is None:
         raise PlatformError("Conta não encontrada", 404)
     if _has_platform_admin(db, tenant_id):
         raise PlatformError("Não é possível excluir uma conta de administrador", 400)
+
+    # Snapshot ANTES da purga: depois do `DELETE FROM tenants` o slug some, e o log de
+    # plataforma precisa ser autossuficiente (sem FK/join para uma linha que deixará de existir).
+    # O ator (Master) vive em OUTRO tenant, então sua linha sobrevive; ainda assim capturamos o
+    # e-mail aqui para deixar o log completo num único snapshot.
+    target_tenant_slug = tenant.slug
+    actor_row = db.get(User, actor.user_id)
+    actor_email = actor_row.email if actor_row is not None else ""
 
     biz = _business_table_names()
     # Uma só transação (tenant_session commita ao sair) => sem estado órfão em falha parcial.
@@ -156,6 +170,23 @@ def delete_account(db: Session, tenant_id: str) -> None:
                 )
         tdb.execute(text("DELETE FROM users WHERE tenant_id = :tid"), {"tid": tenant_id})
         tdb.execute(text("DELETE FROM tenants WHERE id = :tid"), {"tid": tenant_id})
+
+    # A purga (bloco acima) já commitou com sucesso ao sair do `with` sem exceção. Só então
+    # gravamos o log na sessão GLOBAL `db` — NUNCA na `tenant_session` do tenant que acabou de
+    # sumir (seria uma escrita com RLS de um tenant inexistente, e é logicamente "fora do tenant").
+    # [AUTO-DECISION / Story Task 4] Logamos a exclusão que DE FATO ocorreu (após a purga). A
+    # atomicidade cross-sessão não é garantida entre os dois commits: uma falha rara entre eles
+    # deixaria a conta apagada sem log. É escolha consciente — logar uma exclusão que falhou no
+    # meio seria pior para auditoria/LGPD do que o risco raro de perder o log de uma que ocorreu.
+    audit.record_platform(
+        db,
+        actor_user_id=actor.user_id,
+        actor_email=actor_email,
+        target_tenant_id=tenant_id,
+        target_tenant_slug=target_tenant_slug,
+        action="account_deleted",
+    )
+    db.commit()
 
 
 # ── Hierarquia de usuários: Super Admin vê/edita/exclui todos ────────────────

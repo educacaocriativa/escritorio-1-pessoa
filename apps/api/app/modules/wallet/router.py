@@ -10,7 +10,7 @@ from app.core.tenancy import (
     require_module,
     require_platform_admin,
 )
-from app.db.session import get_db
+from app.db.session import get_db  # global (sem tenant): só rotas de Master abaixo (ver Story 1.2)
 from app.modules.wallet import service
 from app.modules.wallet.schemas import (
     PayoutResult,
@@ -79,6 +79,9 @@ def payout(
 
 
 # ── Master: ganhos da plataforma ───────────────────────
+# Uso LEGÍTIMO de `get_db` (Story 1.2, AC1): as rotas abaixo são de Master, guardadas por
+# `require_platform_admin`, e leem/gravam agregados GLOBAIS (platform_earnings/settings).
+# NÃO tocam `users` nem dados por tenant. Rotas de negócio deste módulo usam `get_tenant_db`.
 
 
 @router.get("/platform-earnings", response_model=PlatformEarningsSummary, tags=["platform-admin"])
@@ -86,6 +89,7 @@ def platform_earnings(
     _admin: CurrentUser = Depends(require_platform_admin),
     db: Session = Depends(get_db),
 ) -> PlatformEarningsSummary:
+    """Master: total de ganhos da plataforma (agregado global, sem escopo de tenant)."""
     return PlatformEarningsSummary(**service.platform_earnings(db))
 
 
