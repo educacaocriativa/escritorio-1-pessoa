@@ -16,7 +16,7 @@ from app.core.security import (
 
 VALID = {
     "legal_name": "João Silva Advocacia",
-    "document": "12345678000190",
+    "document": "12345678000195",
     "slug": "joaosilva",
     "email": "joao@example.com",
     "name": "João Silva",

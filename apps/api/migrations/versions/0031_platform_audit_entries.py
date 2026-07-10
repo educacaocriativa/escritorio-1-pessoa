@@ -5,14 +5,8 @@ Master (ex.: exclusão de conta) e SOBREVIVE à purga do tenant. Guarda snapshot
 slug do tenant) porque o tenant-alvo é apagado logo em seguida.
 
 Revision ID: 0031
-Revises: 0029
+Revises: 0030
 Create Date: 2026-07-10
-
-NOTE (coordenação com Story 1.1): esta story roda em paralelo com a 1.1, que cria a migration
-`0030_*`. `down_revision` aqui aponta para `0029` porque a branch isolada desta story não tem
-acesso ao arquivo `0030`. No MERGE das duas branches pode ser necessário REBASE da cadeia
-`down_revision` (ex.: apontar esta para `0030`) para manter a sequência linear do Alembic.
-Isso é esperado e não é um erro de implementação desta story.
 """
 from collections.abc import Sequence
 
@@ -20,7 +14,7 @@ import sqlalchemy as sa
 from alembic import op
 
 revision: str = "0031"
-down_revision: str | None = "0029"
+down_revision: str | None = "0030"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 
