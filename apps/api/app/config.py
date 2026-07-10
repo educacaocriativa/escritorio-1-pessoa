@@ -41,6 +41,9 @@ class Settings(BaseSettings):
     frontend_url: str = "http://localhost:5173"
     upload_dir: str = "./uploads"
     generated_dir: str = "./generated"
+    # Worker durável (app.worker): intervalo entre sweeps (tick do funil + fila de notificações).
+    # Operacional, não é segredo — sem guard de produção (mesmo espírito de session_idle_timeout).
+    worker_tick_interval_seconds: int = 60
 
     @property
     def is_production(self) -> bool:

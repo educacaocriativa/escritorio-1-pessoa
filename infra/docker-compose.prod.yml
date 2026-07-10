@@ -42,6 +42,22 @@ services:
              uvicorn app.main:app --host 0.0.0.0 --port 8000"
     networks: [internal]
 
+  worker:
+    # Worker durável (Story 4.3): tick do funil + fila de notificações. Espelha o `api` SEM porta,
+    # SEM volumes (não gera/lê arquivos) e SEM alembic/seed (o `api` já migra/semeia). depends_on:
+    # api p/ subir só depois das migrations. Só a rede interna — não é HTTP-facing.
+    build: ../apps/api
+    restart: always
+    env_file:
+      - .env.prod
+    environment:
+      DATABASE_URL: postgresql+psycopg://e1p_app:${APP_DB_PASSWORD}@postgres:5432/e1pdb
+      ENVIRONMENT: production
+    depends_on:
+      - api
+    command: python -m app.worker
+    networks: [internal]
+
   web:
     build:
       context: ..
