@@ -12,6 +12,7 @@ from fastapi import Depends, Header, HTTPException, status
 from sqlalchemy.orm import Session
 
 from app.core.security import decode_access_token
+from app.core.subdomain import extract_tenant_slug, get_tenant_by_subdomain
 from app.db.session import SessionLocal, get_db, tenant_session
 
 
@@ -83,4 +84,9 @@ __all__ = [
     "require_module",
     "require_platform_admin",
     "SessionLocal",
+    # Resolução de tenant por subdomínio (Story 4.4). ⚠️ Reexportado por conveniência, mas
+    # NUNCA use para isolamento/RLS — o Host header é controlável pelo cliente. Só branding/UX
+    # em rotas públicas (ver app/core/subdomain.py).
+    "extract_tenant_slug",
+    "get_tenant_by_subdomain",
 ]
