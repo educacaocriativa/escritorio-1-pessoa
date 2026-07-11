@@ -21,7 +21,7 @@ from alembic import op
 
 # Número 0039 RESERVADO exclusivamente para esta story (evita colisão com stories em paralelo).
 revision: str = "0039"
-down_revision: str | None = "0031"
+down_revision: str | None = "0033"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 
