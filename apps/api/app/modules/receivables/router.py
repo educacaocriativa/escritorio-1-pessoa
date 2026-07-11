@@ -1,10 +1,9 @@
 """Rotas de Contas a Receber."""
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Body, Depends, Header, HTTPException, Query
 from sqlalchemy.orm import Session
 
-from app.config import settings
 from app.core.tenancy import CurrentUser, get_tenant_db, require_module
 from app.db.session import get_tenant_session_factory
 from app.modules.crm.models import Client
@@ -19,7 +18,6 @@ from app.modules.receivables.schemas import (
     DunningResult,
     MessageRequest,
     RescheduleRequest,
-    WebhookPayment,
 )
 
 router = APIRouter(prefix="/receivables", tags=["receivables"])
@@ -47,6 +45,8 @@ def _out(charge: Charge, db: Session) -> ChargeOut:
         payment_code=charge.payment_code,
         transaction_id=charge.transaction_id,
         created_at=charge.created_at,
+        gateway_provider=charge.gateway_provider,
+        gateway_status_raw=charge.gateway_status_raw,
     )
 
 
@@ -56,23 +56,26 @@ def _err(e: service.ReceivableError) -> HTTPException:
 
 @router.post("/webhook")
 def payment_webhook(
-    data: WebhookPayment,
+    body: dict = Body(...),
+    asaas_access_token: str | None = Header(default=None),
     session_factory=Depends(get_tenant_session_factory),
 ) -> dict:
-    """Webhook do gateway: reconhece o pagamento AUTOMATICAMENTE (sem login). Em produção,
-    defina GATEWAY_WEBHOOK_SECRET para que só o gateway confirme; em dev (segredo vazio) fica
-    aberto para testes. O dono NUNCA marca pago manualmente — só saca o que entra por aqui."""
-    if settings.gateway_webhook_secret and data.secret != settings.gateway_webhook_secret:
-        raise HTTPException(status_code=401, detail="Segredo do webhook inválido")
-    if data.status != "paid":
-        return {"status": "ignored"}
+    """Webhook do gateway: reconhece o pagamento AUTOMATICAMENTE (sem login). Aceita o payload
+    REAL do provedor (Asaas: {event, payment.externalReference}) OU o payload interno de dev/teste
+    ({tenant_id, charge_id, status, secret}) — o link 'simular pgto' continua funcionando.
+
+    Segurança (fail-closed): com GATEWAY_WEBHOOK_SECRET definido, só o gateway confirma — para o
+    payload real valida o token do header (`asaas-access-token`), para o interno valida `secret`
+    no corpo. Segredo vazio (dev) = aberto para testes. O dono NUNCA marca pago manualmente.
+
+    Nota (No Invention): o nome do header de autenticação do Asaas deve ser confirmado contra a
+    documentação vigente do provedor antes do go-live."""
     try:
-        status = service.webhook_confirm(
-            session_factory=session_factory, tenant_id=data.tenant_id, charge_id=data.charge_id
+        return service.process_webhook(
+            session_factory=session_factory, body=body, token=asaas_access_token
         )
     except service.ReceivableError as e:
         raise _err(e) from e
-    return {"status": status}
 
 
 @router.get("/summary", response_model=ChargesSummary)

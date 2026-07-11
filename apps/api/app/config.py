@@ -42,6 +42,13 @@ class Settings(BaseSettings):
     # Segredo do webhook do gateway de pagamento. Vazio (dev) = webhook aberto p/ testes;
     # em produção, defina para que SÓ o gateway confirme pagamentos (o dono nunca marca à mão).
     gateway_webhook_secret: str = ""
+    # Gateway de pagamento REAL (Asaas) — gera boleto/Pix registrado + envia o webhook de verdade.
+    # Vazio = mantém o stub atual (core/boleto + código stub): graceful degradation INCLUSIVE em
+    # produção (diferente de JWT_SECRET/ANTHROPIC_API_KEY, que são bloqueantes). Preencher a chave
+    # para ativar. base_url vazio = usa o default do provedor (aponte p/ o sandbox ao testar).
+    payment_gateway_provider: str = ""  # "asaas" | "" (vazio = mantém o stub)
+    payment_gateway_api_key: str = ""
+    payment_gateway_base_url: str = ""  # ex.: https://api-sandbox.asaas.com/v3
 
     # App
     root_domain: str = "e1p.com"

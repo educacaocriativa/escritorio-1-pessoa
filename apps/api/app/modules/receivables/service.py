@@ -5,13 +5,14 @@ Tudo numa única transação por operação.
 """
 from __future__ import annotations
 
+import logging
 from datetime import UTC, date, datetime, time
 
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.config import settings
-from app.core import ai, audit, whatsapp
+from app.core import ai, audit, payment_gateway, whatsapp
 from app.core.recurrence import advance, occurrences
 from app.db.base import _uuid
 from app.modules.agenda.models import (
@@ -32,6 +33,11 @@ from app.modules.receivables.models import (
 from app.modules.receivables.schemas import ChargeCreate
 from app.modules.wallet import service as wallet_service
 
+logger = logging.getLogger("e1p.receivables")
+
+# Eventos do Asaas que significam "pagamento reconhecido" (compensado/confirmado).
+_ASAAS_PAID_EVENTS = {"PAYMENT_RECEIVED", "PAYMENT_CONFIRMED"}
+
 
 class ReceivableError(Exception):
     def __init__(self, message: str, status_code: int = 400):
@@ -40,7 +46,7 @@ class ReceivableError(Exception):
 
 
 def _payment_code(method: str, charge_id: str) -> str:
-    """Stub do gateway (sem integração real ainda). Substituir por Asaas/Mercado Pago."""
+    """Stub do gateway (usado quando o gateway real não está configurado — graceful degradation)."""
     if method == "pix":
         return f"00020126-PIX-COPIA-E-COLA-{charge_id}"
     if method == "boleto":
@@ -48,9 +54,48 @@ def _payment_code(method: str, charge_id: str) -> str:
     return f"https://pay.e1p.com/c/{charge_id}"  # link de cartão
 
 
+def gateway_reference(tenant_id: str, charge_id: str) -> str:
+    """external_reference enviado ao gateway: embute `tenant_id:charge_id` para correlacionar o
+    webhook de volta SEM introduzir uma consulta global sem RLS (Regra de Ouro nº 1)."""
+    return f"{tenant_id}:{charge_id}"
+
+
 def is_overdue(charge: Charge, today: date | None = None) -> bool:
     today = today or datetime.now(UTC).date()
     return charge.status == STATUS_OPEN and charge.due_date < today
+
+
+def _apply_gateway(
+    db: Session, *, tenant_id: str, charge: Charge
+) -> payment_gateway.GatewayChargeResult | None:
+    """Se o gateway real estiver configurado, cria a cobrança registrada e devolve o resultado
+    (linha digitável/Pix reais + status). Qualquer falha degrada para o stub (devolve None) — a
+    criação da cobrança NUNCA quebra por causa do gateway."""
+    if not payment_gateway.is_configured():
+        return None
+    client = db.get(Client, charge.client_id) if charge.client_id else None
+    payer_name = client.name if client else (charge.description or "Cliente")
+    payer_document = client.document if client else None
+    try:
+        result = payment_gateway.create_registered_charge(
+            method=charge.method,
+            amount_cents=charge.amount_cents,
+            due_date=charge.due_date,
+            payer_name=payer_name,
+            payer_document=payer_document,
+            external_reference=gateway_reference(tenant_id, charge.id),
+        )
+    except payment_gateway.GatewayError:
+        logger.exception(
+            "[receivables] gateway falhou para charge=%s — degradando para stub", charge.id
+        )
+        return None
+    charge.gateway_provider = result.provider
+    charge.gateway_charge_id = result.gateway_charge_id
+    charge.gateway_status_raw = result.status
+    if result.payment_code:
+        charge.payment_code = result.payment_code
+    return result
 
 
 def build_charge(db: Session, *, tenant_id: str, actor: str, data: ChargeCreate) -> Charge:
@@ -71,7 +116,9 @@ def build_charge(db: Session, *, tenant_id: str, actor: str, data: ChargeCreate)
     )
     db.add(charge)
     db.flush()  # popula charge.id (default aplicado no flush)
+    # Default = stub; se o gateway real estiver configurado, _apply_gateway sobrescreve o código.
     charge.payment_code = _payment_code(data.method, charge.id)
+    gateway_result = _apply_gateway(db, tenant_id=tenant_id, charge=charge)
 
     # Nome do cliente/empresa no título do evento (cai p/ a descrição se não houver cliente).
     client = db.get(Client, data.client_id) if data.client_id else None
@@ -96,21 +143,30 @@ def build_charge(db: Session, *, tenant_id: str, actor: str, data: ChargeCreate)
     db.flush()  # popula event.id
     charge.agenda_event_id = event.id
 
-    # Boleto: já gera o arquivo (PDF) e anexa à cobrança, com o vencimento certo.
+    # Boleto: já gera o arquivo (PDF) e anexa à cobrança, com o vencimento e o código certos.
     if data.method == "boleto":
-        _attach_boleto(db, tenant_id=tenant_id, charge=charge)
+        _attach_boleto(db, tenant_id=tenant_id, charge=charge, gateway=gateway_result)
 
     audit.record(db, tenant_id=tenant_id, actor=actor, action="receivable.create", target=charge.id)
     return charge
 
 
-def _attach_boleto(db: Session, *, tenant_id: str, charge: Charge) -> None:
+def _attach_boleto(
+    db: Session,
+    *,
+    tenant_id: str,
+    charge: Charge,
+    gateway: payment_gateway.GatewayChargeResult | None = None,
+) -> None:
     from app.core.boleto import generate_boleto_pdf
     from app.modules.attachments.models import Attachment
     from app.modules.auth.models import Tenant
 
     tenant = db.get(Tenant, tenant_id)
     client = db.get(Client, charge.client_id) if charge.client_id else None
+    # Com gateway real: usa a linha digitável REGISTRADA (já em charge.payment_code). O PDF é
+    # regenerado com esse código real; o boleto bancário oficial fica em gateway.boleto_url
+    # (bankSlipUrl) — embuti-lo como bytes exige validar o endpoint real do provedor (TODO).
     pdf = generate_boleto_pdf(
         payee=tenant.legal_name if tenant else "",
         payer=client.name if client else (charge.description or "Cliente"),
@@ -118,8 +174,9 @@ def _attach_boleto(db: Session, *, tenant_id: str, charge: Charge) -> None:
         due_date=charge.due_date,
         code=charge.payment_code,
     )
+    label = "boleto"
     db.add(Attachment(
-        tenant_id=tenant_id, owner_type="charge", owner_id=charge.id, label="boleto",
+        tenant_id=tenant_id, owner_type="charge", owner_id=charge.id, label=label,
         filename=f"boleto-{charge.id[:8]}.pdf", content_type="application/pdf",
         size=len(pdf), data=pdf,
     ))
@@ -127,7 +184,7 @@ def _attach_boleto(db: Session, *, tenant_id: str, charge: Charge) -> None:
 
 def create_charge(db: Session, *, tenant_id: str, actor: str, data: ChargeCreate) -> Charge:
     """Cria a cobrança. Se recorrente, gera N cobranças (uma por vencimento), cada uma com seu
-    código e seu evento na Agenda — assim cada repetição recebe seu próprio boleto."""
+    código e seu evento na Agenda — assim cada repetição recebe seu próprio boleto/registro."""
     n = occurrences(data.recurrence, data.recurrence_count)
     group = _uuid() if n > 1 else None
     first: Charge | None = None
@@ -275,12 +332,75 @@ def mark_paid(db: Session, *, charge_id: str, tenant_id: str, actor: str, by_ai:
 
 def webhook_confirm(*, session_factory, tenant_id: str, charge_id: str) -> str:
     """Reconhecimento AUTOMÁTICO de pagamento (gateway). Abre a sessão do tenant e dá baixa —
-    o que credita a Carteira (split) e libera o valor para saque. Sem ação manual do dono."""
+    o que credita a Carteira (split) e libera o valor para saque. Sem ação manual do dono.
+
+    Contrato interno estável — preservado exatamente (chamado pela rota de webhook e por testes)."""
     with session_factory(tenant_id) as db:
         charge = mark_paid(
             db, charge_id=charge_id, tenant_id=tenant_id, actor="gateway:webhook", by_ai=False
         )
         return charge.status
+
+
+def _validate_webhook_secret(*, is_provider_payload: bool, body: dict, token: str | None) -> None:
+    """Fail-closed quando GATEWAY_WEBHOOK_SECRET está definido; aberto (dev) quando vazio.
+
+    - Payload real do provedor (Asaas): valida o token vindo do HEADER.
+    - Payload interno (dev/teste): valida o campo `secret` do corpo (retrocompatível)."""
+    secret = settings.gateway_webhook_secret
+    if not secret:
+        return  # dev: webhook aberto para testes (o segredo vazio some em produção)
+    expected = token if is_provider_payload else body.get("secret", "")
+    if expected != secret:
+        raise ReceivableError("Segredo do webhook inválido", 401)
+
+
+def _resolve_webhook(body: dict, token: str | None) -> tuple[str, str] | None:
+    """Extrai (tenant_id, charge_id) do payload do webhook, validando o segredo. Devolve None
+    quando o evento deve ser ignorado (ex.: status != pago). Levanta ReceivableError (401/400)
+    em segredo inválido ou payload malformado.
+
+    Suporta DOIS formatos:
+    - Real (Asaas): {"event": "PAYMENT_RECEIVED", "payment": {"externalReference": "tenant:charge"}}
+    - Interno (dev/teste): {"tenant_id", "charge_id", "status", "secret"}
+    """
+    is_provider_payload = "event" in body or "payment" in body
+    _validate_webhook_secret(is_provider_payload=is_provider_payload, body=body, token=token)
+
+    if is_provider_payload:
+        event = body.get("event")
+        if event not in _ASAAS_PAID_EVENTS:
+            return None  # evento não-financeiro/não-pago: ignorar
+        payment = body.get("payment") or {}
+        external = payment.get("externalReference") or ""
+        tenant_id, sep, charge_id = external.partition(":")
+        if not sep or not tenant_id or not charge_id:
+            raise ReceivableError(
+                "externalReference ausente/inválido no webhook do gateway", 400
+            )
+        return tenant_id, charge_id
+
+    # Payload interno de dev/teste.
+    if body.get("status", "paid") != "paid":
+        return None
+    tenant_id = body.get("tenant_id")
+    charge_id = body.get("charge_id")
+    if not tenant_id or not charge_id:
+        raise ReceivableError("payload de webhook incompleto", 400)
+    return tenant_id, charge_id
+
+
+def process_webhook(*, session_factory, body: dict, token: str | None) -> dict:
+    """Ponto de entrada do webhook: valida o segredo, resolve (tenant, charge) do payload real ou
+    interno e reusa `webhook_confirm` (idempotente, com FOR UPDATE) para dar a baixa."""
+    resolved = _resolve_webhook(body, token)
+    if resolved is None:
+        return {"status": "ignored"}
+    tenant_id, charge_id = resolved
+    status = webhook_confirm(
+        session_factory=session_factory, tenant_id=tenant_id, charge_id=charge_id
+    )
+    return {"status": status}
 
 
 def cancel_charge(db: Session, *, charge_id: str, tenant_id: str, actor: str) -> Charge:

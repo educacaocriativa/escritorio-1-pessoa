@@ -49,3 +49,9 @@ class Charge(Base, TenantMixin, TimestampMixin):
     recurrence: Mapped[str] = mapped_column(String(8), default="none", nullable=False)
     recurrence_count: Mapped[int] = mapped_column(Integer, default=1, nullable=False)
     recurrence_group: Mapped[str | None] = mapped_column(String(36), nullable=True)
+    # Gateway de pagamento real (Asaas). Nullable/aditivos (migration 0033): quando o gateway
+    # está configurado, guardam qual provedor gerou a cobrança, o id dela no provedor (suporte)
+    # e o último status bruto recebido pelo webhook (debug). None = cobrança via stub.
+    gateway_provider: Mapped[str | None] = mapped_column(String(20), nullable=True)
+    gateway_charge_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    gateway_status_raw: Mapped[str | None] = mapped_column(String(40), nullable=True)
