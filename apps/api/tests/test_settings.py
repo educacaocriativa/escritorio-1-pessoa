@@ -26,6 +26,18 @@ def test_profile_created_with_defaults(client: TestClient, headers):
     assert p["document"] == "39393939000107"
     assert p["primary_color"] == "#5D44F8"
     assert p["font"] == "Inter"
+    assert p["timezone"] == "America/Sao_Paulo"  # default de fuso (Story 4.5)
+
+
+def test_update_timezone(client: TestClient, headers):
+    resp = client.patch(
+        "/settings/profile", json={"timezone": "America/Manaus"}, headers=headers
+    )
+    assert resp.status_code == 200
+    assert resp.json()["timezone"] == "America/Manaus"
+    # persiste
+    again = client.get("/settings/profile", headers=headers).json()
+    assert again["timezone"] == "America/Manaus"
 
 
 def test_update_brand_kit(client: TestClient, headers):

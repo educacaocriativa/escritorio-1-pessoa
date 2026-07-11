@@ -19,3 +19,6 @@ ignore = ["S101", "B008"]
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 asyncio_mode = "auto"
+markers = [
+    "rls_e2e: teste de isolamento cross-tenant via testcontainers, exige Docker disponível",
+]

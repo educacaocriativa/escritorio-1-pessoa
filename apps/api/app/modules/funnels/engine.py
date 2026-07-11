@@ -5,8 +5,10 @@ Conceitos:
 - **Runtime do grafo:** `_drive` anda pelos nós seguindo as arestas, executando a AÇÃO REAL de
   cada nó (reaproveita `service.run_node` — cria cliente/cobrança/proposta, envia mensagem...).
 - **Espera:** o nó `esperar` pausa a jornada (status=waiting) até `resume_at`.
-- **Agendador:** `tick` retoma as jornadas cujo `resume_at` já venceu. Um cron (ou a tela) chama
-  o tick periodicamente — não há worker em background ainda (ver core/events.py).
+- **Agendador:** `tick` retoma as jornadas cujo `resume_at` já venceu. O worker durável
+  (`app.worker`, Story 4.3) chama o tick periodicamente em background; a tela e o endpoint
+  `POST /funnels/runs/tick` continuam funcionando (disparo manual). Pendente ainda: o auto-enroll
+  por evento (inscrever no funil automaticamente ao criar lead / aplicar tag via core/events).
 - **Condicional (`se-ou`):** escolhe o ramo por uma condição simples (tem tag / pagou / sempre).
 
 Idempotência/segurança: limite de passos por execução evita laço infinito; falha de ação marca

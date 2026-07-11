@@ -1,0 +1,54 @@
+# CI — testa a imagem Docker de PRODUÇÃO e o isolamento cross-tenant (RLS).
+# Story 3.2: pega o drift venv↔produção (a suíte roda DENTRO da imagem, não só no venv)
+# e garante o isolamento RLS num Postgres real (testcontainers).
+#
+# Gate obrigatório: se qualquer job falhar, o workflow fica vermelho. Para que isso
+# BLOQUEIE merge/deploy de fato, @devops deve habilitar branch protection em
+# GitHub → Settings → Branches → "Require status checks to pass" marcando
+# `test-in-prod-image` e `cross-tenant-rls` (follow-up fora do escopo de código — Task 5).
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  # AC1: builda a imagem de produção e roda ruff + a suíte completa DENTRO dela.
+  # Mesmo tipo de drift que já quebrou uma vez (FastAPI do venv > pinado em requirements.txt).
+  test-in-prod-image:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # Contexto de build = apps/api (mesmo padrão de infra/docker-compose.prod.yml: build ../apps/api).
+      # O Dockerfile faz `COPY . .`, incluindo apps/api/tests/ (não excluído pelo .dockerignore),
+      # então a suíte viaja dentro da imagem de produção.
+      - name: Build imagem de produção
+        run: docker build -f apps/api/Dockerfile -t e1p-api:ci apps/api
+
+      # ruff + pytest DENTRO da imagem. SQLite em memória (conftest.py) — sem Postgres real.
+      # O marker rls_e2e é excluído aqui (o teste de isolamento precisa subir um Postgres via
+      # testcontainers e roda no job cross-tenant-rls, direto no runner — sem Docker-in-Docker).
+      - name: Lint + testes na imagem de produção
+        run: docker run --rm e1p-api:ci sh -c "ruff check . && python -m pytest -q -m 'not rls_e2e'"
+
+  # AC2: isolamento cross-tenant no Postgres REAL (testcontainers). Roda direto no runner
+  # (Docker nativo no ubuntu-latest), não aninhado na imagem de produção — evita Docker-in-Docker.
+  cross-tenant-rls:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+
+      - name: Instalar dependências
+        run: pip install -r apps/api/requirements.txt
+
+      # Só o teste marcado rls_e2e. Sobe postgres:16-alpine, roda as migrations como o papel
+      # NÃO-superusuário e1p_app (Regra de Ouro nº 1) e valida "João não vê dados da Maria".
+      - name: Teste de isolamento RLS (Postgres real)
+        run: cd apps/api && python -m pytest -q -m rls_e2e tests/test_rls_isolation.py

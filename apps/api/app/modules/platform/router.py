@@ -4,6 +4,7 @@ from __future__ import annotations
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 
+from app.config import settings
 from app.core.tenancy import CurrentUser, require_platform_admin
 from app.db.session import get_db
 from app.modules.auth.schemas import TenantOut, UserOut
@@ -53,7 +54,9 @@ def create_account(
         raise HTTPException(status_code=e.status_code, detail=str(e)) from e
     return AccountInviteOut(
         tenant=TenantOut.model_validate(tenant), owner=UserOut.model_validate(owner),
-        temp_password=temp, delivery=data.delivery, delivery_status=status,
+        # Em produção a senha temporária NÃO volta no corpo (vai por e-mail/WhatsApp — AC3).
+        temp_password=None if settings.is_production else temp,
+        delivery=data.delivery, delivery_status=status,
     )
 
 
@@ -114,7 +117,9 @@ def create_staff(
     except (service.PlatformError, AuthError) as e:
         raise HTTPException(status_code=e.status_code, detail=str(e)) from e
     return StaffInviteOut(
-        user=UserOut.model_validate(user), temp_password=temp,
+        user=UserOut.model_validate(user),
+        # Em produção a senha temporária NÃO volta no corpo (vai por e-mail/WhatsApp — AC3).
+        temp_password=None if settings.is_production else temp,
         delivery=data.delivery, delivery_status=status,
     )
 

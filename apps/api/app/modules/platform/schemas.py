@@ -33,7 +33,8 @@ class AccountInviteOut(BaseModel):
     """Conta criada via convite: tenant + dono + senha temporária e como foi entregue."""
     tenant: TenantOut
     owner: UserOut
-    temp_password: str
+    # None em produção (não vaza no corpo — a senha vai por e-mail/WhatsApp; Story 2.1 AC3).
+    temp_password: str | None = None
     delivery: str
     delivery_status: str
 
@@ -83,7 +84,8 @@ class CreateStaffRequest(BaseModel):
 class StaffInviteOut(BaseModel):
     """Resultado do convite: o usuário criado + a senha temporária e como foi entregue."""
     user: UserOut
-    temp_password: str
+    # None em produção (não vaza no corpo — a senha vai por e-mail/WhatsApp; Story 2.1 AC3).
+    temp_password: str | None = None
     delivery: str
     delivery_status: str  # sent | logged | failed
 

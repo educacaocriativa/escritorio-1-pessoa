@@ -5,6 +5,7 @@ Cada módulo expõe um `router` (APIRouter). Adicione novos módulos aqui confor
 from fastapi import APIRouter
 
 from app.modules.agenda.router import router as agenda_router
+from app.modules.attachments.router import public_router as attachments_public_router
 from app.modules.attachments.router import router as attachments_router
 from app.modules.auth.router import router as auth_router
 from app.modules.cockpit.router import router as cockpit_router
@@ -12,6 +13,8 @@ from app.modules.contracts.router import public_router as contracts_public_route
 from app.modules.contracts.router import router as contracts_router
 from app.modules.crm.router import router as crm_router
 from app.modules.funnels.router import router as funnels_router
+from app.modules.google_calendar.router import public_router as google_calendar_public_router
+from app.modules.google_calendar.router import router as google_calendar_router
 from app.modules.juridico.router import router as juridico_router
 from app.modules.marketing.router import router as marketing_router
 from app.modules.notifications.router import router as notifications_router
@@ -50,4 +53,7 @@ ALL_ROUTERS: list[APIRouter] = [
     pages_router,
     pages_public_router,
     attachments_router,
+    attachments_public_router,
+    google_calendar_router,
+    google_calendar_public_router,
 ]

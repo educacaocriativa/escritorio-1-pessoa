@@ -1,4 +1,4 @@
-import type { ApiError, AuthToken } from "@e1p/shared-types";
+import type { ApiError, AuthToken, GoogleCalendarStatus } from "@e1p/shared-types";
 import axios, { AxiosError } from "axios";
 
 /** Cliente HTTP único da aplicação. Em dev o Vite faz proxy de /api -> :8000. */
@@ -32,6 +32,24 @@ export async function refreshSession(): Promise<string | null> {
   } catch {
     return null;
   }
+}
+
+// ── Integração Google (Meet/Calendar OAuth — Story 4.1) ──────────────────────
+/** Estado da integração Google do tenant (configurado na plataforma? conectado? qual e-mail?). */
+export async function getGoogleStatus(): Promise<GoogleCalendarStatus> {
+  const { data } = await api.get<GoogleCalendarStatus>("/integrations/google/status");
+  return data;
+}
+
+/** URL de autorização do Google para redirecionar o usuário (inicia o consent OAuth). */
+export async function getGoogleConnectUrl(): Promise<string> {
+  const { data } = await api.get<{ url: string }>("/integrations/google/connect");
+  return data.url;
+}
+
+/** Desconecta a conta Google do tenant (revoga best-effort e apaga a credencial local). */
+export async function disconnectGoogle(): Promise<void> {
+  await api.post("/integrations/google/disconnect");
 }
 
 export function apiErrorMessage(err: unknown): string {

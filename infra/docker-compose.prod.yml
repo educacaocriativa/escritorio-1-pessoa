@@ -39,7 +39,24 @@ services:
     command: >
       sh -c "alembic upgrade head &&
              python -m app.seed &&
+             python -m app.seed_staging &&
              uvicorn app.main:app --host 0.0.0.0 --port 8000"
+    networks: [internal]
+
+  worker:
+    # Worker durável (Story 4.3): tick do funil + fila de notificações. Espelha o `api` SEM porta,
+    # SEM volumes (não gera/lê arquivos) e SEM alembic/seed (o `api` já migra/semeia). depends_on:
+    # api p/ subir só depois das migrations. Só a rede interna — não é HTTP-facing.
+    build: ../apps/api
+    restart: always
+    env_file:
+      - .env.prod
+    environment:
+      DATABASE_URL: postgresql+psycopg://e1p_app:${APP_DB_PASSWORD}@postgres:5432/e1pdb
+      ENVIRONMENT: production
+    depends_on:
+      - api
+    command: python -m app.worker
     networks: [internal]
 
   web:
@@ -52,8 +69,15 @@ services:
     networks: [internal]
 
   caddy:
-    image: caddy:2-alpine
+    # Imagem custom com o plugin caddy-dns/cloudflare (necessário p/ o desafio DNS-01 do
+    # wildcard `*.${ROOT_DOMAIN}` — a imagem oficial `caddy:2-alpine` não traz módulos de
+    # DNS). Ver infra/caddy/Dockerfile e Story 4.4. O domínio único (${DOMAIN}) segue no
+    # HTTP-01 automático, sem regressão (IV1).
+    build: ./caddy
     restart: always
+    # env_file: injeta DOMAIN, ROOT_DOMAIN e CLOUDFLARE_API_TOKEN (lidos pelo Caddyfile via
+    # {$DOMAIN}/{$ROOT_DOMAIN}/{$CLOUDFLARE_API_TOKEN}). Preencha ROOT_DOMAIN e o token no
+    # .env.prod (ver .env.prod.example) — sem o token, o bloco wildcard não emite o cert.
     env_file:
       - .env.prod
     ports:

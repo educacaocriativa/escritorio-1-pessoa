@@ -1,8 +1,46 @@
+# Domínio único (IV1 da Story 4.4): topologia atual, SEM alteração de comportamento.
+# TLS automático via desafio HTTP-01 (Let's Encrypt) — o que já funciona hoje. Nenhuma
+# regressão: este bloco não usa DNS-01.
 {$DOMAIN} {
 	encode gzip
 
 	# Front chama sempre /api/... (ver apps/web/src/lib/api.ts) — handle_path remove o
 	# prefixo antes de repassar, igual ao proxy do Vite em dev (vite.config.ts).
+	handle_path /api/* {
+		reverse_proxy api:8000
+	}
+
+	handle {
+		reverse_proxy web:80
+	}
+}
+
+# Painel de monitoramento (Uptime Kuma) — Story 3.4, topologia Caddy próprio (opção B).
+# Só é usado se o docker-compose.monitoring.yml for subido na MESMA rede deste Caddy
+# (ver docs/HOSTINGER-DEPLOY.md §8). Na topologia de produção real (Traefik compartilhado)
+# quem publica monitor.<domínio> é o Traefik via labels do compose de monitoramento — lá
+# este arquivo Caddyfile nem é usado.
+monitor.{$DOMAIN} {
+	encode gzip
+	reverse_proxy uptime-kuma:3001
+}
+
+# Wildcard por tenant (`*.{$ROOT_DOMAIN}`, ex.: `*.e1p.com`) — white-label por subdomínio.
+# TLS via desafio DNS-01 (Cloudflare): OBRIGATÓRIO para certificado curinga — o Let's Encrypt
+# NÃO emite wildcard via HTTP-01, só via DNS-01. Só ESTE bloco usa DNS-01; o domínio único
+# acima permanece com HTTP-01 automático (sem regressão, IV1).
+# Requer, no .env.prod: CLOUDFLARE_API_TOKEN (escopo Zone.DNS Edit na zona) e ROOT_DOMAIN,
+# com o DNS de ROOT_DOMAIN gerido pela Cloudflare (ver docs/HOSTINGER-DEPLOY.md §8).
+# Mesmo roteamento do bloco acima (/api → api:8000, resto → web:80). A resolução de tenant
+# por subdomínio acontece no BACKEND a partir do JWT (RLS) — nunca do Host header, que é
+# controlável pelo cliente (ver apps/api/app/core/subdomain.py, Regra de Ouro nº 1).
+*.{$ROOT_DOMAIN} {
+	encode gzip
+
+	tls {
+		dns cloudflare {$CLOUDFLARE_API_TOKEN}
+	}
+
 	handle_path /api/* {
 		reverse_proxy api:8000
 	}

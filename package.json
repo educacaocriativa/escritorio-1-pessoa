@@ -12,6 +12,7 @@
     "build:web": "pnpm --filter @e1p/web build",
     "lint": "pnpm -r --if-present lint",
     "typecheck": "pnpm -r --if-present typecheck",
-    "test": "pnpm -r --if-present test"
+    "test": "pnpm -r --if-present test",
+    "generate:types": "python apps/api/scripts/export_openapi.py && pnpm --filter @e1p/shared-types generate"
   }
 }

@@ -91,6 +91,40 @@ def refresh_access_token(payload: dict[str, Any]) -> str | None:
     return create_access_token(identity, absolute_expiry=ceiling)
 
 
+# Anti-CSRF do OAuth Google: o `state` é um JWT assinado com o mesmo JWT_SECRET, num claim
+# DEDICADO (`purpose`) para não colidir com tokens de sessão de login. Stateless (não precisa de
+# tabela no banco) e expira sozinho em 10 min — reaproveita a infra de assinatura já validada.
+_OAUTH_STATE_PURPOSE = "google_oauth_state"
+_OAUTH_STATE_TTL_MINUTES = 10
+
+
+def sign_oauth_state(tenant_id: str) -> str:
+    """Emite um `state` assinado (anti-CSRF) carregando o tenant que iniciou o fluxo OAuth."""
+    now = datetime.now(UTC)
+    to_encode = {
+        "purpose": _OAUTH_STATE_PURPOSE,
+        "tenant_id": tenant_id,
+        "exp": now + timedelta(minutes=_OAUTH_STATE_TTL_MINUTES),
+        "iat": now,
+    }
+    return jwt.encode(to_encode, settings.jwt_secret, algorithm=settings.jwt_algorithm)
+
+
+def verify_oauth_state(token: str) -> str | None:
+    """Valida o `state` do callback do Google. Retorna o `tenant_id`, ou None se inválido/
+    expirado/de propósito errado (fail-closed: na dúvida, recusa)."""
+    try:
+        payload = jwt.decode(token, settings.jwt_secret, algorithms=[settings.jwt_algorithm])
+    except JWTError:
+        return None
+    if payload.get("purpose") != _OAUTH_STATE_PURPOSE:
+        return None
+    tenant_id = payload.get("tenant_id")
+    if not tenant_id or not isinstance(tenant_id, str):
+        return None
+    return tenant_id
+
+
 def generate_reset_token() -> tuple[str, str]:
     """Retorna (token_cru, hash). Só o hash é persistido; o cru vai ao usuário (e-mail/link)."""
     raw = secrets.token_urlsafe(32)

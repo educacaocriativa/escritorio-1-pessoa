@@ -108,6 +108,8 @@ class EventOut(BaseModel):
     guests: list[str]
     amount_cents: int | None
     external_ref: str | None
+    # Id do evento espelhado no Google Calendar (quando o Meet foi gerado via OAuth). Story 4.1.
+    google_event_id: str | None = None
     # Nome do cliente (cobrança) ou fornecedor (conta a pagar) — resolvido no list/get.
     client_name: str | None = None
     created_by_ai: bool

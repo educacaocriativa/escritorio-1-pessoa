@@ -13,6 +13,9 @@ SLUG_RE = re.compile(r"^[a-z0-9](?:[a-z0-9-]{1,61}[a-z0-9])?$")
 RESERVED_SLUGS = {
     "www", "api", "admin", "app", "mail", "e1p", "static", "cdn", "platform",
     "support", "billing", "auth", "status", "assets", "help", "blog",
+    # "monitor": subdomínio do painel de monitoramento de infra (Uptime Kuma, Story 3.4) —
+    # reservado p/ evitar colisão com o wildcard de subdomínio por tenant (Story 4.4).
+    "monitor",
 }
 
 

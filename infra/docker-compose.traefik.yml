@@ -49,6 +49,7 @@ services:
     command: >
       sh -c "alembic upgrade head &&
              python -m app.seed &&
+             python -m app.seed_staging &&
              uvicorn app.main:app --host 0.0.0.0 --port 8000"
     # db_internal fala com o Postgres; edge é alcançado pelo Traefik compartilhado
     # E dá saída à internet (chamadas à API da Anthropic) — só db_internal é isolada.
@@ -59,7 +60,13 @@ services:
       # Front chama sempre /api/... (ver apps/web/src/lib/api.ts); os routers da API
       # (app/main.py) NÃO esperam esse prefixo — por isso o stripprefix abaixo, que
       # substitui o `handle_path` do Caddyfile antigo (ver infra/Caddyfile).
-      - traefik.http.routers.e1p-api.rule=Host(`${DOMAIN}`) && PathPrefix(`/api`)
+      # Wildcard por tenant (Story 4.4): além do ${DOMAIN} único, aceita `<slug>.${ROOT_DOMAIN}`
+      # (HostRegexp). IMPORTANTE: a EMISSÃO do certificado wildcard depende de um certresolver
+      # DNS-01 no Traefik COMPARTILHADO (/opt/infra/proxy/, FORA deste repo) — este label só
+      # roteia; sem esse resolver externo o wildcard não recebe cert (ver docs/HOSTINGER-DEPLOY.md
+      # §8 e Dev Notes → Riscos da Story 4.4). Sintaxe HostRegexp do Traefik v2 (named group);
+      # no Traefik v3 use: HostRegexp(`^[a-z0-9-]+\.${ROOT_DOMAIN}$`).
+      - traefik.http.routers.e1p-api.rule=(Host(`${DOMAIN}`) || HostRegexp(`{subdomain:[a-z0-9-]+}.${ROOT_DOMAIN}`)) && PathPrefix(`/api`)
       - traefik.http.routers.e1p-api.entrypoints=websecure
       - traefik.http.routers.e1p-api.tls.certresolver=letsencrypt
       # Precisa casar ANTES do catch-all do `web` (priority=1).
@@ -67,6 +74,22 @@ services:
       - traefik.http.routers.e1p-api.middlewares=security-headers@file,e1p-api-stripprefix
       - traefik.http.middlewares.e1p-api-stripprefix.stripprefix.prefixes=/api
       - traefik.http.services.e1p-api.loadbalancer.server.port=8000
+
+  worker:
+    # Worker durável (Story 4.3): tick do funil + fila de notificações. Espelha o `api` SEM os
+    # labels/rede do Traefik (não é HTTP-facing) e SEM alembic/seed (o `api` já migra/semeia).
+    # Só db_internal p/ falar com o Postgres; depends_on: api p/ subir depois das migrations.
+    build: ../apps/api
+    restart: always
+    env_file:
+      - .env.prod
+    environment:
+      DATABASE_URL: postgresql+psycopg://e1p_app:${APP_DB_PASSWORD}@postgres:5432/e1pdb
+      ENVIRONMENT: production
+    depends_on:
+      - api
+    command: python -m app.worker
+    networks: [db_internal]
 
   web:
     build:
@@ -79,7 +102,10 @@ services:
     labels:
       - traefik.enable=true
       - traefik.docker.network=edge
-      - traefik.http.routers.e1p-web.rule=Host(`${DOMAIN}`)
+      # Wildcard por tenant (Story 4.4): catch-all aceita ${DOMAIN} e `<slug>.${ROOT_DOMAIN}`.
+      # Mesma dependência externa do certresolver DNS-01 no Traefik compartilhado (ver router
+      # e1p-api acima). Prioridade 1 mantida: casa por último, depois do router /api.
+      - traefik.http.routers.e1p-web.rule=Host(`${DOMAIN}`) || HostRegexp(`{subdomain:[a-z0-9-]+}.${ROOT_DOMAIN}`)
       - traefik.http.routers.e1p-web.entrypoints=websecure
       - traefik.http.routers.e1p-web.tls.certresolver=letsencrypt
       # Catch-all — casa por último, depois do router /api acima.

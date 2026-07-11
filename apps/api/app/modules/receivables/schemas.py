@@ -59,6 +59,9 @@ class ChargeOut(BaseModel):
     payment_code: str
     transaction_id: str | None
     created_at: datetime
+    # Gateway real (Asaas) — somente-leitura; None quando a cobrança foi gerada pelo stub.
+    gateway_provider: str | None = None
+    gateway_status_raw: str | None = None
 
 
 class RescheduleRequest(BaseModel):
@@ -72,11 +75,31 @@ class ChargeUpdate(BaseModel):
 
 
 class WebhookPayment(BaseModel):
-    """Confirmação de pagamento vinda do gateway (Pix/cartão/boleto compensado)."""
+    """Payload INTERNO de confirmação (dev/teste): o link 'simular pgto' e testes chamam o webhook
+    com este corpo. Em produção o corpo real vem do provedor (ver AsaasWebhookPayload)."""
     tenant_id: str
     charge_id: str
     status: str = "paid"
     secret: str = ""
+
+
+class AsaasWebhookPayment(BaseModel):
+    """Sub-objeto `payment` do evento do Asaas (campos relevantes; o provedor envia mais)."""
+    id: str | None = None
+    externalReference: str | None = None  # noqa: N815 (nome do campo é ditado pela API do Asaas)
+    status: str | None = None
+
+
+class AsaasWebhookPayload(BaseModel):
+    """Payload REAL do webhook do Asaas. `event` é o tipo (ex.: PAYMENT_RECEIVED/PAYMENT_CONFIRMED)
+    e `payment.externalReference` carrega `tenant_id:charge_id` (setado ao criar a cobrança).
+
+    Documentação/validação de contrato: os nomes de campos seguem a doc pública do Asaas e devem
+    ser confirmados contra a doc vigente antes do go-live. O endpoint aceita o corpo cru (dict)
+    e não exige este schema para não quebrar por campos extras do provedor — ele documenta o
+    formato esperado."""
+    event: str | None = None
+    payment: AsaasWebhookPayment | None = None
 
 
 class DunningResult(BaseModel):

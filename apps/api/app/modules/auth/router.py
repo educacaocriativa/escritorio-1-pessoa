@@ -94,10 +94,23 @@ def forgot_password(data: ForgotPasswordRequest, db: Session = Depends(get_db)) 
     raw = request_password_reset(db, str(data.email))
     # Resposta sempre genérica — não revela se o e-mail existe.
     resp: dict = {"message": "Se o e-mail existir, enviaremos instruções de redefinição."}
-    # DEV: ainda não há provedor de e-mail. Em desenvolvimento devolvemos o token para
-    # permitir testar o fluxo. NUNCA em produção (lá vai por e-mail/WhatsApp).
-    if raw and not settings.is_production:
-        resp["dev_reset_token"] = raw
+    if raw:
+        # Entrega real por e-mail (graceful degradation: sem SMTP configurado vira log).
+        # Import tardio — mesmo padrão de platform/service.py::_send_invite.
+        from app.core.email import send_email
+
+        body = (
+            "Você solicitou a redefinição da sua senha na plataforma.\n\n"
+            f"Código de redefinição: {raw}\n\n"
+            'Abra a tela "Esqueci minha senha" > "Definir nova senha" no app, cole este '
+            "código no campo indicado e escolha uma nova senha. O código expira em 1 hora.\n\n"
+            "Se você não fez esta solicitação, ignore este e-mail."
+        )
+        send_email(to=str(data.email), subject="Redefinição de senha", body=body)
+        # DEV: devolvemos o token na resposta para permitir testar o fluxo sem provedor real.
+        # NUNCA em produção (lá o usuário recebe apenas pelo e-mail acima).
+        if not settings.is_production:
+            resp["dev_reset_token"] = raw
     return resp
 
 
