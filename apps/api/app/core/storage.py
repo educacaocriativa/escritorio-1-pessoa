@@ -16,11 +16,25 @@ RLS que já protege a linha de metadado em `attachments`.
 from __future__ import annotations
 
 import logging
+from datetime import datetime
 from functools import lru_cache
+from typing import NamedTuple
 
 from app.config import settings
 
 logger = logging.getLogger("e1p.storage")
+
+
+class StorageObject(NamedTuple):
+    """Um objeto listado no bucket: chave + data da última modificação (UTC, tz-aware).
+
+    `last_modified` vem do campo `LastModified` do `list_objects_v2` (boto3 devolve um
+    `datetime` tz-aware em UTC) e é usado pela varredura de órfãos para filtrar por idade
+    (`--older-than`, Story 6.1) — não tocar em uploads recém-subidos que possam estar em voo.
+    """
+
+    key: str
+    last_modified: datetime
 
 
 def is_configured() -> bool:
@@ -74,3 +88,28 @@ def get_object(key: str) -> bytes:
 def delete_object(key: str) -> None:
     """Remove o objeto do bucket."""
     _client().delete_object(Bucket=settings.s3_bucket, Key=key)
+
+
+def list_objects(prefix: str) -> list[StorageObject]:
+    """Lista os objetos do bucket sob `prefix` (chave + `LastModified`).
+
+    Única função de LISTAGEM do módulo (as demais são get/put/delete). Adicionada pela Story 6.1
+    para a rotina de varredura de órfãos (`app.scripts.scan_orphan_storage`). Pagina via
+    `ContinuationToken` para não truncar buckets grandes (`list_objects_v2` devolve no máx. 1000
+    chaves por página). O `LastModified` acompanha cada chave para o filtro de idade da varredura.
+    """
+    client = _client()
+    out: list[StorageObject] = []
+    token: str | None = None
+    while True:
+        kwargs: dict[str, str] = {"Bucket": settings.s3_bucket, "Prefix": prefix}
+        if token:
+            kwargs["ContinuationToken"] = token
+        resp = client.list_objects_v2(**kwargs)
+        for obj in resp.get("Contents", []):
+            out.append(StorageObject(key=obj["Key"], last_modified=obj["LastModified"]))
+        if resp.get("IsTruncated"):
+            token = resp.get("NextContinuationToken")
+        else:
+            break
+    return out
