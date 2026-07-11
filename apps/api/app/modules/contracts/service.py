@@ -205,6 +205,14 @@ def build_contract_from_quote(db: Session, *, tenant_id: str, actor: str, quote)
     return contract
 
 
+def exists(db: Session, contract_id: str) -> bool:
+    """O contrato existe E é visível pela RLS do tenant atual? Usada por Payables/Receivables
+    (Story 5.4) para validar `contract_id` no cadastro/edição — um contrato inexistente OU de
+    outro tenant devolve False (a RLS esconde a linha → db.get None), garantindo o isolamento
+    sem que os módulos financeiros filtrem tenant manualmente (Regra de Ouro nº 1)."""
+    return db.get(Contract, contract_id) is not None
+
+
 def get_contract(db: Session, contract_id: str) -> Contract:
     c = db.get(Contract, contract_id)
     if c is None:
@@ -227,8 +235,14 @@ def update_contract(
     db: Session, *, contract_id: str, tenant_id: str, actor: str, data: ContractUpdate
 ) -> Contract:
     c = get_contract(db, contract_id)
-    if c.status != STATUS_DRAFT:
+    # Story 5.4: `fixed_costs_allocated_cents` é metadado ANALÍTICO (break-even da DRE do contrato),
+    # não parte do documento/snapshot — editável em qualquer status. Os campos do DOCUMENTO
+    # (título/cliente/cláusulas) seguem restritos a rascunho.
+    doc_fields = (data.title, data.client_id, data.clauses)
+    if any(v is not None for v in doc_fields) and c.status != STATUS_DRAFT:
         raise ContractError("Só contratos em rascunho podem ser editados", 409)
+    if data.fixed_costs_allocated_cents is not None:
+        c.fixed_costs_allocated_cents = data.fixed_costs_allocated_cents
     if data.title is not None:
         c.title = data.title
     if data.client_id is not None:

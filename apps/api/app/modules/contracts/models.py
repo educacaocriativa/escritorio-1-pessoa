@@ -11,7 +11,7 @@ from __future__ import annotations
 
 from datetime import datetime
 
-from sqlalchemy import JSON, DateTime, String
+from sqlalchemy import JSON, BigInteger, DateTime, String
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.db.base import Base, TenantMixin, TimestampMixin, _uuid
@@ -41,6 +41,11 @@ class Contract(Base, TenantMixin, TimestampMixin):
     clauses: Mapped[list] = mapped_column(JSON, default=list, nullable=False)
     status: Mapped[str] = mapped_column(String(12), default=STATUS_DRAFT, nullable=False)
     public_slug: Mapped[str | None] = mapped_column(String(64), unique=True, nullable=True)
+
+    # Custo fixo atribuído ao contrato/projeto (Story 5.4), em centavos. Entrada MANUAL opcional
+    # do usuário, usada no break-even da DRE do contrato. Distinta do rateio de overhead (que é
+    # calculado só na leitura, nunca gravado). NULL = sem custo fixo atribuído (tratado como 0).
+    fixed_costs_allocated_cents: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
 
     # Assinatura & KYC (preenchidos no aceite do cliente)
     signer_name: Mapped[str] = mapped_column(String(255), default="", nullable=False)

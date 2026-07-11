@@ -156,3 +156,72 @@ def test_categories_list(client: TestClient, headers):
 
 def test_requires_auth(client: TestClient):
     assert client.get("/payables/summary").status_code == 401
+
+
+# ── Story 5.2: classificação (plano de contas) + competência ───────────────────────────────────
+
+
+def test_payable_competence_defaults_to_due_date(client: TestClient, headers):
+    """AC1/AC2: competência omitida → fallback = vencimento."""
+    b = client.post("/payables/bills", json=_bill(due_date="2099-08-05"), headers=headers).json()
+    assert b["competence_date"] == "2099-08-05"
+    assert b["chart_account_id"] is None
+
+
+def test_payable_accepts_explicit_competence(client: TestClient, headers):
+    b = client.post(
+        "/payables/bills",
+        json=_bill(due_date="2099-09-30", competence_date="2099-08-31"),
+        headers=headers,
+    ).json()
+    assert b["competence_date"] == "2099-08-31"
+    assert b["due_date"] == "2099-09-30"
+
+
+def test_payable_accepts_valid_chart_account(client: TestClient, headers):
+    acc = client.post(
+        "/chart-of-accounts",
+        json={"grupo_dre": "DESPESA_FIXA", "categoria": "Aluguel"},
+        headers=headers,
+    ).json()
+    b = client.post(
+        "/payables/bills", json=_bill(chart_account_id=acc["id"]), headers=headers
+    ).json()
+    assert b["chart_account_id"] == acc["id"]
+
+
+def test_payable_rejects_unknown_chart_account(client: TestClient, headers):
+    resp = client.post(
+        "/payables/bills", json=_bill(chart_account_id="nao-existe"), headers=headers
+    )
+    assert resp.status_code == 404, resp.text
+
+
+def test_recurring_payable_competence_advances(client: TestClient, headers):
+    client.post(
+        "/payables/bills",
+        json=_bill(due_date="2026-08-05", competence_date="2026-08-01",
+                   recurrence="monthly", recurrence_count=3),
+        headers=headers,
+    )
+    bills = client.get("/payables/bills", headers=headers).json()
+    comps = sorted(b["competence_date"] for b in bills)
+    assert comps == ["2026-08-01", "2026-09-01", "2026-10-01"]
+
+
+def test_reclassify_payable(client: TestClient, headers):
+    acc = client.post(
+        "/chart-of-accounts",
+        json={"grupo_dre": "TRIBUTOS", "categoria": "ISS"},
+        headers=headers,
+    ).json()
+    b = client.post("/payables/bills", json=_bill(), headers=headers).json()
+    resp = client.patch(
+        f"/payables/bills/{b['id']}",
+        json={"competence_date": "2099-07-31", "chart_account_id": acc["id"]},
+        headers=headers,
+    )
+    assert resp.status_code == 200, resp.text
+    out = resp.json()
+    assert out["competence_date"] == "2099-07-31"
+    assert out["chart_account_id"] == acc["id"]

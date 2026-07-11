@@ -2,6 +2,11 @@
 
 Quando uma cobrança é paga, vira uma Transaction na Carteira (com o split aplicado) e o
 vencimento é injetado na Agenda. Tabela de NEGÓCIO (RLS).
+
+Regra determinística (Story 5.2): fluxo de caixa usa `paid_at` (regime de caixa);
+DRE/lucratividade/relatórios analíticos usam `competence_date` (regime de competência).
+Nunca inverter. As Stories 5.3 (DRE) e 5.7 (projeção) devem citar esta regra literalmente
+ao escrever suas queries, para eliminar ambiguidade entre stories/sessões diferentes.
 """
 from __future__ import annotations
 
@@ -37,6 +42,23 @@ class Charge(Base, TenantMixin, TimestampMixin):
     due_date: Mapped[date] = mapped_column(Date, nullable=False)
 
     status: Mapped[str] = mapped_column(String(12), default=STATUS_OPEN, nullable=False)
+    # Classificação DRE (Story 5.2, aditivas/nullable — migration 0046).
+    # competence_date: regime de COMPETÊNCIA (DRE). Backfill de legados = due_date; se omitida na
+    #   criação, o service usa due_date como fallback.
+    # paid_at: regime de CAIXA (fluxo de caixa). Setada na baixa (mark_paid/webhook). NOVA aqui
+    #   (Payable já tinha; Charge só rastreava status="paid"+updated_at, o que não é confiável).
+    # chart_account_id: vínculo OPCIONAL a uma conta do plano de contas (chart_accounts, Story 5.1);
+    #   sem FK dura (mesmo padrão de client_id) — RLS + validação no service garantem a integridade.
+    competence_date: Mapped[date | None] = mapped_column(Date, nullable=True)
+    paid_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    chart_account_id: Mapped[str | None] = mapped_column(String(36), nullable=True)
+    # Vínculo OPCIONAL ao Contract como eixo financeiro "projeto" (Story 5.4). Mesmo padrão de
+    # referência solta (sem FK dura) de client_id. NULL = bucket implícito "Empresa" (overhead).
+    contract_id: Mapped[str | None] = mapped_column(String(36), index=True, nullable=True)
+    # Vínculo OPCIONAL ao centro de custo como 2ª dimensão de análise (Story 5.5). Mesmo padrão de
+    # referência solta (sem FK dura). NULL = "Não atribuído" — quem não usa a dimensão não é
+    # obrigado; legado nasce vazio e a visão padrão dos relatórios (sem filtro) fica idêntica.
+    cost_center_id: Mapped[str | None] = mapped_column(String(36), index=True, nullable=True)
     # Stub do gateway: Pix copia-e-cola / linha do boleto / link de pagamento.
     payment_code: Mapped[str] = mapped_column(Text, default="", nullable=False)
     transaction_id: Mapped[str | None] = mapped_column(String(36), nullable=True)  # tx da carteira

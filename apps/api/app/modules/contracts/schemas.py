@@ -38,6 +38,9 @@ class ContractUpdate(BaseModel):
     title: str | None = Field(default=None, min_length=1, max_length=255)
     client_id: str | None = None
     clauses: list[Clause] | None = None
+    # Story 5.4: custo fixo atribuído ao contrato (centavos), usado no break-even da DRE do
+    # contrato. Opcional; >= 0. None no PATCH = "não altera".
+    fixed_costs_allocated_cents: int | None = Field(default=None, ge=0)
 
 
 class ContractOut(BaseModel):
@@ -50,6 +53,8 @@ class ContractOut(BaseModel):
     clauses: list[Clause]
     status: str
     public_slug: str | None
+    # Story 5.4: custo fixo atribuído ao contrato (centavos); None = não atribuído.
+    fixed_costs_allocated_cents: int | None
     signer_name: str
     signer_document: str
     signed_at: datetime | None

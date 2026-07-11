@@ -38,6 +38,7 @@ def _out(c: Contract, db: Session) -> ContractOut:
         clauses=c.clauses,
         status=c.status,
         public_slug=c.public_slug,
+        fixed_costs_allocated_cents=c.fixed_costs_allocated_cents,
         signer_name=c.signer_name,
         signer_document=c.signer_document,
         signed_at=c.signed_at,

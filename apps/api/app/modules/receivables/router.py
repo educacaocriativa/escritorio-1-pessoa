@@ -37,6 +37,11 @@ def _out(charge: Charge, db: Session) -> ChargeOut:
         method=charge.method,
         amount_cents=charge.amount_cents,
         due_date=charge.due_date,
+        competence_date=charge.competence_date,
+        paid_at=charge.paid_at,
+        chart_account_id=charge.chart_account_id,
+        contract_id=charge.contract_id,
+        cost_center_id=charge.cost_center_id,
         status=charge.status,
         is_overdue=service.is_overdue(charge),
         protested_at=charge.protested_at,
@@ -102,7 +107,10 @@ def create_charge(
     user: CurrentUser = Depends(_guard),
     db: Session = Depends(get_tenant_db),
 ) -> ChargeOut:
-    charge = service.create_charge(db, tenant_id=user.tenant_id, actor=user.user_id, data=data)
+    try:
+        charge = service.create_charge(db, tenant_id=user.tenant_id, actor=user.user_id, data=data)
+    except service.ReceivableError as e:
+        raise _err(e) from e
     return _out(charge, db)
 
 

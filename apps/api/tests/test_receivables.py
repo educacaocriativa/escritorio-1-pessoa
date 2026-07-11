@@ -417,3 +417,108 @@ def test_gateway_failure_degrades_to_stub(client: TestClient, headers, monkeypat
     c = resp.json()
     assert c["gateway_provider"] is None
     assert c["payment_code"].startswith("34191")  # caiu no stub
+
+
+# ── Story 5.2: classificação (plano de contas) + 3 datas (competência/vencimento/pagamento) ────
+
+
+def test_charge_competence_defaults_to_due_date(client: TestClient, headers):
+    """AC1/AC2: competência omitida → backend usa o vencimento como fallback (regra do backfill)."""
+    c = client.post(
+        "/receivables/charges", json=_charge(due_date="2026-08-10"), headers=headers
+    ).json()
+    assert c["competence_date"] == "2026-08-10"
+    assert c["paid_at"] is None  # ainda não paga
+    assert c["chart_account_id"] is None  # vínculo opcional
+
+
+def test_charge_accepts_explicit_competence(client: TestClient, headers):
+    """AC1: competência informada é preservada (independente do vencimento)."""
+    c = client.post(
+        "/receivables/charges",
+        json=_charge(due_date="2026-09-30", competence_date="2026-08-31"),
+        headers=headers,
+    ).json()
+    assert c["competence_date"] == "2026-08-31"
+    assert c["due_date"] == "2026-09-30"
+
+
+def test_charge_accepts_valid_chart_account(client: TestClient, headers):
+    """AC1: vínculo a uma conta do plano de contas do próprio tenant."""
+    acc = client.post(
+        "/chart-of-accounts",
+        json={"grupo_dre": "RECEITA", "categoria": "Consultoria"},
+        headers=headers,
+    ).json()
+    c = client.post(
+        "/receivables/charges", json=_charge(chart_account_id=acc["id"]), headers=headers
+    ).json()
+    assert c["chart_account_id"] == acc["id"]
+
+
+def test_charge_rejects_unknown_chart_account(client: TestClient, headers):
+    """AC1/IV3: chart_account_id inexistente/de outro tenant → 404 (RLS fail-closed no Postgres)."""
+    resp = client.post(
+        "/receivables/charges", json=_charge(chart_account_id="nao-existe"), headers=headers
+    )
+    assert resp.status_code == 404, resp.text
+
+
+def test_mark_paid_sets_paid_at(client: TestClient, headers):
+    """AC1/IV1: a baixa grava a data de pagamento (regime de caixa)."""
+    c = client.post("/receivables/charges", json=_charge(), headers=headers).json()
+    assert c["paid_at"] is None
+    paid = client.post(f"/receivables/charges/{c['id']}/pay", headers=headers).json()
+    assert paid["status"] == "paid"
+    assert paid["paid_at"] is not None  # timestamp da baixa
+
+
+def test_webhook_sets_paid_at(client: TestClient, headers):
+    """IV1: a baixa via webhook (caminho de dinheiro real) também grava paid_at."""
+    c = client.post("/receivables/charges", json=_charge(), headers=headers).json()
+    client.post(
+        "/receivables/webhook",
+        json={"tenant_id": c["tenant_id"], "charge_id": c["id"], "status": "paid"},
+    )
+    got = client.get(f"/receivables/charges/{c['id']}", headers=headers).json()
+    assert got["paid_at"] is not None
+
+
+def test_pay_twice_does_not_overwrite_paid_at(client: TestClient, headers):
+    """IV1: baixa dupla é idempotente e NÃO sobrescreve o paid_at da primeira baixa."""
+    c = client.post("/receivables/charges", json=_charge(), headers=headers).json()
+    first = client.post(f"/receivables/charges/{c['id']}/pay", headers=headers).json()
+    second = client.post(f"/receivables/charges/{c['id']}/pay", headers=headers).json()
+    assert first["paid_at"] == second["paid_at"]  # data da 1ª baixa preservada
+
+
+def test_recurring_charge_competence_advances_per_occurrence(client: TestClient, headers):
+    """AC1: com competência informada, cada ocorrência recorrente cai no seu próprio período."""
+    client.post(
+        "/receivables/charges",
+        json=_charge(due_date="2026-08-10", competence_date="2026-08-01", method="boleto",
+                     recurrence="monthly", recurrence_count=3),
+        headers=headers,
+    )
+    charges = client.get("/receivables/charges", headers=headers).json()
+    comps = sorted(c["competence_date"] for c in charges)
+    assert comps == ["2026-08-01", "2026-09-01", "2026-10-01"]
+
+
+def test_reclassify_open_charge(client: TestClient, headers):
+    """AC1: reclassificar uma cobrança em aberto (competência + conta do plano de contas)."""
+    acc = client.post(
+        "/chart-of-accounts",
+        json={"grupo_dre": "RECEITA", "categoria": "Serviços"},
+        headers=headers,
+    ).json()
+    c = client.post("/receivables/charges", json=_charge(), headers=headers).json()
+    resp = client.patch(
+        f"/receivables/charges/{c['id']}",
+        json={"competence_date": "2026-07-31", "chart_account_id": acc["id"]},
+        headers=headers,
+    )
+    assert resp.status_code == 200, resp.text
+    out = resp.json()
+    assert out["competence_date"] == "2026-07-31"
+    assert out["chart_account_id"] == acc["id"]

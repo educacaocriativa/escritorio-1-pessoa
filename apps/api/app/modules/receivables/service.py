@@ -22,6 +22,9 @@ from app.modules.agenda.models import (
     STATUS_SCHEDULED,
     AgendaEvent,
 )
+from app.modules.chart_of_accounts import service as chart_service
+from app.modules.contracts import service as contracts_service
+from app.modules.cost_centers import service as cost_centers_service
 from app.modules.crm.models import Client
 from app.modules.notifications.models import Notification
 from app.modules.receivables.models import (
@@ -37,6 +40,17 @@ logger = logging.getLogger("e1p.receivables")
 
 # Eventos do Asaas que significam "pagamento reconhecido" (compensado/confirmado).
 _ASAAS_PAID_EVENTS = {"PAYMENT_RECEIVED", "PAYMENT_CONFIRMED"}
+
+# Story 5.6 (decisão de arquitetura — Aria/quality_gate): o rendimento de investimento vira uma
+# `Charge` sintética JÁ baixada (status=paid), construída direto por `investments.register_yield` —
+# nunca passa por mark_paid/split. Ela é um lançamento de RECEITA FINANCEIRA (entra na DRE), NÃO uma
+# cobrança de cliente. Portanto NÃO deve poluir as superfícies de Contas a Receber (a lista de
+# cobranças e o "Recebido"/`paid_cents` do resumo, que é uma superfície de RECONCILIAÇÃO de
+# recebíveis de cliente). Filtramos a LEITURA por este prefixo de `external_ref`. A string duplica
+# `investments.EXTERNAL_REF_PREFIX` DE PROPÓSITO: `investments` já depende de `receivables` (importa
+# Charge/STATUS_PAID); importar de volta criaria dependência circular. Mantido em sincronia por
+# comentário cruzado (ver `app/modules/investments/models.py`).
+_INVESTMENT_REF_PREFIX = "investment:"
 
 
 class ReceivableError(Exception):
@@ -63,6 +77,16 @@ def gateway_reference(tenant_id: str, charge_id: str) -> str:
 def is_overdue(charge: Charge, today: date | None = None) -> bool:
     today = today or datetime.now(UTC).date()
     return charge.status == STATUS_OPEN and charge.due_date < today
+
+
+def _not_investment_yield():
+    """Predicado SQL que exclui as `Charge` sintéticas de rendimento de investimento (Story 5.6).
+
+    ⚠️ LÓGICA TERNÁRIA SQL: `Charge.external_ref` é nullable e cobranças NORMAIS têm NULL. Um
+    `external_ref NOT LIKE 'investment:%'` PURO avaliaria `NOT (NULL LIKE ...)` = NULL (falsy) e
+    excluiria TODAS as cobranças normais (bug silencioso). Por isso o `coalesce(external_ref, '')`:
+    cobrança normal vira '' e passa no NOT LIKE; só a Charge de rendimento é filtrada."""
+    return func.coalesce(Charge.external_ref, "").not_like(f"{_INVESTMENT_REF_PREFIX}%")
 
 
 def _apply_gateway(
@@ -104,6 +128,21 @@ def build_charge(db: Session, *, tenant_id: str, actor: str, data: ChargeCreate)
     Permite que outros módulos (ex.: Orçamentos ao aprovar) gerem a cobrança atomicamente
     junto com sua própria mutação, num único commit.
     """
+    # Story 5.2: valida o vínculo opcional ao plano de contas (404 se apontar p/ conta
+    # inexistente/de outro tenant — a RLS já esconde a linha cross-tenant). Ponto de criação ÚNICO,
+    # então qualquer caller (inclusive o dominó de Orçamentos) herda a validação.
+    if data.chart_account_id and not chart_service.exists(db, data.chart_account_id):
+        raise ReceivableError("Conta do plano de contas não encontrada", 404)
+    # Story 5.4: valida o vínculo opcional ao contrato (404 se apontar p/ contrato inexistente/de
+    # outro tenant — a RLS já esconde a linha cross-tenant). Ponto de criação ÚNICO, então qualquer
+    # caller (inclusive o dominó de Orçamentos) herda a validação.
+    if data.contract_id and not contracts_service.exists(db, data.contract_id):
+        raise ReceivableError("Contrato não encontrado", 404)
+    # Story 5.5: valida o vínculo opcional ao centro de custo (2ª dimensão). 404 se apontar p/ um
+    # centro inexistente/de outro tenant — a RLS já esconde a linha cross-tenant. Ponto de criação
+    # ÚNICO, então qualquer caller (inclusive o dominó de Orçamentos) herda a validação.
+    if data.cost_center_id and not cost_centers_service.exists(db, data.cost_center_id):
+        raise ReceivableError("Centro de custo não encontrado", 404)
     charge = Charge(
         tenant_id=tenant_id,
         client_id=data.client_id,
@@ -112,6 +151,11 @@ def build_charge(db: Session, *, tenant_id: str, actor: str, data: ChargeCreate)
         method=data.method,
         amount_cents=data.amount_cents,
         due_date=data.due_date,
+        # competência (regime de competência/DRE): fallback = vencimento quando omitida.
+        competence_date=data.competence_date or data.due_date,
+        chart_account_id=data.chart_account_id,
+        contract_id=data.contract_id,
+        cost_center_id=data.cost_center_id,
         status=STATUS_OPEN,
     )
     db.add(charge)
@@ -189,7 +233,12 @@ def create_charge(db: Session, *, tenant_id: str, actor: str, data: ChargeCreate
     group = _uuid() if n > 1 else None
     first: Charge | None = None
     for i in range(n):
-        occ = data.model_copy(update={"due_date": advance(data.due_date, data.recurrence, i)})
+        updates = {"due_date": advance(data.due_date, data.recurrence, i)}
+        # Se a competência foi informada, avança em paralelo ao vencimento (cada ocorrência cai no
+        # seu período). Se omitida, o build_charge usa o due_date da ocorrência.
+        if data.competence_date is not None:
+            updates["competence_date"] = advance(data.competence_date, data.recurrence, i)
+        occ = data.model_copy(update=updates)
         charge = build_charge(db, tenant_id=tenant_id, actor=actor, data=occ)
         charge.recurrence = data.recurrence
         charge.recurrence_count = n
@@ -217,7 +266,8 @@ def list_charges(
     offset: int = 0,
 ) -> list[Charge]:
     limit = max(1, min(limit, 500))
-    stmt = select(Charge).order_by(Charge.due_date)
+    # Story 5.6: exclui os lançamentos de rendimento de investimento (não são cobranças de cliente).
+    stmt = select(Charge).where(_not_investment_yield()).order_by(Charge.due_date)
     if status:
         stmt = stmt.where(Charge.status == status)
     if client_id:
@@ -259,6 +309,32 @@ def update_charge(db: Session, *, charge_id: str, tenant_id: str, actor: str, da
         charge.amount_cents = data.amount_cents
     if data.due_date is not None:
         charge.due_date = data.due_date
+    # Story 5.2: reclassificação (competência/conta do plano de contas). Não toca no caminho de
+    # dinheiro; competence_date NÃO segue o due_date aqui (edição explícita é a fonte da verdade).
+    if data.competence_date is not None:
+        charge.competence_date = data.competence_date
+    if data.chart_account_id is not None:
+        if not chart_service.exists(db, data.chart_account_id):
+            raise ReceivableError("Conta do plano de contas não encontrada", 404)
+        charge.chart_account_id = data.chart_account_id
+    # Story 5.4: (re)vincular/desvincular do contrato. "" desvincula (bucket "Empresa"); um id
+    # inexistente/de outro tenant → 404. Metadado analítico, não toca no caminho de dinheiro.
+    if data.contract_id is not None:
+        if data.contract_id == "":
+            charge.contract_id = None
+        elif not contracts_service.exists(db, data.contract_id):
+            raise ReceivableError("Contrato não encontrado", 404)
+        else:
+            charge.contract_id = data.contract_id
+    # Story 5.5: (re)vincular/desvincular do centro de custo (2ª dimensão). "" desvincula ("Não
+    # atribuído"); id inexistente/de outro tenant → 404. Metadado analítico, não toca no dinheiro.
+    if data.cost_center_id is not None:
+        if data.cost_center_id == "":
+            charge.cost_center_id = None
+        elif not cost_centers_service.exists(db, data.cost_center_id):
+            raise ReceivableError("Centro de custo não encontrado", 404)
+        else:
+            charge.cost_center_id = data.cost_center_id
 
     ev = db.get(AgendaEvent, charge.agenda_event_id) if charge.agenda_event_id else None
     if ev is not None:
@@ -319,6 +395,10 @@ def mark_paid(db: Session, *, charge_id: str, tenant_id: str, actor: str, by_ai:
         external_ref=charge.id,
     )
     charge.status = STATUS_PAID
+    # Story 5.2: registra a data de pagamento (regime de caixa). Dentro do bloco FOR UPDATE e após
+    # a guarda de idempotência (status já PAID → return acima), então paid_at é setado UMA vez —
+    # um reenvio de webhook não sobrescreve a data da primeira baixa.
+    charge.paid_at = datetime.now(UTC)
     charge.transaction_id = tx.id
     if charge.agenda_event_id:
         ev = db.get(AgendaEvent, charge.agenda_event_id)
@@ -512,11 +592,17 @@ def charge_messages(db: Session, *, charge_id: str) -> list[Notification]:
 
 def summary(db: Session) -> dict:
     today = datetime.now(UTC).date()
+    # open/overdue filtram por STATUS_OPEN — a Charge de rendimento nasce STATUS_PAID, então já não
+    # entra aqui (não precisa do filtro de investimento). Só `paid` (abaixo) somaria o rendimento.
     open_charges = list(db.scalars(select(Charge).where(Charge.status == STATUS_OPEN)).all())
     open_cents = sum(c.amount_cents for c in open_charges if c.due_date >= today)
     overdue = [c for c in open_charges if c.due_date < today]
+    # Story 5.6: "Recebido" é reconciliação de recebíveis de CLIENTE — exclui rendimento de
+    # investimento (que é receita financeira, contabilizada na DRE, não recebimento de cobrança).
     paid = db.scalar(
-        select(func.coalesce(func.sum(Charge.amount_cents), 0)).where(Charge.status == STATUS_PAID)
+        select(func.coalesce(func.sum(Charge.amount_cents), 0))
+        .where(Charge.status == STATUS_PAID)
+        .where(_not_investment_yield())
     ) or 0
     return {
         "open_cents": open_cents,
