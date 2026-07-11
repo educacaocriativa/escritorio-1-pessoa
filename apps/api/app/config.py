@@ -42,6 +42,15 @@ class Settings(BaseSettings):
     # .env de staging define SEED_SYNTHETIC_DATA=true (Story 3.1).
     seed_synthetic_data: bool = False
 
+    # Object storage S3-compatível para os Anexos (Story 3.5). Vazio (default) = anexos
+    # continuam no Postgres (comportamento legado preservado). Preencher `s3_bucket` + credenciais
+    # para ativar (AWS S3 real ou provedor S3-compatível barato via `s3_endpoint_url`).
+    s3_endpoint_url: str = ""  # vazio = endpoint padrão da AWS; defina p/ MinIO/B2/Wasabi
+    s3_bucket: str = ""  # vazio = storage S3 desligado (fallback Postgres)
+    s3_access_key_id: str = ""
+    s3_secret_access_key: str = ""
+    s3_region: str = "auto"
+
     # App
     root_domain: str = "e1p.com"
     frontend_url: str = "http://localhost:5173"

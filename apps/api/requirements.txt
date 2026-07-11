@@ -12,6 +12,7 @@ pydantic-settings==2.6.1
 python-dotenv==1.0.1
 aiofiles==24.1.0
 httpx==0.28.0
+boto3==1.35.99  # object storage S3-compatível dos Anexos (Story 3.5)
 
 # Documentos / OCR (módulos que precisam)
 python-docx==1.1.2
