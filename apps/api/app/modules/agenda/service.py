@@ -63,9 +63,22 @@ def find_conflicts(
 def create_event(
     db: Session, *, tenant_id: str, actor: str, by_ai: bool, data: EventCreate
 ) -> tuple[AgendaEvent, list[AgendaEvent]]:
+    starts_at = data.starts_at
+    ends_at = data.ends_at
+
+    if data.all_day:
+        # Ancora o evento de dia inteiro na meia-noite REAL do fuso do tenant (convertida p/ UTC),
+        # em vez da meia-noite UTC crua. Import lazy de settings.get_profile p/ não acoplar o
+        # módulo-núcleo Agenda ao módulo settings (mesmo padrão de quotes→contracts no CLAUDE.md).
+        from app.core.tz import day_window_utc
+        from app.modules.settings.service import get_profile
+
+        profile = get_profile(db, tenant_id)
+        starts_at, ends_at = day_window_utc(data.starts_at.date(), profile.timezone)
+
     conflicts: list[AgendaEvent] = []
     if data.kind in OCCUPYING_KINDS:
-        conflicts = find_conflicts(db, data.starts_at, data.ends_at)
+        conflicts = find_conflicts(db, starts_at, ends_at)
 
     event = AgendaEvent(
         tenant_id=tenant_id,
@@ -74,8 +87,8 @@ def create_event(
         kind=data.kind,
         priority=data.priority,
         source=data.source,
-        starts_at=data.starts_at,
-        ends_at=data.ends_at,
+        starts_at=starts_at,
+        ends_at=ends_at,
         all_day=data.all_day,
         location=data.location,
         meeting_url=data.meeting_url,
@@ -160,7 +173,8 @@ def get_event(db: Session, event_id: str) -> AgendaEvent:
 
 
 def update_event(
-    db: Session, *, event_id: str, tenant_id: str, actor: str, data: EventUpdate
+    db: Session, *, event_id: str, tenant_id: str, actor: str, data: EventUpdate,
+    by_ai: bool = False,
 ) -> AgendaEvent:
     event = get_event(db, event_id)
     if data.title is not None:
@@ -176,20 +190,24 @@ def update_event(
     if data.meeting_url is not None:
         event.meeting_url = data.meeting_url
     audit.record(
-        db, tenant_id=tenant_id, actor=actor, action="agenda.event.update", target=event.id
+        db, tenant_id=tenant_id, actor=actor, action="agenda.event.update", target=event.id,
+        is_ai=by_ai,
     )
     db.commit()
     db.refresh(event)
     return event
 
 
-def cancel_event(db: Session, *, event_id: str, tenant_id: str, actor: str) -> AgendaEvent:
+def cancel_event(
+    db: Session, *, event_id: str, tenant_id: str, actor: str, by_ai: bool = False
+) -> AgendaEvent:
     event = get_event(db, event_id)
     if event.status in TERMINAL_STATUSES:
         raise AgendaError("Evento já finalizado ou cancelado", 409)
     event.status = STATUS_CANCELLED
     audit.record(
-        db, tenant_id=tenant_id, actor=actor, action="agenda.event.cancel", target=event.id
+        db, tenant_id=tenant_id, actor=actor, action="agenda.event.cancel", target=event.id,
+        is_ai=by_ai,
     )
     db.commit()
     db.refresh(event)
@@ -204,6 +222,7 @@ def reschedule_event(
     actor: str,
     starts_at: datetime,
     ends_at: datetime,
+    by_ai: bool = False,
 ) -> tuple[AgendaEvent, list[AgendaEvent]]:
     event = get_event(db, event_id)
     if event.status in TERMINAL_STATUSES:
@@ -214,7 +233,8 @@ def reschedule_event(
     event.starts_at = starts_at
     event.ends_at = ends_at
     audit.record(
-        db, tenant_id=tenant_id, actor=actor, action="agenda.event.reschedule", target=event.id
+        db, tenant_id=tenant_id, actor=actor, action="agenda.event.reschedule", target=event.id,
+        is_ai=by_ai,
     )
     db.commit()
     db.refresh(event)
