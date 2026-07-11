@@ -5,7 +5,13 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.core import audit
-from app.modules.attachments.models import ALLOWED_TYPES, MAX_BYTES, Attachment
+from app.modules.attachments.models import (
+    ALLOWED_TYPES,
+    MAX_BYTES,
+    PUBLIC_IMAGE_TYPES,
+    Attachment,
+    PublicImage,
+)
 
 
 class AttachmentError(Exception):
@@ -70,3 +76,30 @@ def delete_attachment(db: Session, *, attachment_id: str, tenant_id: str, actor:
     audit.record(db, tenant_id=tenant_id, actor=actor, action="attachment.delete", target=att.id)
     db.delete(att)
     db.commit()
+
+
+# ── Imagens públicas (logo/fotos renderizadas em <img> — ver PublicImage) ────────────────
+def create_public_image(
+    db: Session, *, tenant_id: str, actor: str, content_type: str, data: bytes
+) -> PublicImage:
+    """Cria uma imagem pública (escrita autenticada; leitura será pública). Mesmas regras de
+    tamanho do módulo de Anexos (10 MB), mas restrito a imagem (JPEG/PNG — sem PDF)."""
+    if content_type not in PUBLIC_IMAGE_TYPES:
+        raise AttachmentError("Tipo não permitido. Envie uma imagem JPEG ou PNG.", 415)
+    if not data:
+        raise AttachmentError("Arquivo vazio", 422)
+    if len(data) > MAX_BYTES:
+        raise AttachmentError("Arquivo acima de 10 MB", 413)
+    img = PublicImage(tenant_id=tenant_id, content_type=content_type, size=len(data), data=data)
+    db.add(img)
+    audit.record(db, tenant_id=tenant_id, actor=actor, action="public_image.create", target=img.id)
+    db.commit()
+    db.refresh(img)
+    return img
+
+
+def get_public_image(db: Session, image_id: str) -> PublicImage:
+    img = db.get(PublicImage, image_id)
+    if img is None:
+        raise AttachmentError("Imagem não encontrada", 404)
+    return img

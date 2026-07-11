@@ -544,6 +544,16 @@ export interface Attachment {
   created_at: string;
 }
 
+/**
+ * Imagem intencionalmente PÚBLICA (logo/foto de proposta, carrossel, site) — retorno de
+ * `POST /attachments/public-images`. `url` é o caminho da rota de leitura no backend
+ * (`/public-images/{id}`); o helper `uploadPublicImage` prefixa o proxy `/api`.
+ */
+export interface PublicImage {
+  id: UUID;
+  url: string;
+}
+
 // ── Sites / Páginas ────────────────────────────────────
 export type PageBlock = { type: string; [key: string]: unknown };
 

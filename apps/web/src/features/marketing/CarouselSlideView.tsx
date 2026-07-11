@@ -6,6 +6,12 @@ import { forwardRef, useRef, useState } from "react";
 const W = 1080;
 const H = 1350; // 4:5
 
+// Guarda de esquema de <img src>/background-image (IV3, mesma regra de ConfiguracoesPage/
+// ProposalView/PageBuilderPage): só aceita http(s):// ou caminho relativo iniciado por "/"
+// (ex.: /api/public-images/{id}). Bloqueia javascript:, data:, etc. Aplicada aqui para
+// uniformizar o padrão nos 4 consumidores após o upload real (Story 4.2).
+const safeSrc = (u: string) => (/^(https?:\/\/|\/)/i.test(u.trim()) ? u.trim() : "");
+
 export type SlideStyle = Pick<
   Carousel,
   "handle" | "primary_color" | "bg_color" | "text_color" | "accent_color" | "font"
@@ -73,7 +79,8 @@ export const EditorialSlide = forwardRef<
   const isCover = slide.kind === "cover";
   const isCta = slide.kind === "cta";
   const isAccent = slide.kind === "accent";
-  const onPhoto = (isCover || isCta) && !!slide.photo_url;
+  const photo = safeSrc(slide.photo_url || "");
+  const onPhoto = (isCover || isCta) && !!photo;
   const page = index === 0 ? "" : `${index}/${total - 1}`;
 
   const base: React.CSSProperties = {
@@ -86,7 +93,7 @@ export const EditorialSlide = forwardRef<
   let bg: React.CSSProperties = { background: isAccent ? style.primary_color : style.bg_color };
   if (onPhoto) {
     bg = {
-      backgroundImage: `url('${slide.photo_url}')`,
+      backgroundImage: `url('${photo}')`,
       backgroundSize: "cover",
       backgroundPosition: "center",
     };
@@ -143,9 +150,9 @@ export const EditorialSlide = forwardRef<
             <p style={{ fontSize: 40, fontWeight: 600, lineHeight: 1.45 }}>
               {highlighted(slide.heading || "", slide.highlight, isAccent ? style.accent_color : style.primary_color)}
             </p>
-            {slide.photo_url && (
+            {photo && (
               <img
-                src={slide.photo_url}
+                src={photo}
                 alt=""
                 crossOrigin="anonymous"
                 style={{ width: "100%", height: 360, objectFit: "cover", borderRadius: 8 }}
