@@ -1,0 +1,68 @@
+# Checklist de Go-Live — credenciais e infra real pendentes
+
+> Tudo que está aqui já está **implementado e testado** (com mocks/stubs) em `main`. O que falta é plugar credenciais/infra reais e validar ponta-a-ponta. Cada item referencia o runbook detalhado em `docs/HOSTINGER-DEPLOY.md`.
+
+## 1. E-mail transacional (Story 2.1)
+- [ ] Contratar/gerar credenciais SMTP (provedor: SES, SMTP próprio, etc.)
+- [ ] Preencher em `infra/.env.prod`: `SMTP_HOST`, `SMTP_PORT`, `SMTP_USER`, `SMTP_PASSWORD`, `SMTP_FROM`
+- [ ] Validar: `forgot-password` chega por e-mail de verdade (hoje cai em log se `SMTP_HOST` vazio)
+
+## 2. Gateway de pagamento — Asaas (Story 2.2)
+- [ ] Criar conta Asaas (sandbox primeiro, depois produção) e gerar API key
+- [ ] Preencher: `PAYMENT_GATEWAY_PROVIDER=asaas`, `PAYMENT_GATEWAY_API_KEY`, `PAYMENT_GATEWAY_BASE_URL` (sandbox: `https://api-sandbox.asaas.com/v3`)
+- [ ] Configurar `GATEWAY_WEBHOOK_SECRET` e registrar a URL do webhook no painel Asaas
+- [ ] Revalidar contra o sandbox real: campos/endpoints exatos do payload, formato do `bankSlipUrl`
+- [ ] Testar boleto/Pix real de ponta a ponta + confirmação de pagamento via webhook
+
+## 3. WhatsApp Cloud API (Story 2.3)
+- [ ] Criar app Meta for Developers + número WhatsApp Business
+- [ ] Preencher: `WHATSAPP_TOKEN`, `WHATSAPP_PHONE_ID`
+- [ ] Validar entrega real (hoje cai em log se token vazio)
+
+## 4. Storage de anexos — S3-compatível (Story 3.5)
+- [ ] Escolher provedor (AWS S3, MinIO self-hosted, Backblaze B2, Wasabi)
+- [ ] Criar bucket + credenciais de acesso
+- [ ] Preencher: `S3_ENDPOINT_URL` (vazio = AWS), `S3_BUCKET`, `S3_ACCESS_KEY_ID`, `S3_SECRET_ACCESS_KEY`, `S3_REGION`
+- [ ] Rodar o backfill dos anexos legados (`docs/HOSTINGER-DEPLOY.md` §6.5)
+- [ ] Validar IV3: o dump do Postgres encolhe depois do backfill
+
+## 5. Google Calendar/Meet OAuth (Story 4.1)
+- [ ] Criar projeto no Google Cloud Console + ativar Calendar API
+- [ ] Gerar OAuth Client ID/Secret, configurar redirect URI
+- [ ] Preencher: `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`, `GOOGLE_OAUTH_REDIRECT_URI`
+- [ ] Testar fluxo OAuth ponta-a-ponta (autorizar, criar evento com Meet real)
+- [ ] Dívida conhecida sinalizada pela story: `refresh_token` guardado em texto plano (endurecer antes de produção séria); reschedule/cancel ainda não sincronizam de volta pro Google
+
+## 6. Backup automatizado + offsite (Story 3.3)
+- [ ] Instalar/configurar `rclone` na VPS com remote S3-compatível (fora do repo, `rclone config`)
+- [ ] Preencher: `BACKUP_S3_BUCKET`, `BACKUP_RETENTION_DAYS_LOCAL`, `BACKUP_RETENTION_DAYS_REMOTE`
+- [ ] Agendar cron (`/etc/cron.d/e1p-backup`, já documentado)
+- [ ] **Rodar um restore de teste de verdade** (não só o script — o drill completo) — `docs/HOSTINGER-DEPLOY.md` §6
+
+## 7. Monitoramento e alertas — Uptime Kuma (Story 3.4)
+- [ ] Subir a stack de monitoramento na VPS (`docs/HOSTINGER-DEPLOY.md` §9.1)
+- [ ] Configurar os monitores na UI do Kuma (§9.2)
+- [ ] Criar bot Telegram + configurar canal de alerta (§9.3)
+- [ ] Rodar o teste de queda simulada (IV2, §9.4) e confirmar que o alerta chega
+
+## 8. Wildcard de subdomínio por tenant (Story 4.4)
+- [ ] DNS de `ROOT_DOMAIN` gerido pela Cloudflare (pré-requisito)
+- [ ] Gerar `CLOUDFLARE_API_TOKEN` com escopo mínimo (Zone.DNS:Edit só na zona do domínio)
+- [ ] Escolher topologia: Caddy próprio (§10.2) ou Traefik compartilhado (§10.3 — precisa de config extra em `/opt/infra/proxy/`)
+- [ ] Validar emissão/renovação do certificado wildcard (IV3, §10.4) e isolamento entre tenants (IV1/IV2, §10.5)
+
+## 9. CI e branch protection (Story 3.2)
+- [x] CI já existe e roda de verdade (`test-in-prod-image` + `cross-tenant-rls`) — validado na PR #7
+- [ ] Habilitar branch protection em GitHub → Settings → Branches → marcar os 2 checks como obrigatórios (transforma o CI num gate real, hoje só reporta status)
+- [ ] (Fora do escopo atual) CD automático — deploy hoje é `git pull` + rebuild manual na VPS
+
+## 10. Staging (Story 3.1)
+- [ ] Subir o ambiente de staging isolado (`docs/HOSTINGER-DEPLOY.md` §8.2)
+- [ ] Rodar o smoke test dos módulos-chave antes de promover qualquer release (§8.3)
+
+## 11. Achados incidentais durante a implementação (não bloqueantes, mas vale investigar)
+- [ ] `apps/api/app/modules/funnels/service.py` — possível bug pré-existente: um caminho que deveria chamar `send_email` está chamando `whatsapp.send_text` (achado pelo @dev na Story 4.3, fora do escopo dela, não corrigido)
+- [ ] `pnpm lint` está quebrado no repo inteiro por falta de `eslint.config.js` (pré-existente, não é regressão desta leva de stories, mas trava `scripts/check.sh` de lint no frontend)
+
+---
+**Como usar:** cada item tem instruções detalhadas no `docs/HOSTINGER-DEPLOY.md` (seções indicadas). Nenhum desses itens bloqueia o deploy inicial em si — os graceful degradations (stub/log) fazem o sistema funcionar sem eles, só sem a integração real ativa.
