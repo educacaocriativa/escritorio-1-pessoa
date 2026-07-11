@@ -49,6 +49,7 @@ services:
     command: >
       sh -c "alembic upgrade head &&
              python -m app.seed &&
+             python -m app.seed_staging &&
              uvicorn app.main:app --host 0.0.0.0 --port 8000"
     # db_internal fala com o Postgres; edge é alcançado pelo Traefik compartilhado
     # E dá saída à internet (chamadas à API da Anthropic) — só db_internal é isolada.

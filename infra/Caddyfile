@@ -11,3 +11,13 @@
 		reverse_proxy web:80
 	}
 }
+
+# Painel de monitoramento (Uptime Kuma) — Story 3.4, topologia Caddy próprio (opção B).
+# Só é usado se o docker-compose.monitoring.yml for subido na MESMA rede deste Caddy
+# (ver docs/HOSTINGER-DEPLOY.md §8). Na topologia de produção real (Traefik compartilhado)
+# quem publica monitor.<domínio> é o Traefik via labels do compose de monitoramento — lá
+# este arquivo Caddyfile nem é usado.
+monitor.{$DOMAIN} {
+	encode gzip
+	reverse_proxy uptime-kuma:3001
+}

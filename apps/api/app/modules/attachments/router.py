@@ -61,11 +61,11 @@ def download_attachment(
     attachment_id: str, _u: CurrentUser = Depends(_guard), db: Session = Depends(get_tenant_db)
 ) -> Response:
     try:
-        att = service.get_attachment(db, attachment_id)
+        att, data = service.get_attachment_bytes(db, attachment_id)
     except service.AttachmentError as e:
         raise _err(e) from e
     return Response(
-        content=att.data,
+        content=data,
         media_type=att.content_type,
         headers={"Content-Disposition": f'inline; filename="{att.filename}"'},
     )

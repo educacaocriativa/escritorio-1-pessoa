@@ -50,6 +50,21 @@ class Settings(BaseSettings):
     payment_gateway_api_key: str = ""
     payment_gateway_base_url: str = ""  # ex.: https://api-sandbox.asaas.com/v3
 
+    # Staging: quando True, o boot semeia dados sintéticos (tenant/usuário/registros de demo)
+    # para o smoke test antes de promover à produção. Default False = produção NUNCA semeia
+    # (é o ÚNICO gate — ver app/seed_staging.py e docs/HOSTINGER-DEPLOY.md §8). Só o
+    # .env de staging define SEED_SYNTHETIC_DATA=true (Story 3.1).
+    seed_synthetic_data: bool = False
+
+    # Object storage S3-compatível para os Anexos (Story 3.5). Vazio (default) = anexos
+    # continuam no Postgres (comportamento legado preservado). Preencher `s3_bucket` + credenciais
+    # para ativar (AWS S3 real ou provedor S3-compatível barato via `s3_endpoint_url`).
+    s3_endpoint_url: str = ""  # vazio = endpoint padrão da AWS; defina p/ MinIO/B2/Wasabi
+    s3_bucket: str = ""  # vazio = storage S3 desligado (fallback Postgres)
+    s3_access_key_id: str = ""
+    s3_secret_access_key: str = ""
+    s3_region: str = "auto"
+
     # App
     root_domain: str = "e1p.com"
     frontend_url: str = "http://localhost:5173"

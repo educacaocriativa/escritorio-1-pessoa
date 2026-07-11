@@ -17,6 +17,8 @@ build/
 .env.*
 !.env.example
 !.env.prod.example
+!.env.staging.example
+!.env.monitoring.example
 *.pem
 *.key
 
