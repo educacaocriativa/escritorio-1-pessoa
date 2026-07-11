@@ -35,3 +35,26 @@ caminho AWS documentado como evolução.
 
 **Sequenciamento recomendado:** Epic 1 → Epic 2 → Epic 3 → (Epic 4 pós-lançamento).
 PRD completo (com Requirements FR/NFR/CR, constraints técnicas e premissas do PM): [`../prd.md`](../prd.md).
+
+---
+
+## Iniciativas pós-go-live
+
+> Estas iniciativas **não** fazem parte do PRD de go-live (`docs/prd.md`) — são **features novas de produto**
+> e/ou robustez de plataforma, com PRD próprio. Numeração de epics continua a sequência (5, 6...).
+
+### Inteligência Financeira & Robustez de Plataforma
+Porte (design, não código) de recursos financeiros analíticos e de plataforma do produto irmão do fundador
+(`AxisGov/plataforma-gestao`) para o e1p: DRE por categoria (plano de contas DRE), projeção de caixa 30/60/90
++ runway, motor de diagnóstico determinístico (🟢🟡🔴 primeiro, IA narrando depois), fila auditável de
+pagamentos com papéis, lucratividade por projeto, centro de custo, conta de investimento, varredura de órfãos
+no storage e secret scan (gitleaks) + SAST (semgrep) no CI.
+PRD: [`prd-inteligencia-financeira.md`](./prd-inteligencia-financeira.md).
+
+| Epic | Arquivo | Classificação | Stories |
+|---|---|---|---|
+| Epic 5 — Inteligência Financeira | [epic-5-inteligencia-financeira.md](./epic-5-inteligencia-financeira.md) | FEATURE NOVA (pós-go-live) | 9 |
+| Epic 6 — Robustez de Plataforma (Storage & CI) | [epic-6-robustez-plataforma.md](./epic-6-robustez-plataforma.md) | PLATAFORMA (pós-go-live) | 2 |
+
+**Sequenciamento recomendado:** Epic 5 (interno: 5.1 → 5.2 → 5.3–5.7 → 5.8 → 5.9); Epic 6 é independente e
+pode correr em paralelo. Cobre os 9 recursos pedidos pelo fundador sem omissão (rastreabilidade na §4.2 do PRD).
