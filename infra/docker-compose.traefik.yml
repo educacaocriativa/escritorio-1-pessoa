@@ -68,6 +68,22 @@ services:
       - traefik.http.middlewares.e1p-api-stripprefix.stripprefix.prefixes=/api
       - traefik.http.services.e1p-api.loadbalancer.server.port=8000
 
+  worker:
+    # Worker durável (Story 4.3): tick do funil + fila de notificações. Espelha o `api` SEM os
+    # labels/rede do Traefik (não é HTTP-facing) e SEM alembic/seed (o `api` já migra/semeia).
+    # Só db_internal p/ falar com o Postgres; depends_on: api p/ subir depois das migrations.
+    build: ../apps/api
+    restart: always
+    env_file:
+      - .env.prod
+    environment:
+      DATABASE_URL: postgresql+psycopg://e1p_app:${APP_DB_PASSWORD}@postgres:5432/e1pdb
+      ENVIRONMENT: production
+    depends_on:
+      - api
+    command: python -m app.worker
+    networks: [db_internal]
+
   web:
     build:
       context: ..
