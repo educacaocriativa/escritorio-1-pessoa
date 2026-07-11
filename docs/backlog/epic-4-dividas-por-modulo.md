@@ -10,12 +10,15 @@ sejam priorizadas por valor/risco **após o lançamento**. Este documento é o a
 
 ## Status
 
-**Classificação PROPOSTA em modo autônomo — pendente de confirmação final do @po.**
+**Classificação RATIFICADA pelo @pm em 2026-07-11 (revisão final de go-live).**
 
-A priorização de backlog é autoridade **exclusiva do @po** (`.claude/rules/agent-authority.md` —
-"@po (Pax) — Backlog prioritization"). As colunas **Valor / Risco / Prioridade** abaixo são uma
-proposta inicial para não deixar a tabela vazia (AC2); o **@po deve confirmar, ajustar ou substituir**
-esses valores antes de qualquer item ser puxado para uma story de implementação.
+Proposta originalmente por @dev em modo autônomo e revisada item a item por Morgan (@pm) como
+`quality_gate` da Story 4.6. As colunas **Valor / Risco / Prioridade** foram consideradas sólidas e
+rastreáveis; um único ajuste de direção estratégica foi aplicado (**Item 3 — PDF assinado**, Valor
+Médio-Alto → Alto, marcado como topo do P2 — ver rationale na linha e na "Nota de autoridade").
+A priorização de backlog permanece revisável pelo @po no momento em que cada item for puxado para
+uma story de implementação (sequenciamento fino), mas a classificação base está aprovada — não é mais
+um rascunho pendente.
 
 > **Escopo (o que NÃO está aqui):** este catálogo cobre apenas as dívidas "soltas" do §6 que ainda
 > não têm story dedicada. Itens já cobertos por stories próprias do Epic 4 **não** são duplicados aqui:
@@ -36,7 +39,7 @@ esses valores antes de qualquer item ser puxado para uma story de implementaçã
 |---|------|--------|----------------------|------------------|------------------|--------------------|------------|
 | 1 | Estorno/reversão de `platform_earnings` | Carteira & Split (Fase 2) | "estorno (`refunded`) ainda sem caminho de execução nem reversão do `platform_earnings`. Payout real precisa integração bancária + KYC (hoje só marca withdrawn)." `[Source: CLAUDE.md#carteira-split]` | Alto | Alto | **P1** | Dinheiro real da plataforma; reversão incorreta pode gerar disputa financeira/contábil com o dono da conta. |
 | 2 | OCR de boleto | Contas a Pagar (Fase 2) | "OCR de boleto (IA lê PDF e preenche fornecedor/valor/vencimento) — não implementado" `[Source: CLAUDE.md#contas-a-pagar]` | Médio | Baixo | **P4** | Ganho de produtividade; sem OCR o usuário preenche manualmente (fallback já existe). |
-| 3 | PDF assinado com hash/carimbo de tempo | Construtor de Contratos + Assinatura & KYC (Fase 3) | "PDF assinado + hash/carimbo de tempo; verificação real de documento (KYC forte)." `[Source: CLAUDE.md#construtor-de-contratos]` | Médio-Alto | Médio | **P2** | Reforça o valor probatório do contrato (KYC já registra nome/CPF/IP; falta o carimbo forte). |
+| 3 | PDF assinado com hash/carimbo de tempo | Construtor de Contratos + Assinatura & KYC (Fase 3) | "PDF assinado + hash/carimbo de tempo; verificação real de documento (KYC forte)." `[Source: CLAUDE.md#construtor-de-contratos]` | Alto | Médio | **P2 (topo)** | **[@pm ajustou Valor Médio-Alto → Alto]** Advogados são persona primária (§1) e a assinatura pública já está em produção: cada contrato assinado sem carimbo/hash acumula valor probatório fraco que **não é remediável retroativamente**. Fica no topo do P2 (fazer antes dos demais P2). KYC já registra nome/CPF/IP — não é contrato inválido, por isso fica abaixo dos P1 de dinheiro/segurança. |
 | 4 | Régua de cobrança + juros/multa | Contas a Receber (Fase 2) | "régua de cobrança (lembretes automáticos) + juros/multa; estorno;" `[Source: CLAUDE.md#contas-a-receber]` | Alto | Médio | **P2** | Impacta diretamente inadimplência/receita; "Cobrar com IA" manual já mitiga parcialmente o risco hoje. |
 | 5 | Antecipação de recebíveis | Carteira & Split (Fase 2) | "Antecipação de recebíveis não implementada." `[Source: CLAUDE.md#carteira-split]` | Médio | Baixo | **P4** | Feature de monetização adicional; não é esperada pelo usuário hoje (não regride nada). |
 | 6 | Checkout público real | Produtos & Checkout (Fase 2) | "checkout público real (página + gateway)" `[Source: CLAUDE.md#produtos-checkout]` | Alto | Médio | **P2** | Habilita venda de produto sem intervenção manual do dono da conta — valor direto de monetização. |
@@ -53,10 +56,21 @@ P3 = médio · P4 = incremental (fallback aceitável hoje).
 
 ## Nota de autoridade
 
-Classificação **proposta por River (@sm) em modo autônomo** — o @po deve confirmar, ajustar ou
-substituir os valores de **Valor / Risco / Prioridade** antes de qualquer item ser puxado para uma
-story de implementação. Nenhum item deste catálogo deve ser considerado "aprovado para
-implementação" apenas por constar aqui.
+Classificação **proposta em modo autônomo** e **ratificada por Morgan (@pm) em 2026-07-11** na
+revisão final de go-live (quality_gate da Story 4.6). O @pm é dono da orquestração do Epic 4; a
+ratificação resolve a lacuna original do AC2 (a coluna não é mais um rascunho "pendente").
+
+**Ajuste do @pm nesta revisão (1 item):**
+- **Item 3 — PDF assinado com hash/carimbo:** Valor **Médio-Alto → Alto** e marcado como **topo do
+  P2**. Motivo: advogados são persona primária do produto e a assinatura pública já roda em produção;
+  cada contrato assinado sem carimbo/hash acumula valor probatório fraco **não remediável
+  retroativamente**. Continua abaixo dos P1 (dinheiro/segurança) porque o KYC atual já registra
+  nome/CPF/IP — o contrato não é inválido, apenas menos forte.
+
+Os outros 12 itens foram revisados e mantidos como classificados (valor/risco/prioridade coerentes com
+o estado atual descrito no CLAUDE.md §6). O **@po** pode refinar o **sequenciamento fino** quando cada
+item virar story de implementação, mas nenhum item deve ser considerado "aprovado para implementação"
+apenas por constar aqui — vira story própria com seus próprios ACs.
 
 ## Verificação de consistência com o PRD (IV3)
 
