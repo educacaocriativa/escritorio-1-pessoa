@@ -11,7 +11,7 @@ A política RLS `tenant_isolation` (migration 0025) permanece válida sem altera
 `tenant_id`, não pelas colunas de conteúdo (IV2 preservado).
 
 Revision ID: 0039
-Revises: 0031
+Revises: 0033
 Create Date: 2026-07-10
 """
 from collections.abc import Sequence
