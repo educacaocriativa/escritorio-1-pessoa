@@ -196,3 +196,46 @@ def test_duplicate_email_different_case_rejected(client: TestClient):
     _register(client, email="Joao@Example.com")
     resp = _register(client, slug="outro", email="joao@example.com")
     assert resp.status_code == 409
+
+
+def test_register_conflict_message_does_not_leak_which_field(client: TestClient):
+    # Mitigação de enumeração de e-mail (Story 4.5): a mensagem de conflito NÃO pode revelar se
+    # colidiu o e-mail ou o slug. As duas mensagens têm de ser IDÊNTICAS.
+    _register(client)  # joaosilva / joao@example.com
+    # (a) mesmo e-mail, slug novo -> conflito por e-mail
+    by_email = _register(client, slug="outroslug")
+    # (b) e-mail novo, mesmo slug -> conflito por slug
+    by_slug = _register(client, email="outro@example.com")
+    assert by_email.status_code == 409
+    assert by_slug.status_code == 409
+    assert by_email.json()["detail"] == by_slug.json()["detail"]
+
+
+def test_welcome_email_dispatched_on_register(client: TestClient, monkeypatch):
+    # E-mail de boas-vindas best-effort é disparado após um registro bem-sucedido.
+    from app.modules.auth import service
+
+    calls: list[dict] = []
+
+    def _spy(**kwargs):
+        calls.append(kwargs)
+        return "logged"
+
+    monkeypatch.setattr(service, "send_email", _spy)
+    resp = _register(client)
+    assert resp.status_code == 201
+    assert len(calls) == 1
+    assert calls[0]["to"] == VALID["email"]
+
+
+def test_welcome_email_failure_does_not_block_register(client: TestClient, monkeypatch):
+    # Uma exceção no envio NUNCA derruba o registro (best-effort, mesmo princípio do WhatsApp).
+    from app.modules.auth import service
+
+    def _boom(**kwargs):
+        raise RuntimeError("SMTP fora do ar")
+
+    monkeypatch.setattr(service, "send_email", _boom)
+    resp = _register(client)
+    assert resp.status_code == 201, resp.text
+    assert resp.json()["access_token"]

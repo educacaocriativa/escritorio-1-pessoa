@@ -11,6 +11,7 @@ import {
 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
+import ImageUploadButton from "../../components/ImageUploadButton";
 import { api, apiErrorMessage } from "../../lib/api";
 import ProposalView from "./ProposalView";
 
@@ -330,6 +331,7 @@ export default function QuoteBuilderPage() {
                   { key: "url", placeholder: "URL da imagem (https://...)" },
                   { key: "caption", placeholder: "Legenda (opcional)" },
                 ]}
+                uploadField="url"
               />
             )}
             {tab === "Cronograma" && (
@@ -511,7 +513,7 @@ function DadosTab(props: {
 
 // ── Abas de lista (Imagens / Cronograma) ────────────────────────────────────
 function ListTab<T extends Record<string, string>>({
-  show, setShow, showLabel, addLabel, rows, setRows, blank, fields,
+  show, setShow, showLabel, addLabel, rows, setRows, blank, fields, uploadField,
 }: {
   show: boolean;
   setShow: (b: boolean) => void;
@@ -521,6 +523,9 @@ function ListTab<T extends Record<string, string>>({
   setRows: React.Dispatch<React.SetStateAction<T[]>>;
   blank: T;
   fields: { key: keyof T; placeholder: string }[];
+  // Opcional (aditivo — retrocompatível): quando setado, cada linha ganha um botão de upload
+  // de imagem que preenche este campo. O consumidor "Cronograma" não passa nada → sem mudança.
+  uploadField?: keyof T;
 }) {
   return (
     <div className="space-y-3">
@@ -541,6 +546,13 @@ function ListTab<T extends Record<string, string>>({
               className={inputCls}
             />
           ))}
+          {uploadField && (
+            <ImageUploadButton
+              onUploaded={(url) =>
+                setRows((r) => r.map((x, idx) => (idx === i ? { ...x, [uploadField]: url } : x)))
+              }
+            />
+          )}
         </div>
       ))}
       <button onClick={() => setRows((r) => [...r, { ...blank }])} className="flex items-center gap-1 text-sm font-medium text-primary-600">
@@ -574,6 +586,7 @@ function AparenciaTab(props: {
       <Labeled label="Logo (URL — altura ideal ~56px)">
         <input value={props.logoUrl} onChange={(e) => props.setLogoUrl(e.target.value)} placeholder="https://.../logo.png" className={inputCls} />
       </Labeled>
+      <ImageUploadButton label="Enviar logo" onUploaded={props.setLogoUrl} />
       <div className="grid grid-cols-2 gap-3">
         {colors.map(([label, value, set]) => (
           <div key={label}>

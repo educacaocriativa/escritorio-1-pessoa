@@ -16,6 +16,10 @@ from app.db.base import Base, TenantMixin, TimestampMixin, _uuid
 ALLOWED_TYPES = {"application/pdf", "image/jpeg", "image/png"}
 MAX_BYTES = 10 * 1024 * 1024  # 10 MB
 
+# Imagens INTENCIONALMENTE públicas (logo/fotos): só formatos renderizáveis em <img>/CSS.
+# Distinto de ALLOWED_TYPES (que inclui PDF) — estas nunca são abertas como documento.
+PUBLIC_IMAGE_TYPES = {"image/jpeg", "image/png"}
+
 
 class Attachment(Base, TenantMixin, TimestampMixin):
     __tablename__ = "attachments"
@@ -34,3 +38,26 @@ class Attachment(Base, TenantMixin, TimestampMixin):
     data: Mapped[bytes | None] = mapped_column(LargeBinary, nullable=True)
     # Chave do objeto no storage S3-compatível (Story 3.5). None = bytes ainda no Postgres.
     storage_key: Mapped[str | None] = mapped_column(String(512), nullable=True)
+
+
+class PublicImage(Base, TimestampMixin):
+    """Imagens deliberadamente PÚBLICAS na leitura (logo/fotos de proposta, carrossel, site).
+
+    Tabela GLOBAL (SEM ``TenantMixin`` / SEM RLS), mesmo padrão de ``published_proposals`` /
+    ``published_pages`` / ``published_contracts``: a LEITURA é pública por design — a imagem é
+    renderizada num ``<img>``/``background-image`` inclusive nas páginas públicas sem login
+    (``/p/:slug``), onde nenhum token é enviado. O isolamento relevante (Regra de Ouro nº 1)
+    acontece na ESCRITA: o upload (``POST /attachments/public-images``) exige um usuário
+    autenticado do tenant, e ``tenant_id`` é gravado APENAS para rastreio/auditoria — NUNCA é
+    usado como controle de acesso de leitura. É uma tabela separada de ``Attachment`` (que guarda
+    boletos/contratos e permanece 100% protegida por RLS, sem nenhuma rota pública).
+    """
+
+    __tablename__ = "public_images"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
+    # tenant_id: coluna simples de rastreio/auditoria — NÃO controla acesso de leitura.
+    tenant_id: Mapped[str] = mapped_column(String(36), index=True, nullable=False)
+    content_type: Mapped[str] = mapped_column(String(100), nullable=False)
+    size: Mapped[int] = mapped_column(Integer, nullable=False)
+    data: Mapped[bytes] = mapped_column(LargeBinary, nullable=False)

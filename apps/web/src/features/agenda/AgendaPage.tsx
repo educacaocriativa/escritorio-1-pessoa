@@ -3,8 +3,11 @@ import { ChevronLeft, ChevronRight, MapPin, Sparkles, Users, Video } from "lucid
 import { useCallback, useEffect, useMemo, useState } from "react";
 import Attachments from "../../components/Attachments";
 import Modal, { Field } from "../../components/Modal";
-import { api, apiErrorMessage } from "../../lib/api";
+import { api, apiErrorMessage, getGoogleStatus } from "../../lib/api";
 import { usePrimaryAction } from "../../store/pageActions";
+
+// Tipos de evento que geram Meet automaticamente quando o Google está conectado (Story 4.1).
+const MEET_KINDS = new Set(["reuniao", "atendimento", "audiencia"]);
 
 const brl = (c: number) => (c / 100).toLocaleString("pt-BR", { style: "currency", currency: "BRL" });
 
@@ -540,6 +543,17 @@ function NewEventModal({
   const [error, setError] = useState<string | null>(null);
   const [conflict, setConflict] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
+  const [googleConnected, setGoogleConnected] = useState(false);
+
+  // Descobre se o Google está conectado (para a dica de "Meet automático"). Silencioso em falha.
+  useEffect(() => {
+    if (!open) return;
+    getGoogleStatus()
+      .then((s) => setGoogleConnected(s.connected))
+      .catch(() => setGoogleConnected(false));
+  }, [open]);
+
+  const autoMeet = googleConnected && MEET_KINDS.has(kind);
 
   // pré-preenche a data ao abrir num dia do calendário
   useEffect(() => {
@@ -630,7 +644,9 @@ function NewEventModal({
             <input
               value={meetingUrl}
               onChange={(e) => setMeetingUrl(e.target.value)}
-              placeholder="Cole o link da reunião"
+              placeholder={
+                autoMeet ? "Deixe em branco para gerar o Meet automaticamente" : "Cole o link da reunião"
+              }
               className="w-full rounded-lg border border-neutral-200 px-3 py-2 text-sm outline-none focus:border-primary-400"
             />
             <a
@@ -642,6 +658,11 @@ function NewEventModal({
               <Video size={15} /> Meet
             </a>
           </div>
+          {autoMeet && !meetingUrl && (
+            <p className="mt-1 text-xs text-primary-600">
+              Um link do Meet será gerado automaticamente ao salvar (Google conectado).
+            </p>
+          )}
         </div>
         <Field label="Convidados (e-mails, separados por vírgula)" value={guests} onChange={setGuests} />
         <label className="block">

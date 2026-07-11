@@ -129,6 +129,26 @@ def test_cancelled_event_not_counted(client: TestClient, headers):
     assert body["agenda"]["today_count"] == 0  # cancelado não conta
 
 
+def test_event_near_local_midnight_counts_on_local_day(client: TestClient, headers):
+    # Story 4.5 (Task 5): janela do dia ancorada no fuso do tenant (America/Sao_Paulo, UTC-3).
+    # Um evento às 23:30 LOCAL do dia 2026-07-01 = 2026-07-02T02:30Z. Com a janela ANTIGA em UTC
+    # ([D00:00Z, D+1 00:00Z)) ele caía fora e SUMIA do resumo do dia local (bug do CLAUDE.md).
+    # Com a janela no fuso ([D03:00Z, D+1 03:00Z)) ele aparece no dia local correto.
+    client.post(
+        "/agenda/events",
+        json=_event(
+            title="Atendimento noturno",
+            starts_at="2026-07-02T02:30:00+00:00",  # 23:30 local de 2026-07-01
+            ends_at="2026-07-02T03:00:00+00:00",
+        ),
+        headers=headers,
+    )
+    body = client.get("/cockpit/summary", params={"day": DAY}, headers=headers).json()
+    assert body["agenda"]["today_count"] == 1
+    titles = [e["title"] for e in body["agenda"]["today_events"]]
+    assert "Atendimento noturno" in titles
+
+
 def test_done_critical_not_in_alert(client: TestClient, headers):
     created = client.post(
         "/agenda/events",

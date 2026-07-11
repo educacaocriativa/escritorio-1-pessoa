@@ -43,6 +43,21 @@ services:
              python -m app.seed &&
              uvicorn app.main:app --host 0.0.0.0 --port 8000"
 
+  worker:
+    # Worker durável (Story 4.3): tick do funil + fila de notificações. Mesmo bloco do `api`,
+    # SEM porta HTTP e SEM alembic/seed (o `api` já migra/semeia). depends_on: api p/ subir só
+    # depois das migrations (evita corrida com o schema).
+    build: ../apps/api
+    restart: unless-stopped
+    environment:
+      DATABASE_URL: postgresql+psycopg://e1p_app:e1ppass@postgres:5432/e1pdb
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      JWT_SECRET: ${JWT_SECRET:-dev-secret-change-me}
+      ENVIRONMENT: development
+    depends_on:
+      - api
+    command: python -m app.worker
+
   web:
     # Contexto = raiz do monorepo (o Dockerfile precisa de packages/ e pnpm-workspace.yaml).
     # Build de PRODUÇÃO (nginx estático, SEM proxy /api). Em DEV o front é o Vite (`pnpm dev`)

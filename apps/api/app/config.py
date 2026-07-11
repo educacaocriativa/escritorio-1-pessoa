@@ -65,15 +65,39 @@ class Settings(BaseSettings):
     s3_secret_access_key: str = ""
     s3_region: str = "auto"
 
+    # OAuth Google (Meet/Calendar) — app OAuth GLOBAL da plataforma (um Google Cloud project
+    # para todos os tenants). Vazio = integração indisponível (fail-safe: o sistema segue
+    # funcionando com o campo manual de reunião, só não oferece "Conectar Google"). O token de
+    # acesso à agenda é POR TENANT (ver modules/google_calendar), não confundir com estes.
+    google_client_id: str = ""
+    google_client_secret: str = ""
+    google_oauth_redirect_uri: str = ""
+
     # App
     root_domain: str = "e1p.com"
     frontend_url: str = "http://localhost:5173"
     upload_dir: str = "./uploads"
     generated_dir: str = "./generated"
+    # Worker durável (app.worker): intervalo entre sweeps (tick do funil + fila de notificações).
+    # Operacional, não é segredo — sem guard de produção (mesmo espírito de session_idle_timeout).
+    worker_tick_interval_seconds: int = 60
 
     @property
     def is_production(self) -> bool:
         return self.environment == "production"
+
+    @property
+    def google_oauth_configured(self) -> bool:
+        """True quando o app OAuth do Google está configurado (client id/secret + redirect).
+
+        Usado pelo backend (para permitir/negar o fluxo de conexão) E exposto num endpoint de
+        status para o frontend decidir se mostra o botão "Conectar Google". Integração OPCIONAL
+        por design (AC3): vazio não quebra nada, apenas desabilita a geração automática de Meet."""
+        return bool(
+            self.google_client_id
+            and self.google_client_secret
+            and self.google_oauth_redirect_uri
+        )
 
     @model_validator(mode="after")
     def _guard_production_secrets(self) -> "Settings":

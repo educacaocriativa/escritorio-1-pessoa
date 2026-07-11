@@ -3,6 +3,14 @@
  * Deve espelhar os schemas Pydantic do backend (apps/api/app/.../schemas).
  * Quando um schema do backend mudar, atualize aqui — os agentes de QA (dedup-checker)
  * vigiam tipos que deveriam morar neste pacote.
+ *
+ * GERAÇÃO AUTOMÁTICA (Story 4.5): os tipos GERADOS a partir do OpenAPI do FastAPI agora vivem em
+ * `./generated.ts`. Rode `pnpm generate:types` na RAIZ do monorepo para regenerá-los (exporta o
+ * OpenAPI via `apps/api/scripts/export_openapi.py` → `openapi.json` → `openapi-typescript`).
+ * Os tipos deste arquivo (`index.ts`) continuam mantidos À MÃO por retrocompatibilidade e devem
+ * ser migrados incrementalmente para `generated.ts` em stories futuras (catalogar na Story 4.6).
+ * ATENÇÃO: sem CI, a regeneração é um passo MANUAL após qualquer mudança de schema no backend —
+ * `openapi.json`/`generated.ts` versionados podem sofrer drift se esquecerem de rodar o comando.
  */
 
 // ── Identidade / acesso ────────────────────────────────
@@ -157,10 +165,22 @@ export interface AgendaEvent {
   /** Valor em centavos (inteiro) para eventos de cobrança. */
   amount_cents: number | null;
   external_ref: string | null;
+  /** Id do evento espelhado no Google Calendar (quando o Meet foi gerado via OAuth). */
+  google_event_id: string | null;
   /** Nome do cliente (cobrança) ou fornecedor (conta a pagar), resolvido no list/get. */
   client_name: string | null;
   created_by_ai: boolean;
   created_at: string;
+}
+
+/** Estado da integração Google (Meet/Calendar) para a tela de Configurações. */
+export interface GoogleCalendarStatus {
+  /** App OAuth configurado na plataforma (mostra/esconde o botão "Conectar Google"). */
+  configured: boolean;
+  /** Este tenant já conectou uma conta Google. */
+  connected: boolean;
+  /** E-mail da conta Google conectada (null se não conectado). */
+  email: string | null;
 }
 
 /** Resposta de criar/remarcar evento: a 'Guardiã da Agenda' devolve conflitos detectados. */
@@ -532,6 +552,16 @@ export interface Attachment {
   created_at: string;
 }
 
+/**
+ * Imagem intencionalmente PÚBLICA (logo/foto de proposta, carrossel, site) — retorno de
+ * `POST /attachments/public-images`. `url` é o caminho da rota de leitura no backend
+ * (`/public-images/{id}`); o helper `uploadPublicImage` prefixa o proxy `/api`.
+ */
+export interface PublicImage {
+  id: UUID;
+  url: string;
+}
+
 // ── Sites / Páginas ────────────────────────────────────
 export type PageBlock = { type: string; [key: string]: unknown };
 
@@ -585,6 +615,7 @@ export interface TenantProfile {
   text_color: string;
   bg_color: string;
   font: string;
+  timezone: string;
 }
 
 // ── Controle de Estoque ────────────────────────────────

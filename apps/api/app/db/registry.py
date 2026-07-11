@@ -7,7 +7,7 @@ garanta que ele seja importado aqui (direta ou indiretamente).
 from app.core.audit import AuditEntry, PlatformAuditEntry  # noqa: F401
 from app.db.base import Base
 from app.modules.agenda.models import AgendaEvent  # noqa: F401
-from app.modules.attachments.models import Attachment  # noqa: F401
+from app.modules.attachments.models import Attachment, PublicImage  # noqa: F401
 from app.modules.auth.models import Tenant, User  # noqa: F401
 from app.modules.contracts.models import (  # noqa: F401
     Contract,
@@ -16,6 +16,7 @@ from app.modules.contracts.models import (  # noqa: F401
 )
 from app.modules.crm.models import Client, PipelineStage  # noqa: F401
 from app.modules.funnels.models import Funnel, FunnelRun  # noqa: F401
+from app.modules.google_calendar.models import GoogleCredential  # noqa: F401
 from app.modules.juridico.models import LegalDocument  # noqa: F401
 from app.modules.marketing.models import Carousel  # noqa: F401
 from app.modules.notifications.models import Notification  # noqa: F401

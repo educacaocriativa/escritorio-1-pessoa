@@ -19,6 +19,7 @@ class ProfileOut(BaseModel):
     text_color: str
     bg_color: str
     font: str
+    timezone: str
 
 
 class ProfileUpdate(BaseModel):
@@ -36,3 +37,4 @@ class ProfileUpdate(BaseModel):
     text_color: str | None = Field(default=None, max_length=9)
     bg_color: str | None = Field(default=None, max_length=9)
     font: str | None = Field(default=None, max_length=40)
+    timezone: str | None = Field(default=None, max_length=64)

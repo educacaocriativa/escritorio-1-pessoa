@@ -2,6 +2,7 @@ import type { Page, PageBlock } from "@e1p/shared-types";
 import { ArrowLeft, ChevronDown, ChevronUp, Eye, Globe, Plus, Save, Trash2 } from "lucide-react";
 import { useCallback, useEffect, useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
+import ImageUploadButton from "../../components/ImageUploadButton";
 import { api, apiErrorMessage } from "../../lib/api";
 import PageBlocks from "./PageBlocks";
 
@@ -128,6 +129,11 @@ export default function PageBuilderPage() {
             <select value={page.font} onChange={(e) => setStyle({ font: e.target.value })} className="col-span-2 rounded-lg border border-neutral-200 px-2 py-1.5 text-sm outline-none">
               {FONTS.map((f) => <option key={f} value={f}>{f}</option>)}
             </select>
+            <div className="col-span-2 space-y-1">
+              <span className="text-xs text-neutral-500">Logo</span>
+              <input value={page.logo_url} onChange={(e) => setStyle({ logo_url: e.target.value })} placeholder="URL do logo (https://...)" className="w-full rounded-lg border border-neutral-200 px-2 py-1.5 text-sm outline-none focus:border-primary-400" />
+              <ImageUploadButton label="Enviar logo" onUploaded={(url) => setStyle({ logo_url: url })} />
+            </div>
           </div>
 
           {/* Blocos */}
@@ -187,6 +193,12 @@ function BlockFields({ block, onChange }: { block: PageBlock; onChange: (p: Part
     case "text":
       return <textarea value={v("text")} onChange={(e) => onChange({ text: e.target.value })} rows={block.type === "text" ? 3 : 2} className={inp} />;
     case "image":
+      return (
+        <div className="space-y-1.5">
+          <input value={v("url")} onChange={(e) => onChange({ url: e.target.value })} placeholder="URL (https://...)" className={inp} />
+          <ImageUploadButton label="Enviar imagem" onUploaded={(url) => onChange({ url })} />
+        </div>
+      );
     case "video":
       return <input value={v("url")} onChange={(e) => onChange({ url: e.target.value })} placeholder="URL (https://...)" className={inp} />;
     case "button":

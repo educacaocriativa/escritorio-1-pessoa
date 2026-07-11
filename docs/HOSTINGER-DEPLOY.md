@@ -272,19 +272,6 @@ Só **depois** do smoke test de staging passar, aplique o MESMO fluxo da seção
 real (`git pull` + `docker compose ... up -d --build`). Produção não semeia dados sintéticos:
 lá `SEED_SYNTHETIC_DATA` fica vazio/false, então `app.seed_staging` é um no-op.
 
-## Dívida / próximos passos
-- Wildcard subdomínio por tenant (`*.seudominio.com`) — exige TLS via desafio DNS-01
-  (Caddy suporta plugins de provedor de DNS; Cloudflare é o mais simples se você migrar
-  o DNS pra lá). Reavaliar quando o white-label por subdomínio for pro ar.
-- **CI** já existe (`.github/workflows/ci.yml`, Story 3.2): testa a imagem de produção e o
-  isolamento RLS a cada push/PR na `main`. **Pendente (@devops):** habilitar branch protection
-  em GitHub → Settings → Branches marcando `test-in-prod-image` e `cross-tenant-rls` como checks
-  obrigatórios (transforma o workflow num gate que BLOQUEIA merge, não só um status vermelho).
-  **CD (deploy automático)** ainda não existe — o deploy segue `git pull` + rebuild manual na VPS.
-- Monitoramento/alertas: **implementado** na Story 3.4 com Uptime Kuma self-hosted —
-  ver **§9** abaixo. (Migração para observabilidade gerenciada na AWS Fase B fica para
-  quando o tráfego justificar.)
-
 ## 9. Monitoramento e alertas (Story 3.4)
 
 Monitoramento self-hosted de disponibilidade com **Uptime Kuma** (gratuito, 1 container,
@@ -372,3 +359,64 @@ docker start $(docker ps -qf "name=api")    # restaura
   contratado — **nenhum serviço pago novo** foi introduzido.
 - **Sintaxe do compose:** valide antes de subir com
   `docker compose -f docker-compose.monitoring.yml config`.
+
+## 10. Wildcard de subdomínio por tenant (`*.${ROOT_DOMAIN}`) — Story 4.4
+White-label por subdomínio (`joaosilva.e1p.com`). O certificado curinga exige TLS via
+**desafio DNS-01** — o Let's Encrypt **não** emite wildcard via HTTP-01. O domínio único
+(`${DOMAIN}`) continua no HTTP-01 automático, sem regressão.
+
+### 10.1 Pré-requisitos (fora do escopo de código — exigem infra/DNS real)
+1. **DNS de `${ROOT_DOMAIN}` gerido pela Cloudflare** (ou outro provedor com plugin Caddy).
+   Se ainda estiver em outro registrador, migre a zona para a Cloudflare antes.
+2. **Registro DNS wildcard**: um `A`/`CNAME` de `*.${ROOT_DOMAIN}` apontando pro IP da VPS.
+3. **`CLOUDFLARE_API_TOKEN`** com escopo **mínimo** (menor privilégio): *Zone → DNS → Edit*
+   na zona `${ROOT_DOMAIN}`. Gere em https://dash.cloudflare.com/profile/api-tokens e
+   coloque no `.env.prod` (nunca commitar). `ROOT_DOMAIN=e1p.com` também no `.env.prod`.
+
+### 10.2 Topologia A — Caddy próprio (`docker-compose.prod.yml`)
+- A imagem do Caddy passa a ser **buildada localmente** (`infra/caddy/Dockerfile`, via
+  `xcaddy build --with github.com/caddy-dns/cloudflare`) — a oficial `caddy:2-alpine` não
+  traz módulos de DNS. O `Caddyfile` ganhou um segundo bloco `*.{$ROOT_DOMAIN}` com
+  `tls { dns cloudflare {$CLOUDFLARE_API_TOKEN} }`.
+- Subir: `docker compose -f docker-compose.prod.yml up -d --build` (o `--build` recompila
+  a imagem do Caddy com o plugin).
+
+### 10.3 Topologia B — Traefik compartilhado (`docker-compose.traefik.yml`, produção real)
+- ⚠️ **Dependência externa (bloqueio operacional, não de código):** o Traefik compartilhado
+  vive em `/opt/infra/proxy/` **fora deste repositório**. Os labels de `api`/`web` já aceitam
+  o wildcard (`HostRegexp(...)`), **mas a emissão do certificado** depende de configurar, no
+  repo de infra externo, um **certresolver com desafio DNS-01/Cloudflare** (mesmo provedor da
+  Topologia A, para não ter dois fluxos de credencial DNS). Sem essa mudança externa o
+  roteamento wildcard funciona mas fica sem cert válido. Coordene com quem opera `/opt/infra/proxy/`.
+
+### 10.4 Runbook de validação IV3 (emissão/renovação do certificado)
+1. Preencha `.env.prod` com `CLOUDFLARE_API_TOKEN` e `ROOT_DOMAIN`.
+2. `docker compose -f docker-compose.prod.yml up -d --build`.
+3. Acesse `https://qualquerslug.${ROOT_DOMAIN}` (o slug pode nem existir como tenant — o
+   objetivo aqui é só validar o certificado, não um tenant real).
+4. Confirme a cobertura do curinga:
+   `echo | openssl s_client -connect qualquerslug.${ROOT_DOMAIN}:443 -servername qualquerslug.${ROOT_DOMAIN} 2>/dev/null | openssl x509 -noout -text | grep -A1 'Subject Alternative Name'`
+   → deve listar `DNS:*.${ROOT_DOMAIN}`.
+5. Logs da emissão via Cloudflare:
+   `docker compose -f docker-compose.prod.yml logs caddy | grep -i 'cloudflare\|dns-01\|obtain'`.
+
+### 10.5 IV1 (domínio único) e IV2 (isolamento) — validação
+- **IV1:** acesse `https://${DOMAIN}` após a mudança e faça login normalmente — sem exigir
+  subdomínio. O bloco do domínio único não usa DNS-01 e não foi alterado no comportamento.
+- **IV2 (segurança, revisão de código obrigatória no quality gate):** confirmar que
+  `app/core/subdomain.py::extract_tenant_slug`/`get_tenant_by_subdomain` **NÃO** é usado em
+  nenhum ponto que sete a GUC `app.current_tenant_id` nem substitua `get_tenant_db`/
+  `tenant_session`. O isolamento continua 100% no JWT+RLS — o `Host` (controlável pelo
+  cliente) só serve para branding/UX em rotas públicas. Ver Regra de Ouro nº 1 (CLAUDE.md §3.1).
+
+## Dívida / próximos passos
+- **Wildcard na Topologia B (Traefik compartilhado):** a emissão real do cert curinga depende
+  de config externa em `/opt/infra/proxy/` (certresolver DNS-01/Cloudflare) — ver §10.3.
+- **CI** já existe (`.github/workflows/ci.yml`, Story 3.2): testa a imagem de produção e o
+  isolamento RLS a cada push/PR na `main`. **Pendente (@devops):** habilitar branch protection
+  em GitHub → Settings → Branches marcando `test-in-prod-image` e `cross-tenant-rls` como checks
+  obrigatórios (transforma o workflow num gate que BLOQUEIA merge, não só um status vermelho).
+  **CD (deploy automático)** ainda não existe — o deploy segue `git pull` + rebuild manual na VPS.
+- Monitoramento/alertas: **implementado** na Story 3.4 com Uptime Kuma self-hosted —
+  ver **§9**. (Migração para observabilidade gerenciada na AWS Fase B fica para quando o
+  tráfego justificar.)

@@ -16,6 +16,7 @@ DEFAULT_ACCENT = "#3DD68C"
 DEFAULT_TEXT = "#1F2937"
 DEFAULT_BG = "#FFFFFF"
 DEFAULT_FONT = "Inter"
+DEFAULT_TIMEZONE = "America/Sao_Paulo"
 
 
 class TenantProfile(Base, TenantMixin, TimestampMixin):
@@ -40,3 +41,7 @@ class TenantProfile(Base, TenantMixin, TimestampMixin):
     text_color: Mapped[str] = mapped_column(String(9), default=DEFAULT_TEXT, nullable=False)
     bg_color: Mapped[str] = mapped_column(String(9), default=DEFAULT_BG, nullable=False)
     font: Mapped[str] = mapped_column(String(40), default=DEFAULT_FONT, nullable=False)
+    # Fuso horário do tenant (IANA). Ancora janelas do dia / eventos all-day (Agenda/Cockpit).
+    timezone: Mapped[str] = mapped_column(
+        String(64), default=DEFAULT_TIMEZONE, nullable=False
+    )

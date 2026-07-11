@@ -1,3 +1,6 @@
+# Domínio único (IV1 da Story 4.4): topologia atual, SEM alteração de comportamento.
+# TLS automático via desafio HTTP-01 (Let's Encrypt) — o que já funciona hoje. Nenhuma
+# regressão: este bloco não usa DNS-01.
 {$DOMAIN} {
 	encode gzip
 
@@ -20,4 +23,29 @@
 monitor.{$DOMAIN} {
 	encode gzip
 	reverse_proxy uptime-kuma:3001
+}
+
+# Wildcard por tenant (`*.{$ROOT_DOMAIN}`, ex.: `*.e1p.com`) — white-label por subdomínio.
+# TLS via desafio DNS-01 (Cloudflare): OBRIGATÓRIO para certificado curinga — o Let's Encrypt
+# NÃO emite wildcard via HTTP-01, só via DNS-01. Só ESTE bloco usa DNS-01; o domínio único
+# acima permanece com HTTP-01 automático (sem regressão, IV1).
+# Requer, no .env.prod: CLOUDFLARE_API_TOKEN (escopo Zone.DNS Edit na zona) e ROOT_DOMAIN,
+# com o DNS de ROOT_DOMAIN gerido pela Cloudflare (ver docs/HOSTINGER-DEPLOY.md §8).
+# Mesmo roteamento do bloco acima (/api → api:8000, resto → web:80). A resolução de tenant
+# por subdomínio acontece no BACKEND a partir do JWT (RLS) — nunca do Host header, que é
+# controlável pelo cliente (ver apps/api/app/core/subdomain.py, Regra de Ouro nº 1).
+*.{$ROOT_DOMAIN} {
+	encode gzip
+
+	tls {
+		dns cloudflare {$CLOUDFLARE_API_TOKEN}
+	}
+
+	handle_path /api/* {
+		reverse_proxy api:8000
+	}
+
+	handle {
+		reverse_proxy web:80
+	}
 }
