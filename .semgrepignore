@@ -1,0 +1,31 @@
+# Paths ignorados pelo semgrep (job `sast-semgrep` do CI — Story 6.2).
+#
+# ATENÇÃO: quando este arquivo existe, o semgrep usa ELE no lugar dos defaults embutidos,
+# então precisamos re-listar explicitamente os excludes padrão (node_modules, .git, etc.)
+# além dos nossos. Objetivo: escanear só o CÓDIGO-FONTE do frontend, sem dependências
+# nem artefatos gerados (AC2 — "conjunto de regras curado para reduzir ruído").
+
+# Dependências / código de terceiros
+node_modules/
+.pnpm-store/
+
+# Artefatos de build e saída
+dist/
+build/
+out/
+coverage/
+.vite/
+.turbo/
+
+# Controle de versão e metadados
+.git/
+.github/
+
+# O backend Python NÃO é alvo deste job (já coberto por `ruff` no test-in-prod-image);
+# o CI aponta o semgrep só para apps/web, mas reforçamos aqui para evitar ruído se o
+# escopo mudar.
+apps/api/
+
+# Ferramentas e agentes do repo (não são superfície de produto do usuário)
+.claude/
+.aiox/

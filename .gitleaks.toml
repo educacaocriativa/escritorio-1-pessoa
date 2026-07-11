@@ -1,0 +1,42 @@
+# gitleaks — configuração de secret scan do e1p (Story 6.2).
+#
+# Rodado no CI pelo job `secret-scan` de .github/workflows/ci.yml, usando o CLI
+# gitleaks OSS (MIT, gratuito) via container pinado por digest — NÃO a gitleaks-action
+# (desde a v2 a Action exige um GITLEAKS_LICENSE para contas de ORGANIZAÇÃO — chave
+# gratuita, mas com registro externo + EULA proprietário; este repo é da org
+# `educacaocriativa`). O CLI é MIT, sem registro nem EULA. Ver o cabeçalho do ci.yml.
+#
+# Herda o ruleset default do gitleaks (100+ detectores de segredo) e adiciona uma
+# allowlist VERSIONADA para conviver com achados legítimos já tratados (AC1). Cada
+# exceção deve ser documentada com justificativa — allowlist não é lixeira de ruído.
+
+title = "gitleaks config — e1p"
+
+# Reaproveita todas as regras embutidas do gitleaks (AWS, GCP, tokens genéricos, etc.).
+[extend]
+useDefault = true
+
+[allowlist]
+description = "Falsos positivos conhecidos e código de terceiros (documentar cada entrada)."
+
+# `paths` são regexes de caminho. Ignoramos dependências e lockfiles: são código de
+# terceiros / conteúdo gerado, não fonte nossa — reduz ruído sem esconder nossos segredos.
+paths = [
+    '''(^|/)node_modules/''',
+    '''(^|/)dist/''',
+    '''(^|/)build/''',
+    '''(^|/)pnpm-lock\.yaml$''',
+    '''(^|/)package-lock\.json$''',
+    '''(^|/)yarn\.lock$''',
+]
+
+# --- Precedente documentado (NÃO ativo hoje) --------------------------------------
+# O token do Apify que veio no zip da skill de carrossel foi REDIGIDO ANTES de ser
+# commitado (ver CLAUDE.md §"Gerador de Carrossel"), então não deve haver segredo vivo
+# no histórico. Se algum dia a varredura de histórico (push para main) sinalizar
+# `docs/skills/carrosseis-instagram.md` por causa desse token já-removido, adicione a
+# entrada abaixo ao array `paths` ACIMA, com justificativa e link para o commit:
+#     '''(^|/)docs/skills/carrosseis-instagram\.md$'''
+# Mantido comentado de propósito: allowlistar o arquivo inteiro esconde QUALQUER segredo
+# futuro nele — só ative se/quando um achado benigno real aparecer (mission rule: não
+# suprimir preventivamente o que ainda não foi observado).
