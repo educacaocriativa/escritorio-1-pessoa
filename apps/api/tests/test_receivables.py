@@ -228,3 +228,192 @@ def test_get_single_charge(client: TestClient, headers):
 
 def test_requires_auth(client: TestClient):
     assert client.get("/receivables/summary").status_code == 401
+
+
+# ── Story 2.2: gateway de pagamento real (Asaas) ──────────────────────────────────────────────
+# Documento válido para o path do gateway (o gateway registrado exige CPF/CNPJ do pagador).
+VALID_CPF = "11144477735"
+
+
+def _configure_gateway(monkeypatch, create_fn):
+    """Ativa o gateway real nos testes e injeta um `create_registered_charge` fake (sem HTTP)."""
+    from app.config import settings
+    from app.core import payment_gateway
+
+    monkeypatch.setattr(settings, "payment_gateway_api_key", "test-key")
+    monkeypatch.setattr(settings, "payment_gateway_provider", "asaas")
+    monkeypatch.setattr(payment_gateway, "create_registered_charge", create_fn)
+
+
+def _fake_result(**kwargs):
+    from app.core.payment_gateway import GatewayChargeResult
+
+    ref = kwargs["external_reference"]
+    return GatewayChargeResult(
+        provider="asaas",
+        gateway_charge_id=f"pay_{ref.split(':')[1][:6]}",
+        payment_code=f"REGISTERED-{kwargs['method']}-{ref.split(':')[1][:6]}",
+        status="PENDING",
+        boleto_url="https://asaas.example/boleto",
+    )
+
+
+def test_webhook_accepts_real_asaas_payload_and_credits_wallet(client: TestClient, headers):
+    """AC2: o payload REAL do provedor (event + payment.externalReference) dá a baixa."""
+    c = client.post("/receivables/charges", json=_charge(method="boleto"), headers=headers).json()
+    payload = {
+        "event": "PAYMENT_RECEIVED",
+        "payment": {"id": "pay_x", "externalReference": f"{c['tenant_id']}:{c['id']}",
+                    "status": "RECEIVED"},
+    }
+    resp = client.post("/receivables/webhook", json=payload)
+    assert resp.status_code == 200
+    assert resp.json()["status"] == "paid"
+    got = client.get(f"/receivables/charges/{c['id']}", headers=headers).json()
+    assert got["status"] == "paid"
+    assert client.get("/wallet/summary", headers=headers).json()["available_cents"] > 0
+
+
+def test_webhook_real_payload_is_idempotent(client: TestClient, headers):
+    """AC3/IV2: reenvio at-least-once do mesmo evento não duplica a receita na carteira."""
+    c = client.post(
+        "/receivables/charges", json=_charge(amount_cents=10000), headers=headers
+    ).json()
+    payload = {
+        "event": "PAYMENT_CONFIRMED",
+        "payment": {"externalReference": f"{c['tenant_id']}:{c['id']}"},
+    }
+    client.post("/receivables/webhook", json=payload)
+    client.post("/receivables/webhook", json=payload)  # reenvio
+    # serviço pix 30% -> 7000 líquido, uma única vez
+    assert client.get("/wallet/summary", headers=headers).json()["available_cents"] == 7000
+
+
+def test_webhook_ignores_non_payment_event(client: TestClient, headers):
+    c = client.post("/receivables/charges", json=_charge(), headers=headers).json()
+    resp = client.post(
+        "/receivables/webhook",
+        json={"event": "PAYMENT_CREATED",
+              "payment": {"externalReference": f"{c['tenant_id']}:{c['id']}"}},
+    )
+    assert resp.status_code == 200
+    assert resp.json()["status"] == "ignored"
+    # não deu baixa
+    got = client.get(f"/receivables/charges/{c['id']}", headers=headers).json()
+    assert got["status"] == "open"
+
+
+def test_webhook_real_payload_missing_reference_rejected(client: TestClient):
+    resp = client.post(
+        "/receivables/webhook",
+        json={"event": "PAYMENT_RECEIVED", "payment": {"externalReference": "sem-separador"}},
+    )
+    assert resp.status_code == 400
+
+
+def test_webhook_secret_enforced_for_real_payload(client: TestClient, headers, monkeypatch):
+    """Fail-closed: com GATEWAY_WEBHOOK_SECRET definido, o token do header é obrigatório."""
+    from app.config import settings
+
+    monkeypatch.setattr(settings, "gateway_webhook_secret", "s3cr3t")
+    c = client.post("/receivables/charges", json=_charge(), headers=headers).json()
+    payload = {"event": "PAYMENT_RECEIVED",
+               "payment": {"externalReference": f"{c['tenant_id']}:{c['id']}"}}
+    # sem token -> 401
+    assert client.post("/receivables/webhook", json=payload).status_code == 401
+    # token errado -> 401
+    bad = client.post("/receivables/webhook", json=payload,
+                      headers={"asaas-access-token": "errado"})
+    assert bad.status_code == 401
+    # token correto -> 200 paid
+    ok = client.post("/receivables/webhook", json=payload,
+                     headers={"asaas-access-token": "s3cr3t"})
+    assert ok.status_code == 200
+    assert ok.json()["status"] == "paid"
+
+
+def test_webhook_internal_secret_still_enforced(client: TestClient, headers, monkeypatch):
+    """Retrocompat: o payload interno de dev valida o `secret` no corpo quando o segredo existe."""
+    from app.config import settings
+
+    monkeypatch.setattr(settings, "gateway_webhook_secret", "s3cr3t")
+    c = client.post("/receivables/charges", json=_charge(), headers=headers).json()
+    base = {"tenant_id": c["tenant_id"], "charge_id": c["id"], "status": "paid"}
+    assert client.post("/receivables/webhook", json=base).status_code == 401
+    ok = client.post("/receivables/webhook", json={**base, "secret": "s3cr3t"})
+    assert ok.status_code == 200
+    assert ok.json()["status"] == "paid"
+
+
+def test_graceful_degradation_without_gateway(client: TestClient, headers):
+    """IV1: sem chave do gateway, a cobrança usa o stub (código stub + boleto layout-stub)."""
+    c = client.post("/receivables/charges", json=_charge(method="boleto"), headers=headers).json()
+    assert c["gateway_provider"] is None
+    assert c["payment_code"].startswith("34191")  # linha do boleto stub
+    atts = client.get(f"/attachments?owner_type=charge&owner_id={c['id']}", headers=headers).json()
+    assert any(a["label"] == "boleto" and a["size"] > 0 for a in atts)
+
+
+def test_gateway_configured_uses_registered_code(client: TestClient, headers, monkeypatch):
+    """AC1: com o gateway configurado, a cobrança carrega o código REGISTRADO e o external_ref
+    correto (tenant_id:charge_id)."""
+    calls: list[dict] = []
+
+    def fake_create(**kwargs):
+        calls.append(kwargs)
+        return _fake_result(**kwargs)
+
+    _configure_gateway(monkeypatch, fake_create)
+    cl = client.post(
+        "/crm/clients", json={"name": "Pagador", "document": VALID_CPF}, headers=headers
+    ).json()
+    c = client.post(
+        "/receivables/charges", json=_charge(method="boleto", client_id=cl["id"]), headers=headers
+    ).json()
+    assert c["payment_code"].startswith("REGISTERED-boleto")
+    assert c["gateway_provider"] == "asaas"
+    assert len(calls) == 1
+    assert calls[0]["external_reference"] == f"{c['tenant_id']}:{c['id']}"
+
+
+def test_gateway_called_per_recurring_occurrence(client: TestClient, headers, monkeypatch):
+    """AC4: cada ocorrência recorrente gera seu próprio registro no gateway (uma chamada cada)."""
+    calls: list[dict] = []
+
+    def fake_create(**kwargs):
+        calls.append(kwargs)
+        return _fake_result(**kwargs)
+
+    _configure_gateway(monkeypatch, fake_create)
+    cl = client.post(
+        "/crm/clients", json={"name": "Pagador", "document": VALID_CPF}, headers=headers
+    ).json()
+    client.post(
+        "/receivables/charges",
+        json=_charge(method="boleto", client_id=cl["id"], recurrence="monthly",
+                     recurrence_count=3),
+        headers=headers,
+    )
+    assert len(calls) == 3
+    refs = {kw["external_reference"] for kw in calls}
+    assert len(refs) == 3  # um external_reference distinto por ocorrência
+
+
+def test_gateway_failure_degrades_to_stub(client: TestClient, headers, monkeypatch):
+    """Fail-safe: se o gateway falhar, a cobrança ainda é criada com o stub (não quebra o fluxo)."""
+    from app.core.payment_gateway import GatewayError
+
+    def boom(**kwargs):
+        raise GatewayError("indisponível")
+
+    _configure_gateway(monkeypatch, boom)
+    cl = client.post(
+        "/crm/clients", json={"name": "Pagador", "document": VALID_CPF}, headers=headers
+    ).json()
+    resp = client.post(
+        "/receivables/charges", json=_charge(method="boleto", client_id=cl["id"]), headers=headers
+    )
+    assert resp.status_code == 201
+    c = resp.json()
+    assert c["gateway_provider"] is None
+    assert c["payment_code"].startswith("34191")  # caiu no stub
