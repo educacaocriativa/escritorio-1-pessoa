@@ -325,6 +325,8 @@ export interface Charge {
   method: PaymentMethod;
   amount_cents: number;
   due_date: string;
+  // Story 5.4: vínculo opcional ao contrato (eixo "projeto"); null = bucket "Empresa".
+  contract_id: UUID | null;
   status: ChargeStatus;
   is_overdue: boolean;
   protested_at: string | null;
@@ -355,6 +357,8 @@ export interface Payable {
   supplier: string;
   amount_cents: number;
   due_date: string;
+  // Story 5.4: vínculo opcional ao contrato (eixo "projeto"); null = bucket "Empresa".
+  contract_id: UUID | null;
   status: PayableStatus;
   is_overdue: boolean;
   paid_at: string | null;
@@ -372,6 +376,27 @@ export interface PayablesSummary {
   week_cents: number;
   month_cents: number;
   paid_month_cents: number;
+}
+
+// Story 5.9: Fila de Pagamentos — visão nova sobre Payable (sem tabela nova). Baldes calculados
+// na leitura: atrasados / hoje / próximos 7 dias / próximos 30 dias.
+export interface PaymentQueueSummary {
+  atrasados_count: number;
+  atrasados_cents: number;
+  hoje_count: number;
+  hoje_cents: number;
+  proximos_7_dias_count: number;
+  proximos_7_dias_cents: number;
+  proximos_30_dias_count: number;
+  proximos_30_dias_cents: number;
+}
+
+export interface PaymentQueue {
+  atrasados: Payable[];
+  hoje: Payable[];
+  proximos_7_dias: Payable[];
+  proximos_30_dias: Payable[];
+  summary: PaymentQueueSummary;
 }
 
 // ── Produtos, Cupons e Alunos ──────────────────────────
@@ -528,6 +553,8 @@ export interface Contract {
   clauses: Clause[];
   status: ContractStatus;
   public_slug: string | null;
+  // Story 5.4: custo fixo atribuído ao contrato (centavos), usado no break-even; null = não atribuído.
+  fixed_costs_allocated_cents: number | null;
   signer_name: string;
   signer_document: string;
   signed_at: string | null;

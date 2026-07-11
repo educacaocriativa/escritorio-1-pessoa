@@ -53,7 +53,7 @@ function Sidebar({ onClose }: { onClose: () => void }) {
                 <li key={item.to}>
                   <NavLink
                     to={item.to}
-                    end={item.to === "/"}
+                    end={item.to === "/" || item.exact === true}
                     className={({ isActive }) =>
                       clsx(
                         "flex items-center gap-3 py-3 pl-4 text-[15px] font-medium transition",

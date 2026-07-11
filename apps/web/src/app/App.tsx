@@ -12,7 +12,15 @@ import PublicContractPage from "../features/contratos/PublicContractPage";
 import ClientDetailPage from "../features/crm/ClientDetailPage";
 import CrmPage from "../features/crm/CrmPage";
 import EstoquePage from "../features/estoque/EstoquePage";
+import CentrosCustoPage from "../features/financeiro/CentrosCustoPage";
+import ContratoDrePage from "../features/financeiro/ContratoDrePage";
+import DiagnosticoPage from "../features/financeiro/DiagnosticoPage";
+import DrePage from "../features/financeiro/DrePage";
+import FilaPagamentosPage from "../features/financeiro/FilaPagamentosPage";
 import FinanceiroPage from "../features/financeiro/FinanceiroPage";
+import InvestimentosPage from "../features/financeiro/InvestimentosPage";
+import PlanoContasPage from "../features/financeiro/PlanoContasPage";
+import ProjecaoCaixaPage from "../features/financeiro/ProjecaoCaixaPage";
 import FunisPage from "../features/funis/FunisPage";
 import FunnelBuilderPage from "../features/funis/FunnelBuilderPage";
 import JuridicoDocumentPage from "../features/juridico/JuridicoDocumentPage";
@@ -48,6 +56,14 @@ export default function App() {
           <Route path="/crm" element={<CrmPage />} />
           <Route path="/crm/clients/:id" element={<ClientDetailPage />} />
           <Route path="/financeiro" element={<FinanceiroPage />} />
+          <Route path="/financeiro/plano-contas" element={<PlanoContasPage />} />
+          <Route path="/financeiro/centros-custo" element={<CentrosCustoPage />} />
+          <Route path="/financeiro/investimentos" element={<InvestimentosPage />} />
+          <Route path="/financeiro/dre" element={<DrePage />} />
+          <Route path="/financeiro/projecao-caixa" element={<ProjecaoCaixaPage />} />
+          <Route path="/financeiro/fila-pagamentos" element={<FilaPagamentosPage />} />
+          <Route path="/financeiro/diagnostico" element={<DiagnosticoPage />} />
+          <Route path="/financeiro/contratos/:id/dre" element={<ContratoDrePage />} />
           <Route path="/cobrancas" element={<CobrancasPage />} />
           <Route path="/pagar" element={<PagarPage />} />
           <Route path="/produtos" element={<ProdutosPage />} />

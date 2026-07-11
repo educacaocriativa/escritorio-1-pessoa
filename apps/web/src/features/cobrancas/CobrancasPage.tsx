@@ -1,4 +1,4 @@
-import type { Charge, ChargesSummary, Client } from "@e1p/shared-types";
+import type { Charge, ChargesSummary, Client, Contract } from "@e1p/shared-types";
 import { Copy, Paperclip } from "lucide-react";
 import { useCallback, useEffect, useState } from "react";
 import Attachments from "../../components/Attachments";
@@ -270,11 +270,16 @@ function NewChargeModal({
   const [recurrence, setRecurrence] = useState("none");
   const [recurrenceCount, setRecurrenceCount] = useState("12");
   const [clients, setClients] = useState<Client[]>([]);
+  const [contracts, setContracts] = useState<Contract[]>([]);
+  const [contractId, setContractId] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
 
   useEffect(() => {
-    if (open) api.get<Client[]>("/crm/clients").then(({ data }) => setClients(data));
+    if (open) {
+      api.get<Client[]>("/crm/clients").then(({ data }) => setClients(data));
+      api.get<Contract[]>("/contracts").then(({ data }) => setContracts(data)).catch(() => setContracts([]));
+    }
   }, [open]);
 
   async function save() {
@@ -289,6 +294,7 @@ function NewChargeModal({
         due_date: dueDate,
         description,
         client_id: clientId || null,
+        contract_id: contractId || null,
         recurrence,
         recurrence_count: recurrence === "none" ? 1 : Math.max(1, Math.min(60, parseInt(recurrenceCount, 10) || 1)),
       });
@@ -296,6 +302,7 @@ function NewChargeModal({
       setValue("");
       setDueDate("");
       setDescription("");
+      setContractId("");
       onClose();
     } catch (err) {
       setError(apiErrorMessage(err));
@@ -345,6 +352,24 @@ function NewChargeModal({
           <Field label="Vencimento" type="date" value={dueDate} onChange={setDueDate} />
         </div>
         <Field label="Descrição" value={description} onChange={setDescription} placeholder="Mensalidade" />
+        <label className="block">
+          <span className="mb-1 block text-xs font-medium text-neutral-600">
+            Vincular a contrato (opcional)
+          </span>
+          <select
+            value={contractId}
+            onChange={(e) => setContractId(e.target.value)}
+            className="w-full rounded-lg border border-neutral-200 px-3 py-2 text-sm outline-none focus:border-primary-400"
+          >
+            <option value="">Empresa (sem contrato)</option>
+            {contracts.map((c) => (
+              <option key={c.id} value={c.id}>
+                {c.title}
+                {c.client_name ? ` — ${c.client_name}` : ""}
+              </option>
+            ))}
+          </select>
+        </label>
         <div className="flex gap-2">
           <label className="flex-1">
             <span className="mb-1 block text-xs font-medium text-neutral-600">Recorrência</span>

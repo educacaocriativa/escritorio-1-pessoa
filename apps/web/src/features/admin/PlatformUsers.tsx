@@ -13,6 +13,7 @@ const MODULES: { key: string; label: string }[] = [
   { key: "agenda", label: "Agenda" },
   { key: "receivables", label: "Cobranças" },
   { key: "payables", label: "Contas a Pagar" },
+  { key: "chart_of_accounts", label: "Plano de contas" },
   { key: "wallet", label: "Financeiro" },
   { key: "quotes", label: "Orçamentos" },
   { key: "contracts", label: "Contratos" },

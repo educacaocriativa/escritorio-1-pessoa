@@ -97,11 +97,22 @@ export default function ContratosPage() {
                     )}
                   </td>
                   <td className="px-4 py-3 text-right">
-                    {c.status !== "signed" && c.status !== "cancelled" && (
-                      <button onClick={(e) => cancel(e, c.id)} className="text-xs font-medium text-neutral-400 hover:text-danger">
-                        Cancelar
+                    <div className="flex items-center justify-end gap-3">
+                      <button
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          navigate(`/financeiro/contratos/${c.id}/dre`);
+                        }}
+                        className="text-xs font-medium text-primary-600 hover:text-primary-700"
+                      >
+                        Ver DRE
                       </button>
-                    )}
+                      {c.status !== "signed" && c.status !== "cancelled" && (
+                        <button onClick={(e) => cancel(e, c.id)} className="text-xs font-medium text-neutral-400 hover:text-danger">
+                          Cancelar
+                        </button>
+                      )}
+                    </div>
                   </td>
                 </tr>
               ))}
