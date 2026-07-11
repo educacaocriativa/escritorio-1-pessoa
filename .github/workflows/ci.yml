@@ -1,11 +1,23 @@
-# CI — testa a imagem Docker de PRODUÇÃO e o isolamento cross-tenant (RLS).
+# CI — testa a imagem Docker de PRODUÇÃO, o isolamento cross-tenant (RLS),
+# e faz secret scan (gitleaks) + SAST do frontend (semgrep).
 # Story 3.2: pega o drift venv↔produção (a suíte roda DENTRO da imagem, não só no venv)
 # e garante o isolamento RLS num Postgres real (testcontainers).
+# Story 6.2: adiciona `secret-scan` (gitleaks) e `sast-semgrep` como gates de segurança.
 #
 # Gate obrigatório: se qualquer job falhar, o workflow fica vermelho. Para que isso
 # BLOQUEIE merge/deploy de fato, @devops deve habilitar branch protection em
 # GitHub → Settings → Branches → "Require status checks to pass" marcando
 # `test-in-prod-image` e `cross-tenant-rls` (follow-up fora do escopo de código — Task 5).
+#
+# Story 6.2 — gates OBSERVÁVEIS primeiro, bloqueantes depois: `secret-scan` e
+# `sast-semgrep` seguem O MESMO modelo — hoje aparecem no PR (check vermelho quando
+# acham algo), mas NÃO impedem merge porque ainda não estão em "Require status checks
+# to pass". A promoção para bloqueante é um follow-up de @devops (mesma tela de branch
+# protection acima), a ser feito após um período de observação sem falso positivo
+# excessivo — assim ninguém trava merge por falso positivo no dia 1. NÃO usamos
+# `continue-on-error` (deixaria o check sempre verde e tornaria a promoção via branch
+# protection um no-op) — o mecanismo de "não-bloqueante" é a AUSÊNCIA do check na lista
+# de required, igual aos dois jobs acima.
 name: CI
 
 on:
@@ -52,3 +64,69 @@ jobs:
       # NÃO-superusuário e1p_app (Regra de Ouro nº 1) e valida "João não vê dados da Maria".
       - name: Teste de isolamento RLS (Postgres real)
         run: cd apps/api && python -m pytest -q -m rls_e2e tests/test_rls_isolation.py
+
+  # Story 6.2 / AC1: secret scan com gitleaks (OSS, MIT — custo zero, Regra de Ouro nº 4).
+  # Usamos o CLI gitleaks via container pinado por DIGEST (supply-chain), NÃO a
+  # gitleaks-action: desde a v2 a Action exige um GITLEAKS_LICENSE para contas de
+  # ORGANIZAÇÃO (este repo é da org educacaocriativa). Essa chave é gratuita, MAS
+  # exige registro externo (form) e está sob EULA proprietário — a Action NÃO é MIT.
+  # O CLI/binário gitleaks é MIT, sem registro nem EULA (mesma engine, cobertura
+  # idêntica): custo zero de verdade + zero fricção operacional/legal (Regra de Ouro nº 4).
+  # O padrão `docker run` é o mesmo já usado por `test-in-prod-image` neste arquivo.
+  # Observável, não bloqueante — ver o cabeçalho (branch protection é o gate de merge).
+  secret-scan:
+    runs-on: ubuntu-latest
+    steps:
+      # fetch-depth: 0 → gitleaks precisa do histórico p/ escanear o range de commits
+      # (o diff do PR e os commits do push), não só o snapshot do último commit.
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      # gitleaks v8.30.1 pinado por digest. Em PR, escaneia SÓ o range base..head
+      # (o "diff do PR" — AC1); em push para main, varre o histórico visível (a allowlist
+      # de .gitleaks.toml calibra o ruído). `git` = subcomando de scan de repositório;
+      # ENTRYPOINT da imagem já é `gitleaks`, então passamos só os args a partir de `git`.
+      - name: Secret scan (gitleaks)
+        env:
+          GITLEAKS_IMAGE: ghcr.io/gitleaks/gitleaks@sha256:c00b6bd0aeb3071cbcb79009cb16a60dd9e0a7c60e2be9ab65d25e6bc8abbb7f
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          set -euo pipefail
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
+            echo "gitleaks: escaneando o range do PR ${BASE_SHA}..${HEAD_SHA}"
+            docker run --rm -v "$PWD:/repo" -w /repo "$GITLEAKS_IMAGE" \
+              git --config .gitleaks.toml --redact --verbose \
+              --log-opts="${BASE_SHA}..${HEAD_SHA}"
+          else
+            echo "gitleaks: varredura completa do histórico (push para main)"
+            docker run --rm -v "$PWD:/repo" -w /repo "$GITLEAKS_IMAGE" \
+              git --config .gitleaks.toml --redact --verbose
+          fi
+
+  # Story 6.2 / AC2: SAST do frontend (TS/JS/React + OWASP) com semgrep (OSS — custo zero).
+  # Container semgrep/semgrep pinado por DIGEST. Packs públicos curados do Semgrep Registry
+  # (p/typescript, p/react, p/owasp-top-ten) — não o pack genérico p/ci (mais ruidoso).
+  # Escaneia SÓ apps/web (TS/React): o backend Python já é coberto por `ruff` no job
+  # test-in-prod-image; SAST Python (p/python) fica como follow-up, não é escopo do AC2.
+  # Observável, não bloqueante — ver o cabeçalho.
+  sast-semgrep:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # `semgrep scan` com --error → exit 1 se houver achado (check vermelho = observável).
+      # --metrics=off: nenhum dado sai para a Semgrep (privacidade + sem token/conta).
+      # Excludes de node_modules/dist/etc. vêm de .semgrepignore na raiz.
+      - name: SAST (semgrep — TS/JS/React + OWASP)
+        run: |
+          docker run --rm -v "$PWD:/src" -w /src \
+            semgrep/semgrep@sha256:2b33f46ba66cf8cc2ad59ccfa7d22951fd00c632c38f1339e84ec8e6e641a942 \
+            semgrep scan \
+              --config=p/typescript \
+              --config=p/react \
+              --config=p/owasp-top-ten \
+              --error \
+              --metrics=off \
+              apps/web

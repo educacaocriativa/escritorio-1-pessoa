@@ -12,6 +12,7 @@ from app.modules.payables.schemas import (
     PayableOut,
     PayablesSummary,
     PayableUpdate,
+    PaymentQueueOut,
 )
 
 router = APIRouter(prefix="/payables", tags=["payables"])
@@ -20,24 +21,8 @@ _guard = require_module("payables")
 
 
 def _out(p: Payable) -> PayableOut:
-    return PayableOut(
-        id=p.id,
-        tenant_id=p.tenant_id,
-        description=p.description,
-        category=p.category,
-        supplier=p.supplier,
-        amount_cents=p.amount_cents,
-        due_date=p.due_date,
-        status=p.status,
-        is_overdue=service.is_overdue(p),
-        paid_at=p.paid_at,
-        recurrence=p.recurrence,
-        recurrence_count=p.recurrence_count,
-        recurrence_group=p.recurrence_group,
-        payment_code=p.payment_code,
-        attachment_url=p.attachment_url,
-        created_at=p.created_at,
-    )
+    # Montagem canônica do PayableOut vive no service (reutilizada pela fila da Story 5.9).
+    return service.payable_out(p)
 
 
 def _err(e: service.PayableError) -> HTTPException:
@@ -50,6 +35,16 @@ def summary(
     db: Session = Depends(get_tenant_db),
 ) -> PayablesSummary:
     return PayablesSummary(**service.summary(db))
+
+
+@router.get("/queue", response_model=PaymentQueueOut)
+def payment_queue(
+    user: CurrentUser = Depends(_guard),
+    db: Session = Depends(get_tenant_db),
+) -> PaymentQueueOut:
+    """Story 5.9 — fila de pagamentos: Payables em aberto agrupados por janela de vencimento.
+    Mesmo módulo/guard (`require_module('payables')`), sem autorização nova."""
+    return service.payment_queue(db, tenant_id=user.tenant_id)
 
 
 @router.get("/categories", response_model=list[str])
@@ -87,7 +82,10 @@ def create_bill(
     user: CurrentUser = Depends(_guard),
     db: Session = Depends(get_tenant_db),
 ) -> PayableOut:
-    p = service.create_payable(db, tenant_id=user.tenant_id, actor=user.user_id, data=data)
+    try:
+        p = service.create_payable(db, tenant_id=user.tenant_id, actor=user.user_id, data=data)
+    except service.PayableError as e:
+        raise _err(e) from e
     return _out(p)
 
 

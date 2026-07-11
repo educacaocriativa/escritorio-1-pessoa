@@ -16,6 +16,17 @@ class ChargeCreate(BaseModel):
     method: str
     amount_cents: int = Field(gt=0)
     due_date: date
+    # Classificação DRE (Story 5.2, opcionais). competence_date omitida → service usa due_date
+    # como fallback (mesma regra do backfill). chart_account_id validado contra o plano de contas
+    # do tenant só se informado (404 se apontar p/ conta inexistente/de outro tenant).
+    competence_date: date | None = None
+    chart_account_id: str | None = None
+    # Story 5.4: vínculo opcional ao Contract (eixo "projeto"). Validado se informado (404 se
+    # apontar p/ contrato inexistente/de outro tenant). NULL = bucket "Empresa" (overhead).
+    contract_id: str | None = None
+    # Story 5.5: vínculo opcional ao centro de custo (2ª dimensão). Validado se informado (404 se
+    # apontar p/ centro de custo inexistente/de outro tenant). NULL = "Não atribuído".
+    cost_center_id: str | None = None
     recurrence: str = "none"  # none/weekly/monthly/yearly
     recurrence_count: int = Field(default=1, ge=1, le=60)
 
@@ -51,6 +62,14 @@ class ChargeOut(BaseModel):
     method: str
     amount_cents: int
     due_date: date
+    # Story 5.2: competência (regime de competência/DRE) e pagamento (regime de caixa).
+    competence_date: date | None
+    paid_at: datetime | None
+    chart_account_id: str | None
+    # Story 5.4: vínculo ao contrato (eixo "projeto"); None = bucket "Empresa".
+    contract_id: str | None
+    # Story 5.5: vínculo ao centro de custo (2ª dimensão); None = "Não atribuído".
+    cost_center_id: str | None
     status: str
     is_overdue: bool
     protested_at: datetime | None
@@ -72,6 +91,15 @@ class ChargeUpdate(BaseModel):
     description: str | None = None
     amount_cents: int | None = Field(default=None, gt=0)
     due_date: date | None = None
+    # Story 5.2: reclassificar uma cobrança em aberto (competência/conta do plano de contas).
+    competence_date: date | None = None
+    chart_account_id: str | None = None
+    # Story 5.4: (re)vincular a um contrato. None no PATCH = "não altera"; "" desvincula (bucket
+    # "Empresa"). Ver update_charge.
+    contract_id: str | None = None
+    # Story 5.5: (re)vincular a um centro de custo. None = "não altera"; "" desvincula ("Não
+    # atribuído"). Mesmo padrão de contract_id.
+    cost_center_id: str | None = None
 
 
 class WebhookPayment(BaseModel):

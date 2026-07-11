@@ -1,6 +1,7 @@
 import type { CockpitSummary } from "@e1p/shared-types";
-import { AlertTriangle, CalendarDays, FileSignature, Sparkles, TrendingUp, Wallet } from "lucide-react";
+import { AlertTriangle, CalendarDays, FileSignature, ListChecks, Sparkles, TrendingUp, Wallet } from "lucide-react";
 import { type ReactNode, useEffect, useState } from "react";
+import { Link } from "react-router-dom";
 import Modal from "../../components/Modal";
 import { api } from "../../lib/api";
 import { useAuth } from "../../store/auth";
@@ -47,11 +48,20 @@ export default function CockpitPage() {
 
   return (
     <div className="space-y-6">
-      <div>
-        <p className="text-sm text-neutral-500">Página / Cockpit</p>
-        <h1 className="text-2xl font-bold text-neutral-800">
-          Bom dia, {user?.name?.split(" ")[0] ?? ""} 👋
-        </h1>
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <div>
+          <p className="text-sm text-neutral-500">Página / Cockpit</p>
+          <h1 className="text-2xl font-bold text-neutral-800">
+            Bom dia, {user?.name?.split(" ")[0] ?? ""} 👋
+          </h1>
+        </div>
+        <Link
+          to="/financeiro/fila-pagamentos"
+          className="flex items-center gap-1.5 rounded-pill bg-white px-3 py-1.5 text-xs font-semibold text-primary-600 shadow-sm transition hover:bg-primary-50"
+        >
+          <ListChecks size={14} />
+          Fila de pagamentos
+        </Link>
       </div>
 
       <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">

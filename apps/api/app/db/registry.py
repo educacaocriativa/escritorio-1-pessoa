@@ -9,14 +9,17 @@ from app.db.base import Base
 from app.modules.agenda.models import AgendaEvent  # noqa: F401
 from app.modules.attachments.models import Attachment, PublicImage  # noqa: F401
 from app.modules.auth.models import Tenant, User  # noqa: F401
+from app.modules.chart_of_accounts.models import ChartAccount  # noqa: F401
 from app.modules.contracts.models import (  # noqa: F401
     Contract,
     ContractTemplate,
     PublishedContract,
 )
+from app.modules.cost_centers.models import CostCenter  # noqa: F401
 from app.modules.crm.models import Client, PipelineStage  # noqa: F401
 from app.modules.funnels.models import Funnel, FunnelRun  # noqa: F401
 from app.modules.google_calendar.models import GoogleCredential  # noqa: F401
+from app.modules.investments.models import InvestmentAccount  # noqa: F401
 from app.modules.juridico.models import LegalDocument  # noqa: F401
 from app.modules.marketing.models import Carousel  # noqa: F401
 from app.modules.notifications.models import Notification  # noqa: F401

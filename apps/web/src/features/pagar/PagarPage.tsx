@@ -1,10 +1,38 @@
-import type { Payable, PayablesSummary } from "@e1p/shared-types";
+import type { Contract, Payable, PayablesSummary } from "@e1p/shared-types";
 import { Copy, Paperclip } from "lucide-react";
 import { useCallback, useEffect, useState } from "react";
 import Attachments from "../../components/Attachments";
 import Modal, { Field } from "../../components/Modal";
 import { api, apiErrorMessage } from "../../lib/api";
 import { usePrimaryAction } from "../../store/pageActions";
+
+/** Seletor "Vincular a contrato" (Story 5.4) — opcional; vazio = bucket "Empresa" (overhead). */
+function ContractSelect({ value, onChange }: { value: string; onChange: (v: string) => void }) {
+  const [contracts, setContracts] = useState<Contract[]>([]);
+  useEffect(() => {
+    api.get<Contract[]>("/contracts").then((r) => setContracts(r.data)).catch(() => setContracts([]));
+  }, []);
+  return (
+    <label className="block">
+      <span className="mb-1 block text-xs font-medium text-neutral-600">
+        Vincular a contrato (opcional)
+      </span>
+      <select
+        value={value}
+        onChange={(e) => onChange(e.target.value)}
+        className="w-full rounded-lg border border-neutral-200 px-3 py-2 text-sm outline-none focus:border-primary-400"
+      >
+        <option value="">Empresa (sem contrato)</option>
+        {contracts.map((c) => (
+          <option key={c.id} value={c.id}>
+            {c.title}
+            {c.client_name ? ` — ${c.client_name}` : ""}
+          </option>
+        ))}
+      </select>
+    </label>
+  );
+}
 
 const brl = (c: number) => (c / 100).toLocaleString("pt-BR", { style: "currency", currency: "BRL" });
 
@@ -324,6 +352,7 @@ function NewBillModal({
   const [recurrence, setRecurrence] = useState("none");
   const [recurrenceCount, setRecurrenceCount] = useState("12");
   const [paymentCode, setPaymentCode] = useState("");
+  const [contractId, setContractId] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
 
@@ -341,6 +370,7 @@ function NewBillModal({
         recurrence,
         recurrence_count: recurrence === "none" ? 1 : Math.max(1, Math.min(60, parseInt(recurrenceCount, 10) || 1)),
         payment_code: paymentCode,
+        contract_id: contractId || null,
       });
       onCreated();
       setDescription("");
@@ -348,6 +378,7 @@ function NewBillModal({
       setValue("");
       setDueDate("");
       setPaymentCode("");
+      setContractId("");
       onClose();
     } catch (err) {
       setError(apiErrorMessage(err));
@@ -386,6 +417,7 @@ function NewBillModal({
             Gera uma conta por período, cada uma com seu vencimento (para anexar o boleto certo).
           </p>
         )}
+        <ContractSelect value={contractId} onChange={setContractId} />
         <div className="rounded-lg bg-neutral-50 p-3">
           <p className="mb-2 text-xs font-medium text-neutral-600">Pix copia-e-cola / linha do boleto (opcional)</p>
           <textarea value={paymentCode} onChange={(e) => setPaymentCode(e.target.value)} rows={2} placeholder="Cole o código aqui (os arquivos do boleto/contrato você anexa depois, em Boleto/Pix)" className="w-full rounded-lg border border-neutral-200 px-3 py-2 text-sm outline-none focus:border-primary-400" />
