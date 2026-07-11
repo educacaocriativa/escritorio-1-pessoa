@@ -14,10 +14,22 @@ from app.modules.auth.models import User
 from app.modules.crm.models import Client, PipelineStage
 from app.modules.crm.service import EVENT_CLIENT_MOVED
 from app.modules.notifications.models import Notification
+from app.modules.settings import service as settings_service
 
 
 def _owner_recipient(db: Session, tenant_id: str) -> str:
+    """Telefone do owner/destinatário para o WhatsApp.
+
+    Prioridade: TenantProfile.phone (editável na tela Configurações por qualquer owner) →
+    User.phone (preenchido no fluxo de convite) → User.email (fallback final, preserva o
+    placeholder histórico e a graceful degradation quando nenhum telefone foi configurado).
+    """
     owner = db.scalar(select(User).where(User.tenant_id == tenant_id, User.role == "owner"))
+    profile = settings_service.get_profile(db, tenant_id)
+    if profile.phone:
+        return profile.phone
+    if owner and owner.phone:
+        return owner.phone
     return owner.email if owner else ""
 
 
