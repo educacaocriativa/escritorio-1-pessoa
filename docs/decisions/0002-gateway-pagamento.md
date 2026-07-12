@@ -80,9 +80,14 @@ Racional:
   em `status=PAID`), então reenvios at-least-once do Asaas não geram dupla baixa/dupla receita.
 - **Segurança do webhook (dinheiro real):** ver seção abaixo — condições que DEVEM ser satisfeitas
   antes do go-live.
-- **Pendências de No Invention (Article IV):** os nomes exatos de endpoints/campos/header de
-  autenticação do Asaas seguem a doc pública mas **não foram validados contra sandbox real** neste
-  ambiente. Revalidar contra a documentação vigente + sandbox antes do go-live (marcado no código).
+- **Pendências de No Invention (Article IV) — RESOLVIDO em 2026-07-12 para o lado de SAÍDA
+  (criar cobrança):** validado contra o sandbox real (`api-sandbox.asaas.com`, conta "FLAVIO KATO
+  LTDA") — `POST /customers`, `POST /payments` (boleto E Pix) e `GET /payments/{id}/pixQrCode`
+  responderam `200` reais; header `access_token` (não `asaas-access-token`) confirmado como o
+  mecanismo de auth correto para essas chamadas; `bankSlipUrl`/linha digitável/copia-e-cola
+  retornados no formato esperado pelo adapter. **Ainda não validado:** o lado de ENTRADA (webhook
+  que a Asaas chama de volta) — ver condições de go-live abaixo, item 2, que continua pendente
+  (exige URL pública, não testável em localhost sem tunnel).
 
 ## Segurança do webhook — condições de go-live (revisão do quality gate)
 

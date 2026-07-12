@@ -8,11 +8,24 @@
 - [x] Validar: `forgot-password` chega por e-mail de verdade — testado ponta a ponta em 2026-07-12 (registro real + `/auth/forgot-password` + teste direto de `core/email.send_email`), e-mails confirmados recebidos na caixa de entrada real.
 
 ## 2. Gateway de pagamento — Asaas (Story 2.2)
-- [ ] Criar conta Asaas (sandbox primeiro, depois produção) e gerar API key
-- [ ] Preencher: `PAYMENT_GATEWAY_PROVIDER=asaas`, `PAYMENT_GATEWAY_API_KEY`, `PAYMENT_GATEWAY_BASE_URL` (sandbox: `https://api-sandbox.asaas.com/v3`)
-- [ ] Configurar `GATEWAY_WEBHOOK_SECRET` e registrar a URL do webhook no painel Asaas
-- [ ] Revalidar contra o sandbox real: campos/endpoints exatos do payload, formato do `bankSlipUrl`
-- [ ] Testar boleto/Pix real de ponta a ponta + confirmação de pagamento via webhook
+- [x] Criar conta Asaas (sandbox) e gerar API key — reaproveitada conta sandbox pré-existente do
+  fundador ("FLAVIO KATO LTDA", já aprovada).
+- [x] Preencher `PAYMENT_GATEWAY_PROVIDER=asaas`, `PAYMENT_GATEWAY_API_KEY`, `PAYMENT_GATEWAY_BASE_URL`
+  (sandbox `https://api-sandbox.asaas.com/v3`) — feito no `.env` local (raiz, gitignorado) e
+  repassado a `api`/`worker` via `env_file` no `infra/docker-compose.yml`. **Cuidado (achado
+  2026-07-12):** a API key da Asaas tem um `$` literal — precisa estar como `$$` no `.env` (ou
+  usar `env_file`, não `environment: ${VAR}`), senão o Compose interpola e o valor vira string
+  vazia. **Pendente:** replicar em `infra/.env.prod` de verdade quando a VPS existir (item 10).
+- [ ] Configurar `GATEWAY_WEBHOOK_SECRET` e registrar a URL do webhook no painel Asaas — falta
+  uma URL pública (só existe depois do item 10/deploy).
+- [x] Revalidar contra o sandbox real: campos/endpoints exatos do payload, formato do `bankSlipUrl`
+  — validado em 2026-07-12: `POST /customers`, `POST /payments` e `GET /payments/{id}/pixQrCode`
+  responderam `200` reais contra `api-sandbox.asaas.com` (boleto E Pix), com `gateway_charge_id`/
+  `payment_code`/`boleto_url` reais retornados pelo fluxo completo (`receivables.create_charge`).
+  Resolve a pendência de No Invention registrada no ADR 0002.
+- [ ] Testar boleto/Pix real de ponta a ponta + confirmação de pagamento via webhook — criação da
+  cobrança validada (linha acima); falta a ponta do webhook de confirmação (exige URL pública/
+  ngrok, não testado ainda).
 
 ## 3. WhatsApp Cloud API (Story 2.3)
 - [ ] Criar app Meta for Developers + número WhatsApp Business
