@@ -25,7 +25,9 @@ scripts/         check.sh e utilitários
 ```bash
 # Requisitos: Docker, Node 22 + pnpm, Python 3.13
 cp .env.example .env            # preencha ANTHROPIC_API_KEY etc.
-docker compose -f infra/docker-compose.yml up --build
+# --env-file é OBRIGATÓRIO: com só "-f infra/docker-compose.yml", o Compose v5 procura
+# o .env dentro de infra/ (não na raiz) e ignora suas variáveis silenciosamente.
+docker compose --env-file .env -f infra/docker-compose.yml up --build
 # Web:  http://localhost:5173    API: http://localhost:8000/health
 ```
 
