@@ -78,6 +78,10 @@ def _seed_tenant(app_url: str, tenant_id: str, *, receita: int, despesa: int) ->
             conn.execute(
                 text("SELECT set_config('app.current_tenant_id', :tid, false)"), {"tid": tenant_id}
             )
+            conn.commit()  # fixa a GUC (escopo de sessão) e ENCERRA a txn: sem isso a Session
+            # ligada a uma conexão já em transação usa join por SAVEPOINT e o session.commit()
+            # só libera o savepoint — a txn externa (com o seed) é revertida no close. Mesmo
+            # padrão da produção em app/db/session.py::tenant_session.
             session = Session(bind=conn)
             rec = ChartAccount(tenant_id=tenant_id, grupo_dre="RECEITA", categoria="Consultoria")
             desp = ChartAccount(tenant_id=tenant_id, grupo_dre="DESPESA_FIXA", categoria="Aluguel")
@@ -132,6 +136,10 @@ def _receita_consultoria(app_url: str, tenant_id: str) -> int:
             conn.execute(
                 text("SELECT set_config('app.current_tenant_id', :tid, false)"), {"tid": tenant_id}
             )
+            conn.commit()  # fixa a GUC (escopo de sessão) e ENCERRA a txn: sem isso a Session
+            # ligada a uma conexão já em transação usa join por SAVEPOINT e o session.commit()
+            # só libera o savepoint — a txn externa (com o seed) é revertida no close. Mesmo
+            # padrão da produção em app/db/session.py::tenant_session.
             session = Session(bind=conn)
             report = dre_report(session, start=START, end=END)
             session.close()

@@ -70,5 +70,40 @@ def test_profile_is_singleton(client: TestClient, headers):
     assert client.get("/settings/profile", headers=headers).json()["display_name"] == "B"
 
 
+def test_update_invalid_timezone_rejected(client: TestClient, headers):
+    resp = client.patch(
+        "/settings/profile", json={"timezone": "Nao/Existe"}, headers=headers
+    )
+    assert resp.status_code == 422
+    # não persistiu: segue o default
+    again = client.get("/settings/profile", headers=headers).json()
+    assert again["timezone"] == "America/Sao_Paulo"
+
+
+def test_update_invalid_website_rejected(client: TestClient, headers):
+    resp = client.patch(
+        "/settings/profile", json={"website": "nao-e-uma-url"}, headers=headers
+    )
+    assert resp.status_code == 422
+    again = client.get("/settings/profile", headers=headers).json()
+    assert again["website"] == ""  # default vazio, não persistiu o lixo
+
+
+def test_update_invalid_color_rejected(client: TestClient, headers):
+    # cor por nome (não hex)
+    resp = client.patch(
+        "/settings/profile", json={"primary_color": "vermelho"}, headers=headers
+    )
+    assert resp.status_code == 422
+    # hex com dígitos inválidos
+    resp2 = client.patch(
+        "/settings/profile", json={"primary_color": "#ZZZZZZ"}, headers=headers
+    )
+    assert resp2.status_code == 422
+    # não persistiu: segue o default
+    again = client.get("/settings/profile", headers=headers).json()
+    assert again["primary_color"] == "#5D44F8"
+
+
 def test_requires_auth(client: TestClient):
     assert client.get("/settings/profile").status_code == 401

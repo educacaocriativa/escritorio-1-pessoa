@@ -81,10 +81,15 @@ export default function PageBuilderPage() {
   };
 
   const publish = async () => {
-    await save();
-    const { data } = await api.post<Page>(`/pages/${id}/publish`);
-    setPage(data);
-    setSavedAt("publicada");
+    const saved = await save();
+    if (!saved) return;
+    try {
+      const { data } = await api.post<Page>(`/pages/${id}/publish`);
+      setPage(data);
+      setSavedAt("publicada");
+    } catch (err) {
+      setError(apiErrorMessage(err));
+    }
   };
   const view = async () => {
     await save();
