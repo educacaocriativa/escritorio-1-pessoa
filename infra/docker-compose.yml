@@ -26,19 +26,18 @@ services:
   api:
     build: ../apps/api
     restart: unless-stopped
+    # env_file (não `environment: ${VAR}`) porque lê o arquivo CRU, sem interpolação — algumas
+    # credenciais reais (ex.: API key da Asaas) contêm `$` literal, que o Compose tentaria
+    # expandir como referência de variável se passasse por `${VAR:-}` (vira string vazia).
+    env_file:
+      - path: ../.env
+        required: false
     environment:
       # App conecta como papel NÃO-superusuário (e1p_app) p/ a RLS valer. Ver initdb/01-rls-enforce.sql.
       DATABASE_URL: postgresql+psycopg://e1p_app:e1ppass@postgres:5432/e1pdb
       ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
       JWT_SECRET: ${JWT_SECRET:-dev-secret-change-me}
       ENVIRONMENT: development
-      # E-mail transacional (Story 2.1) — vazio = graceful degradation (vira log). Ver .env.example.
-      SMTP_HOST: ${SMTP_HOST:-}
-      SMTP_PORT: ${SMTP_PORT:-587}
-      SMTP_USER: ${SMTP_USER:-}
-      SMTP_PASSWORD: ${SMTP_PASSWORD:-}
-      SMTP_FROM: ${SMTP_FROM:-}
-      SMTP_USE_TLS: ${SMTP_USE_TLS:-true}
     ports:
       - "8000:8000"
     depends_on:
@@ -56,17 +55,14 @@ services:
     # depois das migrations (evita corrida com o schema).
     build: ../apps/api
     restart: unless-stopped
+    env_file:
+      - path: ../.env
+        required: false
     environment:
       DATABASE_URL: postgresql+psycopg://e1p_app:e1ppass@postgres:5432/e1pdb
       ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
       JWT_SECRET: ${JWT_SECRET:-dev-secret-change-me}
       ENVIRONMENT: development
-      SMTP_HOST: ${SMTP_HOST:-}
-      SMTP_PORT: ${SMTP_PORT:-587}
-      SMTP_USER: ${SMTP_USER:-}
-      SMTP_PASSWORD: ${SMTP_PASSWORD:-}
-      SMTP_FROM: ${SMTP_FROM:-}
-      SMTP_USE_TLS: ${SMTP_USE_TLS:-true}
     depends_on:
       - api
     command: python -m app.worker

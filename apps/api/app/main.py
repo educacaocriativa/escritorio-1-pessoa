@@ -1,9 +1,16 @@
+import logging
+
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.config import settings
 from app.modules import ALL_ROUTERS
 from app.modules.notifications.service import register as register_notifications
+
+# Sem isto, o root logger fica sem handler (só o "lastResort" do Python, WARNING+ pra stderr) —
+# logger.info/exception de core/email.py, core/whatsapp.py, core/payment_gateway.py etc. nunca
+# aparecem em `docker logs`. Mesmo padrão já usado em app/worker.py.
+logging.basicConfig(level=logging.INFO)
 
 app = FastAPI(
     title="e1p API",
