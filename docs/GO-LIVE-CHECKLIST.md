@@ -16,16 +16,23 @@
   2026-07-12):** a API key da Asaas tem um `$` literal — precisa estar como `$$` no `.env` (ou
   usar `env_file`, não `environment: ${VAR}`), senão o Compose interpola e o valor vira string
   vazia. **Pendente:** replicar em `infra/.env.prod` de verdade quando a VPS existir (item 10).
-- [ ] Configurar `GATEWAY_WEBHOOK_SECRET` e registrar a URL do webhook no painel Asaas — falta
-  uma URL pública (só existe depois do item 10/deploy).
+- [x] Configurar `GATEWAY_WEBHOOK_SECRET` e registrar a URL do webhook no painel/API Asaas —
+  gerado um segredo real (48 hex chars) e configurado no `.env` local; registrado via
+  `POST /v3/webhooks` contra um túnel público temporário (`cloudflared`, autorizado
+  explicitamente pelo usuário, removido ao fim do teste). **Pendente:** repetir o registro contra
+  a URL pública real de produção quando o item 10 (deploy) existir — a URL de túnel foi só para
+  validação, não é permanente.
 - [x] Revalidar contra o sandbox real: campos/endpoints exatos do payload, formato do `bankSlipUrl`
   — validado em 2026-07-12: `POST /customers`, `POST /payments` e `GET /payments/{id}/pixQrCode`
   responderam `200` reais contra `api-sandbox.asaas.com` (boleto E Pix), com `gateway_charge_id`/
   `payment_code`/`boleto_url` reais retornados pelo fluxo completo (`receivables.create_charge`).
   Resolve a pendência de No Invention registrada no ADR 0002.
-- [ ] Testar boleto/Pix real de ponta a ponta + confirmação de pagamento via webhook — criação da
-  cobrança validada (linha acima); falta a ponta do webhook de confirmação (exige URL pública/
-  ngrok, não testado ainda).
+- [x] Testar boleto/Pix real de ponta a ponta + confirmação de pagamento via webhook — validado em
+  2026-07-12: criada cobrança Pix real (R$33,00) pelo fluxo do produto, confirmada via
+  `POST /v3/sandbox/payment/{id}/confirm` (endpoint sandbox-only), webhook real da Asaas capturado
+  (header `asaas-access-token` confirmado, payload `PAYMENT_RECEIVED`/`externalReference` conforme
+  doc pública), cobrança marcada `paid` e split de 30% aplicado corretamente na Carteira
+  (R$9,90 taxa → R$23,10 disponível). Ver ADR 0002 para os detalhes completos.
 
 ## 3. WhatsApp Cloud API (Story 2.3)
 - [ ] Criar app Meta for Developers + número WhatsApp Business
