@@ -95,7 +95,10 @@ def _params(data: dict) -> dict:
         return {"method": cfg.get("method", "boleto"),
                 "description": cfg.get("description") or label or "Cobrança",
                 "amount_cents": cfg.get("amount_cents", 0)}
-    if action in ("send_email", "send_message"):
+    if action == "send_email":
+        return {"subject": cfg.get("subject", ""),
+                "message": cfg.get("body") or cfg.get("message", "")}
+    if action == "send_message":
         return {"message": cfg.get("body") or cfg.get("message", "")}
     if action == "create_client":
         return {"name": cfg.get("name", "")}

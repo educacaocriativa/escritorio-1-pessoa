@@ -156,6 +156,26 @@ def test_run_send_message(client: TestClient, headers):
     assert any(n["message"] == "Olá! Tudo bem?" for n in notifs)
 
 
+def test_run_send_email(client: TestClient, headers):
+    # Regressão: action="send_email" deve entregar por e-mail (core/email), não por WhatsApp.
+    cl = client.post(
+        "/crm/clients", json={"name": "Contato", "email": "contato@example.com"}, headers=headers
+    ).json()
+    resp = client.post(
+        "/funnels/run-node",
+        json={"action": "send_email", "client_id": cl["id"],
+              "params": {"subject": "Bem-vindo", "message": "Olá! Tudo bem?"}},
+        headers=headers,
+    )
+    assert resp.status_code == 200, resp.text
+    notifs = client.get("/notifications", headers=headers).json()
+    assert any(
+        n["message"] == "Olá! Tudo bem?" and n["channel"] == "email"
+        and n["recipient"] == "contato@example.com"
+        for n in notifs
+    )
+
+
 def test_run_requires_client(client: TestClient, headers):
     resp = client.post(
         "/funnels/run-node",
