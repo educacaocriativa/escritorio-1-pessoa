@@ -61,8 +61,8 @@
 - [ ] Rodar o smoke test dos módulos-chave antes de promover qualquer release (§8.3)
 
 ## 11. Achados incidentais durante a implementação (não bloqueantes, mas vale investigar)
-- [ ] `apps/api/app/modules/funnels/service.py` — possível bug pré-existente: um caminho que deveria chamar `send_email` está chamando `whatsapp.send_text` (achado pelo @dev na Story 4.3, fora do escopo dela, não corrigido)
-- [ ] `pnpm lint` está quebrado no repo inteiro por falta de `eslint.config.js` (pré-existente, não é regressão desta leva de stories, mas trava `scripts/check.sh` de lint no frontend)
+- [x] `apps/api/app/modules/funnels/service.py` — possível bug pré-existente: um caminho que deveria chamar `send_email` está chamando `whatsapp.send_text` (achado pelo @dev na Story 4.3, fora do escopo dela, não corrigido). **Corrigido** (PR #12): `run_node` despacha por `core/email.send_email` quando o canal é e-mail; `subject` do config do nó agora é propagado (builder + motor de automação).
+- [x] `pnpm lint` está quebrado no repo inteiro por falta de `eslint.config.js` (pré-existente, não é regressão desta leva de stories, mas trava `scripts/check.sh` de lint no frontend). **Corrigido** (PR #12): `apps/web/eslint.config.js` (flat config) adicionado; os 2 problemas revelados (`vitest.config.ts`, `ProdutosPage.tsx`) corrigidos. `pnpm lint` limpo.
 
 ---
 **Como usar:** cada item tem instruções detalhadas no `docs/HOSTINGER-DEPLOY.md` (seções indicadas). Nenhum desses itens bloqueia o deploy inicial em si — os graceful degradations (stub/log) fazem o sistema funcionar sem eles, só sem a integração real ativa.
