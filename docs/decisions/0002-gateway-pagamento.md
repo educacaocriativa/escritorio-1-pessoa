@@ -85,9 +85,19 @@ Racional:
   LTDA") — `POST /customers`, `POST /payments` (boleto E Pix) e `GET /payments/{id}/pixQrCode`
   responderam `200` reais; header `access_token` (não `asaas-access-token`) confirmado como o
   mecanismo de auth correto para essas chamadas; `bankSlipUrl`/linha digitável/copia-e-cola
-  retornados no formato esperado pelo adapter. **Ainda não validado:** o lado de ENTRADA (webhook
-  que a Asaas chama de volta) — ver condições de go-live abaixo, item 2, que continua pendente
-  (exige URL pública, não testável em localhost sem tunnel).
+  retornados no formato esperado pelo adapter. **RESOLVIDO em 2026-07-12 também para o lado de
+  ENTRADA (webhook):** com autorização explícita do usuário, exposta a API local via túnel
+  temporário (`cloudflared`, `trycloudflare.com`, sem conta, encerrado ao fim do teste), registrado
+  um webhook real (`POST /v3/webhooks`) apontando pro túnel, e disparado `POST
+  /v3/sandbox/payment/{id}/confirm` (endpoint sandbox-only) sobre uma cobrança criada pelo fluxo
+  real do produto (`receivables.create_charge`). Capturada a requisição real da Asaas: header
+  **`asaas-access-token`** confirmado byte-a-byte (bate com o que o código já esperava — nenhuma
+  mudança de código necessária), payload `{event: "PAYMENT_RECEIVED", payment: {externalReference,
+  ...}}` confere com a doc pública. Processamento validado ponta a ponta: cobrança marcada `paid`,
+  split de 30% (serviço) aplicado corretamente na Carteira (R$33,00 → R$9,90 taxa → R$23,10
+  disponível). Webhook de teste e túnel removidos após a validação (não deixam rastro
+  permanente). `GATEWAY_WEBHOOK_SECRET` real gerado e configurado no `.env` local para uso
+  contínuo em dev.
 
 ## Segurança do webhook — condições de go-live (revisão do quality gate)
 
@@ -99,11 +109,14 @@ Como é **dinheiro entrando no sistema**, o gate exige que, ao configurar o prov
    **guard de boot** numa próxima story: se `is_production` e `payment_gateway_api_key` definido,
    então `gateway_webhook_secret` não pode ser vazio (fail-fast, mesmo espírito do
    `_guard_production_secrets`). — *item para o backlog, não bloqueia esta story.*
-2. **Confirmar o mecanismo de autenticação real do Asaas** (header `asaas-access-token` vs. HMAC de
-   assinatura do corpo). O código valida hoje um token de header por igualdade simples; se o Asaas
-   usar assinatura HMAC do payload, trocar a validação para verificação de assinatura
-   (constant-time). Verificação obrigatória contra a doc vigente antes do go-live.
-3. **Registrar o token do webhook no painel do Asaas** igual ao `GATEWAY_WEBHOOK_SECRET`.
+2. **[RESOLVIDO 2026-07-12]** Confirmar o mecanismo de autenticação real do Asaas: é o header
+   `asaas-access-token` por igualdade simples (NÃO é HMAC de assinatura do corpo) — confirmado
+   contra a doc pública E contra uma requisição real capturada do sandbox. Código já validava
+   assim; nenhuma mudança necessária.
+3. **[VALIDADO EM SANDBOX 2026-07-12, pendente para PRODUÇÃO]** Registrar o token do webhook no
+   painel/API do Asaas igual ao `GATEWAY_WEBHOOK_SECRET` — feito e validado contra uma URL de
+   túnel temporária (removida após o teste). Falta repetir contra a URL pública real de produção
+   quando o item 10 (deploy) existir.
 4. **Validar o isolamento cross-tenant no Postgres real** (RLS), não só no SQLite dos testes: um
    `externalReference` do tenant A não pode baixar cobrança sob o tenant B. O parsing já garante a
    separação; a RLS é a defesa final e precisa ser exercida no e2e (mesma lacuna de e2e já
