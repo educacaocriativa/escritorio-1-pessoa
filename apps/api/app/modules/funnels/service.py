@@ -287,7 +287,7 @@ def run_node(
 ) -> dict:
     from datetime import UTC, datetime, timedelta
 
-    from app.core import whatsapp
+    from app.core import email, whatsapp
     from app.modules.crm import service as crm_service
     from app.modules.crm.models import Client
     from app.modules.crm.schemas import ClientCreate
@@ -359,7 +359,11 @@ def run_node(
             raise FunnelError("Escreva a mensagem (ou gere com IA) antes de enviar", 422)
         channel = "email" if action == "send_email" else "whatsapp"
         recipient = (c.email if channel == "email" else c.phone) or c.name
-        status = whatsapp.send_text(to=recipient, text=msg)
+        if channel == "email":
+            subject = (params.get("subject") or "Mensagem").strip()
+            status = email.send_email(to=recipient, subject=subject, body=msg)
+        else:
+            status = whatsapp.send_text(to=recipient, text=msg)
         db.add(Notification(
             tenant_id=tenant_id, channel=channel, recipient=recipient,
             client_id=c.id, message=msg, status=status,

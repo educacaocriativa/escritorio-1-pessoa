@@ -546,6 +546,7 @@ function RunNodeModal({
   const [amount, setAmount] = useState("");
   const [method, setMethod] = useState(node.data.key === "gerou-pix" ? "pix" : "boleto");
   const [description, setDescription] = useState(node.data.label);
+  const [subject, setSubject] = useState(node.data.config?.subject ?? "");
   const [message, setMessage] = useState(node.data.config?.body ?? "");
   const [busy, setBusy] = useState(false);
 
@@ -567,6 +568,7 @@ function RunNodeModal({
       params.description = description;
       params.amount_cents = Math.round(parseFloat(amount.replace(",", ".") || "0") * 100);
     }
+    if (action === "send_email") params.subject = subject;
     if (action === "send_email" || action === "send_message") params.message = message;
     try {
       const { data } = await api.post<{ message: string }>("/funnels/run-node", {
@@ -620,6 +622,7 @@ function RunNodeModal({
             </>
           )}
           {money && <Field label="Valor (R$)" value={amount} onChange={setAmount} placeholder="0,00" />}
+          {action === "send_email" && <Field label="Assunto" value={subject} onChange={setSubject} />}
           {msg && (
             <label className="block">
               <span className="mb-1 block text-xs font-medium text-neutral-600">Mensagem</span>
