@@ -126,3 +126,25 @@ seus próprios ACs. A criação de stories é **exclusiva do @sm/@po** por `.cla
    CI-RLS), **7.2** (item 2, anonimizador), **7.3** (item 1, setup jsdom/testing-library), **7.4** (item 4, UI auth) e
    **7.5** (item 5, UI dinheiro/contrato), na ordem ratificada. O @sm faz o `*draft` a partir desses stubs.
 3. **@dev** implementa cada story seguindo o ciclo padrão (SDC) com QA Gate ao final.
+
+## Achados de produção durante a Trilha C (novos itens de backlog — @po 2026-07-11)
+
+> **Origem:** descobertos pelo @sm ao pesquisar o código-fonte para redigir as Stories 7.15–7.18 (testes de
+> UI). **NÃO são gaps de cobertura** (classe diferente dos 17 itens acima) — são **defeitos reais de
+> tratamento de erro em produção**. Registrados aqui pelo @po (Pax) durante `*validate-story-draft` para
+> não se perderem. **Decisão de escopo (@po):** corrigi-los está **FORA** das Stories 7.15–7.18 — o Epic 7
+> é dívida de teste e sua IV1 exige explicitamente "nenhum código de produção deve precisar de alteração";
+> embutir um bugfix de produção numa story de teste violaria essa restrição e o **Article IV (No Invention)**
+> da Constitution (não inventar correção não pedida dentro do escopo dado). As stories corretamente **desviam**
+> do bug (testam o caminho infeliz por uma via que TEM tratamento de erro real) em vez de testá-lo ou corrigi-lo.
+> Estes viram **stories próprias de hardening** quando o dono do produto priorizar.
+
+| # | Item | Área | Evidência (verificada no código) | Valor | Risco | Prioridade | Observação |
+|---|------|------|----------------------------------|-------|-------|------------|------------|
+| 18 | `PageBuilderPage.publish()` sem tratamento de erro | Frontend (produção) | `apps/web/src/features/sites/PageBuilderPage.tsx` linhas 83-88: `publish()` faz `await save()` **sem checar o retorno** (`save()` pode devolver `null` em falha) e chama `api.post(.../publish)` **sem `try/catch`** — rejeição vira *unhandled promise rejection*, usuário não recebe erro na UI | Médio | Médio | **P3** | `save()` (linhas 62-81) TEM `try/catch` correto — o defeito é só em `publish()`. Fix sugerido: checar o retorno de `save()` e envolver o `POST /publish` em `try/catch` com `setError(apiErrorMessage)`. Story de hardening, não de teste. |
+| 19 | `PlatformUsers.toggleUser`/`removeUser` sem tratamento de erro | Frontend (produção) | `apps/web/src/features/admin/PlatformUsers.tsx` (~linhas 127-140): suspender/excluir usuário é *fire-and-forget* — falha da API não exibe mensagem na UI | Baixo-Médio | Baixo | **P4** | Comportamento silencioso em falha; não quebra a tela, mas o Super Admin não sabe se a ação falhou. Story de hardening. |
+
+**Nota de rastreabilidade:** ambos os achados já estão documentados nas Dev Notes das Stories 7.18 (item 18 e 19)
+e 7.16 não é afetada. As stories usam esses achados como **justificativa técnica** para as escolhas de caso de
+teste (ex.: 7.18 testa o infeliz de Sites via "Salvar", que tem `try/catch`, não via "Publicar"), o que é a
+conduta correta — cobrir o gap de produção é trabalho separado.

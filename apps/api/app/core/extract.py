@@ -35,7 +35,7 @@ def extract_text(data: bytes, content_type: str, filename: str = "") -> str:
             return data.decode("utf-8", errors="ignore")
     except Exception as e:  # noqa: BLE001 — extração nunca derruba a requisição
         return f"[ERRO NA EXTRAÇÃO: {e}]"
-    return ""
+    return f"[TIPO NÃO SUPORTADO: {content_type or ext or 'desconhecido'}]"
 
 
 def _pdf(data: bytes) -> str:

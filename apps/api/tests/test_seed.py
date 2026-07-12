@@ -8,12 +8,13 @@ O seed usa seu próprio `SessionLocal` (Postgres em produção); aqui apontamos 
 `SessionLocal` para um SQLite em memória (StaticPool, compartilhado entre sessões).
 """
 import pytest
+from pydantic import ValidationError
 from sqlalchemy import create_engine, select
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
 
 import app.seed as seed_module
-from app.config import settings
+from app.config import Settings, settings
 from app.db.registry import Base
 from app.modules.auth.models import User
 
@@ -59,3 +60,28 @@ def test_seed_is_idempotent(seed_session):
         admins = db.scalars(select(User).where(User.is_platform_admin.is_(True))).all()
     assert len(admins) == 1
     assert admins[0].must_reset_password is True
+
+
+def test_seed_never_runs_with_invalid_production_config():
+    """Caminho infeliz do seed: config inválida em produção (env obrigatória faltando).
+
+    `app/seed.py::seed_super_admin()` consome `settings.super_admin_password` (e email/name)
+    DIRETAMENTE, sem validação própria — ele confia que o objeto `settings` global já é válido.
+    Essa validação é fail-fast e vive em `app/config.py::Settings._guard_production_secrets`
+    (`@model_validator(mode="after")`), executada na CONSTRUÇÃO de `Settings()` (linha de módulo).
+    Logo, em produção com config inválida, `import app.config`/`Settings()` já falha ANTES de
+    `seed_super_admin()` rodar — o "caminho infeliz do seed" É esse guard.
+
+    Aqui provamos o cenário mais diretamente ligado ao seed: a senha default do admin
+    (`"trocar-no-primeiro-acesso"`, único dos 4 campos do guard que o seed.py de fato lê).
+    Cross-ref: mesma asserção que `test_config.py::test_production_rejects_default_admin_password`,
+    mas rastreável a partir do contexto/motivação do seed — não é duplicação cega (AC1).
+    """
+    with pytest.raises(ValidationError):
+        # jwt_secret forte + anthropic_api_key presente => o ÚNICO campo inválido é
+        # super_admin_password, que fica no default -> guard de produção rejeita.
+        Settings(
+            environment="production",
+            jwt_secret="x" * 40,
+            anthropic_api_key="sk-ant-x",
+        )

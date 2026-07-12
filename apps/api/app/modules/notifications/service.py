@@ -24,6 +24,20 @@ from app.modules.settings import service as settings_service
 logger = logging.getLogger("e1p.notifications")
 
 
+class NotificationError(Exception):
+    """Erro de domínio do módulo de notificações (padrão MarketingError/JuridicoError).
+
+    Usado como rede de segurança contra ENTRADA INVÁLIDA na origem (ex.: destinatário vazio).
+    NÃO é uma rota HTTP: os call sites internos (assinantes de evento) devem tratá-lo dentro do
+    próprio módulo, sem propagar e derrubar o publicador do evento.
+    """
+
+    def __init__(self, message: str, status_code: int = 422) -> None:
+        super().__init__(message)
+        self.message = message
+        self.status_code = status_code
+
+
 def _owner_recipient(db: Session, tenant_id: str) -> str:
     """Telefone do owner/destinatário para o WhatsApp.
 
@@ -54,7 +68,13 @@ def enqueue(
     A entrega real acontece depois no worker (`process_pending`), fora do request/response HTTP.
     Segue o padrão das demais funções `service.*` que não commitam sozinhas: quem chama decide o
     commit dentro do seu fluxo maior.
+
+    Rede de segurança (Story 7.11): um `recipient` vazio/em-branco é entrada inválida e é
+    REJEITADO explicitamente com `NotificationError` — nunca enfileirado como `pending`
+    indistinguível de um envio válido (que depois falharia mudo no worker).
     """
+    if not recipient or not recipient.strip():
+        raise NotificationError("destinatário (recipient) vazio ou inválido")
     notification = Notification(
         tenant_id=tenant_id,
         channel=channel,
@@ -115,23 +135,43 @@ def process_pending(db: Session, *, tenant_id: str, limit: int = 50) -> int:
 def on_client_moved(*, tenant_id: str, client_id: str, to_stage: str, **_: object) -> None:
     with tenant_session(tenant_id) as db:
         client = db.get(Client, client_id)
+        # Rede de segurança (Story 7.11): cliente inexistente é entrada inválida na origem.
+        # Antes, seguia-se com name="Cliente" (placeholder) e enfileirava-se uma notificação
+        # `pending` indistinguível de um caso real — um sucesso silencioso. Agora, curto-circuita
+        # explicitamente (não enfileira, loga warning). Fluxo feliz (cliente existente) segue igual.
+        if client is None:
+            logger.warning(
+                "[notifications:on_client_moved] cliente inexistente client_id=%s tenant=%s — "
+                "notificação NÃO enfileirada",
+                client_id,
+                tenant_id,
+            )
+            return
         stage = db.get(PipelineStage, to_stage)
-        name = client.name if client else "Cliente"
         col = stage.name if stage else "—"
-        text = f'📌 O cliente {name} foi movido para a etapa "{col}".'
+        text = f'📌 O cliente {client.name} foi movido para a etapa "{col}".'
         recipient = _owner_recipient(db, tenant_id)
         # Enfileira (status="pending") em vez de enviar síncrono aqui: o handler roda dentro da
         # MESMA request que moveu o card (crm.service.move_client → events.emit). A entrega real
         # (WhatsApp) fica para o worker (process_pending), sem bloquear a request (IV2).
-        enqueue(
-            db,
-            tenant_id=tenant_id,
-            channel="whatsapp",
-            recipient=recipient,
-            message=text,
-            client_id=client_id,
-        )
-        db.commit()
+        try:
+            enqueue(
+                db,
+                tenant_id=tenant_id,
+                channel="whatsapp",
+                recipient=recipient,
+                message=text,
+                client_id=client_id,
+            )
+            db.commit()
+        except NotificationError:
+            # Destinatário do owner não resolvido (tenant sem owner/contato) — não pode propagar
+            # e derrubar o publicador do evento (crm.service já commitou o move). Loga e segue.
+            logger.warning(
+                "[notifications:on_client_moved] destinatário inválido tenant=%s — "
+                "notificação NÃO enfileirada",
+                tenant_id,
+            )
 
 
 def list_notifications(db: Session, limit: int = 50) -> list[Notification]:

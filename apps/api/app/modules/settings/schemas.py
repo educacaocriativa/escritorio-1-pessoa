@@ -1,7 +1,14 @@
 """Schemas de Configurações + Brand Kit."""
 from __future__ import annotations
 
-from pydantic import BaseModel, Field
+import re
+from urllib.parse import urlparse
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
+
+from pydantic import BaseModel, Field, field_validator
+
+# Cor hex com `#`, 6 ou 8 dígitos (RRGGBB ou RRGGBBAA) — ambos cabem em String(9).
+_HEX_COLOR_RE = re.compile(r"^#[0-9A-Fa-f]{6}([0-9A-Fa-f]{2})?$")
 
 
 class ProfileOut(BaseModel):
@@ -38,3 +45,38 @@ class ProfileUpdate(BaseModel):
     bg_color: str | None = Field(default=None, max_length=9)
     font: str | None = Field(default=None, max_length=40)
     timezone: str | None = Field(default=None, max_length=64)
+
+    # Validações de formato — só se aplicam a valores NÃO vazios.
+    # None (omitido) = não altera; "" = limpar o campo (ambos preservados, AC4).
+
+    @field_validator("timezone")
+    @classmethod
+    def _validate_timezone(cls, v: str | None) -> str | None:
+        if not v:
+            return v
+        try:
+            ZoneInfo(v)
+        except (ZoneInfoNotFoundError, ValueError) as e:
+            raise ValueError("timezone inválido (não é um fuso IANA reconhecível)") from e
+        return v
+
+    @field_validator("website", "logo_url")
+    @classmethod
+    def _validate_url(cls, v: str | None) -> str | None:
+        if not v:
+            return v
+        parsed = urlparse(v)
+        if parsed.scheme not in ("http", "https") or not parsed.netloc:
+            raise ValueError("URL inválida (esquema http/https e host são obrigatórios)")
+        return v
+
+    @field_validator(
+        "primary_color", "secondary_color", "accent_color", "text_color", "bg_color"
+    )
+    @classmethod
+    def _validate_hex_color(cls, v: str | None) -> str | None:
+        if not v:
+            return v
+        if not _HEX_COLOR_RE.match(v):
+            raise ValueError("cor inválida (esperado hex #RRGGBB ou #RRGGBBAA)")
+        return v

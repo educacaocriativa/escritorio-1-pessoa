@@ -93,5 +93,21 @@ def test_delete(client: TestClient, headers):
     assert client.get(f"/marketing/carousels/{c['id']}", headers=headers).status_code == 404
 
 
+def test_update_nonexistent_returns_404(client: TestClient, headers):
+    # PATCH em um id que nunca existiu (distinto do 404 pós-delete de test_delete)
+    resp = client.patch(
+        "/marketing/carousels/id-que-nunca-existiu",
+        json={"status": "ready"},
+        headers=headers,
+    )
+    assert resp.status_code == 404
+
+
+def test_delete_nonexistent_returns_404(client: TestClient, headers):
+    # DELETE em um id que nunca existiu
+    resp = client.delete("/marketing/carousels/id-que-nunca-existiu", headers=headers)
+    assert resp.status_code == 404
+
+
 def test_requires_auth(client: TestClient):
     assert client.get("/marketing/carousels").status_code == 401
