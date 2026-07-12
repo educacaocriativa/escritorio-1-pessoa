@@ -3,9 +3,9 @@
 > Tudo que está aqui já está **implementado e testado** (com mocks/stubs) em `main`. O que falta é plugar credenciais/infra reais e validar ponta-a-ponta. Cada item referencia o runbook detalhado em `docs/HOSTINGER-DEPLOY.md`.
 
 ## 1. E-mail transacional (Story 2.1)
-- [ ] Contratar/gerar credenciais SMTP (provedor: SES, SMTP próprio, etc.)
-- [ ] Preencher em `infra/.env.prod`: `SMTP_HOST`, `SMTP_PORT`, `SMTP_USER`, `SMTP_PASSWORD`, `SMTP_FROM`
-- [ ] Validar: `forgot-password` chega por e-mail de verdade (hoje cai em log se `SMTP_HOST` vazio)
+- [x] Contratar/gerar credenciais SMTP — **provisório**: SMTP do Gmail pessoal do fundador (`flaviokato76@gmail.com`, Senha de App), enquanto um provedor definitivo (SES, etc.) não é decidido. Limite de ~500 e-mails/dia — trocar antes de qualquer volume real.
+- [x] Preencher `SMTP_HOST`/`SMTP_PORT`/`SMTP_USER`/`SMTP_PASSWORD`/`SMTP_FROM` — feito no `.env` local (raiz do repo, gitignorado) e repassado a `api`/`worker` via `infra/docker-compose.yml`. **Pendente**: replicar em `infra/.env.prod` de verdade quando a VPS for provisionada (item 10 — hoje não há ambiente de staging/produção rodando para preencher esse arquivo).
+- [x] Validar: `forgot-password` chega por e-mail de verdade — testado ponta a ponta em 2026-07-12 (registro real + `/auth/forgot-password` + teste direto de `core/email.send_email`), e-mails confirmados recebidos na caixa de entrada real.
 
 ## 2. Gateway de pagamento — Asaas (Story 2.2)
 - [ ] Criar conta Asaas (sandbox primeiro, depois produção) e gerar API key
