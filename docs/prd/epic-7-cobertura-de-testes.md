@@ -444,6 +444,46 @@ sólido) fechem o último gap de cobertura de UI do catálogo**.
 
 ---
 
+## Ampliação do escopo — achados de produção da Trilha C (hardening, 2026-07-12)
+> **Origem:** durante o gate da Trilha C (Story 7.18), o @po catalogou 2 **defeitos reais de produção** (não gaps de
+> cobertura) em `docs/qa/test-coverage-gate-2026-07-11.md`, seção "Achados de produção durante a Trilha C" (itens
+> **18** e **19**). Ambos foram deliberadamente **desviados** (não corrigidos) nas Stories 7.15–7.18 por restrição de
+> IV1 ("nenhum código de produção deve precisar de alteração") e Article IV (No Invention). **O dono do produto
+> autorizou trabalhar nos dois agora** (2026-07-12) — diferente das demais Stories 7.6–7.18, estas **alteram código de
+> produção** (hardening de tratamento de erro), não apenas adicionam testes. Escopo e dono já definidos pelo @po;
+> stories escritas diretamente pelo @sm (sem stub intermediário do @pm), dado o tamanho pequeno e a origem já
+> catalogada.
+
+## Story 7.19 — `PageBuilderPage.publish()`: tratamento de erro no publicar
+> Origem: Achado de produção item **18** (P3, Médio/Médio). Ver `docs/qa/test-coverage-gate-2026-07-11.md`.
+
+As a **usuário que publica uma página do site**,
+I want **que `publish()` cheque o retorno de `save()` e trate a falha do `POST /publish` com o mesmo padrão de erro já
+usado em `save()`**,
+so that **uma falha ao publicar (seja no salvamento prévio, seja no próprio publish) apareça na tela em vez de virar
+uma unhandled promise rejection silenciosa**.
+
+### Acceptance Criteria (alto nível)
+1. `publish()` não prossegue para o `POST /pages/{id}/publish` se `save()` falhar (retorno `null`).
+2. O `POST /pages/{id}/publish` é envolvido em tratamento de erro que exibe a mensagem na UI, no mesmo padrão visual/
+   funcional já usado por `save()`.
+3. Inclui teste de caminho infeliz cobrindo a falha do publish em si (não só a falha do save prévio), sem regredir os
+   testes de 7.18.
+
+## Story 7.20 — `PlatformUsers.toggleUser`/`removeUser`: tratamento de erro
+> Origem: Achado de produção item **19** (P4, Baixo-Médio/Baixo). Ver `docs/qa/test-coverage-gate-2026-07-11.md`.
+
+As a **Super Admin que suspende/exclui usuários de um escritório**,
+I want **que `toggleUser`/`removeUser` tratem falha da API e exibam erro na UI**,
+so that **eu saiba quando uma ação de suspensão/exclusão falhou, em vez de um fire-and-forget silencioso**.
+
+### Acceptance Criteria (alto nível)
+1. `toggleUser` e `removeUser` tratam falha da API e exibem mensagem de erro na UI, sem quebrar o cartão do escritório.
+2. Inclui testes de caminho infeliz para ambas as ações.
+3. `deleteAccount` (mesmo padrão de bug, fora do item 19 catalogado) permanece fora de escopo.
+
+---
+
 ## Nota de autoridade (para @sm/@po)
 Este epic foi criado por Morgan (@pm) em 2026-07-11 como desdobramento do QA Gate de cobertura
 (`docs/qa/test-coverage-gate-2026-07-11.md`, ratificado no mesmo dia). **Cobre agora os 17 itens auditados (18 linhas
@@ -453,3 +493,8 @@ agrupados em 3 trilhas paralelizáveis. Todos são **stubs de story**, não stor
 criação de epic e a ampliação de escopo são operações do @pm (`.claude/rules/agent-authority.md`); a escrita das stories
 e o sequenciamento fino ficam com @sm/@po. **Coordenação com o Epic 6:** a Story 7.1 e a Story 6.2 mexem no mesmo
 `.github/workflows/ci.yml` — alinhar com @devops para evitar conflito de jobs.
+
+**Stories 7.19 e 7.20 (adicionadas em 2026-07-12):** classe diferente das demais — são **hardening de produção**
+(achados 18/19 catalogados pelo @po durante o gate da Trilha C), autorizadas diretamente pelo dono do produto, com
+escopo já definido pelo @po. O @sm escreveu as stories completas diretamente (sem stub do @pm), dado o tamanho pequeno
+e a origem já rastreada em `docs/qa/test-coverage-gate-2026-07-11.md`.

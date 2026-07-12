@@ -80,6 +80,10 @@ def _seed_tenant(
             conn.execute(
                 text("SELECT set_config('app.current_tenant_id', :tid, false)"), {"tid": tenant_id}
             )
+            conn.commit()  # fixa a GUC (escopo de sessão) e ENCERRA a txn: sem isso a Session
+            # ligada a uma conexão já em transação usa join por SAVEPOINT e o session.commit()
+            # só libera o savepoint — a txn externa (com o seed) é revertida no close. Mesmo
+            # padrão da produção em app/db/session.py::tenant_session.
             session = Session(bind=conn)
             session.add(
                 Transaction(

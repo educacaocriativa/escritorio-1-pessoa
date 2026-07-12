@@ -90,3 +90,45 @@ describe("PageBuilderPage — publicar/salvar (Story 7.18, Task 2)", () => {
     expect(vi.mocked(api.post)).not.toHaveBeenCalled();
   });
 });
+
+describe("PageBuilderPage — publicar: tratamento de erro (Story 7.19)", () => {
+  it("caminho infeliz (POST /publish falha): PATCH resolve, POST rejeita → erro no DOM e tela segue interativa (AC 2, 4, 5)", async () => {
+    const user = userEvent.setup();
+    vi.mocked(api.patch).mockResolvedValue({ data: draftPage } as never);
+    vi.mocked(api.post).mockRejectedValueOnce({
+      response: { data: { detail: "Falha ao publicar a página." } },
+    });
+    renderPage();
+
+    await user.click(await screen.findByRole("button", { name: "Publicar" }));
+
+    // save() (PATCH) rodou e o POST /publish foi tentado.
+    await waitFor(() => expect(vi.mocked(api.post)).toHaveBeenCalledWith("/pages/page-teste/publish"));
+    // A mensagem do apiErrorMessage aparece no <div> de erro compartilhado.
+    expect(await screen.findByText("Falha ao publicar a página.")).toBeInTheDocument();
+    // Tela permanece montada, editável e funcional: botão "Publicar" segue presente e clicável,
+    // título segue editável, "Salvar" reabilitado (sem crash / sem botão travado).
+    expect(screen.getByRole("button", { name: "Publicar" })).toBeEnabled();
+    expect(screen.getByRole("button", { name: "Salvar" })).toBeEnabled();
+    expect(screen.getByDisplayValue("Página de teste")).toBeInTheDocument();
+  });
+
+  it("caminho infeliz (save prévio falha): PATCH rejeita → POST /publish NÃO é chamado e o erro do save aparece sem duplicação (AC 1, 6)", async () => {
+    const user = userEvent.setup();
+    vi.mocked(api.patch).mockRejectedValueOnce({
+      response: { data: { detail: "Falha ao salvar a página." } },
+    });
+    renderPage();
+
+    await user.click(await screen.findByRole("button", { name: "Publicar" }));
+
+    // O erro setado pelo próprio catch de save() permanece visível.
+    expect(await screen.findByText("Falha ao salvar a página.")).toBeInTheDocument();
+    // publish() retornou cedo: nenhum POST /publish disparado.
+    expect(vi.mocked(api.post)).not.toHaveBeenCalled();
+    // Sem erro adicional/duplicado: exatamente um <div> de erro no DOM.
+    expect(screen.getAllByText("Falha ao salvar a página.")).toHaveLength(1);
+    // Tela segue interativa.
+    expect(screen.getByRole("button", { name: "Publicar" })).toBeEnabled();
+  });
+});

@@ -77,6 +77,10 @@ def _seed_tenant(app_url: str, tenant_id: str, *, principal: int, yield_cents: i
             conn.execute(
                 text("SELECT set_config('app.current_tenant_id', :tid, false)"), {"tid": tenant_id}
             )
+            conn.commit()  # fixa a GUC (escopo de sessão) e ENCERRA a txn: sem isso a Session
+            # ligada a uma conexão já em transação usa join por SAVEPOINT e o session.commit()
+            # só libera o savepoint — a txn externa (com o seed) é revertida no close. Mesmo
+            # padrão da produção em app/db/session.py::tenant_session.
             session = Session(bind=conn)
             rend = ChartAccount(
                 tenant_id=tenant_id, grupo_dre="FINANCEIRO", categoria="Rendimento de aplicação"
@@ -109,6 +113,10 @@ def _rentability_under(app_url: str, tenant_id: str, account_id: str) -> dict | 
             conn.execute(
                 text("SELECT set_config('app.current_tenant_id', :tid, false)"), {"tid": tenant_id}
             )
+            conn.commit()  # fixa a GUC (escopo de sessão) e ENCERRA a txn: sem isso a Session
+            # ligada a uma conexão já em transação usa join por SAVEPOINT e o session.commit()
+            # só libera o savepoint — a txn externa (com o seed) é revertida no close. Mesmo
+            # padrão da produção em app/db/session.py::tenant_session.
             session = Session(bind=conn)
             try:
                 return inv_service.rentability(session, account_id=account_id)

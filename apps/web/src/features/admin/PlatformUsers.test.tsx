@@ -32,12 +32,61 @@ function renderPage() {
   );
 }
 
+// Story 7.20 — fixture com conteúdo real p/ exercitar OfficeCard (a 7.18 mockava []).
+// Tipos completos (Tenant/User/TenantUsers) — sem campos opcionais, mesma lição da 7.18.
+const adminUser = {
+  id: "user-admin",
+  tenant_id: "tenant-alpha",
+  email: "dono@alpha.com",
+  name: "Dono Alpha",
+  role: "owner",
+  allowed_modules: [],
+  is_active: true,
+  is_platform_admin: false,
+  document: "12345678901",
+  address: "Rua A, 1",
+  phone: "27999990000",
+  must_reset_password: false,
+  created_at: "2026-01-01T00:00:00Z",
+};
+const staffUser = {
+  id: "user-staff",
+  tenant_id: "tenant-alpha",
+  email: "func@alpha.com",
+  name: "Funcionário Alpha",
+  role: "sub_user",
+  allowed_modules: ["crm"],
+  is_active: true,
+  is_platform_admin: false,
+  document: "10987654321",
+  address: "Rua B, 2",
+  phone: "27988880000",
+  must_reset_password: false,
+  created_at: "2026-01-02T00:00:00Z",
+};
+const officeNode = {
+  tenant: {
+    id: "tenant-alpha",
+    slug: "alpha",
+    legal_name: "Escritório Alpha Ltda",
+    document: "12345678901",
+    created_at: "2026-01-01T00:00:00Z",
+  },
+  admin: adminUser,
+  staff: [staffUser],
+  customers: [],
+  staff_count: 1,
+  customer_count: 0,
+};
+
 beforeEach(() => {
   vi.mocked(api.get).mockImplementation((url: string) => {
-    if (url === "/admin/users") return Promise.resolve({ data: [] } as never);
+    if (url === "/admin/users") return Promise.resolve({ data: [officeNode] } as never);
     return Promise.resolve({ data: [] } as never);
   });
   vi.mocked(api.post).mockReset();
+  vi.mocked(api.patch).mockReset();
+  vi.mocked(api.delete).mockReset();
 });
 
 describe("PlatformUsers — cadastrar nova conta (Story 7.18, Task 4)", () => {
@@ -100,5 +149,51 @@ describe("PlatformUsers — cadastrar nova conta (Story 7.18, Task 4)", () => {
     expect(btn).toBeDisabled();
     await user.click(btn); // clique num botão desabilitado não dispara o onClick
     expect(vi.mocked(api.post)).not.toHaveBeenCalled();
+  });
+});
+
+describe("PlatformUsers/OfficeCard — suspender/excluir usuário: tratamento de erro (Story 7.20)", () => {
+  // Abre o cartão do escritório para expor as linhas de usuário (Admin + funcionário).
+  async function openCard(user: ReturnType<typeof userEvent.setup>) {
+    renderPage();
+    await user.click(await screen.findByText("Escritório Alpha Ltda"));
+    // Confirma que o funcionário está visível (cartão expandido).
+    expect(await screen.findByText("Funcionário Alpha")).toBeInTheDocument();
+  }
+
+  it("caminho infeliz (toggleUser falha): api.patch rejeita → erro no DOM e cartão segue renderizado (AC 1, 4, 5)", async () => {
+    const user = userEvent.setup();
+    vi.mocked(api.patch).mockRejectedValueOnce({
+      response: { data: { detail: "Falha ao suspender o usuário." } },
+    });
+    await openCard(user);
+
+    // Botão "Suspender" (ícone Power): admin e staff estão ativos → duas ocorrências.
+    // Ordem de render: Admin (dono) primeiro, funcionário depois → [1] é o staff.
+    const suspendButtons = screen.getAllByTitle("Suspender");
+    await user.click(suspendButtons[1]);
+
+    expect(await screen.findByText("Falha ao suspender o usuário.")).toBeInTheDocument();
+    // Cartão segue renderizado e interativo.
+    expect(screen.getByText("Funcionário Alpha")).toBeInTheDocument();
+    expect(screen.getAllByTitle("Suspender")[1]).toBeEnabled();
+    // Sucesso não foi alcançado → onChanged() (reload via api.get) não recarregou por sucesso.
+    expect(vi.mocked(api.patch)).toHaveBeenCalledWith("/admin/users/user-staff", { is_active: false });
+  });
+
+  it("caminho infeliz (removeUser falha): confirm=true e api.delete rejeita → erro no DOM e cartão segue renderizado (AC 2, 4, 6)", async () => {
+    const user = userEvent.setup();
+    vi.spyOn(window, "confirm").mockReturnValue(true);
+    vi.mocked(api.delete).mockRejectedValueOnce({
+      response: { data: { detail: "Falha ao excluir o usuário." } },
+    });
+    await openCard(user);
+
+    // Só o funcionário (staff) recebe o botão "Excluir" (admin não recebe onDelete).
+    await user.click(screen.getByTitle("Excluir"));
+
+    expect(await screen.findByText("Falha ao excluir o usuário.")).toBeInTheDocument();
+    expect(screen.getByText("Funcionário Alpha")).toBeInTheDocument();
+    expect(vi.mocked(api.delete)).toHaveBeenCalledWith("/admin/users/user-staff");
   });
 });

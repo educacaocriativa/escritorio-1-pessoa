@@ -79,6 +79,10 @@ def _seed_tenant(app_url: str, tenant_id: str, *, receita: int, cc_name: str) ->
             conn.execute(
                 text("SELECT set_config('app.current_tenant_id', :tid, false)"), {"tid": tenant_id}
             )
+            conn.commit()  # fixa a GUC (escopo de sessão) e ENCERRA a txn: sem isso a Session
+            # ligada a uma conexão já em transação usa join por SAVEPOINT e o session.commit()
+            # só libera o savepoint — a txn externa (com o seed) é revertida no close. Mesmo
+            # padrão da produção em app/db/session.py::tenant_session.
             session = Session(bind=conn)
             cc = CostCenter(tenant_id=tenant_id, name=cc_name, kind="socio")
             rec = ChartAccount(tenant_id=tenant_id, grupo_dre="RECEITA", categoria="Consultoria")
@@ -110,6 +114,10 @@ def _resultado_do_centro(app_url: str, tenant_id: str, cost_center_id: str) -> i
             conn.execute(
                 text("SELECT set_config('app.current_tenant_id', :tid, false)"), {"tid": tenant_id}
             )
+            conn.commit()  # fixa a GUC (escopo de sessão) e ENCERRA a txn: sem isso a Session
+            # ligada a uma conexão já em transação usa join por SAVEPOINT e o session.commit()
+            # só libera o savepoint — a txn externa (com o seed) é revertida no close. Mesmo
+            # padrão da produção em app/db/session.py::tenant_session.
             session = Session(bind=conn)
             report = by_cost_center_report(session, start=START, end=END)
             session.close()
@@ -130,6 +138,10 @@ def _cost_center_visible(app_url: str, tenant_id: str, cost_center_id: str) -> b
             conn.execute(
                 text("SELECT set_config('app.current_tenant_id', :tid, false)"), {"tid": tenant_id}
             )
+            conn.commit()  # fixa a GUC (escopo de sessão) e ENCERRA a txn: sem isso a Session
+            # ligada a uma conexão já em transação usa join por SAVEPOINT e o session.commit()
+            # só libera o savepoint — a txn externa (com o seed) é revertida no close. Mesmo
+            # padrão da produção em app/db/session.py::tenant_session.
             session = Session(bind=conn)
             visible = cost_centers_service.exists(session, cost_center_id)
             session.close()

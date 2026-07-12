@@ -122,16 +122,27 @@ function OfficeCard({
   onChanged: () => void;
 }) {
   const [addStaff, setAddStaff] = useState(false);
+  const [error, setError] = useState<string | null>(null);
   const active = node.admin?.is_active ?? true;
 
   async function toggleUser(u: User) {
-    await api.patch(`/admin/users/${u.id}`, { is_active: !u.is_active });
-    onChanged();
+    setError(null);
+    try {
+      await api.patch(`/admin/users/${u.id}`, { is_active: !u.is_active });
+      onChanged();
+    } catch (err) {
+      setError(apiErrorMessage(err));
+    }
   }
   async function removeUser(u: User) {
     if (!confirm(`Excluir o usuário "${u.name}"?`)) return;
-    await api.delete(`/admin/users/${u.id}`);
-    onChanged();
+    setError(null);
+    try {
+      await api.delete(`/admin/users/${u.id}`);
+      onChanged();
+    } catch (err) {
+      setError(apiErrorMessage(err));
+    }
   }
   async function deleteAccount() {
     if (!confirm(`Excluir a conta "${node.tenant.legal_name}" e TODOS os seus dados? Irreversível.`))
@@ -158,6 +169,7 @@ function OfficeCard({
 
       {open && (
         <div className="space-y-4 border-t border-neutral-100 p-4">
+          {error && <p className="rounded-lg bg-red-50 p-2 text-sm text-danger">{error}</p>}
           {node.admin && (
             <Group title="Admin (dono)">
               <UserRow user={node.admin} onToggle={toggleUser} />
