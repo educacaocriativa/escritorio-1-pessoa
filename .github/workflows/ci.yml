@@ -60,10 +60,34 @@ jobs:
       - name: Instalar dependências
         run: pip install -r apps/api/requirements.txt
 
-      # Só o teste marcado rls_e2e. Sobe postgres:16-alpine, roda as migrations como o papel
-      # NÃO-superusuário e1p_app (Regra de Ouro nº 1) e valida "João não vê dados da Maria".
-      - name: Teste de isolamento RLS (Postgres real)
-        run: cd apps/api && python -m pytest -q -m rls_e2e tests/test_rls_isolation.py
+      # AMPLIADO (Story 7.1): filtra por PROPRIEDADE (o marker rls_e2e), NÃO por um arquivo nomeado.
+      # Assim os 9 arquivos test_*_rls.py de hoje — e um 10º futuro — entram automaticamente, sem
+      # reeditar este ci.yml (mesma lógica do canário anti-regressão da Story 6.1). Sobe
+      # postgres:16-alpine por teste, roda as migrations como o papel NÃO-superusuário e1p_app
+      # (Regra de Ouro nº 1) e valida "João não vê dados da Maria".
+      #
+      # FALHA-DURA anti-skip-silencioso (Story 7.1): um caminho infeliz de RLS que NÃO roda é pior
+      # que um que falha visivelmente. O exit code do pytest sozinho não é garantia suficiente —
+      # cada arquivo rls_e2e abre com `pytest.importorskip("testcontainers.postgres")`; se o
+      # testcontainers sumir (drift em requirements.txt, pip falho) os testes viram SKIPPED e o CI
+      # poderia ficar VERDE com ZERO cobertura de RLS real (falso senso de segurança). Por isso,
+      # além de rodar o pytest, lemos o --junitxml e EXIGIMOS que >=1 teste rls_e2e tenha REALMENTE
+      # executado (coletado E não-skipped): 0 executados FALHA o job de propósito. Um teste que
+      # FALHOU (exit != 0 e != 5) também derruba o job (a guarda não mascara falha real).
+      # Validado localmente (Docker, 2026-07-11): normal→verde; sem testcontainers→9 skipped/exit5→
+      # vermelho; 0 coletados→vermelho. @devops: com esta garantia mais forte, promover
+      # `cross-tenant-rls` a required em branch protection passa a apoiar-se em cobertura real, não
+      # apenas na ausência de falha (ver cabeçalho + Task 5 da Story 6.2).
+      - name: Teste de isolamento RLS (Postgres real — toda a suíte rls_e2e)
+        run: |
+          set -uo pipefail
+          cd apps/api
+          python -m pytest -q -m rls_e2e --junitxml=rls-results.xml
+          rc=$?
+          # rc: 0=passaram · 1=algum FALHOU · 5=nenhum rodou/coletado · outros=erro de coleta/uso.
+          # Falha real (rc != 0 e != 5) derruba já aqui; rc=5 e rc=0 seguem p/ a guarda de execução.
+          if [ "$rc" -ne 0 ] && [ "$rc" -ne 5 ]; then exit "$rc"; fi
+          python -c 'import sys,xml.etree.ElementTree as ET; r=ET.parse("rls-results.xml").getroot(); s=r if r.tag=="testsuite" else r.find("testsuite"); t=int(s.get("tests",0)); k=int(s.get("skipped",0)); ex=t-k; print(f"rls_e2e: coletados={t} executados={ex} skipped={k}"); ok=ex>=1; ok or print("::error::Nenhum teste rls_e2e executou (todos SKIPPED ou zero coletados). RLS real nao foi exercido — falhando o CI em vez de passar em silencio (Story 7.1)."); sys.exit(0 if ok else 1)'
 
   # Story 6.2 / AC1: secret scan com gitleaks (OSS, MIT — custo zero, Regra de Ouro nº 4).
   # Usamos o CLI gitleaks via container pinado por DIGEST (supply-chain), NÃO a
