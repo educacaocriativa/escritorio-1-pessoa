@@ -45,11 +45,14 @@ export default function ProdutosPage() {
     load();
   }, [load]);
 
-  const action =
-    tab === "cupons"
-      ? { label: "Novo cupom", onClick: () => setCouponModal(true) }
-      : { label: "Novo produto", onClick: () => setProductModal(true) };
-  usePrimaryAction(action.label, useCallback(action.onClick, [tab]));
+  const actionLabel = tab === "cupons" ? "Novo cupom" : "Novo produto";
+  usePrimaryAction(
+    actionLabel,
+    useCallback(() => {
+      if (tab === "cupons") setCouponModal(true);
+      else setProductModal(true);
+    }, [tab]),
+  );
 
   async function toggleCoupon(id: string) {
     await api.post(`/products/coupons/${id}/toggle`);
