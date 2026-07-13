@@ -37,6 +37,62 @@ def test_production_ok_with_strong_secret():
     assert s.is_production
 
 
+_GOOGLE = {
+    "google_client_id": "cid",
+    "google_client_secret": "csec",
+    "google_oauth_redirect_uri": "https://api.e1p.com/integrations/google/callback",
+}
+
+
+def test_production_requires_token_encryption_key_when_google_configured():
+    # Google ativo em produção → tokens gravados no banco → chave dedicada obrigatória.
+    with pytest.raises(ValidationError):
+        Settings(
+            environment="production",
+            jwt_secret=STRONG,
+            anthropic_api_key="sk-ant-x",
+            super_admin_password="uma-senha-de-admin-forte",
+            google_token_encryption_key="",
+            **_GOOGLE,
+        )
+
+
+def test_production_rejects_weak_token_encryption_key():
+    with pytest.raises(ValidationError):
+        Settings(
+            environment="production",
+            jwt_secret=STRONG,
+            anthropic_api_key="sk-ant-x",
+            super_admin_password="uma-senha-de-admin-forte",
+            google_token_encryption_key="curta",  # < 32 chars
+            **_GOOGLE,
+        )
+
+
+def test_production_ok_with_google_and_strong_encryption_key():
+    s = Settings(
+        environment="production",
+        jwt_secret=STRONG,
+        anthropic_api_key="sk-ant-x",
+        super_admin_password="uma-senha-de-admin-forte",
+        google_token_encryption_key="k" * 44,
+        **_GOOGLE,
+    )
+    assert s.is_production and s.google_oauth_configured
+
+
+def test_production_without_google_does_not_require_encryption_key():
+    # Google desligado → nenhum token gravado → a chave não é exigida (não bloqueia deploy).
+    s = Settings(
+        environment="production",
+        jwt_secret=STRONG,
+        anthropic_api_key="sk-ant-x",
+        super_admin_password="uma-senha-de-admin-forte",
+        google_token_encryption_key="",
+    )
+    assert s.is_production and not s.google_oauth_configured
+
+
 def test_development_allows_defaults():
     s = Settings(environment="development")
     assert not s.is_production

@@ -72,9 +72,31 @@
   mesmo princípio de robustez que o resto do módulo já seguia. Teste de regressão adicionado
   (`test_callback_userinfo_failure_still_connects`). Credencial de teste desconectada
   (revogada) ao final da validação.
-- [ ] Dívida conhecida sinalizada pela story (ainda não endereçada): `refresh_token` guardado em
-  texto plano (endurecer antes de produção séria); reschedule/cancel ainda não sincronizam de
-  volta pro Google.
+- [x] **Endurecimento: tokens OAuth cifrados em repouso** — `access_token`/`refresh_token` não
+  ficam mais em texto plano no Postgres. Criptografia simétrica Fernet (AES-128-CBC+HMAC, lib
+  `cryptography` que já vinha via `python-jose[cryptography]` — sem nova dependência) via o
+  `TypeDecorator` `EncryptedToken` (`app/core/token_crypto.py`): transparente ao código (Python vê
+  texto plano, banco guarda ciphertext com prefixo `enc:v1:`). Coluna segue `TEXT` → **sem
+  migration**. Chave `GOOGLE_TOKEN_ENCRYPTION_KEY` (nova env, em `.env.example` +
+  `infra/.env.prod.example`); vazio em dev = derivada do `JWT_SECRET` (criptografia SEMPRE ativa).
+  **Guard de boot** (`config._guard_production_secrets`): em `ENVIRONMENT=production` com o Google
+  configurado, a chave dedicada é obrigatória (>=32 chars) — recusa subir sem ela. Idempotente e
+  best-effort: token legado em texto plano segue legível; não re-cifra o que já está cifrado.
+  Validado 2026-07-12 por testes (`tests/test_google_calendar_hardening.py`): leitura CRUA da
+  coluna confirma que o segredo NUNCA aparece em texto plano (só ciphertext `enc:v1:`); round-trip
+  de decifração via ORM devolve o token original; linha legada em texto plano continua legível
+  (`tests/test_config.py`: guard exige/valida a chave em produção).
+- [x] **reschedule/cancel sincronizam de volta pro Google** — ao remarcar (`reschedule_event`) ou
+  cancelar (`cancel_event`) um `AgendaEvent` com `google_event_id` preenchido (evento com Meet
+  real vinculado), a mudança agora é propagada ao Google Calendar: `events.patch` (novos horários)
+  no reschedule e `events.delete` no cancel (`google_calendar/service.py::patch_meet_event` /
+  `delete_meet_event`, mesmo client/auth de `create_meet_event`). **Best-effort, não bloqueante**
+  (IV1/IV2, mesmo princípio do `fetch_account_email`): falha do Google (token revogado, rede, 404
+  porque o evento já sumiu lá) é capturada, logada e NÃO derruba o reschedule/cancel local; 404/410
+  no delete conta como sucesso (idempotente). Rastro da IA preservado (o `audit.record` existente
+  segue). Validado 2026-07-12 por testes (`tests/test_google_calendar_hardening.py`): patch/delete
+  são chamados no evento certo com os novos horários quando há `google_event_id`; NÃO são chamados
+  quando não há; e um erro HTTP mockado do Google não impede o reschedule/cancel local de persistir.
 
 ## 6. Backup automatizado + offsite (Story 3.3)
 - [x] Instalar/configurar `rclone` com remote S3-compatível — validado em 2026-07-12 **localmente**

@@ -33,6 +33,10 @@ _REVOKE_URL = "https://oauth2.googleapis.com/revoke"  # noqa: S105 (endpoint pú
 _CALENDAR_EVENTS_URL = (
     "https://www.googleapis.com/calendar/v3/calendars/primary/events?conferenceDataVersion=1"
 )
+# Evento específico (reschedule/cancel) — {event_id} é o google_event_id guardado no AgendaEvent.
+_CALENDAR_EVENT_URL = (
+    "https://www.googleapis.com/calendar/v3/calendars/primary/events/{event_id}"
+)
 _HTTP_TIMEOUT = 10
 
 # Tipos de evento onde "reunião" faz sentido (geram Meet). Bloqueios/prazos/cobranças não.
@@ -237,6 +241,73 @@ def create_meet_event(
         # Falha de integração externa não derruba a Agenda (IV1). Não logamos o token.
         logger.exception("[google:create_meet:failed] tenant=%s", tenant_id)
         return None
+
+
+# ── Sincronização de reschedule/cancel de volta pro Google ───────────────────
+def patch_meet_event(db: Session, *, tenant_id: str, event) -> bool:
+    """Propaga um REMARCAR (novos horários) para o evento espelho no Google Calendar.
+
+    Best-effort e NÃO bloqueante (mesmo princípio de robustez de create_meet_event / IV1/IV2):
+    qualquer falha (token revogado, rede, quota, 404 porque o evento sumiu lá) é capturada e
+    logada — NUNCA propaga, para não derrubar o reschedule local da Agenda.
+
+    Retorna True se sincronizou; False se não havia o que/como sincronizar (sem google_event_id,
+    sem Google conectado, sem token) ou se a chamada falhou.
+    """
+    if not getattr(event, "google_event_id", None):
+        return False
+    cred = get_credential(db)
+    if cred is None:
+        return False
+    try:
+        access_token = _ensure_fresh_token(db, cred)
+        if not access_token:
+            return False
+        body = {
+            "start": {"dateTime": _iso(event.starts_at)},
+            "end": {"dateTime": _iso(event.ends_at)},
+        }
+        resp = httpx.patch(
+            _CALENDAR_EVENT_URL.format(event_id=event.google_event_id),
+            headers={"Authorization": f"Bearer {access_token}"},
+            json=body,
+            timeout=_HTTP_TIMEOUT,
+        )
+        resp.raise_for_status()
+        return True
+    except Exception:
+        logger.exception("[google:patch_meet:failed] tenant=%s", tenant_id)
+        return False
+
+
+def delete_meet_event(db: Session, *, tenant_id: str, event) -> bool:
+    """Propaga um CANCELAR para o Google Calendar (remove o evento espelho).
+
+    Best-effort e NÃO bloqueante (ver patch_meet_event). Um 404/410 do Google significa que o
+    evento já não existe lá — o objetivo (não deixar evento fantasma) já está cumprido, então
+    conta como sucesso (idempotente).
+    """
+    if not getattr(event, "google_event_id", None):
+        return False
+    cred = get_credential(db)
+    if cred is None:
+        return False
+    try:
+        access_token = _ensure_fresh_token(db, cred)
+        if not access_token:
+            return False
+        resp = httpx.delete(
+            _CALENDAR_EVENT_URL.format(event_id=event.google_event_id),
+            headers={"Authorization": f"Bearer {access_token}"},
+            timeout=_HTTP_TIMEOUT,
+        )
+        if resp.status_code in (404, 410):
+            return True  # já não existe no Google — nada a fazer
+        resp.raise_for_status()
+        return True
+    except Exception:
+        logger.exception("[google:delete_meet:failed] tenant=%s", tenant_id)
+        return False
 
 
 def _iso(dt: datetime) -> str:
