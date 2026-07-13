@@ -49,3 +49,8 @@ coverage/
 htmlcov/
 playwright-report/
 test-results/
+
+# AIOX runtime / agent-local artifacts (not shared via git)
+.aiox/
+.claude/agent-memory/
+.claude/worktrees/
