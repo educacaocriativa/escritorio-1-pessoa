@@ -73,7 +73,7 @@ services:
       - traefik.http.routers.e1p-api.entrypoints=websecure
       - traefik.http.routers.e1p-api.tls.certresolver=letsencrypt-dns
       - traefik.http.routers.e1p-api.tls.domains[0].main=${ROOT_DOMAIN}
-      - traefik.http.routers.e1p-api.tls.domains[0].sans[0]=*.${ROOT_DOMAIN}
+      - traefik.http.routers.e1p-api.tls.domains[0].sans=*.${ROOT_DOMAIN}
       # Precisa casar ANTES do catch-all do `web` (priority=1).
       - traefik.http.routers.e1p-api.priority=20
       - traefik.http.routers.e1p-api.middlewares=security-headers@file,e1p-api-stripprefix
@@ -115,7 +115,7 @@ services:
       - traefik.http.routers.e1p-web.entrypoints=websecure
       - traefik.http.routers.e1p-web.tls.certresolver=letsencrypt-dns
       - traefik.http.routers.e1p-web.tls.domains[0].main=${ROOT_DOMAIN}
-      - traefik.http.routers.e1p-web.tls.domains[0].sans[0]=*.${ROOT_DOMAIN}
+      - traefik.http.routers.e1p-web.tls.domains[0].sans=*.${ROOT_DOMAIN}
       # Catch-all — casa por último, depois do router /api acima.
       - traefik.http.routers.e1p-web.priority=1
       - traefik.http.routers.e1p-web.middlewares=security-headers@file
