@@ -61,14 +61,19 @@ services:
       # (app/main.py) NÃO esperam esse prefixo — por isso o stripprefix abaixo, que
       # substitui o `handle_path` do Caddyfile antigo (ver infra/Caddyfile).
       # Wildcard por tenant (Story 4.4): além do ${DOMAIN} único, aceita `<slug>.${ROOT_DOMAIN}`
-      # (HostRegexp). IMPORTANTE: a EMISSÃO do certificado wildcard depende de um certresolver
-      # DNS-01 no Traefik COMPARTILHADO (/opt/infra/proxy/, FORA deste repo) — este label só
-      # roteia; sem esse resolver externo o wildcard não recebe cert (ver docs/HOSTINGER-DEPLOY.md
-      # §8 e Dev Notes → Riscos da Story 4.4). Sintaxe HostRegexp do Traefik v2 (named group);
-      # no Traefik v3 use: HostRegexp(`^[a-z0-9-]+\.${ROOT_DOMAIN}$`).
+      # (HostRegexp). Certresolver `letsencrypt-dns` é um resolver DISTINTO do `letsencrypt`
+      # (HTTP-01, usado pelos outros projetos na mesma VPS: nexus-publica, doro-site1,
+      # axisgov-stg) — precisa existir na config do Traefik COMPARTILHADO (/opt/infra/proxy/,
+      # FORA deste repo) com dnsChallenge/provider=cloudflare e o mesmo nome `letsencrypt-dns`,
+      # senão o router falha ao subir. tls.domains força o SAN wildcard explícito (sem isso o
+      # Traefik pediria um cert por-hostname individual, não um wildcard de verdade). Sintaxe
+      # HostRegexp do Traefik v2 (named group); no Traefik v3 use:
+      # HostRegexp(`^[a-z0-9-]+\.${ROOT_DOMAIN}$`).
       - traefik.http.routers.e1p-api.rule=(Host(`${DOMAIN}`) || HostRegexp(`{subdomain:[a-z0-9-]+}.${ROOT_DOMAIN}`)) && PathPrefix(`/api`)
       - traefik.http.routers.e1p-api.entrypoints=websecure
-      - traefik.http.routers.e1p-api.tls.certresolver=letsencrypt
+      - traefik.http.routers.e1p-api.tls.certresolver=letsencrypt-dns
+      - traefik.http.routers.e1p-api.tls.domains[0].main=${ROOT_DOMAIN}
+      - traefik.http.routers.e1p-api.tls.domains[0].sans[0]=*.${ROOT_DOMAIN}
       # Precisa casar ANTES do catch-all do `web` (priority=1).
       - traefik.http.routers.e1p-api.priority=20
       - traefik.http.routers.e1p-api.middlewares=security-headers@file,e1p-api-stripprefix
@@ -104,10 +109,13 @@ services:
       - traefik.docker.network=edge
       # Wildcard por tenant (Story 4.4): catch-all aceita ${DOMAIN} e `<slug>.${ROOT_DOMAIN}`.
       # Mesma dependência externa do certresolver DNS-01 no Traefik compartilhado (ver router
-      # e1p-api acima). Prioridade 1 mantida: casa por último, depois do router /api.
+      # e1p-api acima, incluindo o nome `letsencrypt-dns` e o SAN wildcard explícito).
+      # Prioridade 1 mantida: casa por último, depois do router /api.
       - traefik.http.routers.e1p-web.rule=Host(`${DOMAIN}`) || HostRegexp(`{subdomain:[a-z0-9-]+}.${ROOT_DOMAIN}`)
       - traefik.http.routers.e1p-web.entrypoints=websecure
-      - traefik.http.routers.e1p-web.tls.certresolver=letsencrypt
+      - traefik.http.routers.e1p-web.tls.certresolver=letsencrypt-dns
+      - traefik.http.routers.e1p-web.tls.domains[0].main=${ROOT_DOMAIN}
+      - traefik.http.routers.e1p-web.tls.domains[0].sans[0]=*.${ROOT_DOMAIN}
       # Catch-all — casa por último, depois do router /api acima.
       - traefik.http.routers.e1p-web.priority=1
       - traefik.http.routers.e1p-web.middlewares=security-headers@file
