@@ -63,6 +63,26 @@ def test_update_brand_kit(client: TestClient, headers):
     assert again["phone"] == "+5511999998888"
 
 
+def test_update_logo_url_accepts_relative_path(client: TestClient, headers):
+    # uploadPublicImage.ts devolve "/api/public-images/{id}" (caminho relativo via proxy) — o
+    # brand kit precisa aceitar esse formato, não só http(s) absoluto.
+    resp = client.patch(
+        "/settings/profile",
+        json={"logo_url": "/api/public-images/2e41b902-81b0-470e-a96d-7a9fd7964f82"},
+        headers=headers,
+    )
+    assert resp.status_code == 200
+    again = client.get("/settings/profile", headers=headers).json()
+    assert again["logo_url"] == "/api/public-images/2e41b902-81b0-470e-a96d-7a9fd7964f82"
+
+
+def test_update_invalid_logo_url_rejected(client: TestClient, headers):
+    resp = client.patch(
+        "/settings/profile", json={"logo_url": "nao-e-uma-url"}, headers=headers
+    )
+    assert resp.status_code == 422
+
+
 def test_profile_is_singleton(client: TestClient, headers):
     client.get("/settings/profile", headers=headers)
     client.patch("/settings/profile", json={"display_name": "A"}, headers=headers)

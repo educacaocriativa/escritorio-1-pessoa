@@ -60,7 +60,21 @@ class ProfileUpdate(BaseModel):
             raise ValueError("timezone inválido (não é um fuso IANA reconhecível)") from e
         return v
 
-    @field_validator("website", "logo_url")
+    @field_validator("logo_url")
+    @classmethod
+    def _validate_logo_url(cls, v: str | None) -> str | None:
+        # logo_url aceita caminho relativo (ex.: "/api/public-images/{id}") — é o formato devolvido
+        # pelo upload de imagem pública (uploadPublicImage.ts), que sempre passa pelo proxy /api.
+        if not v or v.startswith("/"):
+            return v
+        parsed = urlparse(v)
+        if parsed.scheme not in ("http", "https") or not parsed.netloc:
+            raise ValueError(
+                "URL inválida (http/https com host, ou caminho relativo iniciado por /)"
+            )
+        return v
+
+    @field_validator("website")
     @classmethod
     def _validate_url(cls, v: str | None) -> str | None:
         if not v:

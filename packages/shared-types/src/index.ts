@@ -126,8 +126,10 @@ export interface AuditEntry {
 }
 
 // ── Envelope de erro padrão da API ─────────────────────
+// `detail` é string nos erros de negócio (HTTPException), mas o FastAPI devolve uma LISTA de
+// objetos {loc, msg, type} em erros de validação Pydantic (422) — ambos os formatos são reais.
 export interface ApiError {
-  detail: string;
+  detail: string | { loc: (string | number)[]; msg: string; type: string }[];
   code?: string;
 }
 
