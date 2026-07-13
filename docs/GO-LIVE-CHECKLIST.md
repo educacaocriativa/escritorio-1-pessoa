@@ -77,10 +77,24 @@
   volta pro Google.
 
 ## 6. Backup automatizado + offsite (Story 3.3)
-- [ ] Instalar/configurar `rclone` na VPS com remote S3-compatível (fora do repo, `rclone config`)
-- [ ] Preencher: `BACKUP_S3_BUCKET`, `BACKUP_RETENTION_DAYS_LOCAL`, `BACKUP_RETENTION_DAYS_REMOTE`
-- [ ] Agendar cron (`/etc/cron.d/e1p-backup`, já documentado)
-- [ ] **Rodar um restore de teste de verdade** (não só o script — o drill completo) — `docs/HOSTINGER-DEPLOY.md` §6
+- [x] Instalar/configurar `rclone` com remote S3-compatível — validado em 2026-07-12 **localmente**
+  (MinIO em Docker no lugar do S3 real — sem custo/conta externa) com o binário real do rclone.
+  **Pendente:** instalar `rclone` de verdade na VPS quando ela existir (item 10) — mesmo `rclone
+  config`, só troca o remote (S3/B2/Wasabi real) pelo MinIO de teste.
+- [x] Preencher `BACKUP_S3_BUCKET`/`BACKUP_RETENTION_DAYS_LOCAL`/`BACKUP_RETENTION_DAYS_REMOTE` —
+  testado com `BACKUP_S3_BUCKET` real (bucket MinIO); retenção local exercida (0 dumps > 7 dias,
+  comportamento correto pra dumps novos).
+- [ ] Agendar cron (`/etc/cron.d/e1p-backup`) — só faz sentido na VPS real (item 10).
+- [x] **Rodar um restore de teste de verdade (drill completo)** — validado em 2026-07-12 rodando os
+  scripts REAIS (`infra/scripts/backup.sh` e `restore.sh`, sem nenhuma modificação) contra a stack
+  de dev local + MinIO: `backup.sh` gerou o dump, copiou pro offsite (MinIO); `restore.sh --force
+  --latest-offsite` baixou o dump mais recente e restaurou num Postgres **novo/efêmero** (volume
+  vazio, papel `e1p_app` criado manualmente como o runbook exige). Confirmado pós-restore: `\dt`
+  com todas as tabelas de negócio (owner `e1p_app`), `\du` sem `Superuser` em `e1p_app` (RLS
+  ativa), os 9 tenants reais criados hoje durante as outras validações restaurados intactos, e
+  **isolamento RLS revalidado** conectando como `e1p_app` (não superuser) e confirmando contagens
+  diferentes de `clients` por tenant (0 vs. 1, sem cruzar dados). Recursos de teste (container
+  MinIO, Postgres efêmero) removidos ao final.
 
 ## 7. Monitoramento e alertas — Uptime Kuma (Story 3.4)
 - [ ] Subir a stack de monitoramento na VPS (`docs/HOSTINGER-DEPLOY.md` §9.1)
