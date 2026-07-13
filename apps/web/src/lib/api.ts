@@ -54,8 +54,11 @@ export async function disconnectGoogle(): Promise<void> {
 
 export function apiErrorMessage(err: unknown): string {
   if (err instanceof AxiosError) {
-    const data = err.response?.data as ApiError | undefined;
-    return data?.detail ?? err.message;
+    const detail = (err.response?.data as ApiError | undefined)?.detail;
+    if (Array.isArray(detail)) {
+      return detail.map((d) => d.msg).join("; ") || err.message;
+    }
+    return detail ?? err.message;
   }
   return "Erro inesperado";
 }
