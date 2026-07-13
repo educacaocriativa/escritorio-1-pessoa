@@ -7,6 +7,11 @@ import Modal, { Field } from "../../components/Modal";
 import { api, apiErrorMessage } from "../../lib/api";
 import { usePrimaryAction } from "../../store/pageActions";
 
+// Domínio raiz para exibir o endereço de subdomínio do tenant (Story 4.4) — embutido no
+// bundle em build-time via VITE_ROOT_DOMAIN (ver apps/web/Dockerfile), reflete o mesmo
+// ROOT_DOMAIN configurado no Traefik/backend. Fallback "e1p.com" só pra dev local sem o build arg.
+const ROOT_DOMAIN = import.meta.env.VITE_ROOT_DOMAIN ?? "e1p.com";
+
 // Módulos que um funcionário pode receber (vazio = acesso a tudo).
 const MODULES: { key: string; label: string }[] = [
   { key: "crm", label: "CRM" },
@@ -159,7 +164,7 @@ function OfficeCard({
         <div className="min-w-0 flex-1">
           <p className="truncate font-medium text-neutral-800">{node.tenant.legal_name}</p>
           <p className="truncate text-xs text-neutral-400">
-            {node.tenant.slug}.e1p.com · {node.admin?.name ?? "sem dono"}
+            {node.tenant.slug}.{ROOT_DOMAIN} · {node.admin?.name ?? "sem dono"}
           </p>
         </div>
         <Chip icon={<Users size={12} />} value={node.staff_count} compact />
