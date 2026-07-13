@@ -69,7 +69,9 @@ class ProfileUpdate(BaseModel):
             return v
         parsed = urlparse(v)
         if parsed.scheme not in ("http", "https") or not parsed.netloc:
-            raise ValueError("URL inválida (esquema http/https e host são obrigatórios, ou caminho relativo iniciado por /)")
+            raise ValueError(
+                "URL inválida (http/https com host, ou caminho relativo iniciado por /)"
+            )
         return v
 
     @field_validator("website")
