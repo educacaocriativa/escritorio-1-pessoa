@@ -67,9 +67,11 @@ services:
       # FORA deste repo) com dnsChallenge/provider=cloudflare e o mesmo nome `letsencrypt-dns`,
       # senão o router falha ao subir. tls.domains força o SAN wildcard explícito (sem isso o
       # Traefik pediria um cert por-hostname individual, não um wildcard de verdade). Sintaxe
-      # HostRegexp do Traefik v2 (named group); no Traefik v3 use:
-      # HostRegexp(`^[a-z0-9-]+\.${ROOT_DOMAIN}$`).
-      - traefik.http.routers.e1p-api.rule=(Host(`${DOMAIN}`) || HostRegexp(`{subdomain:[a-z0-9-]+}.${ROOT_DOMAIN}`)) && PathPrefix(`/api`)
+      # HostRegexp de named group (Traefik v2/mux) NÃO funciona no v3 — o parser aceita sem
+      # erro, mas o regex vira algo tipo "\{subdomain:[a-z0-9-]\}\." literal e nunca casa
+      # nenhum host real (confirmado em produção: 404 puro do Traefik pra qualquer
+      # subdomínio). Traefik v3 usa o regex do Go (RE2) direto, sem grupo nomeado.
+      - traefik.http.routers.e1p-api.rule=(Host(`${DOMAIN}`) || HostRegexp(`^[a-z0-9-]+\.${ROOT_DOMAIN}$`)) && PathPrefix(`/api`)
       - traefik.http.routers.e1p-api.entrypoints=websecure
       - traefik.http.routers.e1p-api.tls.certresolver=letsencrypt-dns
       - traefik.http.routers.e1p-api.tls.domains[0].main=${ROOT_DOMAIN}
@@ -114,9 +116,10 @@ services:
       - traefik.docker.network=edge
       # Wildcard por tenant (Story 4.4): catch-all aceita ${DOMAIN} e `<slug>.${ROOT_DOMAIN}`.
       # Mesma dependência externa do certresolver DNS-01 no Traefik compartilhado (ver router
-      # e1p-api acima, incluindo o nome `letsencrypt-dns` e o SAN wildcard explícito).
+      # e1p-api acima, incluindo o nome `letsencrypt-dns`, o SAN wildcard explícito, e a
+      # sintaxe HostRegexp do Traefik v3 — regex RE2 puro, sem grupo nomeado de v2/mux).
       # Prioridade 1 mantida: casa por último, depois do router /api.
-      - traefik.http.routers.e1p-web.rule=Host(`${DOMAIN}`) || HostRegexp(`{subdomain:[a-z0-9-]+}.${ROOT_DOMAIN}`)
+      - traefik.http.routers.e1p-web.rule=Host(`${DOMAIN}`) || HostRegexp(`^[a-z0-9-]+\.${ROOT_DOMAIN}$`)
       - traefik.http.routers.e1p-web.entrypoints=websecure
       - traefik.http.routers.e1p-web.tls.certresolver=letsencrypt-dns
       - traefik.http.routers.e1p-web.tls.domains[0].main=${ROOT_DOMAIN}
