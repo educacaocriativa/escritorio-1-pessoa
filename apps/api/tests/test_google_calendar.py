@@ -146,6 +146,40 @@ def test_callback_happy_connects_account(client: TestClient, headers, configured
     assert status == {"configured": True, "connected": True, "email": "owner@gmail.com"}
 
 
+def test_callback_userinfo_failure_still_connects(
+    client: TestClient, headers, configured, monkeypatch
+):
+    """Achado em produção (2026-07-12): o userinfo é só para exibição ("conectado como ...");
+    uma falha nele (rede, escopo insuficiente) NUNCA deve descartar tokens já obtidos com
+    sucesso — mesmo princípio de robustez do módulo (ver docstring de handle_callback)."""
+
+    def fake_post(url: str, **kw):
+        return FakeResp(
+            {"access_token": "ya29.fake-access", "refresh_token": "1//fake-refresh",
+             "expires_in": 3600, "scope": DEFAULT_SCOPE}
+        )
+
+    def fake_get_raises(url: str, **kw):
+        raise httpx.HTTPStatusError("401", request=None, response=None)
+
+    monkeypatch.setattr(httpx, "post", fake_post)
+    monkeypatch.setattr(httpx, "get", fake_get_raises)
+
+    url = client.get("/integrations/google/connect", headers=headers).json()["url"]
+    state = parse_qs(urlparse(url).query)["state"][0]
+    resp = client.get(
+        "/integrations/google/callback",
+        params={"code": "auth-code", "state": state},
+        follow_redirects=False,
+    )
+    assert resp.status_code == 307
+    assert resp.headers["location"].endswith("/config?google=connected")
+
+    # Conectado mesmo sem e-mail (userinfo falhou) — tokens não foram descartados.
+    status = client.get("/integrations/google/status", headers=headers).json()
+    assert status == {"configured": True, "connected": True, "email": ""}
+
+
 def test_callback_reconnect_updates_same_credential(
     client: TestClient, headers, configured, monkeypatch
 ):

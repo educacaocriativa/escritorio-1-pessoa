@@ -47,11 +47,34 @@
 - [ ] Validar IV3: o dump do Postgres encolhe depois do backfill
 
 ## 5. Google Calendar/Meet OAuth (Story 4.1)
-- [ ] Criar projeto no Google Cloud Console + ativar Calendar API
-- [ ] Gerar OAuth Client ID/Secret, configurar redirect URI
-- [ ] Preencher: `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`, `GOOGLE_OAUTH_REDIRECT_URI`
-- [ ] Testar fluxo OAuth ponta-a-ponta (autorizar, criar evento com Meet real)
-- [ ] Dívida conhecida sinalizada pela story: `refresh_token` guardado em texto plano (endurecer antes de produção séria); reschedule/cancel ainda não sincronizam de volta pro Google
+- [x] Criar projeto no Google Cloud Console + ativar Calendar API — projeto do fundador, Calendar
+  API habilitada, OAuth consent screen em modo "Testing" com `flaviokato76@gmail.com` como test
+  user (suficiente para uso próprio; sair de "Testing" exige verificação do Google só se/quando
+  precisar liberar para outras contas).
+- [x] Gerar OAuth Client ID/Secret, configurar redirect URI — client Web criado, redirect URI
+  `http://localhost:8000/integrations/google/callback` (dev). **Pendente:** cadastrar a URI de
+  produção (`https://<domínio-real>/integrations/google/callback`) quando o item 10 existir —
+  OAuth clients aceitam múltiplas redirect URIs simultâneas, então isso é aditivo, não substitui a
+  de dev.
+- [x] Preencher `GOOGLE_CLIENT_ID`/`GOOGLE_CLIENT_SECRET`/`GOOGLE_OAUTH_REDIRECT_URI` — feito no
+  `.env` local (raiz, gitignorado), repassado a `api`/`worker` via `env_file`.
+- [x] Testar fluxo OAuth ponta-a-ponta (autorizar, criar evento com Meet real) — validado em
+  2026-07-12: autorização real via navegador (conta do fundador), evento tipo "reuniao" criado via
+  `/agenda/events` gerou Meet real (`meeting_url`/`google_event_id` reais, confirmados
+  visualmente no Google Calendar do usuário). **Bug de produção corrigido no caminho** (achado
+  neste teste): `fetch_account_email` (só para exibir "conectado como...") lançava exceção não
+  capturada em `handle_callback` quando falhava (aqui: 401 por faltar o scope `userinfo.email` na
+  autorização original) — isso descartava os tokens de acesso/refresh JÁ obtidos com sucesso,
+  quebrando a conexão inteira por causa de um dado não-essencial. Corrigido: (1) adicionado o
+  scope `userinfo.email` a `DEFAULT_SCOPE` (o recurso "mostrar e-mail conectado" já existia no
+  código/schema mas nunca funcionava, para ninguém); (2) `fetch_account_email` agora é
+  best-effort em `handle_callback` (captura `httpx.HTTPError`, loga, segue com e-mail vazio) —
+  mesmo princípio de robustez que o resto do módulo já seguia. Teste de regressão adicionado
+  (`test_callback_userinfo_failure_still_connects`). Credencial de teste desconectada
+  (revogada) ao final da validação.
+- [ ] Dívida conhecida sinalizada pela story (ainda não endereçada): `refresh_token` guardado em
+  texto plano (endurecer antes de produção séria); reschedule/cancel ainda não sincronizam de
+  volta pro Google.
 
 ## 6. Backup automatizado + offsite (Story 3.3)
 - [ ] Instalar/configurar `rclone` na VPS com remote S3-compatível (fora do repo, `rclone config`)
