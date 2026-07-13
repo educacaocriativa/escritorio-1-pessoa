@@ -64,8 +64,11 @@ describe("AgendaPage — Novo evento (Story 7.15, Task 2)", () => {
       expect.objectContaining({
         title: "Atendimento cliente",
         kind: "atendimento", // default
-        starts_at: "2026-08-01T09:00",
-        ends_at: "2026-08-01T10:00",
+        // Bug #23: o horário do input (local, sem fuso) é convertido para UTC real antes do
+        // POST. Assertamos o mesmo cálculo do componente (local→UTC), robusto a qualquer fuso
+        // do runner — antes enviava a string "naive" crua, que o backend tratava como UTC.
+        starts_at: new Date("2026-08-01T09:00").toISOString(),
+        ends_at: new Date("2026-08-01T10:00").toISOString(),
       }),
     );
     // Modal fecha: o título (heading) some (o botão "Novo evento" da topbar permanece).

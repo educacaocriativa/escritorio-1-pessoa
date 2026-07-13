@@ -4,6 +4,7 @@ import { useCallback, useEffect, useState } from "react";
 import Attachments from "../../components/Attachments";
 import Modal, { Field } from "../../components/Modal";
 import { api, apiErrorMessage, publicApi } from "../../lib/api";
+import { pluralize } from "../../lib/pluralize";
 import { usePrimaryAction } from "../../store/pageActions";
 
 const brl = (c: number) => (c / 100).toLocaleString("pt-BR", { style: "currency", currency: "BRL" });
@@ -39,6 +40,12 @@ export default function CobrancasPage() {
   const [open, setOpen] = useState(false);
   const [docs, setDocs] = useState<Charge | null>(null);
   const [edit, setEdit] = useState<Charge | null>(null);
+  const [toast, setToast] = useState<{ msg: string; type: "ok" | "err" } | null>(null);
+
+  const notify = useCallback((msg: string, type: "ok" | "err" = "ok") => {
+    setToast({ msg, type });
+    setTimeout(() => setToast(null), 2600);
+  }, []);
 
   const load = useCallback(async () => {
     const [s, c] = await Promise.all([
@@ -59,17 +66,25 @@ export default function CobrancasPage() {
   // do gateway (Pix/cartão/boleto) — o dono NÃO marca pago manualmente.
   async function simulatePayment(c: Charge) {
     if (!confirm("Simular o pagamento do cliente (gateway de teste)?")) return;
-    await publicApi.post("/receivables/webhook", {
-      tenant_id: c.tenant_id,
-      charge_id: c.id,
-      status: "paid",
-    });
-    load();
+    try {
+      await publicApi.post("/receivables/webhook", {
+        tenant_id: c.tenant_id,
+        charge_id: c.id,
+        status: "paid",
+      });
+      load();
+    } catch (err) {
+      notify(apiErrorMessage(err), "err");
+    }
   }
   async function cancel(id: string) {
     if (!confirm("Cancelar esta cobrança?")) return;
-    await api.post(`/receivables/charges/${id}/cancel`);
-    load();
+    try {
+      await api.post(`/receivables/charges/${id}/cancel`);
+      load();
+    } catch (err) {
+      notify(apiErrorMessage(err), "err");
+    }
   }
 
   return (
@@ -84,7 +99,7 @@ export default function CobrancasPage() {
       </div>
 
       <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
-        <Stat label="A vencer" value={brl(summary.open_cents)} hint={`${summary.open_count} cobranças`} tone="text-blue-700" />
+        <Stat label="A vencer" value={brl(summary.open_cents)} hint={`${summary.open_count} ${pluralize(summary.open_count, "cobrança", "cobranças")}`} tone="text-blue-700" />
         <Stat label="Vencido" value={brl(summary.overdue_cents)} hint={`${summary.overdue_count} em atraso`} tone="text-danger" />
         <Stat label="Recebido" value={brl(summary.paid_cents)} hint="total" tone="text-accent-700" />
       </div>
@@ -187,6 +202,14 @@ export default function CobrancasPage() {
             />
           </div>
         </Modal>
+      )}
+
+      {toast && (
+        <div
+          className={`fixed bottom-4 left-1/2 z-50 -translate-x-1/2 rounded-pill px-4 py-2 text-sm font-semibold text-white shadow-lg ${toast.type === "err" ? "bg-danger" : "bg-neutral-800"}`}
+        >
+          {toast.msg}
+        </div>
       )}
     </div>
   );

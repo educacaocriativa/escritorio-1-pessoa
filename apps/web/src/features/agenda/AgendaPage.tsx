@@ -571,8 +571,14 @@ function NewEventModal({
     setConflict(null);
     setSaving(true);
     try {
-      const starts_at = allDay ? `${startDate}T00:00:00` : start;
-      const ends_at = allDay ? `${endDate || startDate}T23:59:00` : end;
+      // Eventos com horário: o input datetime-local devolve uma string "naive" (sem fuso,
+      // ex. "2026-07-13T09:00"). Enviá-la crua fazia o backend tratá-la como UTC (grava
+      // "...T09:00:00Z"), exibindo 3h a menos no fuso do Brasil (bug #23). new Date(x) a
+      // interpreta como horário LOCAL e .toISOString() serializa para UTC real (local→UTC).
+      // O ramo all_day é intencionalmente meia-noite UTC da data de calendário (ver CLAUDE.md
+      // §6.0) — NÃO converter, sob pena de reintroduzir o bug antigo de sumiço na agenda.
+      const starts_at = allDay ? `${startDate}T00:00:00` : new Date(start).toISOString();
+      const ends_at = allDay ? `${endDate || startDate}T23:59:00` : new Date(end).toISOString();
       const { data } = await api.post<CreateEventResult>("/agenda/events", {
         title,
         kind,
