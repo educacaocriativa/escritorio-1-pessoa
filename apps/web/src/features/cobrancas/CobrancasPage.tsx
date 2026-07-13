@@ -4,6 +4,7 @@ import { useCallback, useEffect, useState } from "react";
 import Attachments from "../../components/Attachments";
 import Modal, { Field } from "../../components/Modal";
 import { api, apiErrorMessage, publicApi } from "../../lib/api";
+import { pluralize } from "../../lib/pluralize";
 import { usePrimaryAction } from "../../store/pageActions";
 
 const brl = (c: number) => (c / 100).toLocaleString("pt-BR", { style: "currency", currency: "BRL" });
@@ -98,7 +99,7 @@ export default function CobrancasPage() {
       </div>
 
       <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
-        <Stat label="A vencer" value={brl(summary.open_cents)} hint={`${summary.open_count} cobranças`} tone="text-blue-700" />
+        <Stat label="A vencer" value={brl(summary.open_cents)} hint={`${summary.open_count} ${pluralize(summary.open_count, "cobrança", "cobranças")}`} tone="text-blue-700" />
         <Stat label="Vencido" value={brl(summary.overdue_cents)} hint={`${summary.overdue_count} em atraso`} tone="text-danger" />
         <Stat label="Recebido" value={brl(summary.paid_cents)} hint="total" tone="text-accent-700" />
       </div>

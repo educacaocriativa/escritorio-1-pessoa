@@ -5,6 +5,7 @@ import {
 import { useCallback, useEffect, useMemo, useState } from "react";
 import Modal, { Field } from "../../components/Modal";
 import { api, apiErrorMessage } from "../../lib/api";
+import { pluralize } from "../../lib/pluralize";
 import { usePrimaryAction } from "../../store/pageActions";
 
 // Domínio raiz para exibir o endereço de subdomínio do tenant (Story 4.4) — embutido no
@@ -71,9 +72,9 @@ export default function PlatformUsers() {
     <div className="space-y-3">
       {/* Resumo enxuto */}
       <div className="flex flex-wrap items-center gap-2">
-        <Chip icon={<Building2 size={13} />} value={totals.offices} label="escritórios" />
-        <Chip icon={<Users size={13} />} value={totals.staff} label="funcionários" />
-        <Chip icon={<GraduationCap size={13} />} value={totals.customers} label="clientes" />
+        <Chip icon={<Building2 size={13} />} value={totals.offices} label={pluralize(totals.offices, "escritório", "escritórios")} />
+        <Chip icon={<Users size={13} />} value={totals.staff} label={pluralize(totals.staff, "funcionário", "funcionários")} />
+        <Chip icon={<GraduationCap size={13} />} value={totals.customers} label={pluralize(totals.customers, "cliente", "clientes")} />
       </div>
 
       {/* Busca */}
