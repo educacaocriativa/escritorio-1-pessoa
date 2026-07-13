@@ -126,10 +126,19 @@ def upsert_credential(db: Session, *, tenant_id: str, email: str, token_data: di
 
 
 def handle_callback(db: Session, *, tenant_id: str, code: str) -> None:
-    """Fluxo completo do callback: troca o code por tokens, descobre o e-mail e faz upsert."""
+    """Fluxo completo do callback: troca o code por tokens, descobre o e-mail e faz upsert.
+
+    Buscar o e-mail é só para exibição ("conectado como ...") — uma falha aí (rede, escopo
+    insuficiente) NUNCA deve descartar tokens já obtidos com sucesso (mesmo princípio de
+    robustez do módulo, ver docstring do topo do arquivo)."""
     token_data = exchange_code(code)
     access_token = token_data.get("access_token", "")
-    email = fetch_account_email(access_token) if access_token else ""
+    email = ""
+    if access_token:
+        try:
+            email = fetch_account_email(access_token)
+        except httpx.HTTPError:
+            logger.exception("[google:userinfo:failed] tenant=%s", tenant_id)
     upsert_credential(db, tenant_id=tenant_id, email=email, token_data=token_data)
 
 

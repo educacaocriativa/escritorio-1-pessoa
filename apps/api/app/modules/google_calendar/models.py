@@ -17,7 +17,10 @@ from sqlalchemy.orm import Mapped, mapped_column
 
 from app.db.base import Base, TenantMixin, TimestampMixin, _uuid
 
-DEFAULT_SCOPE = "https://www.googleapis.com/auth/calendar.events"
+DEFAULT_SCOPE = (
+    "https://www.googleapis.com/auth/calendar.events"
+    " https://www.googleapis.com/auth/userinfo.email"
+)
 
 
 class GoogleCredential(Base, TenantMixin, TimestampMixin):
