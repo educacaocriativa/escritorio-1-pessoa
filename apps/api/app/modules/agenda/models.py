@@ -66,7 +66,8 @@ class AgendaEvent(Base, TenantMixin, TimestampMixin):
     meeting_url: Mapped[str | None] = mapped_column(String(512), nullable=True)  # link Meet/Zoom
     guests: Mapped[list[str]] = mapped_column(JSON, default=list, nullable=False)  # e-mails
     # Id do evento espelhado no Google Calendar (quando o Meet foi gerado via OAuth Google).
-    # Permite sync futuro de reschedule/cancel (dívida — ver Story 4.1).
+    # Usado para sincronizar reschedule/cancel de volta pro Google (ver agenda/service.py +
+    # google_calendar/service.py::patch_meet_event/delete_meet_event).
     google_event_id: Mapped[str | None] = mapped_column(String(128), nullable=True)
 
     # Dinheiro SEMPRE em centavos inteiros (evita erro de float). Opcional (cobranças).

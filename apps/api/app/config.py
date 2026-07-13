@@ -72,6 +72,13 @@ class Settings(BaseSettings):
     google_client_id: str = ""
     google_client_secret: str = ""
     google_oauth_redirect_uri: str = ""
+    # Chave de criptografia simétrica (Fernet) dos tokens OAuth do Google EM REPOUSO. Gere com:
+    #   python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"
+    # Vazio em dev/test = derivado do JWT_SECRET (a criptografia fica SEMPRE ativa, nunca texto
+    # plano). Em produção COM o Google configurado é OBRIGATÓRIA (guard de boot abaixo): uma chave
+    # dedicada evita acoplar a rotação do JWT à leitura dos tokens já gravados. Ver
+    # app/core/token_crypto.py.
+    google_token_encryption_key: str = ""
 
     # App
     root_domain: str = "e1p.com"
@@ -113,6 +120,19 @@ class Settings(BaseSettings):
             if self.super_admin_password == _DEFAULT_ADMIN_PASSWORD:
                 raise ValueError(
                     "SUPER_ADMIN_PASSWORD default em produção: defina uma senha forte"
+                )
+            # Com o Google conectado em produção, tokens OAuth são gravados no banco: a chave
+            # dedicada de criptografia é obrigatória (não aceitar o fallback derivado do JWT, que
+            # acoplaria a rotação do JWT à leitura dos tokens). >=32 chars = entropia mínima.
+            if self.google_oauth_configured and (
+                not self.google_token_encryption_key
+                or len(self.google_token_encryption_key) < 32
+            ):
+                raise ValueError(
+                    "GOOGLE_TOKEN_ENCRYPTION_KEY ausente/fraca em produção com Google "
+                    "configurado: gere uma chave Fernet "
+                    "(python -c \"from cryptography.fernet import Fernet; "
+                    "print(Fernet.generate_key().decode())\")"
                 )
         return self
 

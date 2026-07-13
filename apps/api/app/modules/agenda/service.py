@@ -205,6 +205,13 @@ def cancel_event(
     if event.status in TERMINAL_STATUSES:
         raise AgendaError("Evento já finalizado ou cancelado", 409)
     event.status = STATUS_CANCELLED
+    # Se este evento tem um espelho no Google (Meet real vinculado), remove-o lá para não deixar
+    # evento fantasma. Best-effort/não bloqueante: falha do Google não derruba o cancel local
+    # (mesmo padrão de create_event). Import lazy p/ não acoplar a Agenda-núcleo à extensão.
+    if event.google_event_id:
+        from app.modules.google_calendar import service as gcal
+
+        gcal.delete_meet_event(db, tenant_id=tenant_id, event=event)
     audit.record(
         db, tenant_id=tenant_id, actor=actor, action="agenda.event.cancel", target=event.id,
         is_ai=by_ai,
@@ -232,6 +239,13 @@ def reschedule_event(
         conflicts = find_conflicts(db, starts_at, ends_at, exclude_id=event.id)
     event.starts_at = starts_at
     event.ends_at = ends_at
+    # Se este evento tem um espelho no Google (Meet real vinculado), atualiza os horários lá para
+    # não ficar desatualizado. Best-effort/não bloqueante: falha do Google não derruba o
+    # reschedule local (mesmo padrão de create_event). Import lazy p/ não acoplar a Agenda-núcleo.
+    if event.google_event_id:
+        from app.modules.google_calendar import service as gcal
+
+        gcal.patch_meet_event(db, tenant_id=tenant_id, event=event)
     audit.record(
         db, tenant_id=tenant_id, actor=actor, action="agenda.event.reschedule", target=event.id,
         is_ai=by_ai,
