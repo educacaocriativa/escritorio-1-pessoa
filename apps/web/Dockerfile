@@ -11,6 +11,12 @@ COPY packages ./packages
 COPY apps/web ./apps/web
 
 RUN pnpm install --frozen-lockfile || pnpm install
+# Domínio raiz usado pra exibir o endereço de subdomínio do tenant (Story 4.4) — Vite só
+# expõe env vars prefixadas com VITE_ e as embute no bundle em build-time (SPA estática,
+# sem servidor Node em runtime). Default "e1p.com" bate com o default do backend
+# (Settings.root_domain em app/config.py) para dev/build sem o arg explícito.
+ARG VITE_ROOT_DOMAIN=e1p.com
+ENV VITE_ROOT_DOMAIN=$VITE_ROOT_DOMAIN
 RUN pnpm --filter @e1p/web build
 
 FROM nginx:alpine

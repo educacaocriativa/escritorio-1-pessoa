@@ -100,6 +100,11 @@ services:
     build:
       context: ..
       dockerfile: apps/web/Dockerfile
+      args:
+        # Embutido no bundle estático em build-time (ver apps/web/Dockerfile) — usado só para
+        # exibir o endereço de subdomínio do tenant na tela do Master (Story 4.4). Sem efeito
+        # em roteamento/TLS (isso já usa ${ROOT_DOMAIN} de verdade nos labels abaixo).
+        VITE_ROOT_DOMAIN: ${ROOT_DOMAIN}
     restart: always
     depends_on:
       - api
