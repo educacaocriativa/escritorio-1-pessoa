@@ -18,6 +18,9 @@ Allowlist (usos legítimos, documentados com guarda explícita no próprio códi
   - attachments → só a rota pública `serve_public_image` lê `public_images` (tabela GLOBAL sem
                   RLS, imagens intencionalmente públicas — Story 4.2). `Attachment` permanece
                   100% RLS via `get_tenant_db`; nenhuma rota pública toca boletos/contratos.
+  - integrations → idem, `capture_lead` (API pública de captura de lead) resolve a chave via
+                  `public_integration_keys` (snapshot GLOBAL sem RLS) antes de abrir a
+                  tenant_session real — mesmo padrão de pages/quotes/contracts.
 """
 from __future__ import annotations
 
@@ -26,7 +29,9 @@ import pathlib
 MODULES_DIR = pathlib.Path(__file__).resolve().parents[1] / "app" / "modules"
 
 # Módulos onde `get_db` (sessão global) é um uso legítimo e já auditado (ver docstring acima).
-ALLOWLIST = {"auth", "platform", "contracts", "pages", "quotes", "wallet", "attachments"}
+ALLOWLIST = {
+    "auth", "platform", "contracts", "pages", "quotes", "wallet", "attachments", "integrations",
+}
 
 
 def _module_routers() -> list[pathlib.Path]:

@@ -88,6 +88,23 @@ def test_move_emits_event(client: TestClient, headers):
     assert captured.get("client_id") == c["id"]
 
 
+def test_create_emits_event(client: TestClient, headers):
+    captured = {}
+
+    def handler(**payload):
+        captured.update(payload)
+
+    events.subscribe("crm.client.created", handler)
+    try:
+        c = client.post(
+            "/crm/clients", json={"name": "Novo Lead", "source": "landing"}, headers=headers
+        ).json()
+    finally:
+        events.clear()
+    assert captured.get("client_id") == c["id"]
+    assert captured.get("source") == "landing"
+
+
 def test_move_to_unknown_stage_404(client: TestClient, headers):
     c = client.post("/crm/clients", json={"name": "X"}, headers=headers).json()
     resp = client.post(

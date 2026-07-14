@@ -36,8 +36,17 @@ paths = [
 # de FIXTURE em apps/api/tests/test_auth.py (ex.: "nova-senha-bem-forte",
 # "primeira-troca-123"), nunca um segredo real. Conferido o diff inteiro do commit antes
 # de allowlistar (só teste + código de feature, sem chave/token real). Ver PR #28.
+#
+# 886f56f: feat(integrations) de auto-enroll de leads + API de captura (14/07) — o
+# `generic-api-key` pegou um `raw_key` de FIXTURE em
+# apps/web/src/features/config/IntegrationsSection.test.tsx ("abcd1234-segredo-completo"),
+# nunca um segredo real (o valor real é gerado em runtime via secrets.token_urlsafe(32) e
+# nunca commitado). Conferido o diff inteiro do commit antes de allowlistar (só feature +
+# testes, sem chave/token real). A fixture foi trocada num commit seguinte por um valor de
+# baixa entropia, mas o achado permanece no histórico deste commit específico. Ver PR #32.
 commits = [
     "b93bf6fe4e85de7e658e0eca381157623f0bdfff",
+    "886f56ffcf770bf03315e12c9d9da6a8dbaaf8ba",
 ]
 
 # --- Precedente documentado (NÃO ativo hoje) --------------------------------------

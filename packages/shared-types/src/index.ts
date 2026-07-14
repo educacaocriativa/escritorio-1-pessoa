@@ -657,6 +657,24 @@ export interface TenantProfile {
   bg_color: string;
   font: string;
   timezone: string;
+  /** Funil de Vendas em que todo lead novo (source=landing/api) é inscrito automaticamente.
+   * null = auto-enroll desligado (comportamento até o dono configurar). */
+  default_entry_funnel_id: UUID | null;
+}
+
+// ── Integrações (captura de lead de sites externos) ────
+export interface IntegrationKey {
+  id: UUID;
+  label: string;
+  /** 8 primeiros caracteres da chave, só para identificar na lista. */
+  key_prefix: string;
+  revoked_at: string | null;
+  created_at: string;
+}
+
+/** Retorno da criação: única vez em que a chave crua fica visível. */
+export interface IntegrationKeyCreated extends IntegrationKey {
+  raw_key: string;
 }
 
 // ── Controle de Estoque ────────────────────────────────

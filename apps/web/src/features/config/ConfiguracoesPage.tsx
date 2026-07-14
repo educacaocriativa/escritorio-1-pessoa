@@ -1,5 +1,5 @@
-import type { GoogleCalendarStatus, TenantProfile } from "@e1p/shared-types";
-import { Check, Video } from "lucide-react";
+import type { FunnelSummary, GoogleCalendarStatus, TenantProfile } from "@e1p/shared-types";
+import { Check, SlidersHorizontal, Video, Workflow } from "lucide-react";
 import { useCallback, useEffect, useState } from "react";
 import ImageUploadButton from "../../components/ImageUploadButton";
 import {
@@ -10,11 +10,20 @@ import {
   getGoogleStatus,
 } from "../../lib/api";
 import { applyBrandTheme } from "../../lib/theme";
+import IntegrationsSection from "./IntegrationsSection";
 
 const FONTS = ["Inter", "Poppins", "Raleway", "Georgia", "Arial"];
 const safeSrc = (u: string) => (/^(https?:\/\/|\/)/i.test(u.trim()) ? u.trim() : "");
 
+type Tab = "perfil" | "integracoes";
+
+const TABS: { key: Tab; label: string; icon: typeof SlidersHorizontal }[] = [
+  { key: "perfil", label: "Perfil & Marca", icon: SlidersHorizontal },
+  { key: "integracoes", label: "Integrações", icon: Workflow },
+];
+
 export default function ConfiguracoesPage() {
+  const [tab, setTab] = useState<Tab>("perfil");
   const [p, setP] = useState<TenantProfile | null>(null);
   const [saving, setSaving] = useState(false);
   const [savedAt, setSavedAt] = useState<string | null>(null);
@@ -64,14 +73,42 @@ export default function ConfiguracoesPage() {
           <h1 className="text-2xl font-bold text-neutral-800">Configurações</h1>
         </div>
         <div className="flex items-center gap-3">
-          {savedAt && !error && <span className="text-xs text-neutral-400">Salvo {savedAt}</span>}
-          <button onClick={save} disabled={saving} className="flex items-center gap-1.5 rounded-pill bg-accent-400 px-5 py-2 text-sm font-semibold text-white hover:bg-accent-500 disabled:opacity-50">
-            <Check size={14} /> {saving ? "Salvando..." : "Salvar"}
-          </button>
+          {tab === "perfil" && savedAt && !error && (
+            <span className="text-xs text-neutral-400">Salvo {savedAt}</span>
+          )}
+          {tab === "perfil" && (
+            <button onClick={save} disabled={saving} className="flex items-center gap-1.5 rounded-pill bg-accent-400 px-5 py-2 text-sm font-semibold text-white hover:bg-accent-500 disabled:opacity-50">
+              <Check size={14} /> {saving ? "Salvando..." : "Salvar"}
+            </button>
+          )}
         </div>
       </div>
-      {error && <div className="rounded-lg bg-red-50 px-3 py-2 text-sm text-danger">{error}</div>}
+      {tab === "perfil" && error && (
+        <div className="rounded-lg bg-red-50 px-3 py-2 text-sm text-danger">{error}</div>
+      )}
 
+      {/* Abas — uma seção por responsabilidade (menos poluição). */}
+      <div className="flex gap-1 rounded-xl bg-neutral-100 p-1 lg:w-fit">
+        {TABS.map((t) => {
+          const Icon = t.icon;
+          const active = tab === t.key;
+          return (
+            <button
+              key={t.key}
+              onClick={() => setTab(t.key)}
+              className={`flex items-center justify-center gap-2 rounded-lg px-4 py-2 text-sm font-semibold transition ${
+                active ? "bg-white text-primary-600 shadow-sm" : "text-neutral-500 hover:text-neutral-700"
+              }`}
+            >
+              <Icon size={16} /> {t.label}
+            </button>
+          );
+        })}
+      </div>
+
+      {tab === "integracoes" && <IntegrationsSection />}
+
+      {tab === "perfil" && (
       <div className="grid grid-cols-1 gap-6 lg:grid-cols-3">
         {/* Formulário */}
         <div className="space-y-6 lg:col-span-2">
@@ -117,6 +154,11 @@ export default function ConfiguracoesPage() {
             </div>
           </Card>
 
+          <FunnelEntryCard
+            value={p.default_entry_funnel_id}
+            onChange={(v) => set({ default_entry_funnel_id: v })}
+          />
+
           <GoogleSection />
         </div>
 
@@ -151,7 +193,43 @@ export default function ConfiguracoesPage() {
           </Card>
         </div>
       </div>
+      )}
     </div>
+  );
+}
+
+/**
+ * Funil de Vendas em que todo lead novo (source=landing/api) é inscrito automaticamente
+ * (auto-enroll). Sem seleção = comportamento atual (sem auto-enroll).
+ */
+function FunnelEntryCard({
+  value, onChange,
+}: { value: string | null; onChange: (v: string | null) => void }) {
+  const [funnels, setFunnels] = useState<FunnelSummary[]>([]);
+
+  useEffect(() => {
+    api.get<FunnelSummary[]>("/funnels").then(({ data }) => {
+      setFunnels(Array.isArray(data) ? data : []);
+    });
+  }, []);
+
+  return (
+    <Card title="Funil de entrada padrão">
+      <p className="mb-3 text-xs text-neutral-400">
+        Todo lead novo — de uma landing page publicada em Sites ou de um site externo via chave
+        de integração — entra automaticamente neste funil.
+      </p>
+      <select
+        value={value ?? ""}
+        onChange={(e) => onChange(e.target.value || null)}
+        className="w-full rounded-lg border border-neutral-200 px-3 py-2 text-sm outline-none focus:border-primary-400"
+      >
+        <option value="">Nenhum (não inscrever automaticamente)</option>
+        {funnels.map((f) => (
+          <option key={f.id} value={f.id}>{f.name}</option>
+        ))}
+      </select>
+    </Card>
   );
 }
 

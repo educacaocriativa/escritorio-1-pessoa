@@ -40,6 +40,10 @@ def update_profile(
         val = getattr(data, f)
         if val is not None:
             setattr(profile, f, val)
+    # None no PATCH = "não altera"; "" desvincula (sem auto-enroll). Mesmo padrão de
+    # contract_id/cost_center_id em receivables/service.py::update_charge.
+    if data.default_entry_funnel_id is not None:
+        profile.default_entry_funnel_id = data.default_entry_funnel_id or None
     audit.record(db, tenant_id=tenant_id, actor=actor, action="settings.profile.update",
                  target=profile.id)
     db.commit()

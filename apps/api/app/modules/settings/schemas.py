@@ -27,6 +27,8 @@ class ProfileOut(BaseModel):
     bg_color: str
     font: str
     timezone: str
+    # Funil de Vendas para auto-enroll de leads novos (source=landing/api). None = desligado.
+    default_entry_funnel_id: str | None
 
 
 class ProfileUpdate(BaseModel):
@@ -45,6 +47,8 @@ class ProfileUpdate(BaseModel):
     bg_color: str | None = Field(default=None, max_length=9)
     font: str | None = Field(default=None, max_length=40)
     timezone: str | None = Field(default=None, max_length=64)
+    # None = não altera; "" = desliga o auto-enroll (mesmo padrão de contract_id em Charge).
+    default_entry_funnel_id: str | None = Field(default=None, max_length=36)
 
     # Validações de formato — só se aplicam a valores NÃO vazios.
     # None (omitido) = não altera; "" = limpar o campo (ambos preservados, AC4).

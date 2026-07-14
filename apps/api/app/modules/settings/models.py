@@ -45,3 +45,7 @@ class TenantProfile(Base, TenantMixin, TimestampMixin):
     timezone: Mapped[str] = mapped_column(
         String(64), default=DEFAULT_TIMEZONE, nullable=False
     )
+    # Funil de Vendas em que todo lead novo (source=landing/api) é inscrito automaticamente.
+    # None = sem auto-enroll (comportamento padrão até o dono configurar). Sem FK dura pra
+    # `funnels.id` (mesmo padrão do projeto): funil apagado só faz o auto-enroll no-opar.
+    default_entry_funnel_id: Mapped[str | None] = mapped_column(String(36), nullable=True)

@@ -22,7 +22,7 @@ vi.mock("../../lib/api", () => ({
     "Erro inesperado",
 }));
 
-// TenantProfile COMPLETO (15 campos, sem opcionais) — fixture parcial quebraria os inputs
+// TenantProfile COMPLETO (16 campos, sem opcionais) — fixture parcial quebraria os inputs
 // controlados (Task 3). Dados fictícios (sem PII real).
 const profile = {
   display_name: "Empresa Fictícia",
@@ -40,11 +40,14 @@ const profile = {
   bg_color: "#FFFFFF",
   font: "Inter",
   timezone: "America/Sao_Paulo",
+  default_entry_funnel_id: null,
 };
 
 beforeEach(() => {
   vi.mocked(api.get).mockImplementation((url: string) => {
     if (url === "/settings/profile") return Promise.resolve({ data: profile } as never);
+    if (url === "/funnels") return Promise.resolve({ data: [] } as never);
+    if (url === "/integrations/leads/keys") return Promise.resolve({ data: [] } as never);
     return Promise.resolve({ data: {} } as never);
   });
   vi.mocked(api.patch).mockReset();
@@ -93,5 +96,58 @@ describe("ConfiguracoesPage — Brand Kit (Story 7.18, Task 3)", () => {
 
     expect(await screen.findByText("Falha ao salvar as configurações.")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Salvar" })).toBeEnabled();
+  });
+});
+
+describe("ConfiguracoesPage — Funil de entrada padrão", () => {
+  it("lista os funis e envia default_entry_funnel_id ao salvar", async () => {
+    const user = userEvent.setup();
+    vi.mocked(api.get).mockImplementation((url: string) => {
+      if (url === "/settings/profile") return Promise.resolve({ data: profile } as never);
+      if (url === "/funnels") {
+        return Promise.resolve({
+          data: [{ id: "f-1", name: "Funil Principal", node_count: 3, created_at: "" }],
+        } as never);
+      }
+      return Promise.resolve({ data: [] } as never);
+    });
+    vi.mocked(api.patch).mockResolvedValue({
+      data: { ...profile, default_entry_funnel_id: "f-1" },
+    } as never);
+    render(<ConfiguracoesPage />);
+
+    const select = await screen.findByText("Funil Principal");
+    expect(select).toBeInTheDocument();
+
+    await user.selectOptions(screen.getByDisplayValue("Nenhum (não inscrever automaticamente)"), "f-1");
+    await user.click(screen.getByRole("button", { name: "Salvar" }));
+
+    await waitFor(() =>
+      expect(vi.mocked(api.patch)).toHaveBeenCalledWith(
+        "/settings/profile",
+        expect.objectContaining({ default_entry_funnel_id: "f-1" }),
+      ),
+    );
+  });
+});
+
+describe("ConfiguracoesPage — aba Integrações", () => {
+  it("troca pra aba Integrações e lista as chaves", async () => {
+    const user = userEvent.setup();
+    vi.mocked(api.get).mockImplementation((url: string) => {
+      if (url === "/settings/profile") return Promise.resolve({ data: profile } as never);
+      if (url === "/integrations/leads/keys") {
+        return Promise.resolve({
+          data: [{ id: "k-1", label: "Site Dóro", key_prefix: "abcd1234", revoked_at: null, created_at: "" }],
+        } as never);
+      }
+      return Promise.resolve({ data: [] } as never);
+    });
+    render(<ConfiguracoesPage />);
+
+    await screen.findByText("Cor primária"); // espera o profile carregar
+    await user.click(screen.getByRole("button", { name: /Integrações/ }));
+
+    expect(await screen.findByText("Site Dóro")).toBeInTheDocument();
   });
 });
