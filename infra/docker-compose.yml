@@ -8,7 +8,10 @@ services:
       POSTGRES_USER: e1puser
       POSTGRES_PASSWORD: e1ppass
     ports:
-      - "5432:5432"
+      # Porta do HOST remapeada pra 5433: 5432 colide com axisgov-postgres (outro projeto local).
+      # Comunicação api/worker -> postgres usa o nome interno do Docker ("postgres:5432"), não
+      # esta porta — só afeta acesso direto do host (psql/pgAdmin), que agora é em localhost:5433.
+      - "5433:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
       # Demove o usuário da app a NÃO-superusuário p/ que a RLS valha (ver script).
