@@ -1,7 +1,10 @@
+import type { TenantProfile } from "@e1p/shared-types";
 import clsx from "clsx";
 import { Bell, ChevronDown, LogOut, Plus, Search, ShieldCheck, X } from "lucide-react";
-import { type ReactNode, useState } from "react";
+import { type ReactNode, useEffect, useState } from "react";
 import { NavLink } from "react-router-dom";
+import { api } from "../lib/api";
+import { applyBrandTheme } from "../lib/theme";
 import { useAuth } from "../store/auth";
 import { usePageActions } from "../store/pageActions";
 import { navSections } from "./navigation";
@@ -12,6 +15,18 @@ import { navSections } from "./navigation";
  */
 export default function AppShell({ children }: { children: ReactNode }) {
   const [open, setOpen] = useState(true);
+
+  // Aplica o Brand Kit do tenant como tema do app (sidebar/botões) uma vez por sessão — as
+  // classes Tailwind já apontam pra CSS vars com fallback estático, então sem tema custom nada
+  // muda visualmente (ver packages/design-tokens/src/tailwind-preset.ts).
+  useEffect(() => {
+    api
+      .get<TenantProfile>("/settings/profile")
+      .then(({ data }) => applyBrandTheme(data))
+      .catch(() => {
+        /* tema é só um complemento visual — sem acesso/erro, fica no fallback estático padrão */
+      });
+  }, []);
 
   return (
     <div className="flex min-h-screen bg-neutral-50">
