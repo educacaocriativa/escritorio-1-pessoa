@@ -314,9 +314,12 @@ def update_charge(db: Session, *, charge_id: str, tenant_id: str, actor: str, da
     if data.competence_date is not None:
         charge.competence_date = data.competence_date
     if data.chart_account_id is not None:
-        if not chart_service.exists(db, data.chart_account_id):
+        if data.chart_account_id == "":
+            charge.chart_account_id = None
+        elif not chart_service.exists(db, data.chart_account_id):
             raise ReceivableError("Conta do plano de contas não encontrada", 404)
-        charge.chart_account_id = data.chart_account_id
+        else:
+            charge.chart_account_id = data.chart_account_id
     # Story 5.4: (re)vincular/desvincular do contrato. "" desvincula (bucket "Empresa"); um id
     # inexistente/de outro tenant → 404. Metadado analítico, não toca no caminho de dinheiro.
     if data.contract_id is not None:

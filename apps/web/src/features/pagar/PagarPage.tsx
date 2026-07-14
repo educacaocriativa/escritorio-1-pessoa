@@ -1,10 +1,17 @@
 import type { Contract, Payable, PayablesSummary } from "@e1p/shared-types";
 import { Copy, Paperclip } from "lucide-react";
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import Attachments from "../../components/Attachments";
 import Modal, { Field } from "../../components/Modal";
 import { api, apiErrorMessage } from "../../lib/api";
 import { usePrimaryAction } from "../../store/pageActions";
+import ChartAccountSelect from "../financeiro/ChartAccountSelect";
+import type { CostCenter } from "../financeiro/costCenters";
+import CostCenterSelect from "../financeiro/CostCenterSelect";
+import { type ChartAccount, GRUPOS_DRE } from "../financeiro/planoContas";
+
+/** Grupos DRE cabíveis numa DESPESA (Contas a Pagar nunca lança em Receita). */
+const EXPENSE_GROUPS = GRUPOS_DRE.filter((g) => g !== "RECEITA");
 
 /** Seletor "Vincular a contrato" (Story 5.4) — opcional; vazio = bucket "Empresa" (overhead). */
 function ContractSelect({ value, onChange }: { value: string; onChange: (v: string) => void }) {
@@ -60,6 +67,8 @@ export default function PagarPage() {
   };
   const [summary, setSummary] = useState<PayablesSummary>(empty);
   const [bills, setBills] = useState<Payable[]>([]);
+  const [chartAccounts, setChartAccounts] = useState<ChartAccount[]>([]);
+  const [costCenters, setCostCenters] = useState<CostCenter[]>([]);
   const [open, setOpen] = useState(false);
   const [attach, setAttach] = useState<Payable | null>(null);
   const [edit, setEdit] = useState<Payable | null>(null);
@@ -71,11 +80,29 @@ export default function PagarPage() {
     ]);
     setSummary(s.data);
     setBills(b.data);
+    // Rótulos são só um complemento de exibição — se o usuário não tiver acesso a esses módulos
+    // (require_module), a lista de contas a pagar continua funcionando normalmente.
+    const [ca, cc] = await Promise.all([
+      api.get<ChartAccount[]>("/chart-of-accounts").catch(() => ({ data: [] as ChartAccount[] })),
+      api.get<CostCenter[]>("/cost-centers").catch(() => ({ data: [] as CostCenter[] })),
+    ]);
+    setChartAccounts(ca.data);
+    setCostCenters(cc.data);
   }, []);
 
   useEffect(() => {
     load();
   }, [load]);
+
+  // Rótulo estruturado quando o lançamento tem vínculo; senão cai no texto legado (`category`).
+  const accountLabel = useMemo(
+    () => Object.fromEntries(chartAccounts.map((a) => [a.id, a.categoria])),
+    [chartAccounts],
+  );
+  const costCenterLabel = useMemo(
+    () => Object.fromEntries(costCenters.map((c) => [c.id, c.name])),
+    [costCenters],
+  );
 
   usePrimaryAction("Nova conta", useCallback(() => setOpen(true), []));
 
@@ -114,6 +141,7 @@ export default function PagarPage() {
               <tr className="border-b border-neutral-100 text-left text-xs uppercase text-neutral-400">
                 <th className="px-4 py-3 font-medium">Conta</th>
                 <th className="px-4 py-3 font-medium">Categoria</th>
+                <th className="px-4 py-3 font-medium">Centro de custo</th>
                 <th className="px-4 py-3 font-medium">Vencimento</th>
                 <th className="px-4 py-3 font-medium">Valor</th>
                 <th className="px-4 py-3 font-medium">Status</th>
@@ -131,7 +159,12 @@ export default function PagarPage() {
                         <span className="block text-xs text-neutral-400">{p.supplier}</span>
                       )}
                     </td>
-                    <td className="px-4 py-3 text-neutral-500">{p.category}</td>
+                    <td className="px-4 py-3 text-neutral-500">
+                      {(p.chart_account_id && accountLabel[p.chart_account_id]) || p.category}
+                    </td>
+                    <td className="px-4 py-3 text-neutral-500">
+                      {(p.cost_center_id && costCenterLabel[p.cost_center_id]) || "—"}
+                    </td>
                     <td className="px-4 py-3 tabular-nums text-neutral-600">
                       {new Date(p.due_date + "T00:00").toLocaleDateString("pt-BR")}
                     </td>
@@ -209,7 +242,8 @@ function EditBillModal({
   onSaved: () => void;
 }) {
   const [description, setDescription] = useState(bill.description);
-  const [category, setCategory] = useState(bill.category);
+  const [chartAccountId, setChartAccountId] = useState(bill.chart_account_id ?? "");
+  const [costCenterId, setCostCenterId] = useState(bill.cost_center_id ?? "");
   const [supplier, setSupplier] = useState(bill.supplier);
   const [value, setValue] = useState((bill.amount_cents / 100).toFixed(2).replace(".", ","));
   const [dueDate, setDueDate] = useState(bill.due_date);
@@ -223,7 +257,8 @@ function EditBillModal({
     try {
       await api.patch(`/payables/bills/${bill.id}`, {
         description,
-        category,
+        chart_account_id: chartAccountId,
+        cost_center_id: costCenterId,
         supplier,
         amount_cents: Math.round(parseFloat(value.replace(",", ".")) * 100),
         due_date: dueDate,
@@ -241,9 +276,19 @@ function EditBillModal({
     <Modal title="Editar conta" open onClose={onClose}>
       <div className="space-y-3">
         <Field label="Descrição" value={description} onChange={setDescription} />
+        <Field label="Fornecedor" value={supplier} onChange={setSupplier} />
         <div className="flex gap-2">
-          <Field label="Categoria" value={category} onChange={setCategory} />
-          <Field label="Fornecedor" value={supplier} onChange={setSupplier} />
+          <div className="flex-1">
+            <ChartAccountSelect
+              value={chartAccountId}
+              onChange={setChartAccountId}
+              groups={EXPENSE_GROUPS}
+              defaultNewGrupo="DESPESA_FIXA"
+            />
+          </div>
+          <div className="flex-1">
+            <CostCenterSelect value={costCenterId} onChange={setCostCenterId} />
+          </div>
         </div>
         <div className="flex gap-2">
           <Field label="Valor (R$)" value={value} onChange={setValue} />
@@ -345,7 +390,8 @@ function NewBillModal({
   onCreated: () => void;
 }) {
   const [description, setDescription] = useState("");
-  const [category, setCategory] = useState("Geral");
+  const [chartAccountId, setChartAccountId] = useState("");
+  const [costCenterId, setCostCenterId] = useState("");
   const [supplier, setSupplier] = useState("");
   const [value, setValue] = useState("");
   const [dueDate, setDueDate] = useState("");
@@ -363,7 +409,8 @@ function NewBillModal({
       const amount_cents = Math.round(parseFloat(value.replace(",", ".")) * 100);
       await api.post("/payables/bills", {
         description,
-        category,
+        chart_account_id: chartAccountId || null,
+        cost_center_id: costCenterId || null,
         supplier,
         amount_cents,
         due_date: dueDate,
@@ -374,6 +421,8 @@ function NewBillModal({
       });
       onCreated();
       setDescription("");
+      setChartAccountId("");
+      setCostCenterId("");
       setSupplier("");
       setValue("");
       setDueDate("");
@@ -391,9 +440,19 @@ function NewBillModal({
     <Modal title="Nova conta a pagar" open={open} onClose={onClose}>
       <div className="space-y-3">
         <Field label="Descrição" value={description} onChange={setDescription} placeholder="Aluguel" />
+        <Field label="Fornecedor" value={supplier} onChange={setSupplier} placeholder="Imobiliária" />
         <div className="flex gap-2">
-          <Field label="Categoria" value={category} onChange={setCategory} placeholder="Estrutura" />
-          <Field label="Fornecedor" value={supplier} onChange={setSupplier} placeholder="Imobiliária" />
+          <div className="flex-1">
+            <ChartAccountSelect
+              value={chartAccountId}
+              onChange={setChartAccountId}
+              groups={EXPENSE_GROUPS}
+              defaultNewGrupo="DESPESA_FIXA"
+            />
+          </div>
+          <div className="flex-1">
+            <CostCenterSelect value={costCenterId} onChange={setCostCenterId} />
+          </div>
         </div>
         <div className="flex gap-2">
           <Field label="Valor (R$)" value={value} onChange={setValue} placeholder="2500,00" />

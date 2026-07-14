@@ -46,6 +46,8 @@ from app.modules.payables.models import STATUS_CANCELED as PAYABLE_CANCELED
 from app.modules.payables.models import Payable
 from app.modules.receivables.models import STATUS_CANCELED as CHARGE_CANCELED
 from app.modules.receivables.models import Charge
+from app.modules.wallet.models import STATUS_REFUNDED as TX_REFUNDED
+from app.modules.wallet.models import Transaction
 
 # Bucket sintético (NÃO é um grupo do enum `grupo_dre`): lançamentos ainda não classificados
 # (chart_account_id IS NULL) ou apontando para uma conta inexistente. Somado à parte, FORA do
@@ -126,6 +128,35 @@ def _sum_by_account(
     return [(acc_id, sign * int(total or 0), int(count)) for acc_id, total, count in rows]
 
 
+def _sum_transactions_by_account(
+    db: Session, *, start: date, end: date, cost_center_id: str | None = None,
+) -> list[tuple[str | None, int, int]]:
+    """Soma `Transaction` (Carteira) por `chart_account_id` — Story 5.10. Mesma base da DRE, mas só
+    entram transações SEM `external_ref` e não estornadas.
+
+    `external_ref` preenchido significa que a transação nasceu de uma Charge já paga (`mark_paid`
+    grava `external_ref=charge.id`) — essa receita JÁ é contada via `_sum_by_account(Charge, ...)`;
+    somar a Transaction também dobraria o valor. Só entram aqui as transações "órfãs" (venda avulsa
+    em "Registrar venda" ou produto/checkout), que não existem em nenhuma outra tabela do DRE.
+    Sinal sempre +1 (Carteira só registra dinheiro entrando)."""
+    competence = func.coalesce(Transaction.competence_date, func.date(Transaction.created_at))
+    stmt = select(
+        Transaction.chart_account_id,
+        func.coalesce(func.sum(Transaction.gross_cents), 0),
+        func.count(Transaction.id),
+    ).where(
+        competence >= start,
+        competence <= end,
+        Transaction.status != TX_REFUNDED,
+        Transaction.external_ref.is_(None),
+    )
+    if cost_center_id is not None:
+        stmt = stmt.where(Transaction.cost_center_id == cost_center_id)
+    stmt = stmt.group_by(Transaction.chart_account_id)
+    rows = db.execute(stmt).all()
+    return [(acc_id, int(total or 0), int(count)) for acc_id, total, count in rows]
+
+
 def dre_report(
     db: Session, *, start: date, end: date, cost_center_id: str | None = None
 ) -> DreReport:
@@ -154,6 +185,8 @@ def dre_report(
     ) + _sum_by_account(
         db, Payable, start=start, end=end, canceled=PAYABLE_CANCELED, sign=-1,
         cost_center_id=cost_center_id,
+    ) + _sum_transactions_by_account(
+        db, start=start, end=end, cost_center_id=cost_center_id,
     )
 
     for acc_id, amount, count in aggregated:
@@ -262,6 +295,33 @@ def _sum_by_cost_center_and_account(
     ]
 
 
+def _sum_transactions_by_cost_center_and_account(
+    db: Session, *, start: date, end: date
+) -> list[tuple[str | None, str | None, int, int]]:
+    """Mesma regra de `_sum_transactions_by_account` (só transações órfãs, não estornadas), cruzada
+    também por centro de custo — usada pelo `by_cost_center_report` (Story 5.10)."""
+    competence = func.coalesce(Transaction.competence_date, func.date(Transaction.created_at))
+    rows = db.execute(
+        select(
+            Transaction.cost_center_id,
+            Transaction.chart_account_id,
+            func.coalesce(func.sum(Transaction.gross_cents), 0),
+            func.count(Transaction.id),
+        )
+        .where(
+            competence >= start,
+            competence <= end,
+            Transaction.status != TX_REFUNDED,
+            Transaction.external_ref.is_(None),
+        )
+        .group_by(Transaction.cost_center_id, Transaction.chart_account_id)
+    ).all()
+    return [
+        (cc_id, acc_id, int(total or 0), int(count))
+        for cc_id, acc_id, total, count in rows
+    ]
+
+
 def by_cost_center_report(db: Session, *, start: date, end: date) -> CostCenterReport:
     """Cruza o resultado do período por centro de custo (2ª dimensão) — Story 5.5, AC2/AC3.
 
@@ -279,7 +339,7 @@ def by_cost_center_report(db: Session, *, start: date, end: date) -> CostCenterR
         db, Charge, start=start, end=end, canceled=CHARGE_CANCELED, sign=1
     ) + _sum_by_cost_center_and_account(
         db, Payable, start=start, end=end, canceled=PAYABLE_CANCELED, sign=-1
-    )
+    ) + _sum_transactions_by_cost_center_and_account(db, start=start, end=end)
 
     # cost_center_id | None -> [receita, resultado, contagem]
     acc: dict[str | None, list[int]] = {}

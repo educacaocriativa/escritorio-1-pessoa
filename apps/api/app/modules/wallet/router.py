@@ -51,9 +51,12 @@ def create_transaction(
     user: CurrentUser = Depends(_guard),
     db: Session = Depends(get_tenant_db),
 ) -> TransactionOut:
-    tx = service.create_transaction(
-        db, tenant_id=user.tenant_id, actor=user.user_id, by_ai=user.is_ai, data=data
-    )
+    try:
+        tx = service.create_transaction(
+            db, tenant_id=user.tenant_id, actor=user.user_id, by_ai=user.is_ai, data=data
+        )
+    except service.WalletError as e:
+        raise HTTPException(status_code=e.status_code, detail=str(e)) from e
     return TransactionOut.model_validate(tx)
 
 

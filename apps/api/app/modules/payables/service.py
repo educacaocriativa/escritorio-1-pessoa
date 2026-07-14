@@ -165,9 +165,12 @@ def update_payable(db: Session, *, payable_id: str, tenant_id: str, actor: str, 
     if data.competence_date is not None:
         p.competence_date = data.competence_date
     if data.chart_account_id is not None:
-        if not chart_service.exists(db, data.chart_account_id):
+        if data.chart_account_id == "":
+            p.chart_account_id = None
+        elif not chart_service.exists(db, data.chart_account_id):
             raise PayableError("Conta do plano de contas não encontrada", 404)
-        p.chart_account_id = data.chart_account_id
+        else:
+            p.chart_account_id = data.chart_account_id
     # Story 5.4: (re)vincular/desvincular do contrato. "" desvincula (bucket "Empresa"); um id
     # inexistente/de outro tenant → 404. Metadado analítico, não toca no caminho de dinheiro.
     if data.contract_id is not None:

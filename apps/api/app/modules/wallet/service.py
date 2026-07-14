@@ -1,10 +1,14 @@
 """Regras da Carteira & Split: cálculo do split, transações, saldos e ganhos da plataforma."""
 from __future__ import annotations
 
+from datetime import UTC, date, datetime
+
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.core import audit
+from app.modules.chart_of_accounts import service as chart_service
+from app.modules.cost_centers import service as cost_centers_service
 from app.modules.wallet.models import (
     DEFAULT_SPLIT_PCT,
     KIND_PRODUCT,
@@ -102,16 +106,27 @@ def build_transaction(
     description: str = "",
     client_id: str | None = None,
     external_ref: str | None = None,
+    competence_date: date | None = None,
+    chart_account_id: str | None = None,
+    cost_center_id: str | None = None,
 ) -> Transaction:
     """Cria a transação + ganho da plataforma na sessão SEM commitar.
 
     Permite que outros módulos (ex.: Contas a Receber, ao dar baixa) gravem a transação
-    atomicamente junto com sua própria mutação.
+    atomicamente junto com sua própria mutação. Chamadores que já reconhecem a receita em outro
+    lugar (ex.: Charge paga) não passam `chart_account_id`/`cost_center_id` — a classificação nessa
+    origem é do Charge, e a DRE já exclui transações com `external_ref` preenchido para não somar
+    em dobro (ver `financial_intelligence/dre.py`).
     """
     pct = split_pct_for(db, kind)
     fee, net = compute_split(gross_cents, pct)
     # Cartão entra como "a receber" (a liberar); Pix/boleto já caem como disponível.
     status = STATUS_PENDING if method == METHOD_CARD else STATUS_AVAILABLE
+
+    if chart_account_id and not chart_service.exists(db, chart_account_id):
+        raise WalletError("Conta do plano de contas não encontrada", 404)
+    if cost_center_id and not cost_centers_service.exists(db, cost_center_id):
+        raise WalletError("Centro de custo não encontrado", 404)
 
     tx = Transaction(
         tenant_id=tenant_id,
@@ -124,6 +139,9 @@ def build_transaction(
         status=status,
         client_id=client_id,
         external_ref=external_ref,
+        competence_date=competence_date or datetime.now(UTC).date(),
+        chart_account_id=chart_account_id,
+        cost_center_id=cost_center_id,
     )
     db.add(tx)
     # Registro GLOBAL do ganho da plataforma (sem RLS) — alimenta o painel do Master.
@@ -142,7 +160,8 @@ def create_transaction(
     tx = build_transaction(
         db, tenant_id=tenant_id, actor=actor, by_ai=by_ai, kind=data.kind, method=data.method,
         gross_cents=data.gross_cents, description=data.description, client_id=data.client_id,
-        external_ref=data.external_ref,
+        external_ref=data.external_ref, competence_date=data.competence_date,
+        chart_account_id=data.chart_account_id, cost_center_id=data.cost_center_id,
     )
     db.commit()
     db.refresh(tx)
