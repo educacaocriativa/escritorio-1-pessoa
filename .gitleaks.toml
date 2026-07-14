@@ -30,6 +30,16 @@ paths = [
     '''(^|/)yarn\.lock$''',
 ]
 
+# `commits` ignora achados introduzidos por um commit específico (só na varredura de
+# histórico completo do push para main — no PR o range já não inclui commits antigos).
+# b93bf6f: feat(auth) de recuperação de senha (29/06) — o `generic-api-key` pegou senhas
+# de FIXTURE em apps/api/tests/test_auth.py (ex.: "nova-senha-bem-forte",
+# "primeira-troca-123"), nunca um segredo real. Conferido o diff inteiro do commit antes
+# de allowlistar (só teste + código de feature, sem chave/token real). Ver PR #28.
+commits = [
+    "b93bf6fe4e85de7e658e0eca381157623f0bdfff",
+]
+
 # --- Precedente documentado (NÃO ativo hoje) --------------------------------------
 # O token do Apify que veio no zip da skill de carrossel foi REDIGIDO ANTES de ser
 # commitado (ver CLAUDE.md §"Gerador de Carrossel"), então não deve haver segredo vivo
