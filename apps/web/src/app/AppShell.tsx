@@ -39,7 +39,7 @@ function Sidebar({ onClose }: { onClose: () => void }) {
         <X size={20} />
       </button>
 
-      <nav className="flex flex-1 flex-col gap-7 overflow-y-auto pr-1">
+      <nav className="flex flex-1 flex-col gap-7 overflow-x-hidden overflow-y-auto pr-1">
         {navSections.map((section, i) => (
           <div key={i}>
             {i > 0 && (
@@ -56,7 +56,7 @@ function Sidebar({ onClose }: { onClose: () => void }) {
                     end={item.to === "/" || item.exact === true}
                     className={({ isActive }) =>
                       clsx(
-                        "flex items-center gap-3 py-3 pl-4 text-[15px] font-medium transition",
+                        "flex min-w-0 items-center gap-3 py-3 pl-4 text-[15px] font-medium transition",
                         isActive
                           ? // pill branco que vaza para a direita (cancela o padding com -mr-4)
                             "-mr-4 rounded-l-full bg-white text-primary-700 shadow-sm"
@@ -65,8 +65,8 @@ function Sidebar({ onClose }: { onClose: () => void }) {
                       )
                     }
                   >
-                    <item.icon size={20} strokeWidth={2} />
-                    <span>{item.label}</span>
+                    <item.icon size={20} strokeWidth={2} className="shrink-0" />
+                    <span className="truncate">{item.label}</span>
                     {!item.ready && (
                       <span className="ml-auto mr-3 text-[10px] uppercase tracking-wide opacity-70">
                         em breve
