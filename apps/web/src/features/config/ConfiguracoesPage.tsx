@@ -9,6 +9,7 @@ import {
   getGoogleConnectUrl,
   getGoogleStatus,
 } from "../../lib/api";
+import { applyBrandTheme } from "../../lib/theme";
 
 const FONTS = ["Inter", "Poppins", "Raleway", "Georgia", "Arial"];
 const safeSrc = (u: string) => (/^(https?:\/\/|\/)/i.test(u.trim()) ? u.trim() : "");
@@ -38,6 +39,7 @@ export default function ConfiguracoesPage() {
     try {
       const { data } = await api.patch<TenantProfile>("/settings/profile", p);
       setP(data);
+      applyBrandTheme(data);
       setSavedAt(new Date().toLocaleTimeString("pt-BR", { hour: "2-digit", minute: "2-digit" }));
     } catch (err) {
       setError(apiErrorMessage(err));

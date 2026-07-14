@@ -84,3 +84,5 @@ export const typography = {
 
 export const tokens = { colors, radii, spacing, typography } as const;
 export default tokens;
+
+export { cssVarName, generateScale, SHADE_KEYS, type ShadeKey } from "./colorScale";
