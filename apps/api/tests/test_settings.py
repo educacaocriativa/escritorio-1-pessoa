@@ -125,5 +125,24 @@ def test_update_invalid_color_rejected(client: TestClient, headers):
     assert again["primary_color"] == "#5D44F8"
 
 
+def test_default_entry_funnel_starts_unset(client: TestClient, headers):
+    p = client.get("/settings/profile", headers=headers).json()
+    assert p["default_entry_funnel_id"] is None
+
+
+def test_set_and_clear_default_entry_funnel(client: TestClient, headers):
+    f = client.post("/funnels", json={"name": "Entrada"}, headers=headers).json()
+    resp = client.patch(
+        "/settings/profile", json={"default_entry_funnel_id": f["id"]}, headers=headers
+    )
+    assert resp.json()["default_entry_funnel_id"] == f["id"]
+
+    # "" desliga o auto-enroll (mesmo padrão de contract_id/cost_center_id em Charge/Payable)
+    cleared = client.patch(
+        "/settings/profile", json={"default_entry_funnel_id": ""}, headers=headers
+    )
+    assert cleared.json()["default_entry_funnel_id"] is None
+
+
 def test_requires_auth(client: TestClient):
     assert client.get("/settings/profile").status_code == 401

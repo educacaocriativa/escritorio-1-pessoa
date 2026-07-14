@@ -13,6 +13,7 @@ from app.modules.crm.models import DEFAULT_STAGES, Client, PipelineStage
 from app.modules.crm.schemas import ClientCreate, ClientUpdate, StageCreate, StageUpdate
 
 EVENT_CLIENT_MOVED = "crm.client.moved"
+EVENT_CLIENT_CREATED = "crm.client.created"
 
 
 class CrmError(Exception):
@@ -156,6 +157,11 @@ def create_client(db: Session, *, tenant_id: str, actor: str, data: ClientCreate
     audit.record(db, tenant_id=tenant_id, actor=actor, action="crm.client.create", target=client.id)
     db.commit()
     db.refresh(client)
+    # Gatilho de automação: outros módulos podem reagir (ex.: auto-enroll no funil de entrada
+    # padrão do tenant, ver funnels/automation.py).
+    events.emit(
+        EVENT_CLIENT_CREATED, tenant_id=tenant_id, client_id=client.id, source=client.source
+    )
     return client
 
 
