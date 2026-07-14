@@ -162,7 +162,10 @@ def test_transaction_accepts_valid_chart_account(client: TestClient, headers):
 def test_transaction_rejects_unknown_chart_account(client: TestClient, headers):
     resp = client.post(
         "/wallet/transactions",
-        json={"kind": "service", "method": "pix", "gross_cents": 100, "chart_account_id": "nao-existe"},
+        json={
+            "kind": "service", "method": "pix", "gross_cents": 100,
+            "chart_account_id": "nao-existe",
+        },
         headers=headers,
     )
     assert resp.status_code == 404, resp.text
@@ -181,7 +184,10 @@ def test_transaction_accepts_valid_cost_center(client: TestClient, headers):
 def test_transaction_rejects_unknown_cost_center(client: TestClient, headers):
     resp = client.post(
         "/wallet/transactions",
-        json={"kind": "service", "method": "pix", "gross_cents": 100, "cost_center_id": "nao-existe"},
+        json={
+            "kind": "service", "method": "pix", "gross_cents": 100,
+            "cost_center_id": "nao-existe",
+        },
         headers=headers,
     )
     assert resp.status_code == 404, resp.text
