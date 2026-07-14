@@ -12,6 +12,8 @@ não é exercida (ver conftest).
 """
 from __future__ import annotations
 
+from datetime import date
+
 import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy import select
@@ -20,6 +22,7 @@ from sqlalchemy.orm import Session
 from app.modules.chart_of_accounts.models import ChartAccount
 from app.modules.payables.models import Payable
 from app.modules.receivables.models import Charge
+from app.modules.wallet.models import Transaction
 
 REGISTER = {
     "legal_name": "Consultoria DRE",
@@ -227,3 +230,48 @@ def test_report_is_read_only(client: TestClient, headers, db: Session):
     _dre(client, headers)
     after = _snapshot(db)
     assert after == before, "DRE escreveu/alterou dados — viola IV1 (read-only)"
+
+
+# ── Story 5.10: Carteira (Transaction) entra na DRE ─────────────────────────────────────────────
+
+
+def test_walkin_transaction_counts_as_receita(client: TestClient, headers):
+    """Venda avulsa ("Registrar venda", sem Charge por trás) classificada entra na DRE como
+    receita — antes da Story 5.10 a Carteira ficava totalmente fora do relatório."""
+    acc = _account(client, headers, "RECEITA", "Vendas avulsas")
+    r = client.post(
+        "/wallet/transactions",
+        json={
+            "kind": "service", "method": "pix", "gross_cents": 5000,
+            "chart_account_id": acc, "competence_date": "2026-07-10",
+        },
+        headers=headers,
+    )
+    assert r.status_code == 201, r.text
+    body = _dre(client, headers)
+    receita = _group(body, "RECEITA")
+    assert receita["total_cents"] == 5000
+    assert receita["categorias"][0]["categoria"] == "Vendas avulsas"
+
+
+def test_paid_charge_transaction_is_not_double_counted(
+    client: TestClient, headers, db: Session
+):
+    """A Transaction gerada ao pagar uma Charge (`external_ref=charge.id`) NÃO soma de novo na
+    DRE — a Charge já é contada; somar as duas dobraria a receita do período."""
+    acc = _account(client, headers, "RECEITA", "Consultoria paga")
+    charge = _charge(client, headers, amount=20000, competence="2026-07-05", account_id=acc)
+    client.post(f"/receivables/charges/{charge['id']}/pay", headers=headers)
+
+    # Força a competência da Transaction resultante PRA DENTRO da janela testada — assim, se o
+    # filtro `external_ref IS NULL` da DRE quebrar, o teste pega o dobro (40000), não um falso
+    # negativo por a transação cair fora do período por coincidência de data.
+    tx = db.execute(
+        select(Transaction).where(Transaction.external_ref == charge["id"])
+    ).scalar_one()
+    tx.competence_date = date(2026, 7, 5)
+    db.commit()
+
+    body = _dre(client, headers)
+    receita = _group(body, "RECEITA")
+    assert receita["total_cents"] == 20000  # só a Charge — a Transaction fica de fora

@@ -289,6 +289,10 @@ export interface Transaction {
   status: TransactionStatus;
   client_id: UUID | null;
   external_ref: string | null;
+  // Story 5.10: vínculo opcional ao plano de contas; null = sem categoria estruturada.
+  chart_account_id: UUID | null;
+  // Story 5.10: vínculo opcional ao centro de custo (2ª dimensão); null = "Não atribuído".
+  cost_center_id: UUID | null;
   created_at: string;
 }
 
@@ -327,8 +331,12 @@ export interface Charge {
   method: PaymentMethod;
   amount_cents: number;
   due_date: string;
+  // Story 5.1: vínculo opcional ao plano de contas; null = sem categoria estruturada.
+  chart_account_id: UUID | null;
   // Story 5.4: vínculo opcional ao contrato (eixo "projeto"); null = bucket "Empresa".
   contract_id: UUID | null;
+  // Story 5.5: vínculo opcional ao centro de custo (2ª dimensão); null = "Não atribuído".
+  cost_center_id: UUID | null;
   status: ChargeStatus;
   is_overdue: boolean;
   protested_at: string | null;
@@ -359,8 +367,12 @@ export interface Payable {
   supplier: string;
   amount_cents: number;
   due_date: string;
+  // Story 5.1: vínculo opcional ao plano de contas; null = sem categoria estruturada.
+  chart_account_id: UUID | null;
   // Story 5.4: vínculo opcional ao contrato (eixo "projeto"); null = bucket "Empresa".
   contract_id: UUID | null;
+  // Story 5.5: vínculo opcional ao centro de custo (2ª dimensão); null = "Não atribuído".
+  cost_center_id: UUID | null;
   status: PayableStatus;
   is_overdue: boolean;
   paid_at: string | null;

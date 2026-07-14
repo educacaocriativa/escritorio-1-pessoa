@@ -522,3 +522,20 @@ def test_reclassify_open_charge(client: TestClient, headers):
     out = resp.json()
     assert out["competence_date"] == "2026-07-31"
     assert out["chart_account_id"] == acc["id"]
+
+
+def test_unset_charge_chart_account(client: TestClient, headers):
+    """"" desvincula (→ sem categoria), mesmo padrão de contract_id/cost_center_id."""
+    acc = client.post(
+        "/chart-of-accounts",
+        json={"grupo_dre": "RECEITA", "categoria": "Consultoria"},
+        headers=headers,
+    ).json()
+    c = client.post(
+        "/receivables/charges", json=_charge(chart_account_id=acc["id"]), headers=headers
+    ).json()
+    resp = client.patch(
+        f"/receivables/charges/{c['id']}", json={"chart_account_id": ""}, headers=headers
+    )
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["chart_account_id"] is None

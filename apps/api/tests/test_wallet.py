@@ -138,6 +138,55 @@ def test_requires_auth(client: TestClient):
     assert client.get("/wallet/summary").status_code == 401
 
 
+# ── Story 5.10: classificação (plano de contas + centro de custo) ──────────────────────────────
+
+
+def test_transaction_accepts_valid_chart_account(client: TestClient, headers):
+    acc = client.post(
+        "/chart-of-accounts",
+        json={"grupo_dre": "RECEITA", "categoria": "Vendas avulsas"},
+        headers=headers,
+    ).json()
+    tx = client.post(
+        "/wallet/transactions",
+        json={
+            "kind": "service", "method": "pix", "gross_cents": 10000,
+            "chart_account_id": acc["id"],
+        },
+        headers=headers,
+    ).json()
+    assert tx["chart_account_id"] == acc["id"]
+    assert tx["competence_date"] is not None  # preenchida com a data de hoje por padrão
+
+
+def test_transaction_rejects_unknown_chart_account(client: TestClient, headers):
+    resp = client.post(
+        "/wallet/transactions",
+        json={"kind": "service", "method": "pix", "gross_cents": 100, "chart_account_id": "nao-existe"},
+        headers=headers,
+    )
+    assert resp.status_code == 404, resp.text
+
+
+def test_transaction_accepts_valid_cost_center(client: TestClient, headers):
+    cc = client.post("/cost-centers", json={"name": "Loja física"}, headers=headers).json()
+    tx = client.post(
+        "/wallet/transactions",
+        json={"kind": "service", "method": "pix", "gross_cents": 10000, "cost_center_id": cc["id"]},
+        headers=headers,
+    ).json()
+    assert tx["cost_center_id"] == cc["id"]
+
+
+def test_transaction_rejects_unknown_cost_center(client: TestClient, headers):
+    resp = client.post(
+        "/wallet/transactions",
+        json={"kind": "service", "method": "pix", "gross_cents": 100, "cost_center_id": "nao-existe"},
+        headers=headers,
+    )
+    assert resp.status_code == 404, resp.text
+
+
 # ── Master: ganhos da plataforma ───────────────────────
 
 

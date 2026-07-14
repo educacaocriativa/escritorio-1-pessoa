@@ -7,7 +7,9 @@ DINHEIRO SEMPRE EM CENTAVOS INTEIROS (nunca float).
 """
 from __future__ import annotations
 
-from sqlalchemy import BigInteger, Integer, String, Text
+from datetime import date
+
+from sqlalchemy import BigInteger, Date, Integer, String, Text
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.db.base import Base, TenantMixin, TimestampMixin, _uuid
@@ -52,6 +54,16 @@ class Transaction(Base, TenantMixin, TimestampMixin):
     status: Mapped[str] = mapped_column(String(12), default=STATUS_AVAILABLE, nullable=False)
     client_id: Mapped[str | None] = mapped_column(String(36), nullable=True)
     external_ref: Mapped[str | None] = mapped_column(String(64), nullable=True)
+
+    # Classificação DRE (Story 5.10, aditivas/nullable — migration 0050; mesmo padrão de
+    # payables/charges desde 5.1/5.2/5.5). competence_date: regime de COMPETÊNCIA (DRE); sem
+    # `due_date` p/ dar fallback (a transação já é caixa realizado), então o service preenche com a
+    # data de criação quando omitida — e a DRE ainda faz COALESCE(competence_date, created_at::date)
+    # como rede de segurança para qualquer linha legada. chart_account_id/cost_center_id: vínculo
+    # OPCIONAL (sem FK dura, mesmo padrão do projeto) — NULL = sem categoria / não atribuído.
+    competence_date: Mapped[date | None] = mapped_column(Date, nullable=True)
+    chart_account_id: Mapped[str | None] = mapped_column(String(36), nullable=True)
+    cost_center_id: Mapped[str | None] = mapped_column(String(36), nullable=True)
 
 
 SETTINGS_ID = "platform"  # singleton

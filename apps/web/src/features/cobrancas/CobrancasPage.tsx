@@ -1,11 +1,18 @@
 import type { Charge, ChargesSummary, Client, Contract } from "@e1p/shared-types";
 import { Copy, Paperclip } from "lucide-react";
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import Attachments from "../../components/Attachments";
 import Modal, { Field } from "../../components/Modal";
 import { api, apiErrorMessage, publicApi } from "../../lib/api";
 import { pluralize } from "../../lib/pluralize";
 import { usePrimaryAction } from "../../store/pageActions";
+import ChartAccountSelect from "../financeiro/ChartAccountSelect";
+import type { CostCenter } from "../financeiro/costCenters";
+import CostCenterSelect from "../financeiro/CostCenterSelect";
+import { type ChartAccount, GRUPOS_DRE } from "../financeiro/planoContas";
+
+/** Grupos DRE cabíveis numa RECEITA (Cobranças nunca lança em Despesa/Tributo/Investimento). */
+const REVENUE_GROUPS = GRUPOS_DRE.filter((g) => g === "RECEITA");
 
 const brl = (c: number) => (c / 100).toLocaleString("pt-BR", { style: "currency", currency: "BRL" });
 
@@ -37,6 +44,8 @@ export default function CobrancasPage() {
   };
   const [summary, setSummary] = useState<ChargesSummary>(empty);
   const [charges, setCharges] = useState<Charge[]>([]);
+  const [chartAccounts, setChartAccounts] = useState<ChartAccount[]>([]);
+  const [costCenters, setCostCenters] = useState<CostCenter[]>([]);
   const [open, setOpen] = useState(false);
   const [docs, setDocs] = useState<Charge | null>(null);
   const [edit, setEdit] = useState<Charge | null>(null);
@@ -54,11 +63,28 @@ export default function CobrancasPage() {
     ]);
     setSummary(s.data);
     setCharges(c.data);
+    // Rótulos são só um complemento de exibição — se o usuário não tiver acesso a esses módulos
+    // (require_module), a lista de cobranças continua funcionando normalmente.
+    const [ca, cc] = await Promise.all([
+      api.get<ChartAccount[]>("/chart-of-accounts").catch(() => ({ data: [] as ChartAccount[] })),
+      api.get<CostCenter[]>("/cost-centers").catch(() => ({ data: [] as CostCenter[] })),
+    ]);
+    setChartAccounts(ca.data);
+    setCostCenters(cc.data);
   }, []);
 
   useEffect(() => {
     load();
   }, [load]);
+
+  const accountLabel = useMemo(
+    () => Object.fromEntries(chartAccounts.map((a) => [a.id, a.categoria])),
+    [chartAccounts],
+  );
+  const costCenterLabel = useMemo(
+    () => Object.fromEntries(costCenters.map((c) => [c.id, c.name])),
+    [costCenters],
+  );
 
   usePrimaryAction("Nova cobrança", useCallback(() => setOpen(true), []));
 
@@ -115,6 +141,8 @@ export default function CobrancasPage() {
               <tr className="border-b border-neutral-100 text-left text-xs uppercase text-neutral-400">
                 <th className="px-4 py-3 font-medium">Cliente</th>
                 <th className="px-4 py-3 font-medium">Descrição</th>
+                <th className="px-4 py-3 font-medium">Categoria</th>
+                <th className="px-4 py-3 font-medium">Centro de custo</th>
                 <th className="px-4 py-3 font-medium">Vencimento</th>
                 <th className="px-4 py-3 font-medium">Valor</th>
                 <th className="px-4 py-3 font-medium">Status</th>
@@ -141,6 +169,12 @@ export default function CobrancasPage() {
                           <Copy size={11} />
                         </button>
                       </span>
+                    </td>
+                    <td className="px-4 py-3 text-neutral-500">
+                      {(c.chart_account_id && accountLabel[c.chart_account_id]) || "—"}
+                    </td>
+                    <td className="px-4 py-3 text-neutral-500">
+                      {(c.cost_center_id && costCenterLabel[c.cost_center_id]) || "—"}
                     </td>
                     <td className="px-4 py-3 tabular-nums text-neutral-600">
                       {new Date(c.due_date + "T00:00").toLocaleDateString("pt-BR")}
@@ -235,6 +269,8 @@ function EditChargeModal({
   onSaved: () => void;
 }) {
   const [description, setDescription] = useState(charge.description);
+  const [chartAccountId, setChartAccountId] = useState(charge.chart_account_id ?? "");
+  const [costCenterId, setCostCenterId] = useState(charge.cost_center_id ?? "");
   const [value, setValue] = useState((charge.amount_cents / 100).toFixed(2).replace(".", ","));
   const [dueDate, setDueDate] = useState(charge.due_date);
   const [error, setError] = useState<string | null>(null);
@@ -246,6 +282,8 @@ function EditChargeModal({
     try {
       await api.patch(`/receivables/charges/${charge.id}`, {
         description,
+        chart_account_id: chartAccountId,
+        cost_center_id: costCenterId,
         amount_cents: Math.round(parseFloat(value.replace(",", ".")) * 100),
         due_date: dueDate,
       });
@@ -261,6 +299,19 @@ function EditChargeModal({
     <Modal title="Editar cobrança" open onClose={onClose}>
       <div className="space-y-3">
         <Field label="Descrição" value={description} onChange={setDescription} />
+        <div className="flex gap-2">
+          <div className="flex-1">
+            <ChartAccountSelect
+              value={chartAccountId}
+              onChange={setChartAccountId}
+              groups={REVENUE_GROUPS}
+              defaultNewGrupo="RECEITA"
+            />
+          </div>
+          <div className="flex-1">
+            <CostCenterSelect value={costCenterId} onChange={setCostCenterId} />
+          </div>
+        </div>
         <div className="flex gap-2">
           <Field label="Valor (R$)" value={value} onChange={setValue} />
           <Field label="Vencimento" type="date" value={dueDate} onChange={setDueDate} />
@@ -290,6 +341,8 @@ function NewChargeModal({
   const [dueDate, setDueDate] = useState("");
   const [description, setDescription] = useState("");
   const [clientId, setClientId] = useState("");
+  const [chartAccountId, setChartAccountId] = useState("");
+  const [costCenterId, setCostCenterId] = useState("");
   const [recurrence, setRecurrence] = useState("none");
   const [recurrenceCount, setRecurrenceCount] = useState("12");
   const [clients, setClients] = useState<Client[]>([]);
@@ -317,6 +370,8 @@ function NewChargeModal({
         due_date: dueDate,
         description,
         client_id: clientId || null,
+        chart_account_id: chartAccountId || null,
+        cost_center_id: costCenterId || null,
         contract_id: contractId || null,
         recurrence,
         recurrence_count: recurrence === "none" ? 1 : Math.max(1, Math.min(60, parseInt(recurrenceCount, 10) || 1)),
@@ -325,6 +380,8 @@ function NewChargeModal({
       setValue("");
       setDueDate("");
       setDescription("");
+      setChartAccountId("");
+      setCostCenterId("");
       setContractId("");
       onClose();
     } catch (err) {
@@ -375,6 +432,19 @@ function NewChargeModal({
           <Field label="Vencimento" type="date" value={dueDate} onChange={setDueDate} />
         </div>
         <Field label="Descrição" value={description} onChange={setDescription} placeholder="Mensalidade" />
+        <div className="flex gap-2">
+          <div className="flex-1">
+            <ChartAccountSelect
+              value={chartAccountId}
+              onChange={setChartAccountId}
+              groups={REVENUE_GROUPS}
+              defaultNewGrupo="RECEITA"
+            />
+          </div>
+          <div className="flex-1">
+            <CostCenterSelect value={costCenterId} onChange={setCostCenterId} />
+          </div>
+        </div>
         <label className="block">
           <span className="mb-1 block text-xs font-medium text-neutral-600">
             Vincular a contrato (opcional)

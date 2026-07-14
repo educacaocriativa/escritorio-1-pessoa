@@ -1,8 +1,15 @@
 import type { Transaction, WalletSummary } from "@e1p/shared-types";
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import Modal, { Field } from "../../components/Modal";
 import { api, apiErrorMessage } from "../../lib/api";
 import { usePrimaryAction } from "../../store/pageActions";
+import ChartAccountSelect from "./ChartAccountSelect";
+import type { CostCenter } from "./costCenters";
+import CostCenterSelect from "./CostCenterSelect";
+import { type ChartAccount, GRUPOS_DRE } from "./planoContas";
+
+/** Grupos DRE cabíveis numa venda da Carteira (é sempre receita, nunca despesa). */
+const REVENUE_GROUPS = GRUPOS_DRE.filter((g) => g === "RECEITA");
 
 export const brl = (cents: number) =>
   (cents / 100).toLocaleString("pt-BR", { style: "currency", currency: "BRL" });
@@ -35,6 +42,8 @@ export default function FinanceiroPage() {
   };
   const [summary, setSummary] = useState<WalletSummary>(empty);
   const [txs, setTxs] = useState<Transaction[]>([]);
+  const [chartAccounts, setChartAccounts] = useState<ChartAccount[]>([]);
+  const [costCenters, setCostCenters] = useState<CostCenter[]>([]);
   const [open, setOpen] = useState(false);
 
   const load = useCallback(async () => {
@@ -44,11 +53,28 @@ export default function FinanceiroPage() {
     ]);
     setSummary(s.data);
     setTxs(t.data);
+    // Rótulos são só um complemento de exibição — se o usuário não tiver acesso a esses módulos
+    // (require_module), a lista de transações continua funcionando normalmente.
+    const [ca, cc] = await Promise.all([
+      api.get<ChartAccount[]>("/chart-of-accounts").catch(() => ({ data: [] as ChartAccount[] })),
+      api.get<CostCenter[]>("/cost-centers").catch(() => ({ data: [] as CostCenter[] })),
+    ]);
+    setChartAccounts(ca.data);
+    setCostCenters(cc.data);
   }, []);
 
   useEffect(() => {
     load();
   }, [load]);
+
+  const accountLabel = useMemo(
+    () => Object.fromEntries(chartAccounts.map((a) => [a.id, a.categoria])),
+    [chartAccounts],
+  );
+  const costCenterLabel = useMemo(
+    () => Object.fromEntries(costCenters.map((c) => [c.id, c.name])),
+    [costCenters],
+  );
 
   usePrimaryAction("Registrar venda", useCallback(() => setOpen(true), []));
 
@@ -95,6 +121,8 @@ export default function FinanceiroPage() {
             <thead>
               <tr className="border-b border-neutral-100 text-left text-xs uppercase text-neutral-400">
                 <th className="px-4 py-3 font-medium">Descrição</th>
+                <th className="px-4 py-3 font-medium">Categoria</th>
+                <th className="px-4 py-3 font-medium">Centro de custo</th>
                 <th className="px-4 py-3 font-medium">Bruto</th>
                 <th className="px-4 py-3 font-medium">Taxa</th>
                 <th className="px-4 py-3 font-medium">Líquido</th>
@@ -110,6 +138,12 @@ export default function FinanceiroPage() {
                     <span className="block text-xs text-neutral-400">
                       {t.kind} · {t.method}
                     </span>
+                  </td>
+                  <td className="px-4 py-3 text-neutral-500">
+                    {(t.chart_account_id && accountLabel[t.chart_account_id]) || "—"}
+                  </td>
+                  <td className="px-4 py-3 text-neutral-500">
+                    {(t.cost_center_id && costCenterLabel[t.cost_center_id]) || "—"}
                   </td>
                   <td className="px-4 py-3 tabular-nums text-neutral-600">{brl(t.gross_cents)}</td>
                   <td className="px-4 py-3 tabular-nums text-danger">
@@ -173,6 +207,8 @@ function NewSaleModal({
   const [method, setMethod] = useState("pix");
   const [value, setValue] = useState("");
   const [description, setDescription] = useState("");
+  const [chartAccountId, setChartAccountId] = useState("");
+  const [costCenterId, setCostCenterId] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
 
@@ -181,10 +217,19 @@ function NewSaleModal({
     setSaving(true);
     try {
       const gross_cents = Math.round(parseFloat(value.replace(",", ".")) * 100);
-      await api.post("/wallet/transactions", { kind, method, gross_cents, description });
+      await api.post("/wallet/transactions", {
+        kind,
+        method,
+        gross_cents,
+        description,
+        chart_account_id: chartAccountId || null,
+        cost_center_id: costCenterId || null,
+      });
       onCreated();
       setValue("");
       setDescription("");
+      setChartAccountId("");
+      setCostCenterId("");
       onClose();
     } catch (err) {
       setError(apiErrorMessage(err));
@@ -226,6 +271,19 @@ function NewSaleModal({
         </label>
         <Field label="Valor (R$)" value={value} onChange={setValue} placeholder="150,00" />
         <Field label="Descrição" value={description} onChange={setDescription} placeholder="Consulta" />
+        <div className="flex gap-2">
+          <div className="flex-1">
+            <ChartAccountSelect
+              value={chartAccountId}
+              onChange={setChartAccountId}
+              groups={REVENUE_GROUPS}
+              defaultNewGrupo="RECEITA"
+            />
+          </div>
+          <div className="flex-1">
+            <CostCenterSelect value={costCenterId} onChange={setCostCenterId} />
+          </div>
+        </div>
         {error && <p className="rounded-lg bg-red-50 p-2 text-sm text-danger">{error}</p>}
         <button
           onClick={save}
