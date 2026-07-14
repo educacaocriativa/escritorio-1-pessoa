@@ -26,7 +26,7 @@ describe("IntegrationsSection", () => {
         return Promise.resolve({
           data: {
             id: "k-1", label: "Site Dóro", key_prefix: "abcd1234",
-            revoked_at: null, created_at: "", raw_key: "abcd1234-segredo-completo",
+            revoked_at: null, created_at: "", raw_key: "chave-fake-de-teste-sem-entropia",
           },
         } as never);
       }
@@ -39,7 +39,7 @@ describe("IntegrationsSection", () => {
     );
     await user.click(screen.getByRole("button", { name: /Nova chave/ }));
 
-    expect(await screen.findByText("abcd1234-segredo-completo")).toBeInTheDocument();
+    expect(await screen.findByText("chave-fake-de-teste-sem-entropia")).toBeInTheDocument();
     expect(api.post).toHaveBeenCalledWith("/integrations/leads/keys", { label: "Site Dóro" });
   });
 
