@@ -30,6 +30,8 @@ class LeadCapture(BaseModel):
     name: str = Field(min_length=1, max_length=255)
     email: EmailStr | None = None
     phone: str | None = Field(default=None, max_length=32)
+    # Observação livre do formulário externo (ex.: "prefere data em dezembro").
+    notes: str | None = Field(default=None, max_length=2000)
     # Campos livres do formulário externo (ex.: "ocasião", "nº de convidados") sem equivalente
     # direto no CRM — viram um bloco de texto anexado a `notes`, sem inventar colunas novas.
     fields: dict[str, str] | None = None

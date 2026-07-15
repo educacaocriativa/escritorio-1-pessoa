@@ -45,6 +45,7 @@ def test_public_capture_creates_lead_with_source_api(client: TestClient, headers
         json={
             "name": "Lead Externo",
             "email": "lead@example.com",
+            "notes": "Prefere data em dezembro",
             "fields": {"ocasiao": "aniversário"},
         },
     )
@@ -52,6 +53,7 @@ def test_public_capture_creates_lead_with_source_api(client: TestClient, headers
     clients = client.get("/crm/clients", headers=headers).json()
     lead = next(c for c in clients if c["name"] == "Lead Externo")
     assert lead["source"] == "api"
+    assert "Prefere data em dezembro" in lead["notes"]
     assert "ocasiao: aniversário" in lead["notes"]
 
 

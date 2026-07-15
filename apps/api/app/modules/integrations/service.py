@@ -43,11 +43,13 @@ def _rate_limited(key_hash: str) -> bool:
     return False
 
 
-def _format_notes(fields: dict[str, str] | None) -> str:
-    if not fields:
-        return ""
-    lines = "\n".join(f"{k}: {v}" for k, v in fields.items() if v)
-    return f"Campos do formulário externo:\n{lines}" if lines else ""
+def _format_notes(notes: str | None, fields: dict[str, str] | None) -> str:
+    parts = [notes.strip()] if notes and notes.strip() else []
+    if fields:
+        lines = "\n".join(f"{k}: {v}" for k, v in fields.items() if v)
+        if lines:
+            parts.append(f"Campos do formulário externo:\n{lines}")
+    return "\n\n".join(parts)
 
 
 # ── CRUD autenticado ────────────────────────────────────
@@ -119,7 +121,7 @@ def capture_lead(db: Session, *, raw_key: str, data: LeadCapture, session_factor
                 name=data.name,
                 email=str(data.email) if data.email else None,
                 phone=data.phone,
-                notes=_format_notes(data.fields),
+                notes=_format_notes(data.notes, data.fields),
                 source="api",
             ),
         )
