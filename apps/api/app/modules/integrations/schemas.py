@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from datetime import datetime
 
-from pydantic import BaseModel, EmailStr, Field
+from pydantic import BaseModel, EmailStr, Field, field_validator
 
 
 class IntegrationKeyCreate(BaseModel):
@@ -35,3 +35,12 @@ class LeadCapture(BaseModel):
     # Campos livres do formulário externo (ex.: "ocasião", "nº de convidados") sem equivalente
     # direto no CRM — viram um bloco de texto anexado a `notes`, sem inventar colunas novas.
     fields: dict[str, str] | None = None
+
+    @field_validator("email", mode="before")
+    @classmethod
+    def _blank_email_to_none(cls, v: object) -> object:
+        # Formulário HTML externo com campo opcional vazio manda `""`, não omite a chave nem
+        # manda `null` — sem isso o EmailStr rejeita string vazia com 422 e o lead se perde.
+        if isinstance(v, str) and not v.strip():
+            return None
+        return v
