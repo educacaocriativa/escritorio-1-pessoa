@@ -57,6 +57,22 @@ def test_public_capture_creates_lead_with_source_api(client: TestClient, headers
     assert "ocasiao: aniversário" in lead["notes"]
 
 
+def test_public_capture_accepts_blank_email_from_html_form(client: TestClient, headers):
+    """Formulário externo com campo de e-mail opcional deixado em branco manda `""`, não
+    omite a chave — sem normalizar isso vira 422 e o lead se perde (bug real de produção)."""
+    key = client.post(
+        "/integrations/leads/keys", json={"label": "Site Y"}, headers=headers
+    ).json()
+    resp = client.post(
+        f"/public/leads/{key['raw_key']}",
+        json={"name": "Lead Sem Email", "email": "", "phone": ""},
+    )
+    assert resp.status_code == 200
+    clients = client.get("/crm/clients", headers=headers).json()
+    lead = next(c for c in clients if c["name"] == "Lead Sem Email")
+    assert lead["email"] is None
+
+
 def test_public_capture_rejects_unknown_key(client: TestClient):
     resp = client.post("/public/leads/chave-invalida", json={"name": "X"})
     assert resp.status_code == 401
