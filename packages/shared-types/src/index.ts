@@ -660,6 +660,76 @@ export interface TenantProfile {
   /** Funil de Vendas em que todo lead novo (source=landing/api) é inscrito automaticamente.
    * null = auto-enroll desligado (comportamento até o dono configurar). */
   default_entry_funnel_id: UUID | null;
+  /** WhatsApp Cloud API (Meta) — POR TENANT. true só quando token+phone_id+waba_id
+   * estiverem TODOS configurados (ver `whatsapp_configured` no backend). */
+  whatsapp_configured: boolean;
+  whatsapp_phone_id: string;
+  whatsapp_waba_id: string;
+  /** Só-escrita: nunca vem preenchido no GET (o token nunca é devolvido em claro).
+   * Setar antes do PATCH para configurar/trocar; "" limpa a credencial. */
+  whatsapp_token?: string;
+  /** Vínculo propósito→template_id para os fluxos FIXOS do sistema (lembrete de cobrança,
+   * envio de contrato/orçamento, convite de staff, aviso de card movido) — diferente do nó
+   * livre do Funil de Vendas, aqui o tenant vincula UM template aprovado por propósito.
+   * Chave ausente/"" = esse fluxo ainda usa texto livre. Ver WHATSAPP_PURPOSES. */
+  whatsapp_template_bindings: Record<string, string>;
+}
+
+/** Espelha `whatsapp_templates.models.PURPOSE_VARIABLE_SPECS` do backend — rótulo de cada
+ * variável, na ordem em que o sistema preenche {{1}}, {{2}}, ... para aquele propósito. */
+export const WHATSAPP_PURPOSES: { key: string; label: string; variables: string[] }[] = [
+  {
+    key: "charge_reminder", label: "Lembrete de cobrança (Cobrar com IA)",
+    variables: ["Nome do cliente", "Frase de cobrança (a IA sugere)", "Valor", "Vencimento"],
+  },
+  {
+    key: "contract_send", label: "Envio de contrato",
+    variables: ["Nome do cliente", "Título do contrato", "Link de assinatura"],
+  },
+  {
+    key: "quote_send", label: "Envio de orçamento/proposta",
+    variables: ["Nome do cliente", "Título do orçamento", "Valor", "Link da proposta"],
+  },
+  {
+    key: "staff_invite", label: "Convite de funcionário (senha temporária)",
+    variables: ["Nome", "Empresa", "E-mail de login", "Senha temporária"],
+  },
+  {
+    key: "client_moved", label: "Aviso interno: cliente mudou de etapa no CRM",
+    variables: ["Nome do cliente", "Nome da nova etapa"],
+  },
+];
+
+// ── WhatsApp Cloud API (Meta): templates de mensagem por tenant ────
+// A Meta exige template pré-aprovado para toda mensagem business-initiated (fora da janela
+// de 24h de atendimento) — ver app/core/whatsapp.py e app/modules/whatsapp_templates.
+export type WhatsappTemplateStatus = "PENDING" | "APPROVED" | "REJECTED" | "PAUSED" | "DISABLED";
+export type WhatsappTemplateCategory = "MARKETING" | "UTILITY" | "AUTHENTICATION";
+
+export interface WhatsappTemplate {
+  id: UUID;
+  name: string;
+  language: string;
+  category_requested: WhatsappTemplateCategory;
+  /** Categoria que a Meta de fato aprovou — pode divergir da solicitada. null até responder. */
+  category_approved: WhatsappTemplateCategory | null;
+  status: WhatsappTemplateStatus;
+  rejected_reason: string | null;
+  meta_template_id: string | null;
+  /** Corpo com variáveis posicionais no formato Meta: {{1}}, {{2}}, ... */
+  body_text: string;
+  variable_count: number;
+  variable_examples: string[];
+  created_at: string;
+  updated_at: string;
+}
+
+export interface WhatsappTemplateCreate {
+  name: string;
+  language: string;
+  category: WhatsappTemplateCategory;
+  body_text: string;
+  variable_examples: string[];
 }
 
 // ── Integrações (captura de lead de sites externos) ────

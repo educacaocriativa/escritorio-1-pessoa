@@ -99,7 +99,7 @@ def _params(data: dict) -> dict:
         return {"subject": cfg.get("subject", ""),
                 "message": cfg.get("body") or cfg.get("message", "")}
     if action == "send_message":
-        return {"message": cfg.get("body") or cfg.get("message", "")}
+        return {"template_id": cfg.get("template_id"), "variables": cfg.get("variables") or []}
     if action == "create_client":
         return {"name": cfg.get("name", "")}
     return {}

@@ -23,6 +23,12 @@ from app.modules.contracts.models import (
 from app.modules.contracts.schemas import Clause, ContractCreate, ContractUpdate, TemplateCreate
 from app.modules.crm.models import Client
 from app.modules.notifications.models import Notification
+from app.modules.settings import service as settings_service
+from app.modules.whatsapp_templates.models import (
+    PURPOSE_CONTRACT_SEND,
+    STATUS_APPROVED,
+    WhatsappTemplate,
+)
 
 # Templates oferecidos a todo tenant na primeira vez (cláusulas com variáveis [CHAVE]).
 DEFAULT_TEMPLATES: list[dict] = [
@@ -256,6 +262,14 @@ def update_contract(
     return c
 
 
+def _render_template_preview(body_text: str, variables: list[str]) -> str:
+    """Substitui {{1}}, {{2}}, ... no corpo do template pelos valores já resolvidos."""
+    rendered = body_text
+    for i, value in enumerate(variables, start=1):
+        rendered = rendered.replace(f"{{{{{i}}}}}", value)
+    return rendered
+
+
 def send_contract(db: Session, *, contract_id: str, tenant_id: str, actor: str) -> Contract:
     c = get_contract(db, contract_id)
     if c.status not in (STATUS_DRAFT, STATUS_SENT):
@@ -267,8 +281,24 @@ def send_contract(db: Session, *, contract_id: str, tenant_id: str, actor: str) 
     link = (
         f"{settings.frontend_url.rstrip('/')}/contrato/{c.public_slug}" if c.public_slug else ""
     )
-    msg = f"Olá! Segue o contrato '{c.title}' para sua assinatura: {link}".strip()
-    status = whatsapp.send_text(to=recipient, text=msg)
+    profile = settings_service.get_profile(db, tenant_id)
+    template_id = (profile.whatsapp_template_bindings or {}).get(PURPOSE_CONTRACT_SEND)
+    template = db.get(WhatsappTemplate, template_id) if template_id else None
+    if template is not None and template.status == STATUS_APPROVED:
+        client_name = client.name if client else "cliente"
+        variables = [client_name, c.title, link]
+        status = whatsapp.send_template(
+            to=client.phone if client and client.phone else "",
+            token=profile.whatsapp_token or "", phone_id=profile.whatsapp_phone_id or "",
+            template_name=template.name, language=template.language, variables=variables,
+        )
+        msg = _render_template_preview(template.body_text, variables)
+    else:
+        msg = f"Olá! Segue o contrato '{c.title}' para sua assinatura: {link}".strip()
+        status = whatsapp.send_text(
+            to=recipient, text=msg,
+            token=profile.whatsapp_token, phone_id=profile.whatsapp_phone_id,
+        )
     db.add(
         Notification(
             tenant_id=tenant_id, channel="whatsapp", recipient=recipient,

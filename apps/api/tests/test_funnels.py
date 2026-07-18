@@ -1,6 +1,14 @@
 """Testes do Construtor de Funil de Vendas."""
 import pytest
 from fastapi.testclient import TestClient
+from sqlalchemy.orm import Session
+
+from app.core import whatsapp as core_whatsapp
+from app.modules.whatsapp_templates.models import (
+    STATUS_APPROVED,
+    STATUS_PENDING,
+    WhatsappTemplate,
+)
 
 REGISTER = {
     "legal_name": "Funil SA",
@@ -16,6 +24,28 @@ REGISTER = {
 def headers(client: TestClient) -> dict[str, str]:
     token = client.post("/auth/register", json=REGISTER).json()["access_token"]
     return {"Authorization": f"Bearer {token}"}
+
+
+@pytest.fixture()
+def tenant_id(client: TestClient, headers: dict[str, str]) -> str:
+    return client.get("/auth/me", headers=headers).json()["user"]["tenant_id"]
+
+
+def _template(
+    db: Session, tenant_id: str, *, status: str = STATUS_APPROVED, **overrides
+) -> WhatsappTemplate:
+    tpl = WhatsappTemplate(
+        tenant_id=tenant_id, name="confirmacao_pedido", language="pt_BR",
+        category_requested="UTILITY", category_approved="UTILITY", status=status,
+        body_text="Olá {{1}}, seu pedido {{2}} foi confirmado!",
+        variable_count=2, variable_examples=["Maria", "#123"],
+    )
+    for k, v in overrides.items():
+        setattr(tpl, k, v)
+    db.add(tpl)
+    db.commit()
+    db.refresh(tpl)
+    return tpl
 
 
 def test_components_catalog(client: TestClient, headers):
@@ -143,17 +173,84 @@ def test_run_create_charge(client: TestClient, headers):
     assert any(c["amount_cents"] == 9900 and c["method"] == "boleto" for c in charges)
 
 
-def test_run_send_message(client: TestClient, headers):
+def test_run_send_message(
+    client: TestClient, headers, db: Session, tenant_id: str, monkeypatch: pytest.MonkeyPatch
+):
+    captured: dict[str, object] = {}
+    monkeypatch.setattr(
+        core_whatsapp, "send_template",
+        lambda **kwargs: (captured.update(kwargs), "sent")[1],
+    )
+    tpl = _template(db, tenant_id)
+    cl = client.post(
+        "/crm/clients", json={"name": "Contato", "phone": "5511988887777"}, headers=headers
+    ).json()
+    resp = client.post(
+        "/funnels/run-node",
+        json={"action": "send_message", "client_id": cl["id"],
+              "params": {"template_id": tpl.id, "variables": ["Maria", "#123"]}},
+        headers=headers,
+    )
+    assert resp.status_code == 200, resp.text
+    assert captured["template_name"] == tpl.name
+    assert captured["variables"] == ["Maria", "#123"]
+    notifs = client.get("/notifications", headers=headers).json()
+    # o texto registrado é o template RENDERIZADO (sem {{n}}), não o texto cru.
+    assert any(
+        n["message"] == "Olá Maria, seu pedido #123 foi confirmado!" and n["channel"] == "whatsapp"
+        for n in notifs
+    )
+
+
+def test_run_send_message_missing_template_is_422(client: TestClient, headers):
+    cl = client.post("/crm/clients", json={"name": "Contato"}, headers=headers).json()
+    resp = client.post(
+        "/funnels/run-node",
+        json={"action": "send_message", "client_id": cl["id"], "params": {}},
+        headers=headers,
+    )
+    assert resp.status_code == 422
+
+
+def test_run_send_message_template_not_approved_is_422(
+    client: TestClient, headers, db: Session, tenant_id: str
+):
+    tpl = _template(db, tenant_id, status=STATUS_PENDING)
     cl = client.post("/crm/clients", json={"name": "Contato"}, headers=headers).json()
     resp = client.post(
         "/funnels/run-node",
         json={"action": "send_message", "client_id": cl["id"],
-              "params": {"message": "Olá! Tudo bem?"}},
+              "params": {"template_id": tpl.id, "variables": ["Maria", "#123"]}},
         headers=headers,
     )
-    assert resp.status_code == 200
+    assert resp.status_code == 422
+
+
+def test_run_send_message_resolves_client_keyword_variables(
+    client: TestClient, headers, db: Session, tenant_id: str, monkeypatch: pytest.MonkeyPatch
+):
+    captured: dict[str, object] = {}
+    monkeypatch.setattr(
+        core_whatsapp, "send_template",
+        lambda **kwargs: (captured.update(kwargs), "sent")[1],
+    )
+    tpl = _template(db, tenant_id)
+    cl = client.post(
+        "/crm/clients", json={"name": "Maria Cliente", "phone": "5511988887777"}, headers=headers
+    ).json()
+    resp = client.post(
+        "/funnels/run-node",
+        json={"action": "send_message", "client_id": cl["id"],
+              "params": {"template_id": tpl.id, "variables": ["{{cliente.nome}}", "#999"]}},
+        headers=headers,
+    )
+    assert resp.status_code == 200, resp.text
+    # mistura de literal ("#999") + keyword ("{{cliente.nome}}") resolvida contra o cliente.
+    assert captured["variables"] == ["Maria Cliente", "#999"]
     notifs = client.get("/notifications", headers=headers).json()
-    assert any(n["message"] == "Olá! Tudo bem?" for n in notifs)
+    assert any(
+        n["message"] == "Olá Maria Cliente, seu pedido #999 foi confirmado!" for n in notifs
+    )
 
 
 def test_run_send_email(client: TestClient, headers):

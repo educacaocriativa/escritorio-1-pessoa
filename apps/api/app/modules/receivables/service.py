@@ -531,16 +531,93 @@ def _compose_dunning(name: str, amount_cents: int, due: date, description: str) 
         )
 
 
+def _compose_dunning_phrase(name: str, amount_cents: int, due: date, description: str) -> str:
+    """Só a FRASE de cobrança (variável 2 do template `charge_reminder`) — não a mensagem inteira.
+
+    Usa a IA (Claude) se houver chave; senão, frase padrão. Mesma técnica de anonimização de PII
+    de `_compose_dunning` (placeholder [NOME], reinserido localmente): o nome/valor/vencimento já
+    são OUTRAS variáveis do template, então aqui só pedimos o motivo/tom da cobrança, sem repetir.
+    """
+    valor = _money(amount_cents)
+    venc = due.strftime("%d/%m/%Y")
+    desc = description or "sua cobrança"
+    if not settings.anthropic_api_key:
+        return "Notamos que sua cobrança está em aberto."
+    system = (
+        "Você é um assistente de cobrança amigável de um pequeno negócio brasileiro. "
+        "Escreva APENAS UMA frase curta (sem saudação, sem repetir valor/data/nome — isso já "
+        "aparece em outras partes da mensagem) explicando o motivo da cobrança em tom cordial e "
+        "respeitoso, em português do Brasil. Nunca ameace. Use o placeholder [NOME] se precisar "
+        "se referir ao cliente. Responda só com a frase."
+    )
+    user = f"Valor: {valor}\nVencimento: {venc}\nDescrição: {desc}\nNome do cliente: [NOME]"
+    try:
+        result = ai.complete(system=system, user_message=user, max_tokens=100)
+        return result.text.strip().replace("[NOME]", name)
+    except Exception:
+        return "Notamos que sua cobrança está em aberto."
+
+
+def _render_template_preview(body_text: str, variables: list[str]) -> str:
+    """Substitui {{1}}, {{2}}, ... no corpo do template pelos valores já resolvidos.
+
+    Duplica `funnels.service._render_template_preview` (função privada de módulo, ~4 linhas) —
+    evitamos importar através de módulos por uma função tão pequena (preferência do projeto contra
+    abstração prematura).
+    """
+    rendered = body_text
+    for i, value in enumerate(variables, start=1):
+        rendered = rendered.replace(f"{{{{{i}}}}}", value)
+    return rendered
+
+
 def collect_with_ai(db: Session, *, charge_id: str, tenant_id: str, actor: str) -> dict:
-    """A IA escreve uma cobrança amigável e 'envia' no WhatsApp do cliente (rastro de IA)."""
+    """A IA escreve uma cobrança amigável e 'envia' no WhatsApp do cliente (rastro de IA).
+
+    Se o tenant já vinculou um template APROVADO ao propósito `charge_reminder` (Configurações),
+    envia via template (exigência da Meta para mensagens business-initiated): a IA só escreve a
+    frase-motivo (variável 2), o resto (nome/valor/vencimento) é preenchido pelo sistema. Sem
+    vínculo (ou template ainda não aprovado), cai no caminho antigo de texto livre — agora usando
+    as credenciais do TENANT em vez do env global morto.
+    """
+    from app.modules.settings import service as settings_service
+    from app.modules.whatsapp_templates.models import (
+        PURPOSE_CHARGE_REMINDER,
+        STATUS_APPROVED,
+        WhatsappTemplate,
+    )
+
     charge = get_charge(db, charge_id)
     if charge.status != STATUS_OPEN:
         raise ReceivableError("Só cobranças em aberto podem ser cobradas", 409)
     client = db.get(Client, charge.client_id) if charge.client_id else None
     name = client.name if client else "cliente"
     recipient = (client.phone if client and client.phone else None) or name
-    message = _compose_dunning(name, charge.amount_cents, charge.due_date, charge.description)
-    status = whatsapp.send_text(to=recipient, text=message)
+
+    profile = settings_service.get_profile(db, tenant_id)
+    template_id = (profile.whatsapp_template_bindings or {}).get(PURPOSE_CHARGE_REMINDER)
+    template = db.get(WhatsappTemplate, template_id) if template_id else None
+
+    if template is not None and template.status == STATUS_APPROVED:
+        valor = _money(charge.amount_cents)
+        venc = charge.due_date.strftime("%d/%m/%Y")
+        phrase = _compose_dunning_phrase(
+            name, charge.amount_cents, charge.due_date, charge.description
+        )
+        variables = [name, phrase, valor, venc]
+        status = whatsapp.send_template(
+            to=client.phone if client and client.phone else "",
+            token=profile.whatsapp_token or "", phone_id=profile.whatsapp_phone_id or "",
+            template_name=template.name, language=template.language, variables=variables,
+        )
+        message = _render_template_preview(template.body_text, variables)
+    else:
+        message = _compose_dunning(name, charge.amount_cents, charge.due_date, charge.description)
+        status = whatsapp.send_text(
+            to=recipient, text=message,
+            token=profile.whatsapp_token, phone_id=profile.whatsapp_phone_id,
+        )
+
     db.add(
         Notification(
             tenant_id=tenant_id, channel="whatsapp", recipient=recipient,
@@ -556,7 +633,17 @@ def collect_with_ai(db: Session, *, charge_id: str, tenant_id: str, actor: str) 
 
 
 def send_message(db: Session, *, charge_id: str, tenant_id: str, actor: str, text: str) -> dict:
-    """Mensagem MANUAL (sem IA) ao cliente da cobrança."""
+    """Mensagem MANUAL (sem IA) ao cliente da cobrança.
+
+    Fica de FORA da conversão para template: é texto arbitrário digitado por um humano, e um
+    template não pode "envelopar" conteúdo livre (é exatamente o que a revisão da Meta existe para
+    impedir — usar um template como disfarce arriscaria o rating de qualidade/ban do número). Este
+    é o caso de "resposta dentro da janela de 24h": a própria Graph API da Meta aceita ou rejeita o
+    envio conforme o estado real da conversa — não precisamos (nem podemos) simular isso aqui.
+    Só passamos a usar as credenciais REAIS do tenant em vez do env global (sempre vazio agora).
+    """
+    from app.modules.settings import service as settings_service
+
     text = (text or "").strip()
     if not text:
         raise ReceivableError("Mensagem vazia", 400)
@@ -565,7 +652,10 @@ def send_message(db: Session, *, charge_id: str, tenant_id: str, actor: str, tex
     recipient = (client.phone if client and client.phone else None) or (
         client.name if client else "cliente"
     )
-    status = whatsapp.send_text(to=recipient, text=text)
+    profile = settings_service.get_profile(db, tenant_id)
+    status = whatsapp.send_text(
+        to=recipient, text=text, token=profile.whatsapp_token, phone_id=profile.whatsapp_phone_id,
+    )
     db.add(
         Notification(
             tenant_id=tenant_id, channel="whatsapp", recipient=recipient,

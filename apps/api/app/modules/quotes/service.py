@@ -24,6 +24,14 @@ from app.modules.quotes.models import (
 from app.modules.quotes.schemas import QuoteCreate, QuoteItem, QuoteUpdate
 from app.modules.receivables import service as receivables_service
 from app.modules.receivables.schemas import ChargeCreate
+from app.modules.settings import service as settings_service
+from app.modules.whatsapp_templates.models import (
+    PURPOSE_QUOTE_SEND,
+    WhatsappTemplate,
+)
+from app.modules.whatsapp_templates.models import (
+    STATUS_APPROVED as TEMPLATE_STATUS_APPROVED,
+)
 
 # prazo padrão da cobrança gerada ao aprovar
 APPROVAL_DUE_DAYS = 7
@@ -178,6 +186,14 @@ def update_quote(
     return q
 
 
+def _render_template_preview(body_text: str, variables: list[str]) -> str:
+    """Substitui {{1}}, {{2}}, ... no corpo do template pelos valores já resolvidos."""
+    rendered = body_text
+    for i, value in enumerate(variables, start=1):
+        rendered = rendered.replace(f"{{{{{i}}}}}", value)
+    return rendered
+
+
 def send_quote(db: Session, *, quote_id: str, tenant_id: str, actor: str) -> Quote:
     """Marca como enviado e registra uma mensagem ao cliente (WhatsApp stub)."""
     q = get_quote(db, quote_id)
@@ -192,8 +208,25 @@ def send_quote(db: Session, *, quote_id: str, tenant_id: str, actor: str) -> Quo
     )
     valor = f"R$ {q.total_cents / 100:.2f}".replace(".", ",")
     link = f"{settings.frontend_url.rstrip('/')}/orcamento/{q.public_slug}" if q.public_slug else ""
-    msg = f"Olá! Segue sua proposta de {q.title}: {valor}. Veja em: {link}".strip()
-    status = whatsapp.send_text(to=recipient, text=msg)
+    profile = settings_service.get_profile(db, tenant_id)
+    template_id = (profile.whatsapp_template_bindings or {}).get(PURPOSE_QUOTE_SEND)
+    template = db.get(WhatsappTemplate, template_id) if template_id else None
+    if template is not None and template.status == TEMPLATE_STATUS_APPROVED:
+        client_name = q.client_name or (client.name if client else None) or "cliente"
+        variables = [client_name, q.title, valor, link]
+        phone_to = q.client_whatsapp or (client.phone if client and client.phone else None) or ""
+        status = whatsapp.send_template(
+            to=phone_to, token=profile.whatsapp_token or "",
+            phone_id=profile.whatsapp_phone_id or "",
+            template_name=template.name, language=template.language, variables=variables,
+        )
+        msg = _render_template_preview(template.body_text, variables)
+    else:
+        msg = f"Olá! Segue sua proposta de {q.title}: {valor}. Veja em: {link}".strip()
+        status = whatsapp.send_text(
+            to=recipient, text=msg,
+            token=profile.whatsapp_token, phone_id=profile.whatsapp_phone_id,
+        )
     db.add(
         Notification(
             tenant_id=tenant_id, channel="whatsapp", recipient=recipient,

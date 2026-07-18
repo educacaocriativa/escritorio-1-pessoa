@@ -35,6 +35,7 @@ from app.modules.receivables.router import router as receivables_router
 from app.modules.settings.router import router as settings_router
 from app.modules.stock.router import router as stock_router
 from app.modules.wallet.router import router as wallet_router
+from app.modules.whatsapp_templates.router import router as whatsapp_templates_router
 
 ALL_ROUTERS: list[APIRouter] = [
     auth_router,
@@ -60,6 +61,7 @@ ALL_ROUTERS: list[APIRouter] = [
     funnels_router,
     stock_router,
     settings_router,
+    whatsapp_templates_router,
     pages_router,
     pages_public_router,
     attachments_router,

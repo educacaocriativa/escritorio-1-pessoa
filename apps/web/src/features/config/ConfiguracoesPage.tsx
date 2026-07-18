@@ -11,6 +11,7 @@ import {
 } from "../../lib/api";
 import { applyBrandTheme } from "../../lib/theme";
 import IntegrationsSection from "./IntegrationsSection";
+import WhatsappSection from "./WhatsappSection";
 
 const FONTS = ["Inter", "Poppins", "Raleway", "Georgia", "Arial"];
 const safeSrc = (u: string) => (/^(https?:\/\/|\/)/i.test(u.trim()) ? u.trim() : "");
@@ -106,7 +107,12 @@ export default function ConfiguracoesPage() {
         })}
       </div>
 
-      {tab === "integracoes" && <IntegrationsSection />}
+      {tab === "integracoes" && (
+        <div className="space-y-6">
+          <WhatsappSection />
+          <IntegrationsSection />
+        </div>
+      )}
 
       {tab === "perfil" && (
       <div className="grid grid-cols-1 gap-6 lg:grid-cols-3">

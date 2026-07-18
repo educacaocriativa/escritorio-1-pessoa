@@ -1,6 +1,7 @@
 """Testes de Configurações + Brand Kit."""
 import pytest
 from fastapi.testclient import TestClient
+from sqlalchemy.orm import Session
 
 REGISTER = {
     "legal_name": "Brand SA",
@@ -146,3 +147,87 @@ def test_set_and_clear_default_entry_funnel(client: TestClient, headers):
 
 def test_requires_auth(client: TestClient):
     assert client.get("/settings/profile").status_code == 401
+
+
+def test_whatsapp_starts_unconfigured(client: TestClient, headers):
+    resp = client.get("/settings/profile", headers=headers)
+    assert resp.status_code == 200
+    p = resp.json()
+    assert p["whatsapp_configured"] is False
+    assert p["whatsapp_phone_id"] == ""
+    assert p["whatsapp_waba_id"] == ""
+    assert "whatsapp_token" not in p
+
+
+def test_whatsapp_full_config_marks_configured(client: TestClient, headers):
+    resp = client.patch(
+        "/settings/profile",
+        json={
+            "whatsapp_token": "EAAG-fake-meta-token",
+            "whatsapp_phone_id": "1234567890",
+            "whatsapp_waba_id": "0987654321",
+        },
+        headers=headers,
+    )
+    assert resp.status_code == 200
+    p = resp.json()
+    assert p["whatsapp_configured"] is True
+    assert p["whatsapp_phone_id"] == "1234567890"
+    assert p["whatsapp_waba_id"] == "0987654321"
+    assert "whatsapp_token" not in p
+    # persiste
+    again = client.get("/settings/profile", headers=headers).json()
+    assert again["whatsapp_configured"] is True
+    assert again["whatsapp_phone_id"] == "1234567890"
+    assert again["whatsapp_waba_id"] == "0987654321"
+
+
+def test_whatsapp_partial_config_not_configured(client: TestClient, headers):
+    resp = client.patch(
+        "/settings/profile",
+        json={
+            "whatsapp_token": "EAAG-fake-meta-token",
+            "whatsapp_phone_id": "1234567890",
+            # whatsapp_waba_id omitido de propósito
+        },
+        headers=headers,
+    )
+    assert resp.status_code == 200
+    assert resp.json()["whatsapp_configured"] is False
+
+
+def test_whatsapp_clear_token_unconfigures(client: TestClient, headers):
+    client.patch(
+        "/settings/profile",
+        json={
+            "whatsapp_token": "EAAG-fake-meta-token",
+            "whatsapp_phone_id": "1234567890",
+            "whatsapp_waba_id": "0987654321",
+        },
+        headers=headers,
+    )
+    resp = client.patch(
+        "/settings/profile", json={"whatsapp_token": ""}, headers=headers
+    )
+    assert resp.status_code == 200
+    assert resp.json()["whatsapp_configured"] is False
+    again = client.get("/settings/profile", headers=headers).json()
+    assert again["whatsapp_configured"] is False
+    # phone_id/waba_id não foram tocados (None = não altera), só o token foi limpo
+    assert again["whatsapp_phone_id"] == "1234567890"
+    assert again["whatsapp_waba_id"] == "0987654321"
+
+
+def test_whatsapp_token_encrypted_at_rest(client: TestClient, headers, db: Session):
+    from sqlalchemy import text
+
+    plaintext = "EAAG-fake-meta-token-for-encryption-check"
+    client.patch(
+        "/settings/profile", json={"whatsapp_token": plaintext}, headers=headers
+    )
+    # Bypassa o TypeDecorator (SQL cru) para inspecionar o valor REALMENTE gravado no banco.
+    stored_raw = db.execute(
+        text("SELECT whatsapp_token FROM tenant_profiles LIMIT 1")
+    ).scalar()
+    assert stored_raw != plaintext
+    assert stored_raw.startswith("enc:v1:")

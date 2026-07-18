@@ -20,6 +20,11 @@ from app.modules.crm.models import Client, PipelineStage
 from app.modules.crm.service import EVENT_CLIENT_MOVED
 from app.modules.notifications.models import Notification
 from app.modules.settings import service as settings_service
+from app.modules.whatsapp_templates.models import (
+    PURPOSE_CLIENT_MOVED,
+    STATUS_APPROVED,
+    WhatsappTemplate,
+)
 
 logger = logging.getLogger("e1p.notifications")
 
@@ -54,6 +59,19 @@ def _owner_recipient(db: Session, tenant_id: str) -> str:
     return owner.email if owner else ""
 
 
+def _render_template_preview(body_text: str, variables: list[str]) -> str:
+    """Substitui {{1}}, {{2}}, ... no corpo do template pelos valores já resolvidos.
+
+    Duplica `funnels.service._render_template_preview` (função privada de módulo, ~4 linhas) —
+    evitamos importar através de módulos por uma função tão pequena (preferência do projeto contra
+    abstração prematura).
+    """
+    rendered = body_text
+    for i, value in enumerate(variables, start=1):
+        rendered = rendered.replace(f"{{{{{i}}}}}", value)
+    return rendered
+
+
 def enqueue(
     db: Session,
     *,
@@ -62,6 +80,9 @@ def enqueue(
     recipient: str,
     message: str,
     client_id: str | None = None,
+    whatsapp_template_name: str | None = None,
+    whatsapp_template_language: str | None = None,
+    whatsapp_template_variables: list | None = None,
 ) -> Notification:
     """Enfileira um envio (status="pending") — NÃO entrega agora nem commita.
 
@@ -72,6 +93,10 @@ def enqueue(
     Rede de segurança (Story 7.11): um `recipient` vazio/em-branco é entrada inválida e é
     REJEITADO explicitamente com `NotificationError` — nunca enfileirado como `pending`
     indistinguível de um envio válido (que depois falharia mudo no worker).
+
+    `whatsapp_template_*` (opcionais): template resolvido no ENFILEIRAMENTO (quando o propósito
+    tem um vínculo aprovado) — o worker (`process_pending`) usa esses campos pra decidir entre
+    `send_template` e `send_text`, sem precisar recalcular o vínculo depois.
     """
     if not recipient or not recipient.strip():
         raise NotificationError("destinatário (recipient) vazio ou inválido")
@@ -83,6 +108,9 @@ def enqueue(
         client_id=client_id,
         status="pending",
         attempts=0,
+        whatsapp_template_name=whatsapp_template_name,
+        whatsapp_template_language=whatsapp_template_language,
+        whatsapp_template_variables=whatsapp_template_variables,
     )
     db.add(notification)
     db.flush()
@@ -106,6 +134,9 @@ def process_pending(db: Session, *, tenant_id: str, limit: int = 50) -> int:
             .limit(limit)
         ).all()
     )
+    # Carregado uma vez por sweep (não por notificação) — a função já é tenant-scoped (param
+    # `tenant_id`), então o token/phone_id do provedor é o mesmo para todo o lote.
+    profile = settings_service.get_profile(db, tenant_id)
     processed = 0
     for notification in pending:
         try:
@@ -115,9 +146,21 @@ def process_pending(db: Session, *, tenant_id: str, limit: int = 50) -> int:
                     subject="Notificação e1p",
                     body=notification.message,
                 )
+            elif notification.whatsapp_template_name:
+                status = whatsapp.send_template(
+                    to=notification.recipient,
+                    token=profile.whatsapp_token or "",
+                    phone_id=profile.whatsapp_phone_id or "",
+                    template_name=notification.whatsapp_template_name,
+                    language=notification.whatsapp_template_language or "pt_BR",
+                    variables=notification.whatsapp_template_variables or [],
+                )
             else:
                 status = whatsapp.send_text(
-                    to=notification.recipient, text=notification.message
+                    to=notification.recipient,
+                    text=notification.message,
+                    token=profile.whatsapp_token,
+                    phone_id=profile.whatsapp_phone_id,
                 )
             notification.status = status
         except Exception as exc:  # noqa: BLE001 — isola a falha de UMA notificação (IV2)
@@ -151,6 +194,22 @@ def on_client_moved(*, tenant_id: str, client_id: str, to_stage: str, **_: objec
         col = stage.name if stage else "—"
         text = f'📌 O cliente {client.name} foi movido para a etapa "{col}".'
         recipient = _owner_recipient(db, tenant_id)
+
+        # Resolve o vínculo propósito→template (Configurações) AGORA, dentro da request — o
+        # worker (process_pending) só entrega depois, sem recalcular vínculo/propósito.
+        profile = settings_service.get_profile(db, tenant_id)
+        template_id = (profile.whatsapp_template_bindings or {}).get(PURPOSE_CLIENT_MOVED)
+        template = db.get(WhatsappTemplate, template_id) if template_id else None
+
+        whatsapp_template_name = whatsapp_template_language = None
+        whatsapp_template_variables: list[str] | None = None
+        message = text
+        if template is not None and template.status == STATUS_APPROVED:
+            whatsapp_template_name = template.name
+            whatsapp_template_language = template.language
+            whatsapp_template_variables = [client.name, col]  # ordem = PURPOSE_VARIABLE_SPECS
+            message = _render_template_preview(template.body_text, whatsapp_template_variables)
+
         # Enfileira (status="pending") em vez de enviar síncrono aqui: o handler roda dentro da
         # MESMA request que moveu o card (crm.service.move_client → events.emit). A entrega real
         # (WhatsApp) fica para o worker (process_pending), sem bloquear a request (IV2).
@@ -160,8 +219,11 @@ def on_client_moved(*, tenant_id: str, client_id: str, to_stage: str, **_: objec
                 tenant_id=tenant_id,
                 channel="whatsapp",
                 recipient=recipient,
-                message=text,
+                message=message,
                 client_id=client_id,
+                whatsapp_template_name=whatsapp_template_name,
+                whatsapp_template_language=whatsapp_template_language,
+                whatsapp_template_variables=whatsapp_template_variables,
             )
             db.commit()
         except NotificationError:

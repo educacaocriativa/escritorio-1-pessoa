@@ -6,12 +6,20 @@ import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy.orm import Session
 
+from app.core import whatsapp
 from app.core.audit import PlatformAuditEntry
 from app.core.security import hash_password
 from app.modules.agenda.models import AgendaEvent
 from app.modules.auth.models import Tenant, User
 from app.modules.crm.models import Client
 from app.modules.platform import service as platform_service
+from app.modules.settings.models import TenantProfile
+from app.modules.whatsapp_templates.models import (
+    PURPOSE_STAFF_INVITE,
+    STATUS_APPROVED,
+    STATUS_PENDING,
+    WhatsappTemplate,
+)
 
 ADMIN_EMAIL = "master@e1p.com"
 ADMIN_PASS = "senha-do-master-123"
@@ -195,7 +203,7 @@ def test_create_edit_delete_staff(client: TestClient, admin_headers):
     assert node["staff_count"] == 0
 
 
-def test_staff_whatsapp_delivery(client: TestClient, admin_headers):
+def test_staff_whatsapp_delivery(client: TestClient, admin_headers, _tenant_session_to_test_db):
     tid = _tenant_id(client, admin_headers, slug="escw", email="escw@example.com")
     invite = client.post(
         f"/admin/accounts/{tid}/users",
@@ -203,6 +211,126 @@ def test_staff_whatsapp_delivery(client: TestClient, admin_headers):
         headers=admin_headers,
     ).json()
     assert invite["delivery"] == "whatsapp" and invite["delivery_status"] in ("sent", "logged")
+
+
+# ── WhatsApp por template (staff_invite) — Story convite via template ───────────────────────
+def test_staff_whatsapp_no_binding_uses_tenant_credentials(
+    client: TestClient, admin_headers, db: Session, _tenant_session_to_test_db, monkeypatch
+):
+    """Sem template vinculado: mantém o texto livre, mas usando as credenciais do TENANT."""
+    tid = _tenant_id(client, admin_headers, slug="escwcred", email="escwcred@example.com")
+    db.add(TenantProfile(tenant_id=tid, whatsapp_token="tok-123", whatsapp_phone_id="phone-456"))
+    db.commit()
+
+    captured = {}
+
+    def _fake_send_text(*, to, text, token=None, phone_id=None):
+        captured.update(to=to, token=token, phone_id=phone_id)
+        return "sent"
+
+    monkeypatch.setattr(whatsapp, "send_text", _fake_send_text)
+
+    invite = client.post(
+        f"/admin/accounts/{tid}/users",
+        json=_staff_body(email="credzap@escwcred.com", delivery="whatsapp"),
+        headers=admin_headers,
+    ).json()
+    assert invite["delivery_status"] == "sent"
+    assert captured["token"] == "tok-123" and captured["phone_id"] == "phone-456"
+
+
+def test_staff_whatsapp_bound_approved_template_sends_variables_in_order(
+    client: TestClient, admin_headers, db: Session, _tenant_session_to_test_db, monkeypatch
+):
+    """Template vinculado + aprovado: usa send_template com as variáveis na ordem do spec
+    (Nome, Empresa, E-mail de login, Senha temporária)."""
+    tid = _tenant_id(client, admin_headers, slug="esctpl", email="esctpl@example.com")
+    tpl = WhatsappTemplate(
+        tenant_id=tid,
+        name="convite_funcionario",
+        language="pt_BR",
+        category_requested="UTILITY",
+        status=STATUS_APPROVED,
+        body_text="Olá {{1}}, bem-vindo à {{2}}. Login: {{3}} Senha: {{4}}",
+        variable_count=4,
+        variable_examples=["Ana", "Empresa X", "ana@x.com", "abc123"],
+    )
+    db.add(tpl)
+    db.flush()
+    db.add(TenantProfile(
+        tenant_id=tid,
+        whatsapp_token="tok-1",
+        whatsapp_phone_id="phone-1",
+        whatsapp_template_bindings={PURPOSE_STAFF_INVITE: tpl.id},
+    ))
+    db.commit()
+
+    captured = {}
+
+    def _fake_send_template(*, to, token, phone_id, template_name, language, variables):
+        captured.update(
+            to=to, token=token, phone_id=phone_id, template_name=template_name,
+            language=language, variables=variables,
+        )
+        return "sent"
+
+    monkeypatch.setattr(whatsapp, "send_template", _fake_send_template)
+
+    body = _staff_body(email="tplzap@esctpl.com", delivery="whatsapp", name="Contadora Nova")
+    invite = client.post(f"/admin/accounts/{tid}/users", json=body, headers=admin_headers).json()
+
+    assert invite["delivery_status"] == "sent"
+    assert captured["template_name"] == "convite_funcionario"
+    assert captured["language"] == "pt_BR"
+    assert captured["token"] == "tok-1" and captured["phone_id"] == "phone-1"
+    assert captured["variables"] == [
+        "Contadora Nova", "Cliente Pagante", "tplzap@esctpl.com", invite["temp_password"],
+    ]
+
+
+def test_staff_whatsapp_bound_unapproved_template_falls_back_to_text(
+    client: TestClient, admin_headers, db: Session, _tenant_session_to_test_db, monkeypatch
+):
+    """Template vinculado mas ainda não aprovado pela Meta: cai no texto livre (send_text)."""
+    tid = _tenant_id(client, admin_headers, slug="esctplpend", email="esctplpend@example.com")
+    tpl = WhatsappTemplate(
+        tenant_id=tid,
+        name="convite_pendente",
+        language="pt_BR",
+        category_requested="UTILITY",
+        status=STATUS_PENDING,
+        body_text="Olá {{1}}, bem-vindo à {{2}}. Login: {{3}} Senha: {{4}}",
+        variable_count=4,
+        variable_examples=[],
+    )
+    db.add(tpl)
+    db.flush()
+    db.add(TenantProfile(
+        tenant_id=tid,
+        whatsapp_token="tok-2",
+        whatsapp_phone_id="phone-2",
+        whatsapp_template_bindings={PURPOSE_STAFF_INVITE: tpl.id},
+    ))
+    db.commit()
+
+    calls = {"template": False, "text": False}
+
+    def _fake_send_template(**kwargs):
+        calls["template"] = True
+        return "sent"
+
+    def _fake_send_text(*, to, text, token=None, phone_id=None):
+        calls["text"] = True
+        return "sent"
+
+    monkeypatch.setattr(whatsapp, "send_template", _fake_send_template)
+    monkeypatch.setattr(whatsapp, "send_text", _fake_send_text)
+
+    body = _staff_body(email="pendzap@esctplpend.com", delivery="whatsapp")
+    invite = client.post(f"/admin/accounts/{tid}/users", json=body, headers=admin_headers).json()
+
+    assert invite["delivery_status"] == "sent"
+    assert calls["text"] is True and calls["template"] is False
 
 
 def test_first_access_password_change(client: TestClient, admin_headers):

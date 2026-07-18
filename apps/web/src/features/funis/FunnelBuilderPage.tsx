@@ -1,4 +1,4 @@
-import type { Client, FunnelComponentCategory } from "@e1p/shared-types";
+import type { Client, FunnelComponentCategory, WhatsappTemplate } from "@e1p/shared-types";
 import html2canvas from "html2canvas";
 import {
   ArrowLeft, Download, GitBranch, type LucideIcon, Maximize2, MessageCircle, MousePointerClick,
@@ -31,6 +31,8 @@ type NodeConfig = {
   delay_value?: number; delay_unit?: "minutes" | "hours" | "days";
   field?: "always" | "has_tag" | "is_paid"; value?: string;
   amount_cents?: number; method?: "boleto" | "pix"; tag?: string;
+  // WhatsApp: template Meta aprovado + valores posicionais (literal ou {{cliente.*}}).
+  template_id?: string; variables?: string[];
 };
 type NodeData = {
   label: string; description: string; color: string; category: string; key: string;
@@ -106,7 +108,9 @@ function PageMockup({ model, color }: { model?: string; color: string }) {
 }
 
 function FunnelNode({ data, selected }: NodeProps<NodeData>) {
-  const configured = !!(data.config?.body || data.config?.model);
+  const configured = contentKind(data.key) === "whatsapp"
+    ? !!data.config?.template_id
+    : !!(data.config?.body || data.config?.model);
   const handleStyle = { background: "#fff", border: `2px solid ${data.color}`, width: 10, height: 10 };
 
   // PÁGINA → card quadrado com mockup colorido.
@@ -441,7 +445,9 @@ function Builder() {
                 {selectedNode.data.shape === "page"
                   ? "Editar página"
                   : KIND_VERB[contentKind(selectedNode.data.key)]}
-                {selectedNode.data.config?.body || selectedNode.data.config?.model ? " ✓" : ""}
+                {contentKind(selectedNode.data.key) === "whatsapp"
+                  ? (selectedNode.data.config?.template_id ? " ✓" : "")
+                  : (selectedNode.data.config?.body || selectedNode.data.config?.model ? " ✓" : "")}
               </button>
               {selectedNode.data.action && (
                 <button
@@ -568,8 +574,14 @@ function RunNodeModal({
       params.description = description;
       params.amount_cents = Math.round(parseFloat(amount.replace(",", ".") || "0") * 100);
     }
-    if (action === "send_email") params.subject = subject;
-    if (action === "send_email" || action === "send_message") params.message = message;
+    if (action === "send_email") {
+      params.subject = subject;
+      params.message = message;
+    }
+    if (action === "send_message") {
+      params.template_id = node.data.config?.template_id;
+      params.variables = node.data.config?.variables ?? [];
+    }
     try {
       const { data } = await api.post<{ message: string }>("/funnels/run-node", {
         action, client_id: needsClient ? clientId || null : null, params,
@@ -583,7 +595,7 @@ function RunNodeModal({
   }
 
   const money = action === "create_quote" || action === "create_charge";
-  const msg = action === "send_email" || action === "send_message";
+  const hasTemplate = !!node.data.config?.template_id;
 
   return (
     <div className="absolute inset-0 z-30 flex items-center justify-center bg-black/30 p-4" onClick={onClose}>
@@ -623,17 +635,28 @@ function RunNodeModal({
           )}
           {money && <Field label="Valor (R$)" value={amount} onChange={setAmount} placeholder="0,00" />}
           {action === "send_email" && <Field label="Assunto" value={subject} onChange={setSubject} />}
-          {msg && (
+          {action === "send_email" && (
             <label className="block">
               <span className="mb-1 block text-xs font-medium text-neutral-600">Mensagem</span>
               <textarea value={message} onChange={(e) => setMessage(e.target.value)} rows={4} className="w-full rounded-lg border border-neutral-200 px-3 py-2 text-sm outline-none focus:border-primary-400" />
             </label>
           )}
+          {action === "send_message" && (
+            <p className={`rounded-lg p-2 text-xs ${hasTemplate ? "bg-neutral-50 text-neutral-500" : "bg-amber-50 text-amber-700"}`}>
+              {hasTemplate
+                ? "Usa o template de WhatsApp configurado no nó (botão “Escrever mensagem”)."
+                : "Configure um template de WhatsApp aprovado no nó (botão “Escrever mensagem”) antes de executar."}
+            </p>
+          )}
         </div>
 
         <div className="mt-5 flex gap-2">
           <button onClick={onClose} className="flex-1 rounded-pill bg-neutral-100 py-2.5 font-semibold text-neutral-600 hover:bg-neutral-200">Cancelar</button>
-          <button onClick={run} disabled={busy} className="flex flex-1 items-center justify-center gap-1.5 rounded-pill bg-accent-500 py-2.5 font-semibold text-white hover:bg-accent-600 disabled:opacity-60">
+          <button
+            onClick={run}
+            disabled={busy || (action === "send_message" && !hasTemplate)}
+            className="flex flex-1 items-center justify-center gap-1.5 rounded-pill bg-accent-500 py-2.5 font-semibold text-white hover:bg-accent-600 disabled:opacity-60"
+          >
             <Play size={14} /> {busy ? "Executando..." : "Executar agora"}
           </button>
         </div>
@@ -653,6 +676,8 @@ function Field({ label, value, onChange, placeholder }: {
   );
 }
 
+const TEMPLATE_KEYWORDS = ["cliente.nome", "cliente.telefone", "cliente.email"] as const;
+
 function NodeContentEditor({
   node,
   onClose,
@@ -665,11 +690,41 @@ function NodeContentEditor({
   const isPage = node.data.shape === "page";
   const kind = contentKind(node.data.key);
   const isEmail = kind === "email";
+  const isWhatsapp = kind === "whatsapp";
   const [subject, setSubject] = useState(node.data.config?.subject ?? "");
   const [body, setBody] = useState(node.data.config?.body ?? "");
   const [model, setModel] = useState(node.data.config?.model ?? (isPage ? "Vendas" : ""));
   const [brief, setBrief] = useState("");
   const [aiBusy, setAiBusy] = useState(false);
+
+  // WhatsApp: template Meta aprovado + valores posicionais (literal ou {{cliente.*}}).
+  const [templates, setTemplates] = useState<WhatsappTemplate[]>([]);
+  const [templateId, setTemplateId] = useState(node.data.config?.template_id ?? "");
+  const [variables, setVariables] = useState<string[]>(node.data.config?.variables ?? []);
+
+  useEffect(() => {
+    if (!isWhatsapp) return;
+    api
+      .get<WhatsappTemplate[]>("/whatsapp-templates", { params: { status: "APPROVED" } })
+      .then(({ data }) => setTemplates(data));
+  }, [isWhatsapp]);
+
+  const selectedTemplate = templates.find((t) => t.id === templateId);
+
+  useEffect(() => {
+    if (!selectedTemplate) return;
+    setVariables((prev) =>
+      Array.from({ length: selectedTemplate.variable_count }, (_, i) => prev[i] ?? ""),
+    );
+  }, [selectedTemplate]);
+
+  function setVariable(i: number, value: string) {
+    setVariables((prev) => {
+      const next = [...prev];
+      next[i] = value;
+      return next;
+    });
+  }
 
   const title = isPage ? "Editar página" : KIND_VERB[kind];
   const bodyLabel = isPage
@@ -708,30 +763,96 @@ function NodeContentEditor({
           </label>
         )}
 
-        <div className="mb-3 rounded-lg bg-primary-50 p-2">
-          <span className="mb-1 block text-xs font-medium text-primary-700">Gerar com IA</span>
-          <div className="flex gap-2">
-            <input value={brief} onChange={(e) => setBrief(e.target.value)} placeholder={`Sobre o que? (ex: ${node.data.label.toLowerCase()})`} className="w-full rounded-lg border border-neutral-200 px-2 py-1.5 text-sm outline-none" />
-            <button onClick={generate} disabled={aiBusy} className="flex shrink-0 items-center gap-1 rounded-lg bg-primary-500 px-3 text-xs font-semibold text-white disabled:opacity-60">
-              <Sparkles size={12} /> {aiBusy ? "..." : "Gerar"}
-            </button>
-          </div>
-        </div>
+        {isWhatsapp ? (
+          <>
+            <label className="mb-3 block">
+              <span className="mb-1 block text-xs font-medium text-neutral-600">Template aprovado (Meta)</span>
+              <select
+                value={templateId}
+                onChange={(e) => setTemplateId(e.target.value)}
+                className="w-full rounded-lg border border-neutral-200 px-3 py-2 text-sm outline-none focus:border-primary-400"
+              >
+                <option value="">Selecione um template</option>
+                {templates.map((t) => (
+                  <option key={t.id} value={t.id}>{t.name} ({t.language})</option>
+                ))}
+              </select>
+              {templates.length === 0 && (
+                <p className="mt-1.5 text-[11px] text-neutral-400">
+                  Nenhum template aprovado ainda — crie um em Configurações → Integrações → WhatsApp.
+                </p>
+              )}
+            </label>
 
-        {isEmail && (
-          <label className="mb-3 block">
-            <span className="mb-1 block text-xs font-medium text-neutral-600">Assunto</span>
-            <input value={subject} onChange={(e) => setSubject(e.target.value)} className="w-full rounded-lg border border-neutral-200 px-3 py-2 text-sm outline-none focus:border-primary-400" />
-          </label>
+            {selectedTemplate && (
+              <div className="mb-4 space-y-2">
+                <p className="text-xs font-medium text-neutral-600">Variáveis do template</p>
+                <p className="rounded-lg bg-neutral-50 p-2 text-xs text-neutral-500">{selectedTemplate.body_text}</p>
+                {Array.from({ length: selectedTemplate.variable_count }, (_, i) => (
+                  <div key={i} className="space-y-1">
+                    <span className="text-[11px] font-medium text-neutral-500">Variável {i + 1}</span>
+                    <div className="flex gap-1.5">
+                      <input
+                        value={variables[i] ?? ""}
+                        onChange={(e) => setVariable(i, e.target.value)}
+                        placeholder={selectedTemplate.variable_examples[i] ?? ""}
+                        className="w-full rounded-lg border border-neutral-200 px-2 py-1.5 text-sm outline-none focus:border-primary-400"
+                      />
+                      {TEMPLATE_KEYWORDS.map((kw) => (
+                        <button
+                          key={kw}
+                          type="button"
+                          onClick={() => setVariable(i, `{{${kw}}}`)}
+                          title={`Usar ${kw}`}
+                          className="shrink-0 rounded-lg bg-neutral-100 px-2 py-1 text-[10px] font-semibold text-neutral-600 hover:bg-neutral-200"
+                        >
+                          {kw.split(".")[1]}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </>
+        ) : (
+          <>
+            <div className="mb-3 rounded-lg bg-primary-50 p-2">
+              <span className="mb-1 block text-xs font-medium text-primary-700">Gerar com IA</span>
+              <div className="flex gap-2">
+                <input value={brief} onChange={(e) => setBrief(e.target.value)} placeholder={`Sobre o que? (ex: ${node.data.label.toLowerCase()})`} className="w-full rounded-lg border border-neutral-200 px-2 py-1.5 text-sm outline-none" />
+                <button onClick={generate} disabled={aiBusy} className="flex shrink-0 items-center gap-1 rounded-lg bg-primary-500 px-3 text-xs font-semibold text-white disabled:opacity-60">
+                  <Sparkles size={12} /> {aiBusy ? "..." : "Gerar"}
+                </button>
+              </div>
+            </div>
+
+            {isEmail && (
+              <label className="mb-3 block">
+                <span className="mb-1 block text-xs font-medium text-neutral-600">Assunto</span>
+                <input value={subject} onChange={(e) => setSubject(e.target.value)} className="w-full rounded-lg border border-neutral-200 px-3 py-2 text-sm outline-none focus:border-primary-400" />
+              </label>
+            )}
+            <label className="mb-4 block">
+              <span className="mb-1 block text-xs font-medium text-neutral-600">{bodyLabel}</span>
+              <textarea value={body} onChange={(e) => setBody(e.target.value)} rows={isEmail ? 8 : 5} placeholder={`Escreva ${bodyLabel.toLowerCase()}...`} className="w-full rounded-lg border border-neutral-200 px-3 py-2 text-sm outline-none focus:border-primary-400" />
+            </label>
+          </>
         )}
-        <label className="mb-4 block">
-          <span className="mb-1 block text-xs font-medium text-neutral-600">{bodyLabel}</span>
-          <textarea value={body} onChange={(e) => setBody(e.target.value)} rows={isEmail ? 8 : 5} placeholder={`Escreva ${bodyLabel.toLowerCase()}...`} className="w-full rounded-lg border border-neutral-200 px-3 py-2 text-sm outline-none focus:border-primary-400" />
-        </label>
 
         <div className="flex gap-2">
           <button onClick={onClose} className="flex-1 rounded-pill bg-neutral-100 py-2.5 font-semibold text-neutral-600 hover:bg-neutral-200">Cancelar</button>
-          <button onClick={() => onSave({ subject: isEmail ? subject : "", body, model: isPage ? model : undefined })} className="flex-1 rounded-pill bg-accent-400 py-2.5 font-semibold text-white hover:bg-accent-500">
+          <button
+            onClick={() =>
+              onSave(
+                isWhatsapp
+                  ? { template_id: templateId, variables }
+                  : { subject: isEmail ? subject : "", body, model: isPage ? model : undefined },
+              )
+            }
+            disabled={isWhatsapp && !templateId}
+            className="flex-1 rounded-pill bg-accent-400 py-2.5 font-semibold text-white hover:bg-accent-500 disabled:opacity-50"
+          >
             Salvar no nó
           </button>
         </div>

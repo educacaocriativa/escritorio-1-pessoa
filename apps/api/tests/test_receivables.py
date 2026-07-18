@@ -524,6 +524,177 @@ def test_reclassify_open_charge(client: TestClient, headers):
     assert out["chart_account_id"] == acc["id"]
 
 
+# ── Fase 2: `collect_with_ai` convertido para template (propósito `charge_reminder`) ──────────
+
+
+@pytest.fixture()
+def tenant_id(client: TestClient, headers: dict[str, str]) -> str:
+    return client.get("/auth/me", headers=headers).json()["user"]["tenant_id"]
+
+
+def _make_template(db, tenant_id: str, *, status: str = "APPROVED", variable_count: int = 4):
+    from app.modules.whatsapp_templates.models import WhatsappTemplate
+
+    tpl = WhatsappTemplate(
+        tenant_id=tenant_id, name="cobranca_padrao", language="pt_BR",
+        category_requested="UTILITY", category_approved="UTILITY", status=status,
+        body_text="Olá {{1}}! {{2}} Valor: {{3}}, vencimento {{4}}.",
+        variable_count=variable_count,
+        variable_examples=["Cliente", "frase", "R$ 10,00", "01/01/2026"][:variable_count],
+    )
+    db.add(tpl)
+    db.commit()
+    db.refresh(tpl)
+    return tpl
+
+
+def _bind_charge_reminder(db, tenant_id: str, template_id: str) -> None:
+    from app.modules.settings import service as settings_service
+    from app.modules.whatsapp_templates.models import PURPOSE_CHARGE_REMINDER
+
+    profile = settings_service.get_profile(db, tenant_id)
+    profile.whatsapp_template_bindings = {PURPOSE_CHARGE_REMINDER: template_id}
+    db.commit()
+
+
+def test_collect_with_ai_without_binding_uses_free_text_with_tenant_credentials(
+    client: TestClient, headers, db, tenant_id, monkeypatch
+):
+    """Sem vínculo configurado: comportamento antigo (mensagem completa de texto livre via
+    `send_text`), mas agora repassando as credenciais do tenant (mesmo vazias no teste)."""
+    from app.core import whatsapp
+
+    calls: list[dict] = []
+
+    def fake_send_text(*, to, text, token=None, phone_id=None):
+        calls.append({"to": to, "text": text, "token": token, "phone_id": phone_id})
+        return "logged"
+
+    monkeypatch.setattr(whatsapp, "send_text", fake_send_text)
+
+    c = client.post(
+        "/receivables/charges",
+        json=_charge(due_date="2020-01-01", amount_cents=15000),
+        headers=headers,
+    ).json()
+    r = client.post(f"/receivables/charges/{c['id']}/collect", headers=headers)
+    assert r.status_code == 200
+    body = r.json()
+    assert len(body["message"]) > 10
+    assert body["status"] == "logged"
+    assert len(calls) == 1
+    # credenciais do tenant repassadas explicitamente (None no teste, mas o parâmetro é usado)
+    assert calls[0]["token"] is None
+    assert calls[0]["phone_id"] is None
+
+
+def test_collect_with_ai_with_approved_binding_uses_template(
+    client: TestClient, headers, db, tenant_id, monkeypatch
+):
+    """Com um template APROVADO vinculado ao propósito, usa `send_template` (não `send_text`),
+    com as 4 variáveis na ordem [nome, frase, valor, vencimento] e a Notification guardando o
+    preview RENDERIZADO (placeholders substituídos)."""
+    from app.core import whatsapp
+
+    tpl = _make_template(db, tenant_id)
+    _bind_charge_reminder(db, tenant_id, tpl.id)
+
+    text_calls: list[dict] = []
+    template_calls: list[dict] = []
+    monkeypatch.setattr(
+        whatsapp, "send_text",
+        lambda **kw: (text_calls.append(kw), "logged")[1],
+    )
+    monkeypatch.setattr(
+        whatsapp, "send_template",
+        lambda **kw: (template_calls.append(kw), "logged")[1],
+    )
+
+    cl = client.post(
+        "/crm/clients", json={"name": "Maria Cliente", "phone": "5511999990000"}, headers=headers
+    ).json()
+    c = client.post(
+        "/receivables/charges",
+        json=_charge(client_id=cl["id"], due_date="2020-01-01", amount_cents=15000),
+        headers=headers,
+    ).json()
+    r = client.post(f"/receivables/charges/{c['id']}/collect", headers=headers)
+    assert r.status_code == 200
+
+    assert not text_calls  # não usou o caminho de texto livre
+    assert len(template_calls) == 1
+    call = template_calls[0]
+    assert call["template_name"] == "cobranca_padrao"
+    variables = call["variables"]
+    assert len(variables) == 4
+    assert variables[0] == "Maria Cliente"
+    assert variables[2] == "R$ 150,00"
+    assert variables[3] == "01/01/2020"
+    # frase (variável 2) não deve conter placeholder [NOME] cru nem ficar vazia
+    assert variables[1]
+
+    notifs = client.get("/notifications", headers=headers).json()
+    whatsapp_notifs = [n for n in notifs if n["channel"] == "whatsapp"]
+    assert whatsapp_notifs
+    rendered = whatsapp_notifs[0]["message"]
+    assert "{{" not in rendered  # placeholders substituídos, não crus
+    assert "Maria Cliente" in rendered
+
+
+def test_collect_with_ai_with_pending_binding_falls_back_to_free_text(
+    client: TestClient, headers, db, tenant_id, monkeypatch
+):
+    """Template vinculado mas AINDA NÃO aprovado (ex.: PENDING) → trata como "sem vínculo":
+    cai no caminho antigo de texto livre, não quebra."""
+    from app.core import whatsapp
+
+    tpl = _make_template(db, tenant_id, status="PENDING")
+    _bind_charge_reminder(db, tenant_id, tpl.id)
+
+    template_calls: list[dict] = []
+    monkeypatch.setattr(
+        whatsapp, "send_template",
+        lambda **kw: (template_calls.append(kw), "logged")[1],
+    )
+
+    c = client.post(
+        "/receivables/charges",
+        json=_charge(due_date="2020-01-01", amount_cents=15000),
+        headers=headers,
+    ).json()
+    r = client.post(f"/receivables/charges/{c['id']}/collect", headers=headers)
+    assert r.status_code == 200
+    body = r.json()
+    assert len(body["message"]) > 10
+    assert not template_calls  # não usou o template ainda pendente
+
+
+def test_send_message_manual_uses_tenant_credentials(
+    client: TestClient, headers, monkeypatch
+):
+    """Mensagem manual continua texto livre (não vira template), mas agora repassa as
+    credenciais do tenant para `send_text`."""
+    from app.core import whatsapp
+
+    calls: list[dict] = []
+    monkeypatch.setattr(
+        whatsapp, "send_text",
+        lambda **kw: (calls.append(kw), "logged")[1],
+    )
+
+    c = client.post("/receivables/charges", json=_charge(), headers=headers).json()
+    r = client.post(
+        f"/receivables/charges/{c['id']}/message",
+        json={"text": "Oi, passando para lembrar 🙂"},
+        headers=headers,
+    )
+    assert r.status_code == 200
+    assert len(calls) == 1
+    assert calls[0]["text"] == "Oi, passando para lembrar 🙂"
+    assert "token" in calls[0]
+    assert "phone_id" in calls[0]
+
+
 def test_unset_charge_chart_account(client: TestClient, headers):
     """"" desvincula (→ sem categoria), mesmo padrão de contract_id/cost_center_id."""
     acc = client.post(
