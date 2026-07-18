@@ -16,6 +16,7 @@ from app.modules.auth.models import Tenant, User
 from app.modules.notifications import service
 from app.modules.notifications.models import Notification
 from app.modules.notifications.service import NotificationError
+from app.modules.settings import service as settings_service
 from app.modules.settings.models import TenantProfile
 
 
@@ -117,6 +118,60 @@ def test_on_client_moved_enqueues_pending_for_existing_client(db, monkeypatch):
     assert notif.recipient == "dono@mov.com"
     assert "Maria Cliente" in notif.message  # usa o nome real, não o placeholder
     assert called["whatsapp"] == 0  # NÃO enviou síncrono — só enfileirou
+    # Sem vínculo propósito→template (Configurações): comportamento antigo, texto livre.
+    assert notif.whatsapp_template_name is None
+    assert notif.whatsapp_template_language is None
+    assert notif.whatsapp_template_variables is None
+
+
+def test_on_client_moved_uses_bound_template_when_approved(db, monkeypatch):
+    """Story de templates: propósito `client_moved` vinculado a um template APROVADO →
+    a Notification enfileirada carrega template_name/language/variables (nessa ordem: nome do
+    cliente, nome da etapa) e `message` guarda o PREVIEW renderizado, não o texto livre nem
+    `{{1}}`/`{{2}}` crus.
+    """
+    from app.modules.crm.models import Client
+    from app.modules.whatsapp_templates.models import PURPOSE_CLIENT_MOVED, WhatsappTemplate
+
+    tenant = _seed_owner_tenant(db, slug="mov3", document="00000000000353")
+    client = Client(tenant_id=tenant.id, name="Maria Cliente")
+    db.add(client)
+    template = WhatsappTemplate(
+        tenant_id=tenant.id,
+        name="aviso_mudanca_etapa",
+        language="pt_BR",
+        category_requested="UTILITY",
+        category_approved="UTILITY",
+        status="APPROVED",
+        body_text='O cliente {{1}} foi movido para a etapa "{{2}}".',
+        variable_count=2,
+        variable_examples=["Maria", "Proposta"],
+    )
+    db.add(template)
+    db.flush()
+
+    profile = settings_service.get_profile(db, tenant.id)
+    profile.whatsapp_template_bindings = {PURPOSE_CLIENT_MOVED: template.id}
+    db.commit()
+
+    @contextmanager
+    def _fake_tenant_session(_tenant_id):
+        yield db
+
+    monkeypatch.setattr(service, "tenant_session", _fake_tenant_session)
+    monkeypatch.setattr(whatsapp, "send_text", lambda *, to, text, **_k: "sent")
+
+    service.on_client_moved(tenant_id=tenant.id, client_id=client.id, to_stage="nao-existe")
+
+    notif = db.scalar(select(Notification))
+    assert notif is not None
+    assert notif.status == "pending"
+    assert notif.whatsapp_template_name == "aviso_mudanca_etapa"
+    assert notif.whatsapp_template_language == "pt_BR"
+    assert notif.whatsapp_template_variables == ["Maria Cliente", "—"]
+    assert notif.message == 'O cliente Maria Cliente foi movido para a etapa "—".'
+    assert "{{1}}" not in notif.message
+    assert "{{2}}" not in notif.message
 
 
 def test_on_client_moved_nonexistent_client_is_not_enqueued(db, monkeypatch):

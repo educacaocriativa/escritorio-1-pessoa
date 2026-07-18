@@ -10,7 +10,7 @@ Também é a FILA de envios assíncronos (Story 4.3): uma notificação criada c
 """
 from __future__ import annotations
 
-from sqlalchemy import Integer, String, Text
+from sqlalchemy import JSON, Integer, String, Text
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.db.base import Base, TenantMixin, TimestampMixin, _uuid
@@ -30,3 +30,9 @@ class Notification(Base, TenantMixin, TimestampMixin):
     # Fila assíncrona (Story 4.3): nº de tentativas de envio e último erro (se falhou).
     attempts: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
     last_error: Mapped[str] = mapped_column(String(500), default="", nullable=False)
+    # Template WhatsApp resolvido no ENFILEIRAMENTO (dentro da request) — o worker entrega
+    # depois (process_pending) sem precisar recalcular propósito/vínculo. NULL nas 3 = mesmo
+    # comportamento antigo (texto livre em `message`, via send_text).
+    whatsapp_template_name: Mapped[str | None] = mapped_column(String(512), nullable=True)
+    whatsapp_template_language: Mapped[str | None] = mapped_column(String(10), nullable=True)
+    whatsapp_template_variables: Mapped[list | None] = mapped_column(JSON, nullable=True)

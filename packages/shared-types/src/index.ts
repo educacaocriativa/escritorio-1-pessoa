@@ -668,7 +668,37 @@ export interface TenantProfile {
   /** Só-escrita: nunca vem preenchido no GET (o token nunca é devolvido em claro).
    * Setar antes do PATCH para configurar/trocar; "" limpa a credencial. */
   whatsapp_token?: string;
+  /** Vínculo propósito→template_id para os fluxos FIXOS do sistema (lembrete de cobrança,
+   * envio de contrato/orçamento, convite de staff, aviso de card movido) — diferente do nó
+   * livre do Funil de Vendas, aqui o tenant vincula UM template aprovado por propósito.
+   * Chave ausente/"" = esse fluxo ainda usa texto livre. Ver WHATSAPP_PURPOSES. */
+  whatsapp_template_bindings: Record<string, string>;
 }
+
+/** Espelha `whatsapp_templates.models.PURPOSE_VARIABLE_SPECS` do backend — rótulo de cada
+ * variável, na ordem em que o sistema preenche {{1}}, {{2}}, ... para aquele propósito. */
+export const WHATSAPP_PURPOSES: { key: string; label: string; variables: string[] }[] = [
+  {
+    key: "charge_reminder", label: "Lembrete de cobrança (Cobrar com IA)",
+    variables: ["Nome do cliente", "Frase de cobrança (a IA sugere)", "Valor", "Vencimento"],
+  },
+  {
+    key: "contract_send", label: "Envio de contrato",
+    variables: ["Nome do cliente", "Título do contrato", "Link de assinatura"],
+  },
+  {
+    key: "quote_send", label: "Envio de orçamento/proposta",
+    variables: ["Nome do cliente", "Título do orçamento", "Valor", "Link da proposta"],
+  },
+  {
+    key: "staff_invite", label: "Convite de funcionário (senha temporária)",
+    variables: ["Nome", "Empresa", "E-mail de login", "Senha temporária"],
+  },
+  {
+    key: "client_moved", label: "Aviso interno: cliente mudou de etapa no CRM",
+    variables: ["Nome do cliente", "Nome da nova etapa"],
+  },
+];
 
 // ── WhatsApp Cloud API (Meta): templates de mensagem por tenant ────
 // A Meta exige template pré-aprovado para toda mensagem business-initiated (fora da janela

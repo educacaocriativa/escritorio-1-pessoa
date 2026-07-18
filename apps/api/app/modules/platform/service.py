@@ -110,7 +110,7 @@ def create_account(db: Session, data: CreateAccountRequest) -> tuple[Tenant, Use
     db.refresh(owner)
     status = _send_invite(
         name=data.name, email=email, phone=data.phone, temp=temp,
-        delivery=data.delivery, company=tenant.legal_name,
+        delivery=data.delivery, company=tenant.legal_name, tenant_id=tenant.id,
     )
     return tenant, owner, temp, status
 
@@ -260,9 +260,17 @@ def _temp_password() -> str:
 
 
 def _send_invite(
-    *, name: str, email: str, phone: str, temp: str, delivery: str, company: str
+    *, name: str, email: str, phone: str, temp: str, delivery: str, company: str, tenant_id: str
 ) -> str:
-    """Entrega a senha temporária por e-mail ou WhatsApp. Devolve o status do envio."""
+    """Entrega a senha temporária por e-mail ou WhatsApp. Devolve o status do envio.
+
+    O convite é enviado em nome do TENANT sendo criado/atendido (`tenant_id`), nunca da
+    plataforma: por WhatsApp, usamos as credenciais e o vínculo de template daquele escritório
+    (Configurações). Como a `db` do Master aqui é a sessão GLOBAL sem tenant (ver `get_db`),
+    abrimos uma `tenant_session` dedicada só para essa leitura — mesmo padrão de `delete_account`
+    nesta mesma classe de serviço, já que ler `TenantProfile`/`WhatsappTemplate` (RLS) exige a GUC
+    de tenant setada na conexão.
+    """
     from app.core import whatsapp
     from app.core.email import send_email
 
@@ -273,7 +281,25 @@ def _send_invite(
         "Por segurança, você deverá definir uma nova senha no primeiro acesso."
     )
     if delivery == "whatsapp":
-        return whatsapp.send_text(to=phone, text=msg)
+        from app.modules.settings import service as settings_service
+        from app.modules.whatsapp_templates.models import (
+            PURPOSE_STAFF_INVITE,
+            STATUS_APPROVED,
+            WhatsappTemplate,
+        )
+
+        with tenant_session(tenant_id) as tdb:
+            profile = settings_service.get_profile(tdb, tenant_id)
+            template_id = (profile.whatsapp_template_bindings or {}).get(PURPOSE_STAFF_INVITE)
+            template = tdb.get(WhatsappTemplate, template_id) if template_id else None
+            token, phone_id = profile.whatsapp_token, profile.whatsapp_phone_id
+        if template is not None and template.status == STATUS_APPROVED:
+            return whatsapp.send_template(
+                to=phone, token=token or "", phone_id=phone_id or "",
+                template_name=template.name, language=template.language,
+                variables=[name, company, email, temp],  # ordem = PURPOSE_VARIABLE_SPECS
+            )
+        return whatsapp.send_text(to=phone, text=msg, token=token, phone_id=phone_id)
     return send_email(to=email, subject="Seu acesso à plataforma", body=msg)
 
 
@@ -311,7 +337,7 @@ def create_staff(db: Session, tenant_id: str, data: CreateStaffRequest) -> tuple
 
     status = _send_invite(
         name=data.name, email=email, phone=data.phone, temp=temp,
-        delivery=data.delivery, company=tenant.legal_name,
+        delivery=data.delivery, company=tenant.legal_name, tenant_id=tenant_id,
     )
     return user, temp, status
 

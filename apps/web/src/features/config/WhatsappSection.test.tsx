@@ -1,5 +1,6 @@
 import type { TenantProfile, WhatsappTemplate } from "@e1p/shared-types";
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { WHATSAPP_PURPOSES } from "@e1p/shared-types";
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { api } from "../../lib/api";
@@ -35,6 +36,7 @@ function profile(overrides: Partial<TenantProfile> = {}): TenantProfile {
     whatsapp_configured: false,
     whatsapp_phone_id: "",
     whatsapp_waba_id: "",
+    whatsapp_template_bindings: {},
     ...overrides,
   };
 }
@@ -240,6 +242,113 @@ describe("WhatsappSection — templates", () => {
 
     expect(
       await screen.findByText("Template com esse nome e idioma já existe"),
+    ).toBeInTheDocument();
+  });
+});
+
+describe("WhatsappSection — vínculos de template por propósito", () => {
+  const [firstPurpose] = WHATSAPP_PURPOSES;
+
+  function emptyBindings(): Record<string, string> {
+    return Object.fromEntries(WHATSAPP_PURPOSES.map((p) => [p.key, ""]));
+  }
+
+  it("renderiza os 5 propósitos fixos com rótulo e variáveis esperadas", async () => {
+    mockGet(profile({ whatsapp_configured: true }), []);
+    render(<WhatsappSection />);
+
+    for (const p of WHATSAPP_PURPOSES) {
+      expect(await screen.findByText(p.label)).toBeInTheDocument();
+      expect(screen.getByText(`Variáveis: ${p.variables.join(", ")}`)).toBeInTheDocument();
+    }
+  });
+
+  it("lista no select apenas templates cujo variable_count bate com o propósito", async () => {
+    const matching = template({
+      id: "t-match",
+      name: "tpl_match",
+      status: "APPROVED",
+      variable_count: firstPurpose.variables.length,
+    });
+    const mismatching = template({
+      id: "t-mismatch",
+      name: "tpl_mismatch",
+      status: "APPROVED",
+      variable_count: firstPurpose.variables.length + 1,
+    });
+    mockGet(profile({ whatsapp_configured: true }), [matching, mismatching]);
+    render(<WhatsappSection />);
+
+    const select = await screen.findByRole("combobox", { name: firstPurpose.label });
+    const options = within(select)
+      .getAllByRole("option")
+      .map((o) => o.textContent);
+
+    expect(options).toContain("tpl_match");
+    expect(options).not.toContain("tpl_mismatch");
+  });
+
+  it("carrega os vínculos existentes do perfil e pré-seleciona o template no select", async () => {
+    const bound = template({
+      id: "t-bound",
+      name: "tpl_bound",
+      status: "APPROVED",
+      variable_count: firstPurpose.variables.length,
+    });
+    mockGet(
+      profile({
+        whatsapp_configured: true,
+        whatsapp_template_bindings: { [firstPurpose.key]: "t-bound" },
+      }),
+      [bound],
+    );
+    render(<WhatsappSection />);
+
+    const select = await screen.findByRole("combobox", { name: firstPurpose.label });
+    await waitFor(() => expect(select).toHaveValue("t-bound"));
+  });
+
+  it("'Salvar vínculos' envia o mapa completo de 5 propósitos com a seleção atual", async () => {
+    const user = userEvent.setup();
+    const matching = template({
+      id: "t-1",
+      name: "tpl_match",
+      status: "APPROVED",
+      variable_count: firstPurpose.variables.length,
+    });
+    mockGet(profile({ whatsapp_configured: true }), [matching]);
+    vi.mocked(api.patch).mockResolvedValue({
+      data: profile({ whatsapp_template_bindings: { [firstPurpose.key]: "t-1" } }),
+    } as never);
+    render(<WhatsappSection />);
+
+    const select = await screen.findByRole("combobox", { name: firstPurpose.label });
+    await user.selectOptions(select, "t-1");
+
+    await user.click(screen.getByRole("button", { name: /Salvar vínculos/ }));
+
+    await waitFor(() =>
+      expect(api.patch).toHaveBeenCalledWith("/settings/profile", {
+        whatsapp_template_bindings: { ...emptyBindings(), [firstPurpose.key]: "t-1" },
+      }),
+    );
+  });
+
+  it("mostra o erro 422 retornado pela API ao salvar um vínculo incompatível", async () => {
+    const user = userEvent.setup();
+    mockGet(profile({ whatsapp_configured: true }), []);
+    vi.mocked(api.patch).mockRejectedValue({
+      response: {
+        data: { detail: "Template deve ter exatamente 4 variáveis para este propósito" },
+      },
+    });
+    render(<WhatsappSection />);
+
+    await screen.findByRole("combobox", { name: firstPurpose.label });
+    await user.click(screen.getByRole("button", { name: /Salvar vínculos/ }));
+
+    expect(
+      await screen.findByText("Template deve ter exatamente 4 variáveis para este propósito"),
     ).toBeInTheDocument();
   });
 });

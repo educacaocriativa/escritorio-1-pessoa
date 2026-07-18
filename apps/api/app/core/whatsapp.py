@@ -15,15 +15,26 @@ from app.config import settings
 logger = logging.getLogger("e1p.whatsapp")
 
 
-def send_text(*, to: str, text: str) -> str:
-    """Retorna o status: 'sent' | 'logged' | 'failed'."""
-    if not settings.whatsapp_token or not settings.whatsapp_phone_id:
+def send_text(
+    *, to: str, text: str, token: str | None = None, phone_id: str | None = None
+) -> str:
+    """Retorna o status: 'sent' | 'logged' | 'failed'.
+
+    `token`/`phone_id` são as credenciais do TENANT (ver `TenantProfile`) — passe-as sempre que
+    o chamador já tiver o perfil do tenant em mãos. Quando omitidos (None, o default), cai na
+    env global `settings.whatsapp_token`/`whatsapp_phone_id` — mantido só por retrocompatibilidade
+    com testes/chamadas antigas; em produção essa env NUNCA está configurada (a integração é
+    100% por tenant), então omitir os parâmetros equivale, na prática, a 'logged' sempre.
+    """
+    tok = token if token is not None else settings.whatsapp_token
+    pid = phone_id if phone_id is not None else settings.whatsapp_phone_id
+    if not tok or not pid:
         logger.info("[whatsapp:logged] para=%s msg=%s", to, text)
         return "logged"
     try:
         resp = httpx.post(
-            f"https://graph.facebook.com/v21.0/{settings.whatsapp_phone_id}/messages",
-            headers={"Authorization": f"Bearer {settings.whatsapp_token}"},
+            f"https://graph.facebook.com/v21.0/{pid}/messages",
+            headers={"Authorization": f"Bearer {tok}"},
             json={
                 "messaging_product": "whatsapp",
                 "to": to,

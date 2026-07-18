@@ -4,6 +4,7 @@ import type {
   WhatsappTemplateCategory,
   WhatsappTemplateCreate,
 } from "@e1p/shared-types";
+import { WHATSAPP_PURPOSES } from "@e1p/shared-types";
 import { Check, Plus, RefreshCw, Trash2 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { api, apiErrorMessage } from "../../lib/api";
@@ -41,6 +42,7 @@ export default function WhatsappSection() {
     <div className="space-y-6">
       <CredentialsCard />
       <TemplatesCard />
+      <BindingsCard />
     </div>
   );
 }
@@ -310,6 +312,131 @@ function TemplatesCard() {
               ))}
             </div>
           )}
+        </>
+      )}
+    </div>
+  );
+}
+
+/** Card "Vínculos de Template por Propósito" — liga um template APROVADO a cada propósito
+ * fixo que o próprio produto define (lembrete de cobrança, envio de contrato/orçamento,
+ * convite de staff, aviso interno de card movido). Diferente do nó livre do Funil de Vendas:
+ * aqui a lista de propósitos é fixa (`WHATSAPP_PURPOSES`) e cada um exige um template com a
+ * contagem exata de variáveis — o backend valida isso no PATCH e retorna 422 se não bater. */
+function BindingsCard() {
+  const [templates, setTemplates] = useState<WhatsappTemplate[]>([]);
+  const [bindings, setBindings] = useState<Record<string, string>>({});
+  const [loaded, setLoaded] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [success, setSuccess] = useState(false);
+
+  const load = useCallback(async () => {
+    const [{ data: profile }, { data: list }] = await Promise.all([
+      api.get<TenantProfile>("/settings/profile"),
+      api.get<WhatsappTemplate[]>("/whatsapp-templates"),
+    ]);
+    setTemplates(Array.isArray(list) ? list : []);
+    const initial: Record<string, string> = {};
+    for (const p of WHATSAPP_PURPOSES) {
+      initial[p.key] = profile.whatsapp_template_bindings?.[p.key] ?? "";
+    }
+    setBindings(initial);
+    setLoaded(true);
+  }, []);
+
+  useEffect(() => {
+    load();
+  }, [load]);
+
+  const approvedTemplates = useMemo(
+    () => templates.filter((t) => t.status === "APPROVED"),
+    [templates],
+  );
+
+  function setBinding(purposeKey: string, templateId: string) {
+    setBindings((prev) => ({ ...prev, [purposeKey]: templateId }));
+    setSuccess(false);
+  }
+
+  async function save() {
+    setSaving(true);
+    setError(null);
+    setSuccess(false);
+    try {
+      await api.patch<TenantProfile>("/settings/profile", {
+        whatsapp_template_bindings: bindings,
+      });
+      setSuccess(true);
+    } catch (err) {
+      setError(apiErrorMessage(err));
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  return (
+    <div className="rounded-2xl bg-white p-5 shadow-sm">
+      <h2 className="mb-1 font-semibold text-neutral-800">Vínculos de Template por Propósito</h2>
+      <p className="mb-4 text-xs text-neutral-400">
+        Escolha qual template aprovado o sistema deve usar automaticamente em cada fluxo. Deixe
+        "Nenhum (texto livre)" para continuar enviando texto livre nesse fluxo.
+      </p>
+
+      {!loaded ? (
+        <p className="text-sm text-neutral-400">Carregando...</p>
+      ) : (
+        <>
+          <div className="space-y-2">
+            {WHATSAPP_PURPOSES.map((p) => {
+              const matching = approvedTemplates.filter(
+                (t) => t.variable_count === p.variables.length,
+              );
+              return (
+                <div key={p.key} className="rounded-xl border border-neutral-100 px-4 py-3">
+                  <p className="text-sm font-semibold text-neutral-800">{p.label}</p>
+                  <p className="mb-2 text-xs text-neutral-400">
+                    Variáveis: {p.variables.join(", ")}
+                  </p>
+                  <select
+                    aria-label={p.label}
+                    value={bindings[p.key] ?? ""}
+                    onChange={(e) => setBinding(p.key, e.target.value)}
+                    className="w-full rounded-lg border border-neutral-200 px-3 py-2 text-sm outline-none focus:border-primary-400"
+                  >
+                    <option value="">— Nenhum (texto livre) —</option>
+                    {matching.map((t) => (
+                      <option key={t.id} value={t.id}>
+                        {t.name}
+                      </option>
+                    ))}
+                  </select>
+                  {matching.length === 0 && (
+                    <p className="mt-1 text-xs text-neutral-400">
+                      Nenhum template aprovado com {p.variables.length} variáveis ainda.
+                    </p>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+
+          {error && (
+            <div className="mt-3 rounded-lg bg-red-50 px-3 py-2 text-sm text-danger">{error}</div>
+          )}
+          {success && (
+            <div className="mt-3 rounded-lg bg-green-50 px-3 py-2 text-sm text-green-700">
+              Vínculos salvos
+            </div>
+          )}
+
+          <button
+            onClick={save}
+            disabled={saving}
+            className="mt-4 flex items-center gap-1.5 rounded-pill bg-primary-600 px-5 py-2 text-sm font-semibold text-white hover:bg-primary-700 disabled:opacity-50"
+          >
+            <Check size={14} /> {saving ? "Salvando..." : "Salvar vínculos"}
+          </button>
         </>
       )}
     </div>

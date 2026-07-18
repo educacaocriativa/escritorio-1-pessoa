@@ -23,6 +23,42 @@ STATUS_DISABLED = "DISABLED"
 # Categorias aceitas pela Meta (o que pedimos — a aprovada pode vir diferente).
 CATEGORIES = ("MARKETING", "UTILITY", "AUTHENTICATION")
 
+# ── Vínculo propósito→template (fluxos de sistema, NÃO o nó livre do funil) ──
+#
+# Diferente do nó de WhatsApp do Funil de Vendas (onde o usuário escolhe QUALQUER template
+# aprovado e monta as variáveis livremente), estes 5 pontos do produto disparam WhatsApp de
+# forma fixa/automática — o tenant só precisa vincular UM template aprovado por propósito
+# (uma vez, em Configurações), e o sistema preenche as variáveis sozinho a cada envio.
+#
+# `PURPOSE_VARIABLE_SPECS` documenta, pra cada propósito, o rótulo de cada variável NA ORDEM
+# em que o sistema vai preenchê-las ({{1}}, {{2}}, ...) — usado tanto para orientar o tenant ao
+# escrever o corpo do template quanto para VALIDAR o vínculo (o template escolhido precisa ter
+# exatamente `len(spec)` variáveis, ou o vínculo é rejeitado).
+PURPOSE_CHARGE_REMINDER = "charge_reminder"
+PURPOSE_CONTRACT_SEND = "contract_send"
+PURPOSE_QUOTE_SEND = "quote_send"
+PURPOSE_STAFF_INVITE = "staff_invite"
+PURPOSE_CLIENT_MOVED = "client_moved"
+
+PURPOSE_VARIABLE_SPECS: dict[str, list[str]] = {
+    PURPOSE_CHARGE_REMINDER: [
+        "Nome do cliente", "Frase de cobrança (a IA sugere uma; pode editar)",
+        "Valor", "Vencimento",
+    ],
+    PURPOSE_CONTRACT_SEND: ["Nome do cliente", "Título do contrato", "Link de assinatura"],
+    PURPOSE_QUOTE_SEND: ["Nome do cliente", "Título do orçamento", "Valor", "Link da proposta"],
+    PURPOSE_STAFF_INVITE: ["Nome", "Empresa", "E-mail de login", "Senha temporária"],
+    PURPOSE_CLIENT_MOVED: ["Nome do cliente", "Nome da nova etapa"],
+}
+
+PURPOSE_LABELS: dict[str, str] = {
+    PURPOSE_CHARGE_REMINDER: "Lembrete de cobrança (Cobrar com IA)",
+    PURPOSE_CONTRACT_SEND: "Envio de contrato",
+    PURPOSE_QUOTE_SEND: "Envio de orçamento/proposta",
+    PURPOSE_STAFF_INVITE: "Convite de funcionário (senha temporária)",
+    PURPOSE_CLIENT_MOVED: "Aviso interno: cliente mudou de etapa no CRM",
+}
+
 
 class WhatsappTemplate(Base, TenantMixin, TimestampMixin):
     __tablename__ = "whatsapp_templates"

@@ -5,7 +5,7 @@ TenantProfile: uma linha por tenant (RLS) com o perfil da empresa e o Brand Kit
 """
 from __future__ import annotations
 
-from sqlalchemy import String, Text
+from sqlalchemy import JSON, String, Text
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.core.token_crypto import EncryptedToken
@@ -59,3 +59,6 @@ class TenantProfile(Base, TenantMixin, TimestampMixin):
     whatsapp_token: Mapped[str | None] = mapped_column(EncryptedToken, nullable=True)
     whatsapp_phone_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
     whatsapp_waba_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    # Vínculo propósito→template (dict[str, str], chaves em whatsapp_templates.PURPOSES).
+    # Propósito ausente/sem valor = fluxo correspondente ainda usa texto livre (send_text).
+    whatsapp_template_bindings: Mapped[dict] = mapped_column(JSON, default=dict, nullable=False)
