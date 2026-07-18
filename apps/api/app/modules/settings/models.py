@@ -8,6 +8,7 @@ from __future__ import annotations
 from sqlalchemy import String, Text
 from sqlalchemy.orm import Mapped, mapped_column
 
+from app.core.token_crypto import EncryptedToken
 from app.db.base import Base, TenantMixin, TimestampMixin, _uuid
 
 DEFAULT_PRIMARY = "#5D44F8"
@@ -49,3 +50,12 @@ class TenantProfile(Base, TenantMixin, TimestampMixin):
     # None = sem auto-enroll (comportamento padrão até o dono configurar). Sem FK dura pra
     # `funnels.id` (mesmo padrão do projeto): funil apagado só faz o auto-enroll no-opar.
     default_entry_funnel_id: Mapped[str | None] = mapped_column(String(36), nullable=True)
+
+    # WhatsApp Cloud API (Meta) — POR TENANT (cada escritório tem sua própria conta/número; NÃO
+    # existe mais uma env global compartilhada). None/vazio = integração desligada (graceful
+    # degradation: `core/whatsapp.send_template` cai no status "logged"). Token cifrado em
+    # repouso (mesmo padrão Fernet do Google OAuth, ver `core/token_crypto.py`); phone_id/waba_id
+    # não são segredos (IDs de conta), guardados em texto plano.
+    whatsapp_token: Mapped[str | None] = mapped_column(EncryptedToken, nullable=True)
+    whatsapp_phone_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    whatsapp_waba_id: Mapped[str | None] = mapped_column(String(64), nullable=True)

@@ -21,6 +21,9 @@ def _out(p: TenantProfile) -> ProfileOut:
         primary_color=p.primary_color, secondary_color=p.secondary_color,
         accent_color=p.accent_color, text_color=p.text_color, bg_color=p.bg_color, font=p.font,
         timezone=p.timezone, default_entry_funnel_id=p.default_entry_funnel_id,
+        whatsapp_configured=bool(p.whatsapp_token and p.whatsapp_phone_id and p.whatsapp_waba_id),
+        whatsapp_phone_id=p.whatsapp_phone_id or "",
+        whatsapp_waba_id=p.whatsapp_waba_id or "",
     )
 
 

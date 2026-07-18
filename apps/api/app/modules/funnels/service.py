@@ -177,6 +177,31 @@ class FunnelError(Exception):
         self.status_code = status_code
 
 
+# ── WhatsApp: resolução de variáveis de template ({{cliente.*}} ou texto literal) ──
+_CLIENT_KEYWORDS = {
+    "cliente.nome": lambda c: c.name,
+    "cliente.telefone": lambda c: c.phone or "",
+    "cliente.email": lambda c: c.email or "",
+}
+
+
+def _resolve_template_variable(raw: str, client) -> str:
+    if raw.startswith("{{") and raw.endswith("}}"):
+        key = raw[2:-2].strip()
+        resolver = _CLIENT_KEYWORDS.get(key)
+        if resolver is not None:
+            return resolver(client) or ""
+    return raw  # texto fixo, literal
+
+
+def _render_template_preview(body_text: str, variables: list[str]) -> str:
+    """Substitui {{1}}, {{2}}, ... no corpo do template pelos valores já resolvidos."""
+    rendered = body_text
+    for i, value in enumerate(variables, start=1):
+        rendered = rendered.replace(f"{{{{{i}}}}}", value)
+    return rendered
+
+
 # ── IA: compõe o conteúdo de um nó (e-mail / mensagem / texto) ──────────────
 _COMPOSE_SYSTEM = {
     "email": (
@@ -296,6 +321,8 @@ def run_node(
     from app.modules.quotes.schemas import QuoteCreate, QuoteItem
     from app.modules.receivables import service as receivables_service
     from app.modules.receivables.schemas import ChargeCreate
+    from app.modules.settings import service as settings_service
+    from app.modules.whatsapp_templates.models import STATUS_APPROVED, WhatsappTemplate
 
     def _client() -> Client:
         c = db.get(Client, client_id) if client_id else None
@@ -352,25 +379,47 @@ def run_node(
         return {"message": f"Cobrança ({method}) criada para {c.name}", "kind": "charge",
                 "ref_id": ch.id}
 
-    if action in ("send_email", "send_message"):
+    if action == "send_email":
         c = _client()
         msg = (params.get("message") or "").strip()
         if not msg:
             raise FunnelError("Escreva a mensagem (ou gere com IA) antes de enviar", 422)
-        channel = "email" if action == "send_email" else "whatsapp"
-        recipient = (c.email if channel == "email" else c.phone) or c.name
-        if channel == "email":
-            subject = (params.get("subject") or "Mensagem").strip()
-            status = email.send_email(to=recipient, subject=subject, body=msg)
-        else:
-            status = whatsapp.send_text(to=recipient, text=msg)
+        recipient = c.email or c.name
+        subject = (params.get("subject") or "Mensagem").strip()
+        status = email.send_email(to=recipient, subject=subject, body=msg)
         db.add(Notification(
-            tenant_id=tenant_id, channel=channel, recipient=recipient,
+            tenant_id=tenant_id, channel="email", recipient=recipient,
             client_id=c.id, message=msg, status=status,
         ))
         audit.record(db, tenant_id=tenant_id, actor=actor, action="funnel.run.message", target=c.id)
         db.commit()
-        return {"message": f"Mensagem registrada para {c.name} ({channel})", "kind": "message",
+        return {"message": f"Mensagem registrada para {c.name} (email)", "kind": "message",
+                "ref_id": c.id}
+
+    if action == "send_message":
+        c = _client()
+        template_id = params.get("template_id")
+        if not template_id:
+            raise FunnelError("Selecione um template de WhatsApp aprovado", 422)
+        tpl = db.get(WhatsappTemplate, template_id)
+        if tpl is None or tpl.status != STATUS_APPROVED:
+            raise FunnelError("Template não encontrado ou ainda não aprovado pela Meta", 422)
+        recipient = c.phone or c.name
+        resolved_vars = [_resolve_template_variable(v, c) for v in (params.get("variables") or [])]
+        profile = settings_service.get_profile(db, tenant_id)
+        status = whatsapp.send_template(
+            to=c.phone or "", token=profile.whatsapp_token or "",
+            phone_id=profile.whatsapp_phone_id or "",
+            template_name=tpl.name, language=tpl.language, variables=resolved_vars,
+        )
+        rendered = _render_template_preview(tpl.body_text, resolved_vars)
+        db.add(Notification(
+            tenant_id=tenant_id, channel="whatsapp", recipient=recipient,
+            client_id=c.id, message=rendered, status=status,
+        ))
+        audit.record(db, tenant_id=tenant_id, actor=actor, action="funnel.run.message", target=c.id)
+        db.commit()
+        return {"message": f"Mensagem registrada para {c.name} (whatsapp)", "kind": "message",
                 "ref_id": c.id}
 
     raise FunnelError("Este componente ainda não executa uma ação automática", 400)

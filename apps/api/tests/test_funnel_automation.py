@@ -2,6 +2,9 @@
 espera + agendador (tick), condicional (se-ou), estado por contato e isolamento."""
 import pytest
 from fastapi.testclient import TestClient
+from sqlalchemy.orm import Session
+
+from app.modules.whatsapp_templates.models import STATUS_APPROVED, WhatsappTemplate
 
 REGISTER = {
     "legal_name": "Funil SA",
@@ -17,6 +20,23 @@ REGISTER = {
 def headers(client: TestClient) -> dict[str, str]:
     token = client.post("/auth/register", json=REGISTER).json()["access_token"]
     return {"Authorization": f"Bearer {token}"}
+
+
+@pytest.fixture()
+def tenant_id(client: TestClient, headers: dict[str, str]) -> str:
+    return client.get("/auth/me", headers=headers).json()["user"]["tenant_id"]
+
+
+def _approved_template(db: Session, tenant_id: str) -> WhatsappTemplate:
+    tpl = WhatsappTemplate(
+        tenant_id=tenant_id, name="lembrete_jornada", language="pt_BR",
+        category_requested="UTILITY", category_approved="UTILITY", status=STATUS_APPROVED,
+        body_text="Olá {{1}}, tudo bem?", variable_count=1, variable_examples=["João"],
+    )
+    db.add(tpl)
+    db.commit()
+    db.refresh(tpl)
+    return tpl
 
 
 def _node(nid, key, action="", config=None):
@@ -41,12 +61,16 @@ def _funnel(client, headers, nodes, edges):
     ).json()["id"]
 
 
-def test_enroll_runs_until_wait_then_tick_resumes(client: TestClient, headers):
+def test_enroll_runs_until_wait_then_tick_resumes(
+    client: TestClient, headers, db: Session, tenant_id: str
+):
+    tpl = _approved_template(db, tenant_id)
     cid = _client_id(client, headers, "João Jornada")
     nodes = [
         _node("n1", "lead", "create_client"),  # contato já existe → pulado
         _node("n2", "esperar", config={"delay_seconds": 0}),
-        _node("n3", "whatsapp", "send_message", config={"body": "Olá, tudo bem? 🙂"}),
+        _node("n3", "whatsapp", "send_message",
+              config={"template_id": tpl.id, "variables": ["{{cliente.nome}}"]}),
     ]
     edges = [_edge("n1", "n2"), _edge("n2", "n3")]
     fid = _funnel(client, headers, nodes, edges)

@@ -13,6 +13,7 @@ _FIELDS = (
     "display_name", "document", "email", "phone", "address", "website", "about",
     "logo_url", "primary_color", "secondary_color", "accent_color", "text_color",
     "bg_color", "font", "timezone",
+    "whatsapp_token", "whatsapp_phone_id", "whatsapp_waba_id",
 )
 
 

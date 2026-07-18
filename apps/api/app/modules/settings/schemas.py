@@ -29,6 +29,11 @@ class ProfileOut(BaseModel):
     timezone: str
     # Funil de Vendas para auto-enroll de leads novos (source=landing/api). None = desligado.
     default_entry_funnel_id: str | None
+    # WhatsApp Cloud API (Meta) — por tenant. `whatsapp_token` NUNCA é exposto aqui (só o boolean
+    # de status); phone_id/waba_id não são segredos (IDs de conta), seguros para GET.
+    whatsapp_configured: bool
+    whatsapp_phone_id: str
+    whatsapp_waba_id: str
 
 
 class ProfileUpdate(BaseModel):
@@ -49,6 +54,12 @@ class ProfileUpdate(BaseModel):
     timezone: str | None = Field(default=None, max_length=64)
     # None = não altera; "" = desliga o auto-enroll (mesmo padrão de contract_id em Charge).
     default_entry_funnel_id: str | None = Field(default=None, max_length=36)
+    # WhatsApp Cloud API (Meta) — por tenant. None = não altera; "" = limpa/desconecta.
+    # Sem @field_validator: token/IDs são strings opacas vindas da Meta (não têm formato a validar
+    # como as cores hex/URLs/timezone acima).
+    whatsapp_token: str | None = Field(default=None)
+    whatsapp_phone_id: str | None = Field(default=None, max_length=64)
+    whatsapp_waba_id: str | None = Field(default=None, max_length=64)
 
     # Validações de formato — só se aplicam a valores NÃO vazios.
     # None (omitido) = não altera; "" = limpar o campo (ambos preservados, AC4).
