@@ -419,3 +419,66 @@ def test_send_media_sent(monkeypatch: pytest.MonkeyPatch) -> None:
         "messaging_product": "whatsapp", "to": "5511988887777", "type": "document",
         "document": {"id": "media-123", "caption": "Cardápio"},
     }
+
+
+def test_send_media_failed_when_provider_raises(monkeypatch: pytest.MonkeyPatch) -> None:
+    def _raise(*_a: object, **_k: object) -> None:
+        raise httpx.ConnectError("sem rede")
+
+    monkeypatch.setattr(httpx, "post", _raise)
+    # Falha do provedor não propaga (IV3): retorna "failed".
+    assert whatsapp.send_media(
+        to="5511988887777", token="tok", phone_id="123", kind="image", media_id="m1"
+    ) == "failed"
+
+
+def test_send_media_failed_when_provider_returns_error_status(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(httpx, "post", lambda *_a, **_k: _FakeResponse(500))
+    # HTTPStatusError (via raise_for_status) também é capturado → "failed".
+    assert whatsapp.send_media(
+        to="5511988887777", token="tok", phone_id="123", kind="image", media_id="m1"
+    ) == "failed"
+
+
+def test_upload_media_raises_on_network_error(monkeypatch: pytest.MonkeyPatch) -> None:
+    def _raise(*_a: object, **_k: object) -> None:
+        raise httpx.ConnectError("sem rede")
+
+    monkeypatch.setattr(httpx, "post", _raise)
+    with pytest.raises(whatsapp.WhatsappApiError):
+        whatsapp.upload_media(
+            phone_id="123", token="tok", file_bytes=b"x", filename="a.pdf",
+            mime_type="application/pdf",
+        )
+
+
+def test_fetch_media_url_raises_on_network_error(monkeypatch: pytest.MonkeyPatch) -> None:
+    def _raise(*_a: object, **_k: object) -> None:
+        raise httpx.ConnectError("sem rede")
+
+    monkeypatch.setattr(httpx, "get", _raise)
+    with pytest.raises(whatsapp.WhatsappApiError):
+        whatsapp.fetch_media_url(token="tok", media_id="media-123")
+
+
+def test_fetch_media_url_raises_on_error_status(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(httpx, "get", lambda *_a, **_k: _FakeResponse(404))
+    with pytest.raises(whatsapp.WhatsappApiError):
+        whatsapp.fetch_media_url(token="tok", media_id="media-123")
+
+
+def test_download_media_raises_on_network_error(monkeypatch: pytest.MonkeyPatch) -> None:
+    def _raise(*_a: object, **_k: object) -> None:
+        raise httpx.ConnectError("sem rede")
+
+    monkeypatch.setattr(httpx, "get", _raise)
+    with pytest.raises(whatsapp.WhatsappApiError):
+        whatsapp.download_media(token="tok", url="https://example.com/f")
+
+
+def test_download_media_raises_on_error_status(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(httpx, "get", lambda *_a, **_k: _FakeResponse(500))
+    with pytest.raises(whatsapp.WhatsappApiError):
+        whatsapp.download_media(token="tok", url="https://example.com/f")
