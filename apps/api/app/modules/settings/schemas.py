@@ -34,6 +34,7 @@ class ProfileOut(BaseModel):
     whatsapp_configured: bool
     whatsapp_phone_id: str
     whatsapp_waba_id: str
+    whatsapp_verify_token: str
     # Vínculo propósito→template (ver whatsapp_templates.models.PURPOSE_VARIABLE_SPECS).
     # Propósito ausente/vazio = esse fluxo do sistema ainda usa texto livre.
     whatsapp_template_bindings: dict[str, str]
@@ -63,6 +64,7 @@ class ProfileUpdate(BaseModel):
     whatsapp_token: str | None = Field(default=None)
     whatsapp_phone_id: str | None = Field(default=None, max_length=64)
     whatsapp_waba_id: str | None = Field(default=None, max_length=64)
+    whatsapp_app_secret: str | None = Field(default=None)
     # None = não altera; um dict substitui o mapa INTEIRO (a UI sempre manda o mapa completo
     # após editar). Chave com valor "" desvincula aquele propósito específico.
     whatsapp_template_bindings: dict[str, str] | None = Field(default=None)
