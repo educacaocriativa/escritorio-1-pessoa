@@ -82,6 +82,11 @@ def upgrade() -> None:
         "whatsapp_conversation_states",
         ["tenant_id"],
     )
+    op.create_index(
+        "ix_whatsapp_conversation_states_client_id",
+        "whatsapp_conversation_states",
+        ["client_id"],
+    )
     op.execute("ALTER TABLE whatsapp_conversation_states ENABLE ROW LEVEL SECURITY")
     op.execute("ALTER TABLE whatsapp_conversation_states FORCE ROW LEVEL SECURITY")
     op.execute(
@@ -105,6 +110,11 @@ def upgrade() -> None:
 
 def downgrade() -> None:
     op.drop_table("public_whatsapp_accounts")
+    op.drop_index(
+        "ix_whatsapp_conversation_states_client_id",
+        table_name="whatsapp_conversation_states",
+        if_exists=True,
+    )
     op.drop_index(
         "ix_whatsapp_conversation_states_tenant_id", table_name="whatsapp_conversation_states"
     )
