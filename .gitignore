@@ -54,3 +54,6 @@ test-results/
 .aiox/
 .claude/agent-memory/
 .claude/worktrees/
+
+# Superpowers subagent-driven-development scratch (progress ledger, review packages)
+.superpowers/
