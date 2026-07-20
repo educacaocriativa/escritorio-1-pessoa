@@ -52,6 +52,8 @@ function CredentialsCard() {
   const [profile, setProfile] = useState<TenantProfile | null>(null);
   const [token, setToken] = useState("");
   const [tokenTouched, setTokenTouched] = useState(false);
+  const [appSecret, setAppSecret] = useState("");
+  const [appSecretTouched, setAppSecretTouched] = useState(false);
   const [phoneId, setPhoneId] = useState("");
   const [wabaId, setWabaId] = useState("");
   const [saving, setSaving] = useState(false);
@@ -64,6 +66,8 @@ function CredentialsCard() {
     setWabaId(data.whatsapp_waba_id ?? "");
     setToken("");
     setTokenTouched(false);
+    setAppSecret("");
+    setAppSecretTouched(false);
   }, []);
 
   useEffect(() => {
@@ -76,17 +80,21 @@ function CredentialsCard() {
     try {
       const patch: Pick<TenantProfile, "whatsapp_phone_id" | "whatsapp_waba_id"> & {
         whatsapp_token?: string;
+        whatsapp_app_secret?: string;
       } = {
         whatsapp_phone_id: phoneId.trim(),
         whatsapp_waba_id: wabaId.trim(),
       };
       if (tokenTouched) patch.whatsapp_token = token;
+      if (appSecretTouched) patch.whatsapp_app_secret = appSecret;
       const { data } = await api.patch<TenantProfile>("/settings/profile", patch);
       setProfile(data);
       setPhoneId(data.whatsapp_phone_id ?? "");
       setWabaId(data.whatsapp_waba_id ?? "");
       setToken("");
       setTokenTouched(false);
+      setAppSecret("");
+      setAppSecretTouched(false);
     } catch (err) {
       setError(apiErrorMessage(err));
     } finally {
@@ -136,6 +144,21 @@ function CredentialsCard() {
                 className="w-full rounded-lg border border-neutral-200 px-3 py-2 text-sm outline-none focus:border-primary-400"
               />
             </label>
+            <label className="block sm:col-span-2">
+              <span className="mb-1 block text-xs font-medium text-neutral-600">
+                App Secret
+              </span>
+              <input
+                type="password"
+                value={appSecret}
+                onChange={(e) => {
+                  setAppSecret(e.target.value);
+                  setAppSecretTouched(true);
+                }}
+                placeholder={configured ? "••••••••" : "Cole o App Secret do seu App na Meta"}
+                className="w-full rounded-lg border border-neutral-200 px-3 py-2 text-sm outline-none focus:border-primary-400"
+              />
+            </label>
             <label className="block">
               <span className="mb-1 block text-xs font-medium text-neutral-600">
                 Phone Number ID
@@ -155,6 +178,26 @@ function CredentialsCard() {
               />
             </label>
           </div>
+
+          {profile.whatsapp_verify_token && (
+            <div className="mt-4 rounded-xl border border-neutral-100 bg-neutral-50 p-4">
+              <p className="mb-2 text-xs font-semibold text-neutral-600">
+                Configure o webhook no painel da Meta (WhatsApp → Configuration):
+              </p>
+              <div className="mb-2">
+                <span className="mb-1 block text-xs text-neutral-500">Callback URL</span>
+                <code className="block truncate rounded-lg bg-white px-3 py-2 text-xs">
+                  {`${window.location.origin}/api/public/whatsapp/webhook`}
+                </code>
+              </div>
+              <div>
+                <span className="mb-1 block text-xs text-neutral-500">Verify token</span>
+                <code className="block truncate rounded-lg bg-white px-3 py-2 text-xs">
+                  {profile.whatsapp_verify_token}
+                </code>
+              </div>
+            </div>
+          )}
 
           {error && (
             <div className="mt-3 rounded-lg bg-red-50 px-3 py-2 text-sm text-danger">{error}</div>

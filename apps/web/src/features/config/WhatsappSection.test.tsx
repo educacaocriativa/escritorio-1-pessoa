@@ -37,6 +37,7 @@ function profile(overrides: Partial<TenantProfile> = {}): TenantProfile {
     whatsapp_phone_id: "",
     whatsapp_waba_id: "",
     whatsapp_template_bindings: {},
+    whatsapp_verify_token: "",
     ...overrides,
   };
 }
@@ -143,6 +144,72 @@ describe("WhatsappSection — credenciais", () => {
         whatsapp_phone_id: "",
         whatsapp_waba_id: "",
         whatsapp_token: "meu-token-secreto",
+      }),
+    );
+  });
+
+  it("mostra a URL do webhook e o verify token gerado quando já configurado", async () => {
+    mockGet(
+      profile({
+        whatsapp_configured: true, whatsapp_phone_id: "phone-123",
+        whatsapp_waba_id: "waba-456", whatsapp_verify_token: "abc123xyz",
+      }),
+    );
+    render(<WhatsappSection />);
+
+    await screen.findByText("Conectado");
+    expect(screen.getByText("abc123xyz")).toBeInTheDocument();
+    expect(screen.getByText(/public\/whatsapp\/webhook/)).toBeInTheDocument();
+  });
+
+  it("não mostra o bloco do webhook quando ainda não há verify_token", async () => {
+    mockGet(profile({ whatsapp_configured: false, whatsapp_verify_token: "" }));
+    render(<WhatsappSection />);
+
+    await screen.findByText("Não conectado");
+    expect(screen.queryByText(/public\/whatsapp\/webhook/)).not.toBeInTheDocument();
+  });
+
+  it("inclui whatsapp_app_secret no payload quando o campo é editado", async () => {
+    const user = userEvent.setup();
+    mockGet(profile({ whatsapp_configured: false }));
+    vi.mocked(api.patch).mockResolvedValue({ data: profile({ whatsapp_configured: true }) } as never);
+    render(<WhatsappSection />);
+
+    await screen.findByText("Não conectado");
+    const secretInput = screen.getByPlaceholderText("Cole o App Secret do seu App na Meta");
+    await user.type(secretInput, "meu-app-secret");
+
+    const saveButtons = screen.getAllByRole("button", { name: /Salvar/ });
+    await user.click(saveButtons[0]);
+
+    await waitFor(() =>
+      expect(api.patch).toHaveBeenCalledWith("/settings/profile", {
+        whatsapp_phone_id: "",
+        whatsapp_waba_id: "",
+        whatsapp_app_secret: "meu-app-secret",
+      }),
+    );
+  });
+
+  it("não inclui whatsapp_app_secret no payload quando o campo não foi tocado", async () => {
+    const user = userEvent.setup();
+    mockGet(
+      profile({ whatsapp_configured: true, whatsapp_phone_id: "phone-1", whatsapp_waba_id: "waba-1" }),
+    );
+    vi.mocked(api.patch).mockResolvedValue({
+      data: profile({ whatsapp_configured: true, whatsapp_phone_id: "phone-1", whatsapp_waba_id: "waba-1" }),
+    } as never);
+    render(<WhatsappSection />);
+
+    await screen.findByText("Conectado");
+    const saveButtons = screen.getAllByRole("button", { name: /Salvar/ });
+    await user.click(saveButtons[0]);
+
+    await waitFor(() =>
+      expect(api.patch).toHaveBeenCalledWith("/settings/profile", {
+        whatsapp_phone_id: "phone-1",
+        whatsapp_waba_id: "waba-1",
       }),
     );
   });
