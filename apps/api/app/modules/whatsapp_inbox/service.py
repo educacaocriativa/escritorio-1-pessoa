@@ -1,0 +1,371 @@
+# apps/api/app/modules/whatsapp_inbox/service.py
+"""Inbox de WhatsApp: ingestão do webhook, lead automático, linha do tempo unificada, janela
+de 24h e envio de resposta (texto/mídia/template).
+
+Ver docs/superpowers/specs/2026-07-19-whatsapp-inbox-design.md para o desenho completo.
+"""
+from __future__ import annotations
+
+import logging
+from datetime import UTC, datetime, timedelta
+
+from sqlalchemy import select
+from sqlalchemy.orm import Session
+
+from app.core import audit, whatsapp
+from app.modules.attachments import service as attachments_service
+from app.modules.attachments.service import AttachmentError
+from app.modules.crm import service as crm_service
+from app.modules.crm.models import Client
+from app.modules.crm.schemas import ClientCreate
+from app.modules.notifications.models import Notification
+from app.modules.settings import service as settings_service
+from app.modules.whatsapp_inbox.models import (
+    DIRECTION_IN,
+    DIRECTION_OUT,
+    KIND_TEXT,
+    MEDIA_STATUS_NONE,
+    MEDIA_STATUS_PENDING,
+    PublicWhatsappAccount,
+    WhatsappConversationState,
+    WhatsappMessage,
+)
+from app.modules.whatsapp_templates.models import STATUS_APPROVED, WhatsappTemplate
+
+logger = logging.getLogger("e1p.whatsapp_inbox")
+
+SESSION_WINDOW = timedelta(hours=24)
+
+# Rótulo genérico para avisos automáticos na timeline (ver `get_timeline`): `Notification` hoje
+# não guarda o propósito explicitamente, então todo aviso automático cai neste rótulo único.
+# Refinamento (guardar o propósito na própria Notification) fica para depois — não bloqueia
+# esta feature.
+AUTOMATED_PURPOSE_LABEL = "Aviso automático"
+
+# Mapeia o mime_type recebido em `send_reply_media` para o `type` que a Graph API espera.
+_MEDIA_KIND_BY_MIME = {
+    "image/jpeg": "image",
+    "image/png": "image",
+    "application/pdf": "document",
+    "audio/mpeg": "audio",
+    "audio/ogg": "audio",
+    "video/mp4": "video",
+}
+
+
+class WhatsappInboxError(Exception):
+    def __init__(self, message: str, status_code: int = 422) -> None:
+        super().__init__(message)
+        self.status_code = status_code
+
+
+# ── Ingestão (webhook) ──────────────────────────────────────────────────────
+
+
+def _extract_messages(payload: dict) -> list[tuple[str | None, dict, str]]:
+    """Devolve [(phone_number_id, mensagem, nome_do_contato)] achatando o formato aninhado do
+    payload da Meta. `phone_number_id` vem por `value.metadata` — é dali que resolvemos o
+    `tenant_id` (a Meta não manda tenant nenhum, só o número que recebeu o evento)."""
+    out: list[tuple[str | None, dict, str]] = []
+    for entry in payload.get("entry", []):
+        for change in entry.get("changes", []):
+            value = change.get("value", {})
+            phone_number_id = value.get("metadata", {}).get("phone_number_id")
+            contacts = value.get("contacts", [])
+            name = contacts[0]["profile"]["name"] if contacts else "Cliente"
+            for msg in value.get("messages", []):
+                out.append((phone_number_id, msg, name))
+    return out
+
+
+def _resolve_tenant_id(db: Session, *, phone_number_id: str | None) -> str | None:
+    """Resolve o `tenant_id` a partir do `phone_number_id` via `PublicWhatsappAccount` (tabela
+    global, sem RLS — o único jeito de saber de quem é o evento antes de qualquer autenticação).
+    Devolve None se o número não estiver cadastrado (evento descartado silenciosamente)."""
+    if not phone_number_id:
+        return None
+    account = db.scalar(
+        select(PublicWhatsappAccount).where(
+            PublicWhatsappAccount.phone_number_id == phone_number_id
+        )
+    )
+    return account.tenant_id if account else None
+
+
+def _get_or_create_client(db: Session, *, tenant_id: str, phone: str, name: str) -> Client:
+    client = db.scalar(select(Client).where(Client.phone == phone))
+    if client is not None:
+        return client
+    return crm_service.create_client(
+        db, tenant_id=tenant_id, actor="whatsapp:inbox",
+        data=ClientCreate(name=name or phone, phone=phone, source="whatsapp"),
+    )
+
+
+def ingest_webhook_payload(db: Session, *, payload: dict) -> None:
+    """Processa UM payload de webhook. Idempotente: mensagens com `wa_message_id` já visto são
+    ignoradas (a Meta reentrega o mesmo evento às vezes). `tenant_id` é resolvido por mensagem
+    a partir do `phone_number_id` (ver `_resolve_tenant_id`) — eventos de números não
+    cadastrados são descartados."""
+    for phone_number_id, msg, contact_name in _extract_messages(payload):
+        wa_message_id = msg.get("id")
+        if wa_message_id and db.scalar(
+            select(WhatsappMessage).where(WhatsappMessage.wa_message_id == wa_message_id)
+        ):
+            continue  # duplicata — ignora
+
+        tenant_id = _resolve_tenant_id(db, phone_number_id=phone_number_id)
+        if tenant_id is None:
+            logger.warning(
+                "[whatsapp_inbox] phone_number_id desconhecido, descartando mensagem: %s",
+                phone_number_id,
+            )
+            continue
+
+        from_number = msg.get("from", "")
+        kind = msg.get("type", "text")
+        text_body = ""
+        media_status = MEDIA_STATUS_NONE
+
+        if kind == "text":
+            text_body = msg.get("text", {}).get("body", "")
+        elif kind in ("image", "audio", "document", "video"):
+            media_obj = msg.get(kind, {})
+            text_body = media_obj.get("caption", "")
+            media_status = MEDIA_STATUS_PENDING
+        else:
+            kind = "text"
+            text_body = "[tipo de mensagem não suportado]"
+
+        client = _get_or_create_client(
+            db, tenant_id=tenant_id, phone=from_number, name=contact_name
+        )
+        db.add(WhatsappMessage(
+            tenant_id=tenant_id, client_id=client.id, direction=DIRECTION_IN, kind=kind,
+            text_body=text_body, media_status=media_status, wa_message_id=wa_message_id,
+            status="sent",
+        ))
+    db.commit()
+
+
+# ── Timeline unificada + janela de 24h ──────────────────────────────────────
+
+
+def list_conversations(db: Session, tenant_id: str) -> list[dict]:
+    """Uma linha por cliente com pelo menos 1 WhatsappMessage, ordenada pela mais recente.
+
+    `tenant_id` não filtra a query explicitamente: a sessão já chega escopada por RLS (mesma
+    convenção de `crm_service.build_board`), é mantido no parâmetro por simetria com o resto do
+    módulo (e uso futuro, ex.: auditoria)."""
+    last_msgs: dict[str, WhatsappMessage] = {}
+    for msg in db.scalars(
+        select(WhatsappMessage).order_by(WhatsappMessage.created_at)
+    ).all():
+        last_msgs[msg.client_id] = msg  # a última iteração (ordem crescente) vence
+
+    states = {
+        s.client_id: s
+        for s in db.scalars(select(WhatsappConversationState)).all()
+    }
+
+    out = []
+    for client_id, last_msg in last_msgs.items():
+        client = db.get(Client, client_id)
+        if client is None:
+            continue
+        state = states.get(client_id)
+        unread = (
+            last_msg.direction == DIRECTION_IN
+            and (
+                state is None
+                or state.last_read_at is None
+                or last_msg.created_at > state.last_read_at
+            )
+        )
+        out.append({
+            "client_id": client_id,
+            "client_name": client.name,
+            "client_phone": client.phone,
+            "last_message_at": last_msg.created_at,
+            "last_message_preview": last_msg.text_body or f"[{last_msg.kind}]",
+            "unread": unread,
+        })
+    out.sort(key=lambda c: c["last_message_at"], reverse=True)
+    return out
+
+
+def get_timeline(db: Session, *, client_id: str) -> list[dict]:
+    """Mescla WhatsappMessage (conversa) + Notification(channel=whatsapp) do mesmo cliente
+    (avisos automáticos já existentes: cobrança, contrato, etc.) — leitura combinada, SEM
+    migrar nenhum dado antigo (ver design doc §2)."""
+    entries: list[dict] = []
+    for msg in db.scalars(
+        select(WhatsappMessage)
+        .where(WhatsappMessage.client_id == client_id)
+        .order_by(WhatsappMessage.created_at)
+    ).all():
+        entries.append({
+            "source": "conversation",
+            "direction": msg.direction,
+            "kind": msg.kind,
+            "text_body": msg.text_body,
+            "media_attachment_id": msg.media_attachment_id,
+            "purpose_label": None,
+            "created_at": msg.created_at,
+        })
+    for notif in db.scalars(
+        select(Notification)
+        .where(Notification.client_id == client_id, Notification.channel == "whatsapp")
+        .order_by(Notification.created_at)
+    ).all():
+        entries.append({
+            "source": "automated",
+            "direction": "out",
+            "kind": "text",
+            "text_body": notif.message,
+            "media_attachment_id": None,
+            "purpose_label": AUTOMATED_PURPOSE_LABEL,
+            "created_at": notif.created_at,
+        })
+    entries.sort(key=lambda e: e["created_at"])
+    return entries
+
+
+def is_within_session_window(db: Session, *, client_id: str) -> bool:
+    last_inbound = db.scalar(
+        select(WhatsappMessage)
+        .where(WhatsappMessage.client_id == client_id, WhatsappMessage.direction == DIRECTION_IN)
+        .order_by(WhatsappMessage.created_at.desc())
+        .limit(1)
+    )
+    if last_inbound is None:
+        return False
+    created_at = last_inbound.created_at
+    if created_at.tzinfo is None:
+        created_at = created_at.replace(tzinfo=UTC)  # SQLite guarda naive; normaliza p/ comparar
+    return datetime.now(UTC) - created_at < SESSION_WINDOW
+
+
+def mark_read(db: Session, *, tenant_id: str, client_id: str) -> None:
+    state = db.scalar(
+        select(WhatsappConversationState).where(
+            WhatsappConversationState.client_id == client_id
+        )
+    )
+    if state is None:
+        state = WhatsappConversationState(tenant_id=tenant_id, client_id=client_id)
+        db.add(state)
+    state.last_read_at = datetime.now(UTC)
+    db.commit()
+
+
+# ── Envio de resposta ────────────────────────────────────────────────────────
+
+
+def send_reply_text(
+    db: Session, *, tenant_id: str, actor: str, client_id: str, text: str
+) -> WhatsappMessage:
+    if not is_within_session_window(db, client_id=client_id):
+        raise WhatsappInboxError(
+            "Fora da janela de 24h — use um template aprovado para responder", 422
+        )
+    client = db.get(Client, client_id)
+    if client is None:
+        raise WhatsappInboxError("Cliente não encontrado", 404)
+    profile = settings_service.get_profile(db, tenant_id)
+    status = whatsapp.send_text(
+        to=client.phone or "", text=text, token=profile.whatsapp_token,
+        phone_id=profile.whatsapp_phone_id,
+    )
+    msg = WhatsappMessage(
+        tenant_id=tenant_id, client_id=client_id, direction=DIRECTION_OUT, kind=KIND_TEXT,
+        text_body=text, status=status,
+    )
+    db.add(msg)
+    audit.record(
+        db, tenant_id=tenant_id, actor=actor, action="whatsapp_inbox.reply.text", target=client_id
+    )
+    db.commit()
+    db.refresh(msg)
+    return msg
+
+
+def send_reply_media(
+    db: Session, *, tenant_id: str, actor: str, client_id: str, file_bytes: bytes,
+    filename: str, mime_type: str, caption: str = "",
+) -> WhatsappMessage:
+    if not is_within_session_window(db, client_id=client_id):
+        raise WhatsappInboxError(
+            "Fora da janela de 24h — use um template aprovado para responder", 422
+        )
+    client = db.get(Client, client_id)
+    if client is None:
+        raise WhatsappInboxError("Cliente não encontrado", 404)
+    kind = _MEDIA_KIND_BY_MIME.get(mime_type, "document")
+    profile = settings_service.get_profile(db, tenant_id)
+    try:
+        media_id = whatsapp.upload_media(
+            phone_id=profile.whatsapp_phone_id or "", token=profile.whatsapp_token or "",
+            file_bytes=file_bytes, filename=filename, mime_type=mime_type,
+        )
+    except whatsapp.WhatsappApiError as exc:
+        raise WhatsappInboxError(f"Falha ao subir mídia: {exc}", 502) from exc
+    status = whatsapp.send_media(
+        to=client.phone or "", token=profile.whatsapp_token or "",
+        phone_id=profile.whatsapp_phone_id or "", kind=kind, media_id=media_id, caption=caption,
+    )
+    msg = WhatsappMessage(
+        tenant_id=tenant_id, client_id=client_id, direction=DIRECTION_OUT, kind=kind,
+        text_body=caption, status=status,
+    )
+    db.add(msg)
+    db.commit()
+    db.refresh(msg)
+    try:
+        attachment = attachments_service.create_attachment(
+            db, tenant_id=tenant_id, actor=actor, owner_type="whatsapp_message",
+            owner_id=msg.id, label="outro", filename=filename, content_type=mime_type,
+            data=file_bytes,
+        )
+    except AttachmentError as exc:
+        raise WhatsappInboxError(str(exc), exc.status_code) from exc
+    msg.media_attachment_id = attachment.id
+    audit.record(
+        db, tenant_id=tenant_id, actor=actor, action="whatsapp_inbox.reply.media", target=client_id
+    )
+    db.commit()
+    db.refresh(msg)
+    return msg
+
+
+def send_reply_template(
+    db: Session, *, tenant_id: str, actor: str, client_id: str, template_id: str,
+    variables: list[str],
+) -> WhatsappMessage:
+    client = db.get(Client, client_id)
+    if client is None:
+        raise WhatsappInboxError("Cliente não encontrado", 404)
+    template = db.get(WhatsappTemplate, template_id)
+    if template is None or template.status != STATUS_APPROVED:
+        raise WhatsappInboxError("Template não encontrado ou ainda não aprovado pela Meta", 422)
+    profile = settings_service.get_profile(db, tenant_id)
+    status = whatsapp.send_template(
+        to=client.phone or "", token=profile.whatsapp_token or "",
+        phone_id=profile.whatsapp_phone_id or "", template_name=template.name,
+        language=template.language, variables=variables,
+    )
+    rendered = template.body_text
+    for i, value in enumerate(variables, start=1):
+        rendered = rendered.replace(f"{{{{{i}}}}}", value)
+    msg = WhatsappMessage(
+        tenant_id=tenant_id, client_id=client_id, direction=DIRECTION_OUT, kind=KIND_TEXT,
+        text_body=rendered, status=status,
+    )
+    db.add(msg)
+    audit.record(
+        db, tenant_id=tenant_id, actor=actor, action="whatsapp_inbox.reply.template",
+        target=client_id,
+    )
+    db.commit()
+    db.refresh(msg)
+    return msg
