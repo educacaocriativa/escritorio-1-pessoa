@@ -63,14 +63,26 @@ class WhatsappInboxError(Exception):
 # ── Resolução de tenant (pré-autenticação do webhook) ───────────────────────
 
 
+def _is_safe_identifier(value: str) -> bool:
+    """Recusa caracteres de controle (NUL em especial) que o driver do Postgres rejeita na
+    hora de fazer bind do parâmetro (psycopg.DataError) — inofensivo no SQLite dos testes,
+    mas quebra em produção. Ambos os identificadores vêm de entrada não confiável (payload
+    público do webhook / query param do handshake), então validamos antes de qualquer lookup."""
+    return "\x00" not in value
+
+
 def resolve_account(db: Session, *, phone_number_id: str) -> PublicWhatsappAccount | None:
     """Resolve tenant/app_secret pelo `phone_number_id` — chamado numa sessão SEM tenant
     (`get_db`), ANTES de qualquer autenticação, mesmo padrão de `PublicIntegrationKey`."""
+    if not _is_safe_identifier(phone_number_id):
+        return None
     return db.get(PublicWhatsappAccount, phone_number_id)
 
 
 def resolve_by_verify_token(db: Session, *, verify_token: str) -> PublicWhatsappAccount | None:
     """Usado só no handshake GET — confere se o token bate com ALGUM tenant cadastrado."""
+    if not _is_safe_identifier(verify_token):
+        return None
     return db.scalar(
         select(PublicWhatsappAccount).where(
             PublicWhatsappAccount.verify_token == verify_token

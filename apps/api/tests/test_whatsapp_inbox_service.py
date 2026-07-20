@@ -91,6 +91,21 @@ def test_resolve_by_verify_token_returns_none_for_unknown_token(db):
     assert inbox_service.resolve_by_verify_token(db, verify_token="token-inexistente") is None
 
 
+def test_resolve_account_rejects_phone_number_id_with_nul_byte(db):
+    # JSON permite um NUL escapado numa string e `json.loads` produz um `str` Python com NUL de
+    # verdade. No driver de produção (psycopg), fazer bind desse valor num parâmetro de query
+    # levanta `psycopg.DataError` — não capturado em lugar nenhum do caminho do webhook. SQLite
+    # (usado nos testes) tolera NUL em campos de texto, então este teste prova a GUARDA em si
+    # (retorna None em vez de deixar o valor chegar ao `db.get`), não o crash do driver real.
+    assert inbox_service.resolve_account(db, phone_number_id="pn\x00id") is None
+
+
+def test_resolve_by_verify_token_rejects_verify_token_with_nul_byte(db):
+    # Mesmo raciocínio para o handshake GET: `hub.verify_token` é um query param de um chamador
+    # anônimo (Meta ou qualquer um), e um NUL codificado (`%00`) chega intacto como `str`.
+    assert inbox_service.resolve_by_verify_token(db, verify_token="tok\x00en") is None
+
+
 def test_ingest_creates_lead_for_unknown_number(db):
     _configure_credentials(db)
     inbox_service.ingest_webhook_payload(
