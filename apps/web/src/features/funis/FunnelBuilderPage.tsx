@@ -688,6 +688,9 @@ function Field({ label, value, onChange, placeholder }: {
 }
 
 const TEMPLATE_KEYWORDS = ["cliente.nome", "cliente.telefone", "cliente.email"] as const;
+// E-mail (texto livre, não posicional): mesmas + notas — traz as respostas de campos
+// customizados do formulário (Sites/Integrações) sem precisar de uma keyword por campo.
+const EMAIL_KEYWORDS = [...TEMPLATE_KEYWORDS, "cliente.notas"] as const;
 
 function NodeContentEditor({
   node,
@@ -868,6 +871,22 @@ function NodeContentEditor({
             <label className="mb-4 block">
               <span className="mb-1 block text-xs font-medium text-neutral-600">{bodyLabel}</span>
               <textarea value={body} onChange={(e) => setBody(e.target.value)} rows={isEmail ? 8 : 5} placeholder={`Escreva ${bodyLabel.toLowerCase()}...`} className="w-full rounded-lg border border-neutral-200 px-3 py-2 text-sm outline-none focus:border-primary-400" />
+              {isEmail && (
+                <div className="mt-1.5 flex flex-wrap gap-1.5">
+                  <span className="text-[11px] text-neutral-400">Inserir dado do lead:</span>
+                  {EMAIL_KEYWORDS.map((kw) => (
+                    <button
+                      key={kw}
+                      type="button"
+                      onClick={() => setBody((b) => `${b}${b && !b.endsWith("\n") ? " " : ""}{{${kw}}}`)}
+                      title={`Inserir {{${kw}}}`}
+                      className="shrink-0 rounded-lg bg-neutral-100 px-2 py-0.5 text-[10px] font-semibold text-neutral-600 hover:bg-neutral-200"
+                    >
+                      {kw.split(".")[1]}
+                    </button>
+                  ))}
+                </div>
+              )}
             </label>
           </>
         )}

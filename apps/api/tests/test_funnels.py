@@ -296,6 +296,37 @@ def test_run_send_email_to_team(client: TestClient, headers):
     )
 
 
+def test_run_send_email_resolves_client_placeholders(client: TestClient, headers):
+    # {{cliente.*}} no assunto/corpo do e-mail é substituído pelos dados reais do lead — inclui
+    # {{cliente.notas}}, que traz as respostas de campos customizados sem precisar de uma
+    # keyword por campo (formulário varia de página pra página).
+    cl = client.post(
+        "/crm/clients",
+        json={"name": "Raissa", "phone": "43996823962",
+              "notes": "Ocasião: Casamento\nConvidados: 160"},
+        headers=headers,
+    ).json()
+    resp = client.post(
+        "/funnels/run-node",
+        json={"action": "send_email", "client_id": cl["id"],
+              "params": {
+                  "subject": "Novo lead: {{cliente.nome}}",
+                  "message": "Nome: {{cliente.nome}}\nWhatsApp: {{cliente.telefone}}\n\n"
+                             "{{cliente.notas}}",
+                  "recipient": "team",
+              }},
+        headers=headers,
+    )
+    assert resp.status_code == 200, resp.text
+    notifs = client.get("/notifications", headers=headers).json()
+    notif = next(n for n in notifs if n["client_id"] == cl["id"])
+    assert "Nome: Raissa" in notif["message"]
+    assert "WhatsApp: 43996823962" in notif["message"]
+    assert "Ocasião: Casamento" in notif["message"]
+    assert "Convidados: 160" in notif["message"]
+    assert "{{" not in notif["message"]
+
+
 def test_run_requires_client(client: TestClient, headers):
     resp = client.post(
         "/funnels/run-node",
