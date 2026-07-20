@@ -738,6 +738,35 @@ export interface WhatsappTemplateCreate {
   variable_examples: string[];
 }
 
+// ── Inbox de WhatsApp (conversa de verdade com clientes) ────
+export interface ConversationSummary {
+  client_id: UUID;
+  client_name: string;
+  client_phone: string | null;
+  last_message_at: string | null;
+  last_message_preview: string;
+  unread: boolean;
+}
+
+export interface TimelineEntry {
+  source: "conversation" | "automated";
+  direction: "in" | "out";
+  kind: "text" | "image" | "audio" | "document" | "video";
+  text_body: string;
+  media_attachment_id: string | null;
+  purpose_label: string | null;
+  created_at: string;
+}
+
+export interface WhatsappMessageOut {
+  id: UUID;
+  direction: "in" | "out";
+  kind: "text" | "image" | "audio" | "document" | "video";
+  text_body: string;
+  status: "sent" | "logged" | "failed";
+  created_at: string;
+}
+
 // ── Integrações (captura de lead de sites externos) ────
 export interface IntegrationKey {
   id: UUID;
