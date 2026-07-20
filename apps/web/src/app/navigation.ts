@@ -12,6 +12,7 @@ import {
   ListTree,
   type LucideIcon,
   Megaphone,
+  MessageCircle,
   Package,
   PieChart,
   Receipt,
@@ -52,6 +53,7 @@ export const navSections: NavSection[] = [
       { label: "Dashboard", to: "/", icon: LayoutDashboard, ready: true },
       { label: "Agenda", to: "/agenda", icon: CalendarDays, ready: true },
       { label: "CRM & Kanban", to: "/crm", icon: Users, ready: true },
+      { label: "Conversas", to: "/conversas", icon: MessageCircle, ready: true },
     ],
   },
   {

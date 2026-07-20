@@ -11,6 +11,7 @@ import ContratosPage from "../features/contratos/ContratosPage";
 import PublicContractPage from "../features/contratos/PublicContractPage";
 import ClientDetailPage from "../features/crm/ClientDetailPage";
 import CrmPage from "../features/crm/CrmPage";
+import ConversasPage from "../features/conversas/ConversasPage";
 import EstoquePage from "../features/estoque/EstoquePage";
 import CentrosCustoPage from "../features/financeiro/CentrosCustoPage";
 import ContratoDrePage from "../features/financeiro/ContratoDrePage";
@@ -55,6 +56,7 @@ export default function App() {
           <Route path="/agenda" element={<AgendaPage />} />
           <Route path="/crm" element={<CrmPage />} />
           <Route path="/crm/clients/:id" element={<ClientDetailPage />} />
+          <Route path="/conversas" element={<ConversasPage />} />
           <Route path="/financeiro" element={<FinanceiroPage />} />
           <Route path="/financeiro/plano-contas" element={<PlanoContasPage />} />
           <Route path="/financeiro/centros-custo" element={<CentrosCustoPage />} />
