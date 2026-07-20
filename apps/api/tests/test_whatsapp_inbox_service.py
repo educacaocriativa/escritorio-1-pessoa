@@ -6,6 +6,7 @@ from sqlalchemy import select
 
 from app.core import whatsapp
 from app.core.audit import AuditEntry
+from app.modules.attachments.models import Attachment
 from app.modules.crm.models import Client
 from app.modules.notifications.models import Notification
 from app.modules.settings import service as settings_service
@@ -282,6 +283,44 @@ def test_send_reply_media_rejects_empty_file_before_sending(
         )
     )
     assert count is None  # nenhuma linha "sent" órfã foi criada
+
+
+def test_send_reply_media_success_creates_message_and_attachment(
+    db, monkeypatch: pytest.MonkeyPatch
+):
+    _configure_credentials(db)
+    client = Client(tenant_id=TENANT_ID, name="Cliente", phone="5511900005558", source="manual")
+    db.add(client)
+    db.flush()
+    db.add(WhatsappMessage(
+        tenant_id=TENANT_ID, client_id=client.id, direction=DIRECTION_IN, kind="text",
+        text_body="oi",
+    ))
+    db.commit()
+
+    monkeypatch.setattr(whatsapp, "upload_media", lambda **_kw: "media-fake-1")
+    monkeypatch.setattr(whatsapp, "send_media", lambda **_kw: "sent")
+
+    msg = inbox_service.send_reply_media(
+        db, tenant_id=TENANT_ID, actor="user-1", client_id=client.id,
+        file_bytes=b"%PDF-1.4 fake pdf bytes", filename="cardapio.pdf",
+        mime_type="application/pdf",
+    )
+
+    assert msg.status == "sent"
+    assert msg.media_attachment_id is not None
+
+    attachment = db.scalar(
+        select(Attachment).where(
+            Attachment.owner_type == "whatsapp_message", Attachment.owner_id == msg.id
+        )
+    )
+    assert attachment is not None
+
+    audit_entry = db.scalar(
+        select(AuditEntry).where(AuditEntry.action == "whatsapp_inbox.reply.media")
+    )
+    assert audit_entry is not None
 
 
 def test_send_reply_template_requires_approved_template(db):

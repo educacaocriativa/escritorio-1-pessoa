@@ -6,7 +6,6 @@ Ver docs/superpowers/specs/2026-07-19-whatsapp-inbox-design.md para o desenho co
 """
 from __future__ import annotations
 
-import logging
 from datetime import UTC, datetime, timedelta
 
 from sqlalchemy import select
@@ -31,8 +30,6 @@ from app.modules.whatsapp_inbox.models import (
     WhatsappMessage,
 )
 from app.modules.whatsapp_templates.models import STATUS_APPROVED, WhatsappTemplate
-
-logger = logging.getLogger("e1p.whatsapp_inbox")
 
 SESSION_WINDOW = timedelta(hours=24)
 
@@ -312,8 +309,7 @@ def send_reply_media(
         text_body=caption, status=status,
     )
     db.add(msg)
-    db.commit()
-    db.refresh(msg)
+    db.flush()  # materializa msg.id na mesma transação, sem commitar — nada é durável ainda
     try:
         attachment = attachments_service.create_attachment(
             db, tenant_id=tenant_id, actor=actor, owner_type="whatsapp_message",
@@ -322,6 +318,8 @@ def send_reply_media(
         )
     except AttachmentError as exc:
         raise WhatsappInboxError(str(exc), exc.status_code) from exc
+    except Exception as exc:  # noqa: BLE001 — falha de storage (S3/rede) vira erro de domínio
+        raise WhatsappInboxError(f"Falha ao salvar anexo: {exc}", 502) from exc
     msg.media_attachment_id = attachment.id
     audit.record(
         db, tenant_id=tenant_id, actor=actor, action="whatsapp_inbox.reply.media", target=client_id
