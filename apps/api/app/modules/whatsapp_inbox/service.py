@@ -144,14 +144,29 @@ def ingest_webhook_payload(db: Session, *, tenant_id: str, payload: dict) -> Non
     assinatura do webhook — reaproveitamos aqui o mesmo `tenant_id` já validado, sem resolvê-lo
     de novo. Idempotente: mensagens com `wa_message_id` já visto são ignoradas (a Meta reentrega
     o mesmo evento às vezes)."""
-    # Cada mensagem do lote é processada de forma ISOLADA: uma mensagem malformada (campo `text`/
-    # mídia com tipo errado, `contacts[0].profile.name` não-string que quebra o `ClientCreate`, ou
-    # qualquer outra falha de UMA mensagem) NUNCA derruba a request inteira nem bloqueia as demais
-    # mensagens válidas do MESMO lote. Mesmo princípio de isolamento de
-    # `notifications/service.py::process_pending` (uma falha por item, logada, sem travar o resto).
-    # A validação estrutural do payload como um todo continua em `_extract_messages` (antes deste
-    # loop) — falha lá é uma classe diferente (não dá nem pra identificar as mensagens) e ainda
-    # levanta `WhatsappInboxError` para a request toda, corretamente.
+    # Cada mensagem do lote é processada de forma ISOLADA e commitada individualmente: uma mensagem
+    # malformada (campo `text`/mídia com tipo errado, `contacts[0].profile.name` não-string que
+    # quebra o `ClientCreate`, ou qualquer outra falha de UMA mensagem) NUNCA derruba a request
+    # inteira nem bloqueia as demais mensagens válidas do MESMO lote. Mesmo princípio de isolamento
+    # de `notifications/service.py::process_pending` (uma falha por item, logada, sem travar o
+    # resto). A validação estrutural do payload como um todo continua em `_extract_messages` (antes
+    # deste loop) — falha lá é uma classe diferente (não dá nem pra identificar as mensagens) e
+    # ainda levanta `WhatsappInboxError` para a request toda, corretamente.
+    #
+    # CRÍTICO — commit POR MENSAGEM (não um único commit no fim do laço): o `db.add(...)` apenas
+    # STAGE o insert; a falha real de PERSISTÊNCIA (ex.: `text_body`/caption com surrogate solto ou
+    # NUL que o driver não consegue codificar — mesma classe de crash que rounds 6-8 blindaram em
+    # `phone_number_id`/`verify_token`) só dispara no flush/commit. Se houvesse um único
+    # `db.commit()` DEPOIS do laço, esse erro cairia FORA de todo try/except por mensagem e viraria
+    # um 500 não tratado, quebrando a garantia de isolamento. E um `db.flush()` por mensagem com
+    # commit único no fim também não serve: o `db.rollback()` de recuperação de uma mensagem
+    # posterior desfaria TUDO desde o último commit — inclusive mensagens anteriores já flushadas e
+    # válidas. Por isso cada mensagem é sua PRÓPRIA transação atômica: commita a si mesma no fim do
+    # try; qualquer falha faz rollback só da sua própria transação e segue para a próxima. O
+    # `db.rollback()` aqui NÃO limpa a GUC `app.current_tenant_id`: ela foi setada em
+    # `tenant_session` com `set_config(..., is_local=false)` + `conn.commit()` no nível da CONEXÃO
+    # (escopo de sessão), então o rollback ORM não a reverte e as mensagens seguintes continuam
+    # corretamente escopadas por tenant.
     for msg, contact_name in _extract_messages(payload):
         try:
             wa_message_id = msg.get("id")
@@ -192,20 +207,27 @@ def ingest_webhook_payload(db: Session, *, tenant_id: str, payload: dict) -> Non
                 db, tenant_id=tenant_id, actor="whatsapp:inbox",
                 action="whatsapp_inbox.message.received", target=client.id,
             )
+            db.commit()  # commita SÓ esta mensagem — transação atômica própria, isolada de
+            # qualquer mensagem seguinte do mesmo lote que venha a falhar (ver nota no topo da
+            # função sobre por que um único commit no fim do laço, ou flush+rollback parcial,
+            # arriscaria desfazer mensagens anteriores já processadas com sucesso).
         except (AttributeError, TypeError, KeyError, WhatsappInboxError) as exc:
+            db.rollback()  # desfaz só a transação desta mensagem (não a GUC de tenant — ver nota)
             logger.warning(
                 "[whatsapp_inbox] mensagem malformada ignorada, wa_message_id=%s: %s",
                 msg.get("id") if isinstance(msg, dict) else None, exc,
             )
             continue
         except Exception as exc:  # noqa: BLE001 — isola a falha de UMA mensagem (inclui
-            # pydantic.ValidationError de ClientCreate e qualquer outra falha inesperada); não trava
-            # o restante do lote (mesmo princípio de process_pending)
+            # pydantic.ValidationError de ClientCreate E falha de persistência do driver no commit,
+            # ex.: text_body/caption com surrogate solto ou NUL); não trava o restante do lote
+            # (mesmo princípio de process_pending)
+            db.rollback()  # desfaz só a transação desta mensagem (não a GUC de tenant — ver nota)
             logger.warning(
                 "[whatsapp_inbox] falha inesperada processando mensagem, ignorada: %s", exc
             )
             continue
-    db.commit()
+    # NENHUM db.commit() aqui: cada mensagem já commitou (ou fez rollback) a si mesma acima.
 
 
 # ── Timeline unificada + janela de 24h ──────────────────────────────────────

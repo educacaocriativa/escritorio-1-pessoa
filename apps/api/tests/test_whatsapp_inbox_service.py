@@ -357,6 +357,51 @@ def test_ingest_processes_valid_message_even_when_another_in_same_payload_is_mal
     assert good.text_body == "mensagem válida"
 
 
+def test_ingest_persists_valid_message_after_earlier_message_fails_to_encode(db):
+    # ISOLAMENTO EM NÍVEL DE PERSISTÊNCIA (review round 9): diferente do teste-payoff acima (que
+    # prova isolação de uma falha de VALIDAÇÃO, pega por `isinstance` ANTES de qualquer `db.add`),
+    # este prova isolação de uma falha na CAMADA DO BANCO. A primeira mensagem tem `text.body` com
+    # um surrogate solto (`"\ud800"`): passa em TODAS as checagens Python (`text` É um dict, `body`
+    # É uma string), então é staged com `db.add(...)` sem erro — mas o surrogate não codifica em
+    # UTF-8, e o commit levanta (SQLite dá `UnicodeEncodeError` na hora do bind, mesma classe que o
+    # psycopg daria em produção). Com um único commit no fim do laço, esse erro escaparia FORA de
+    # todo try/except (500 não tratado) e/ou o rollback derrubaria a mensagem válida junto. Com
+    # commit POR MENSAGEM, a falha da primeira é isolada em sua própria transação e a segunda,
+    # válida e posterior no MESMO lote, sobrevive.
+    _configure_credentials(db)
+    payload = {
+        "entry": [{
+            "changes": [{
+                "value": {
+                    "metadata": {"phone_number_id": "phone-123"},
+                    "contacts": [{"profile": {"name": "Fulano"}, "wa_id": "5511900000005"}],
+                    "messages": [
+                        {
+                            "id": "bad-encode-1", "from": "5511900000005", "type": "text",
+                            "text": {"body": "\ud800"},
+                        },
+                        {
+                            "id": "good-2", "from": "5511900000005", "type": "text",
+                            "text": {"body": "mensagem válida de verdade"},
+                        },
+                    ],
+                },
+                "field": "messages",
+            }],
+        }],
+    }
+    inbox_service.ingest_webhook_payload(db, tenant_id=TENANT_ID, payload=payload)  # não levanta
+
+    assert db.scalar(
+        select(WhatsappMessage).where(WhatsappMessage.wa_message_id == "bad-encode-1")
+    ) is None
+    good = db.scalar(
+        select(WhatsappMessage).where(WhatsappMessage.wa_message_id == "good-2")
+    )
+    assert good is not None
+    assert good.text_body == "mensagem válida de verdade"
+
+
 def test_is_within_session_window_true_right_after_inbound(db):
     _configure_credentials(db)
     client = Client(tenant_id=TENANT_ID, name="Cliente", phone="5511900001111", source="manual")
