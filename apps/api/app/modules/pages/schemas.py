@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from datetime import datetime
 
-from pydantic import BaseModel, EmailStr, Field
+from pydantic import BaseModel, EmailStr, Field, field_validator
 
 
 class PageCreate(BaseModel):
@@ -64,3 +64,17 @@ class LeadSubmit(BaseModel):
     name: str = Field(min_length=1, max_length=255)
     email: EmailStr | None = None
     phone: str = Field(default="", max_length=32)
+    # Respostas dos campos customizados do bloco Formulário (ex.: "Qual a ocasião?" → "Casamento")
+    # sem equivalente direto no CRM — viram um bloco de texto anexado às notas do lead, mesmo
+    # padrão de `integrations.LeadCapture.fields`.
+    fields: dict[str, str] | None = None
+
+    @field_validator("email", mode="before")
+    @classmethod
+    def _blank_email_to_none(cls, v: object) -> object:
+        # Formulário externo com campo opcional vazio manda "", não omite a chave — sem isso o
+        # EmailStr rejeita string vazia com 422 e o lead se perde (mesmo bug já corrigido em
+        # integrations.LeadCapture).
+        if isinstance(v, str) and not v.strip():
+            return None
+        return v

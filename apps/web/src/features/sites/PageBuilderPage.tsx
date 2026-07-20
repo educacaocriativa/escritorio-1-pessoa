@@ -4,7 +4,7 @@ import { useCallback, useEffect, useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
 import ImageUploadButton from "../../components/ImageUploadButton";
 import { api, apiErrorMessage } from "../../lib/api";
-import PageBlocks from "./PageBlocks";
+import PageBlocks, { type ExtraField } from "./PageBlocks";
 
 const BLOCK_TYPES: [string, string][] = [
   ["heading", "Título"], ["text", "Texto"], ["image", "Imagem"], ["button", "Botão"],
@@ -18,7 +18,8 @@ function blankBlock(type: string): PageBlock {
     case "text": return { type, text: "Novo texto" };
     case "image": return { type, url: "" };
     case "button": return { type, label: "Clique aqui", url: "" };
-    case "form": return { type, fields: ["name", "email", "phone"], button: "Enviar" };
+    case "form":
+      return { type, button: "Enviar", showEmail: true, extraFields: [] as ExtraField[], disclaimer: "" };
     case "video": return { type, url: "" };
     default: return { type: "divider" };
   }
@@ -214,8 +215,78 @@ function BlockFields({ block, onChange }: { block: PageBlock; onChange: (p: Part
         </div>
       );
     case "form":
-      return <input value={v("button")} onChange={(e) => onChange({ button: e.target.value })} placeholder="Texto do botão" className={inp} />;
+      return <FormBlockFields block={block} onChange={onChange} />;
     default:
       return <p className="text-xs text-neutral-400">Linha divisória</p>;
   }
+}
+
+function FormBlockFields({ block, onChange }: { block: PageBlock; onChange: (p: Partial<PageBlock>) => void }) {
+  const v = (k: string) => (typeof block[k] === "string" ? (block[k] as string) : "");
+  const extraFields: ExtraField[] = Array.isArray(block.extraFields) ? (block.extraFields as ExtraField[]) : [];
+  const inp = "w-full rounded-lg border border-neutral-200 px-2 py-1.5 text-sm outline-none focus:border-primary-400";
+
+  function setFields(next: ExtraField[]) {
+    onChange({ extraFields: next });
+  }
+  function addField() {
+    setFields([
+      ...extraFields,
+      { key: `campo_${Date.now()}`, label: "Nova pergunta", kind: "text", placeholder: "" },
+    ]);
+  }
+  function patchField(i: number, patch: Partial<ExtraField>) {
+    setFields(extraFields.map((f, idx) => (idx === i ? { ...f, ...patch } : f)));
+  }
+  function removeField(i: number) {
+    setFields(extraFields.filter((_, idx) => idx !== i));
+  }
+
+  return (
+    <div className="space-y-2">
+      <input value={v("button")} onChange={(e) => onChange({ button: e.target.value })} placeholder="Texto do botão" className={inp} />
+      <label className="flex items-center gap-1.5 text-xs text-neutral-500">
+        <input type="checkbox" checked={block.showEmail !== false} onChange={(e) => onChange({ showEmail: e.target.checked })} />
+        Mostrar campo de e-mail
+      </label>
+      <input value={v("phoneHelper")} onChange={(e) => onChange({ phoneHelper: e.target.value })} placeholder="Texto de ajuda abaixo do WhatsApp (opcional)" className={inp} />
+      <textarea value={v("disclaimer")} onChange={(e) => onChange({ disclaimer: e.target.value })} placeholder="Aviso abaixo do botão (opcional)" rows={2} className={inp} />
+
+      <div className="space-y-2 rounded-lg bg-neutral-50 p-2">
+        <p className="text-xs font-semibold text-neutral-500">Campos extras</p>
+        {extraFields.map((f, i) => (
+          <div key={i} className="space-y-1 rounded-lg border border-neutral-200 bg-white p-2">
+            <div className="flex items-center gap-1">
+              <input value={f.label} onChange={(e) => patchField(i, { label: e.target.value })} placeholder="Pergunta (rótulo)" className={`${inp} flex-1`} />
+              <button onClick={() => removeField(i)} className="text-neutral-300 hover:text-danger"><Trash2 size={14} /></button>
+            </div>
+            <div className="flex items-center gap-1.5">
+              <select value={f.kind} onChange={(e) => patchField(i, { kind: e.target.value as ExtraField["kind"] })} className={inp}>
+                <option value="text">Texto livre</option>
+                <option value="select">Lista de opções</option>
+              </select>
+              <label className="flex items-center gap-1 whitespace-nowrap text-xs text-neutral-500">
+                <input type="checkbox" checked={!!f.fullWidth} onChange={(e) => patchField(i, { fullWidth: e.target.checked })} />
+                Largura total
+              </label>
+            </div>
+            {f.kind === "select" ? (
+              <input
+                value={(f.options ?? []).join(", ")}
+                onChange={(e) => patchField(i, { options: e.target.value.split(",").map((s) => s.trim()).filter(Boolean) })}
+                placeholder="Opções separadas por vírgula"
+                className={inp}
+              />
+            ) : (
+              <input value={f.placeholder ?? ""} onChange={(e) => patchField(i, { placeholder: e.target.value })} placeholder="Placeholder" className={inp} />
+            )}
+            <input value={f.helper ?? ""} onChange={(e) => patchField(i, { helper: e.target.value })} placeholder="Texto de ajuda abaixo do campo (opcional)" className={inp} />
+          </div>
+        ))}
+        <button onClick={addField} className="flex items-center gap-1 text-xs font-medium text-primary-600">
+          <Plus size={12} /> Adicionar campo
+        </button>
+      </div>
+    </div>
+  );
 }

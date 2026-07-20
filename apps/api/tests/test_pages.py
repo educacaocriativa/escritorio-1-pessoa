@@ -51,6 +51,25 @@ def test_form_submit_creates_lead(client: TestClient, headers):
     assert lead and lead[0]["source"] == "landing"
 
 
+def test_form_submit_with_extra_fields_goes_to_notes(client: TestClient, headers):
+    p = client.post("/pages", json={"title": "Captura", "model": "captura"}, headers=headers).json()
+    client.post(f"/pages/{p['id']}/publish", headers=headers)
+    resp = client.post(
+        f"/public/pages/{p['public_slug']}/submit",
+        json={
+            "name": "Lead com campos extras",
+            "phone": "11999",
+            "fields": {"Qual a ocasião?": "Casamento", "Convidados": "150"},
+        },
+    )
+    assert resp.status_code == 200
+    clients = client.get("/crm/clients", headers=headers).json()
+    lead = [c for c in clients if c["name"] == "Lead com campos extras"][0]
+    assert lead["source"] == "landing"
+    assert "Casamento" in lead["notes"]
+    assert "150" in lead["notes"]
+
+
 def test_update_blocks_and_publish_sync(client: TestClient, headers):
     p = client.post("/pages", json={"title": "X", "model": "conteudo"}, headers=headers).json()
     client.post(f"/pages/{p['id']}/publish", headers=headers)

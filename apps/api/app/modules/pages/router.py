@@ -151,6 +151,7 @@ def public_submit(
             name=data.name,
             email=str(data.email) if data.email else None,
             phone=data.phone,
+            fields=data.fields,
             session_factory=session_factory,
         )
     except service.PageError as e:
