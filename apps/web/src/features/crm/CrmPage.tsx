@@ -1,4 +1,4 @@
-import type { Board, BoardColumn, Client } from "@e1p/shared-types";
+import type { Board, BoardColumn, Client, PipelineStage } from "@e1p/shared-types";
 import { Archive, ArrowUpRight, GripVertical, Plus } from "lucide-react";
 import { useCallback, useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
@@ -9,6 +9,7 @@ import { usePrimaryAction } from "../../store/pageActions";
 export default function CrmPage() {
   const [board, setBoard] = useState<Board>({ columns: [] });
   const [open, setOpen] = useState(false);
+  const [stageModalOpen, setStageModalOpen] = useState(false);
   const [loading, setLoading] = useState(true);
   const [dragOver, setDragOver] = useState<string | null>(null);
 
@@ -34,18 +35,6 @@ export default function CrmPage() {
     setBoard((b) => optimisticMove(b, clientId, stageId));
     try {
       await api.post(`/crm/clients/${clientId}/move`, { stage_id: stageId });
-    } finally {
-      load();
-    }
-  }
-
-  async function createStage() {
-    const name = window.prompt("Nome da nova etapa:")?.trim();
-    if (!name) return;
-    try {
-      await api.post("/crm/stages", { name });
-    } catch (err) {
-      alert(apiErrorMessage(err));
     } finally {
       load();
     }
@@ -89,7 +78,7 @@ export default function CrmPage() {
             />
           ))}
           <button
-            onClick={createStage}
+            onClick={() => setStageModalOpen(true)}
             className="flex h-12 w-56 shrink-0 items-center justify-center gap-2 rounded-2xl border-2 border-dashed border-neutral-200 text-sm font-medium text-neutral-400 hover:border-primary-300 hover:text-primary-600"
           >
             <Plus size={16} />
@@ -99,6 +88,12 @@ export default function CrmPage() {
       )}
 
       <NewClientModal open={open} onClose={() => setOpen(false)} onCreated={load} />
+      <NewStageModal
+        open={stageModalOpen}
+        onClose={() => setStageModalOpen(false)}
+        stages={board.columns.map((c) => c.stage)}
+        onCreated={load}
+      />
     </div>
   );
 }
@@ -268,6 +263,78 @@ function NewClientModal({
           className="w-full rounded-pill bg-accent-400 py-2.5 font-semibold text-white transition hover:bg-accent-500 disabled:opacity-60"
         >
           {saving ? "Salvando..." : "Criar cliente"}
+        </button>
+      </div>
+    </Modal>
+  );
+}
+
+function NewStageModal({
+  open,
+  onClose,
+  stages,
+  onCreated,
+}: {
+  open: boolean;
+  onClose: () => void;
+  stages: PipelineStage[];
+  onCreated: () => void;
+}) {
+  const [name, setName] = useState("");
+  const [afterStageId, setAfterStageId] = useState("");
+  const [error, setError] = useState<string | null>(null);
+  const [saving, setSaving] = useState(false);
+
+  useEffect(() => {
+    if (!open) return;
+    setName("");
+    setError(null);
+    setAfterStageId(stages.length > 0 ? stages[stages.length - 1].id : "");
+  }, [open, stages]);
+
+  async function save() {
+    setError(null);
+    setSaving(true);
+    try {
+      await api.post("/crm/stages", { name, after_stage_id: afterStageId || null });
+      onCreated();
+      onClose();
+    } catch (err) {
+      setError(apiErrorMessage(err));
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  return (
+    <Modal title="Nova etapa" open={open} onClose={onClose}>
+      <div className="space-y-3">
+        <Field label="Nome da etapa" value={name} onChange={setName} placeholder="Negociação" />
+        {stages.length > 0 && (
+          <label className="block">
+            <span className="mb-1 block text-xs font-medium text-neutral-600">
+              Inserir depois de
+            </span>
+            <select
+              value={afterStageId}
+              onChange={(e) => setAfterStageId(e.target.value)}
+              className="w-full rounded-lg border border-neutral-200 px-3 py-2 text-sm outline-none focus:border-primary-400 focus:ring-2 focus:ring-primary-100"
+            >
+              {stages.map((s) => (
+                <option key={s.id} value={s.id}>
+                  {s.name}
+                </option>
+              ))}
+            </select>
+          </label>
+        )}
+        {error && <p className="rounded-lg bg-red-50 p-2 text-sm text-danger">{error}</p>}
+        <button
+          onClick={save}
+          disabled={saving || !name.trim()}
+          className="w-full rounded-pill bg-accent-400 py-2.5 font-semibold text-white transition hover:bg-accent-500 disabled:opacity-60"
+        >
+          {saving ? "Salvando..." : "Criar etapa"}
         </button>
       </div>
     </Modal>
