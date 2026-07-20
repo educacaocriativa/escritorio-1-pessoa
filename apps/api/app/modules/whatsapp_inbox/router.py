@@ -50,9 +50,21 @@ async def receive_webhook(
         payload = json.loads(body) if body else {}
     except json.JSONDecodeError as exc:
         raise HTTPException(status_code=400, detail="JSON inválido") from exc
+    if not isinstance(payload, dict):
+        raise HTTPException(status_code=400, detail="JSON inválido")
+    entries = payload.get("entry", [])
+    if not isinstance(entries, list):
+        raise HTTPException(status_code=400, detail="JSON inválido")
     phone_number_id = None
-    for entry in payload.get("entry", []):
-        for change in entry.get("changes", []):
+    for entry in entries:
+        if not isinstance(entry, dict):
+            raise HTTPException(status_code=400, detail="JSON inválido")
+        changes = entry.get("changes", [])
+        if not isinstance(changes, list):
+            raise HTTPException(status_code=400, detail="JSON inválido")
+        for change in changes:
+            if not isinstance(change, dict):
+                raise HTTPException(status_code=400, detail="JSON inválido")
             phone_number_id = change.get("value", {}).get("metadata", {}).get("phone_number_id")
             if phone_number_id:
                 break

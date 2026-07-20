@@ -97,6 +97,36 @@ def test_webhook_post_rejects_malformed_json(client, db):
     assert resp.status_code == 400
 
 
+def test_webhook_post_rejects_json_null(client, db):
+    # `null` é JSON sintaticamente válido (json.loads não levanta JSONDecodeError), mas não é um
+    # dict — sem a checagem de shape, `payload.get("entry", [])` explodiria com AttributeError.
+    resp = client.post(
+        "/public/whatsapp/webhook", content=b"null",
+        headers={"content-type": "application/json", "x-hub-signature-256": "sha256=irrelevante"},
+    )
+    assert resp.status_code == 400
+
+
+def test_webhook_post_rejects_json_array(client, db):
+    # `[]` também é JSON válido e não-dict — mesma classe de falha.
+    resp = client.post(
+        "/public/whatsapp/webhook", content=b"[]",
+        headers={"content-type": "application/json", "x-hub-signature-256": "sha256=irrelevante"},
+    )
+    assert resp.status_code == 400
+
+
+def test_webhook_post_rejects_entry_not_a_list(client, db):
+    # Payload é um dict válido, mas `entry` não é uma lista — iterar uma string levaria a
+    # `entry.get(...)` (AttributeError) na próxima linha se não fosse pela guarda isinstance.
+    body = json.dumps({"entry": "not-a-list"}).encode()
+    resp = client.post(
+        "/public/whatsapp/webhook", content=body,
+        headers={"content-type": "application/json", "x-hub-signature-256": "sha256=irrelevante"},
+    )
+    assert resp.status_code == 400
+
+
 def test_webhook_post_rejects_unknown_phone_number_id(client, db):
     payload = {
         "entry": [{
