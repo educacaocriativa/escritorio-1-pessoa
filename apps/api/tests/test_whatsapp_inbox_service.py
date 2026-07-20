@@ -5,6 +5,7 @@ import pytest
 from sqlalchemy import select
 
 from app.core import whatsapp
+from app.core.audit import AuditEntry
 from app.modules.crm.models import Client
 from app.modules.notifications.models import Notification
 from app.modules.settings import service as settings_service
@@ -71,6 +72,24 @@ def test_ingest_creates_lead_for_unknown_number(db):
     msg = db.scalar(select(WhatsappMessage).where(WhatsappMessage.client_id == client.id))
     assert msg.direction == DIRECTION_IN
     assert msg.text_body == "Oi, quero saber do cardápio"
+
+
+def test_ingest_records_audit_entry_for_received_message(db):
+    _configure_credentials(db)
+    existing = Client(tenant_id=TENANT_ID, name="Maria", phone="5511988880000", source="manual")
+    db.add(existing)
+    db.commit()
+    inbox_service.ingest_webhook_payload(
+        db, tenant_id=TENANT_ID, payload=_text_message_payload(
+            phone_number_id="phone-123", wa_id="5511988880000",
+            from_number="5511988880000", body="oi, já sou cliente",
+        ),
+    )
+    audit_entry = db.scalar(
+        select(AuditEntry).where(AuditEntry.action == "whatsapp_inbox.message.received")
+    )
+    assert audit_entry is not None
+    assert audit_entry.target == existing.id
 
 
 def test_ingest_reuses_existing_client_by_phone(db):
@@ -233,6 +252,38 @@ def test_send_reply_media_rejects_disallowed_mime_type_before_sending(
     assert count is None  # nenhuma linha "sent" órfã foi criada
 
 
+def test_send_reply_media_rejects_empty_file_before_sending(
+    db, monkeypatch: pytest.MonkeyPatch
+):
+    _configure_credentials(db)
+    client = Client(tenant_id=TENANT_ID, name="Cliente", phone="5511900005557", source="manual")
+    db.add(client)
+    db.flush()
+    db.add(WhatsappMessage(
+        tenant_id=TENANT_ID, client_id=client.id, direction=DIRECTION_IN, kind="text",
+        text_body="oi",
+    ))
+    db.commit()
+
+    def _boom(*_a: object, **_k: object) -> None:  # pragma: no cover - não deve ser chamado
+        raise AssertionError("upload_media não deveria ser chamado para arquivo vazio")
+
+    monkeypatch.setattr(whatsapp, "upload_media", _boom)
+
+    with pytest.raises(inbox_service.WhatsappInboxError):
+        inbox_service.send_reply_media(
+            db, tenant_id=TENANT_ID, actor="user-1", client_id=client.id,
+            file_bytes=b"", filename="doc.pdf", mime_type="application/pdf",
+        )
+
+    count = db.scalar(
+        select(WhatsappMessage).where(
+            WhatsappMessage.client_id == client.id, WhatsappMessage.direction == DIRECTION_OUT
+        )
+    )
+    assert count is None  # nenhuma linha "sent" órfã foi criada
+
+
 def test_send_reply_template_requires_approved_template(db):
     _configure_credentials(db)
     client = Client(tenant_id=TENANT_ID, name="Cliente", phone="5511900006666", source="manual")
@@ -265,3 +316,8 @@ def test_mark_read_updates_state(db):
     )
     assert state is not None
     assert state.last_read_at is not None
+    audit_entry = db.scalar(
+        select(AuditEntry).where(AuditEntry.action == "whatsapp_inbox.conversation.mark_read")
+    )
+    assert audit_entry is not None
+    assert audit_entry.target == client.id

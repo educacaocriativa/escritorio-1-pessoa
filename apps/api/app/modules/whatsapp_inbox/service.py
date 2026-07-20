@@ -124,6 +124,10 @@ def ingest_webhook_payload(db: Session, *, tenant_id: str, payload: dict) -> Non
             text_body=text_body, media_status=media_status, wa_message_id=wa_message_id,
             status="sent",
         ))
+        audit.record(
+            db, tenant_id=tenant_id, actor="whatsapp:inbox",
+            action="whatsapp_inbox.message.received", target=client.id,
+        )
     db.commit()
 
 
@@ -235,6 +239,10 @@ def mark_read(db: Session, *, tenant_id: str, client_id: str) -> None:
         state = WhatsappConversationState(tenant_id=tenant_id, client_id=client_id)
         db.add(state)
     state.last_read_at = datetime.now(UTC)
+    audit.record(
+        db, tenant_id=tenant_id, actor="whatsapp:inbox",
+        action="whatsapp_inbox.conversation.mark_read", target=client_id,
+    )
     db.commit()
 
 
@@ -282,6 +290,8 @@ def send_reply_media(
         raise WhatsappInboxError("Cliente não encontrado", 404)
     if mime_type not in ALLOWED_TYPES:
         raise WhatsappInboxError("Tipo de arquivo não permitido para envio", 415)
+    if not file_bytes:
+        raise WhatsappInboxError("Arquivo vazio", 422)
     if len(file_bytes) > MAX_BYTES:
         raise WhatsappInboxError("Arquivo acima de 10 MB", 413)
     kind = _MEDIA_KIND_BY_MIME.get(mime_type, "document")
