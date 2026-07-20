@@ -1,5 +1,5 @@
 import type { Page, PageBlock } from "@e1p/shared-types";
-import { ArrowLeft, ChevronDown, ChevronUp, Eye, Globe, Plus, Save, Trash2 } from "lucide-react";
+import { ArrowLeft, Check, ChevronDown, ChevronUp, Code2, Eye, Globe, Plus, Save, Trash2 } from "lucide-react";
 import { useCallback, useEffect, useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
 import ImageUploadButton from "../../components/ImageUploadButton";
@@ -34,6 +34,7 @@ export default function PageBuilderPage() {
   const [savedAt, setSavedAt] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [showAdd, setShowAdd] = useState(false);
+  const [copied, setCopied] = useState(false);
 
   const load = useCallback(async () => {
     const { data } = await api.get<Page>(`/pages/${id}`);
@@ -97,6 +98,31 @@ export default function PageBuilderPage() {
     if (page.public_slug) window.open(`/p/${page.public_slug}`, "_blank");
   };
 
+  const copyEmbed = async () => {
+    const saved = await save();
+    const slug = (saved ?? page).public_slug;
+    if (!slug) return;
+    const url = `${window.location.origin}/p/${slug}`;
+    const safeTitle = page.title.replace(/"/g, "&quot;");
+    const snippet = [
+      "<iframe",
+      `  src="${url}"`,
+      `  title="${safeTitle}"`,
+      '  width="100%"',
+      '  height="620"',
+      '  style="border: none; border-radius: 16px; max-width: 640px;"',
+      '  loading="lazy">',
+      "</iframe>",
+    ].join("\n");
+    try {
+      await navigator.clipboard.writeText(snippet);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
+    } catch {
+      setError("Não foi possível copiar automaticamente — copie o link da página (botão Ver) e monte o iframe manualmente.");
+    }
+  };
+
   const published = page.status === "published";
 
   return (
@@ -110,6 +136,13 @@ export default function PageBuilderPage() {
           {savedAt && <span className="text-xs text-neutral-400">{savedAt === "publicada" ? "Publicada" : `Salvo ${savedAt}`}</span>}
           <button onClick={view} className="flex items-center gap-1.5 rounded-pill bg-neutral-100 px-3 py-2 text-sm font-semibold text-neutral-600 hover:bg-neutral-200">
             <Eye size={14} /> Ver
+          </button>
+          <button
+            onClick={copyEmbed}
+            title="Copia o código <iframe> pronto pra colar em outro site"
+            className="flex items-center gap-1.5 rounded-pill bg-neutral-100 px-3 py-2 text-sm font-semibold text-neutral-600 hover:bg-neutral-200"
+          >
+            {copied ? <Check size={14} /> : <Code2 size={14} />} {copied ? "Copiado!" : "Copiar código (iframe)"}
           </button>
           <button onClick={publish} className="flex items-center gap-1.5 rounded-pill bg-primary-500 px-4 py-2 text-sm font-semibold text-white hover:bg-primary-600">
             <Globe size={14} /> {published ? "Republicar" : "Publicar"}
