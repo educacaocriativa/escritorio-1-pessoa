@@ -14,6 +14,7 @@ from sqlalchemy.orm import Session
 
 from app.core import audit, whatsapp
 from app.modules.attachments import service as attachments_service
+from app.modules.attachments.models import ALLOWED_TYPES, MAX_BYTES
 from app.modules.attachments.service import AttachmentError
 from app.modules.crm import service as crm_service
 from app.modules.crm.models import Client
@@ -26,7 +27,6 @@ from app.modules.whatsapp_inbox.models import (
     KIND_TEXT,
     MEDIA_STATUS_NONE,
     MEDIA_STATUS_PENDING,
-    PublicWhatsappAccount,
     WhatsappConversationState,
     WhatsappMessage,
 )
@@ -62,34 +62,19 @@ class WhatsappInboxError(Exception):
 # ── Ingestão (webhook) ──────────────────────────────────────────────────────
 
 
-def _extract_messages(payload: dict) -> list[tuple[str | None, dict, str]]:
-    """Devolve [(phone_number_id, mensagem, nome_do_contato)] achatando o formato aninhado do
-    payload da Meta. `phone_number_id` vem por `value.metadata` — é dali que resolvemos o
-    `tenant_id` (a Meta não manda tenant nenhum, só o número que recebeu o evento)."""
-    out: list[tuple[str | None, dict, str]] = []
+def _extract_messages(payload: dict) -> list[tuple[dict, str]]:
+    """Devolve [(mensagem, nome_do_contato)] achatando o formato aninhado do payload da Meta.
+    O `tenant_id` já vem resolvido e validado pelo chamador (ver `ingest_webhook_payload`) — não
+    precisamos extrair `phone_number_id` aqui."""
+    out: list[tuple[dict, str]] = []
     for entry in payload.get("entry", []):
         for change in entry.get("changes", []):
             value = change.get("value", {})
-            phone_number_id = value.get("metadata", {}).get("phone_number_id")
             contacts = value.get("contacts", [])
             name = contacts[0]["profile"]["name"] if contacts else "Cliente"
             for msg in value.get("messages", []):
-                out.append((phone_number_id, msg, name))
+                out.append((msg, name))
     return out
-
-
-def _resolve_tenant_id(db: Session, *, phone_number_id: str | None) -> str | None:
-    """Resolve o `tenant_id` a partir do `phone_number_id` via `PublicWhatsappAccount` (tabela
-    global, sem RLS — o único jeito de saber de quem é o evento antes de qualquer autenticação).
-    Devolve None se o número não estiver cadastrado (evento descartado silenciosamente)."""
-    if not phone_number_id:
-        return None
-    account = db.scalar(
-        select(PublicWhatsappAccount).where(
-            PublicWhatsappAccount.phone_number_id == phone_number_id
-        )
-    )
-    return account.tenant_id if account else None
 
 
 def _get_or_create_client(db: Session, *, tenant_id: str, phone: str, name: str) -> Client:
@@ -102,25 +87,19 @@ def _get_or_create_client(db: Session, *, tenant_id: str, phone: str, name: str)
     )
 
 
-def ingest_webhook_payload(db: Session, *, payload: dict) -> None:
-    """Processa UM payload de webhook. Idempotente: mensagens com `wa_message_id` já visto são
-    ignoradas (a Meta reentrega o mesmo evento às vezes). `tenant_id` é resolvido por mensagem
-    a partir do `phone_number_id` (ver `_resolve_tenant_id`) — eventos de números não
-    cadastrados são descartados."""
-    for phone_number_id, msg, contact_name in _extract_messages(payload):
+def ingest_webhook_payload(db: Session, *, tenant_id: str, payload: dict) -> None:
+    """Processa UM payload de webhook para um tenant já resolvido/validado pelo chamador. O
+    router do webhook resolve o `tenant_id` via `PublicWhatsappAccount` (pelo `phone_number_id`)
+    ANTES de chamar esta função, pois precisa do `app_secret` daquele tenant para validar a
+    assinatura do webhook — reaproveitamos aqui o mesmo `tenant_id` já validado, sem resolvê-lo
+    de novo. Idempotente: mensagens com `wa_message_id` já visto são ignoradas (a Meta reentrega
+    o mesmo evento às vezes)."""
+    for msg, contact_name in _extract_messages(payload):
         wa_message_id = msg.get("id")
         if wa_message_id and db.scalar(
             select(WhatsappMessage).where(WhatsappMessage.wa_message_id == wa_message_id)
         ):
             continue  # duplicata — ignora
-
-        tenant_id = _resolve_tenant_id(db, phone_number_id=phone_number_id)
-        if tenant_id is None:
-            logger.warning(
-                "[whatsapp_inbox] phone_number_id desconhecido, descartando mensagem: %s",
-                phone_number_id,
-            )
-            continue
 
         from_number = msg.get("from", "")
         kind = msg.get("type", "text")
@@ -301,6 +280,10 @@ def send_reply_media(
     client = db.get(Client, client_id)
     if client is None:
         raise WhatsappInboxError("Cliente não encontrado", 404)
+    if mime_type not in ALLOWED_TYPES:
+        raise WhatsappInboxError("Tipo de arquivo não permitido para envio", 415)
+    if len(file_bytes) > MAX_BYTES:
+        raise WhatsappInboxError("Arquivo acima de 10 MB", 413)
     kind = _MEDIA_KIND_BY_MIME.get(mime_type, "document")
     profile = settings_service.get_profile(db, tenant_id)
     try:

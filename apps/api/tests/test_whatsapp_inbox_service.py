@@ -60,7 +60,7 @@ def _text_message_payload(*, phone_number_id: str, wa_id: str, from_number: str,
 def test_ingest_creates_lead_for_unknown_number(db):
     _configure_credentials(db)
     inbox_service.ingest_webhook_payload(
-        db, payload=_text_message_payload(
+        db, tenant_id=TENANT_ID, payload=_text_message_payload(
             phone_number_id="phone-123", wa_id="5511999999999",
             from_number="5511999999999", body="Oi, quero saber do cardápio",
         ),
@@ -79,7 +79,7 @@ def test_ingest_reuses_existing_client_by_phone(db):
     db.add(existing)
     db.commit()
     inbox_service.ingest_webhook_payload(
-        db, payload=_text_message_payload(
+        db, tenant_id=TENANT_ID, payload=_text_message_payload(
             phone_number_id="phone-123", wa_id="5511988887777",
             from_number="5511988887777", body="oi",
         ),
@@ -94,8 +94,8 @@ def test_ingest_is_idempotent_on_duplicate_wa_message_id(db):
         phone_number_id="phone-123", wa_id="5511977776666",
         from_number="5511977776666", body="oi", msg_id="wamid.dup",
     )
-    inbox_service.ingest_webhook_payload(db, payload=payload)
-    inbox_service.ingest_webhook_payload(db, payload=payload)
+    inbox_service.ingest_webhook_payload(db, tenant_id=TENANT_ID, payload=payload)
+    inbox_service.ingest_webhook_payload(db, tenant_id=TENANT_ID, payload=payload)
     all_rows = db.scalars(
         select(WhatsappMessage).where(WhatsappMessage.wa_message_id == "wamid.dup")
     ).all()
@@ -119,7 +119,7 @@ def test_ingest_image_message_marks_media_pending(db):
             }],
         }],
     }
-    inbox_service.ingest_webhook_payload(db, payload=payload)
+    inbox_service.ingest_webhook_payload(db, tenant_id=TENANT_ID, payload=payload)
     msg = db.scalar(select(WhatsappMessage).where(WhatsappMessage.wa_message_id == "wamid.img"))
     assert msg.kind == "image"
     assert msg.media_status == MEDIA_STATUS_PENDING
@@ -201,6 +201,38 @@ def test_send_reply_text_raises_outside_window(db):
         )
 
 
+def test_send_reply_media_rejects_disallowed_mime_type_before_sending(
+    db, monkeypatch: pytest.MonkeyPatch
+):
+    _configure_credentials(db)
+    client = Client(tenant_id=TENANT_ID, name="Cliente", phone="5511900005556", source="manual")
+    db.add(client)
+    db.flush()
+    db.add(WhatsappMessage(
+        tenant_id=TENANT_ID, client_id=client.id, direction=DIRECTION_IN, kind="text",
+        text_body="oi",
+    ))
+    db.commit()
+
+    def _boom(*_a: object, **_k: object) -> None:  # pragma: no cover - não deve ser chamado
+        raise AssertionError("upload_media não deveria ser chamado para mime_type reprovado")
+
+    monkeypatch.setattr(whatsapp, "upload_media", _boom)
+
+    with pytest.raises(inbox_service.WhatsappInboxError):
+        inbox_service.send_reply_media(
+            db, tenant_id=TENANT_ID, actor="user-1", client_id=client.id,
+            file_bytes=b"fake-audio-bytes", filename="audio.mp3", mime_type="audio/mpeg",
+        )
+
+    count = db.scalar(
+        select(WhatsappMessage).where(
+            WhatsappMessage.client_id == client.id, WhatsappMessage.direction == DIRECTION_OUT
+        )
+    )
+    assert count is None  # nenhuma linha "sent" órfã foi criada
+
+
 def test_send_reply_template_requires_approved_template(db):
     _configure_credentials(db)
     client = Client(tenant_id=TENANT_ID, name="Cliente", phone="5511900006666", source="manual")
@@ -209,13 +241,15 @@ def test_send_reply_template_requires_approved_template(db):
         category_requested="UTILITY", status="PENDING", body_text="Olá {{1}}",
         variable_count=1, variable_examples=["Nome"],
     )
+    db.add(client)
     db.add(tpl)
     db.commit()
-    with pytest.raises(inbox_service.WhatsappInboxError):
+    with pytest.raises(inbox_service.WhatsappInboxError) as exc_info:
         inbox_service.send_reply_template(
             db, tenant_id=TENANT_ID, actor="user-1", client_id=client.id,
             template_id=tpl.id, variables=["Fulano"],
         )
+    assert "não aprovado" in str(exc_info.value)
 
 
 def test_mark_read_updates_state(db):
