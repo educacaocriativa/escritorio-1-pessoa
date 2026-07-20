@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 
-from fastapi import APIRouter, Depends, HTTPException, Query, Request
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, Request, UploadFile
 from fastapi.responses import PlainTextResponse
 from sqlalchemy.orm import Session
 
@@ -12,6 +12,7 @@ from app.core import whatsapp
 from app.core.tenancy import CurrentUser, get_tenant_db, require_module
 from app.db.session import get_db, get_tenant_session_factory
 from app.modules.whatsapp_inbox import service
+from app.modules.whatsapp_inbox.schemas import SendTemplateRequest, SendTextRequest
 
 public_router = APIRouter(prefix="/public/whatsapp", tags=["whatsapp-inbox-public"])
 router = APIRouter(prefix="/whatsapp-conversations", tags=["whatsapp-inbox"])
@@ -135,3 +136,56 @@ def mark_read(
     client_id: str, user: CurrentUser = Depends(_guard), db: Session = Depends(get_tenant_db)
 ):
     service.mark_read(db, tenant_id=user.tenant_id, client_id=client_id)
+
+
+def _msg_out(msg) -> dict:
+    return {
+        "id": msg.id, "direction": msg.direction, "kind": msg.kind,
+        "text_body": msg.text_body, "status": msg.status, "created_at": msg.created_at,
+    }
+
+
+@router.post("/{client_id}/messages/text")
+def send_text_reply(
+    client_id: str, data: SendTextRequest,
+    user: CurrentUser = Depends(_guard), db: Session = Depends(get_tenant_db),
+) -> dict:
+    try:
+        msg = service.send_reply_text(
+            db, tenant_id=user.tenant_id, actor=user.user_id, client_id=client_id, text=data.text,
+        )
+    except service.WhatsappInboxError as e:
+        raise _err(e) from e
+    return _msg_out(msg)
+
+
+@router.post("/{client_id}/messages/media")
+async def send_media_reply(
+    client_id: str, caption: str = Form(""), file: UploadFile = File(...),
+    user: CurrentUser = Depends(_guard), db: Session = Depends(get_tenant_db),
+) -> dict:
+    data = await file.read()
+    try:
+        msg = service.send_reply_media(
+            db, tenant_id=user.tenant_id, actor=user.user_id, client_id=client_id,
+            file_bytes=data, filename=file.filename or "arquivo",
+            mime_type=file.content_type or "application/octet-stream", caption=caption,
+        )
+    except service.WhatsappInboxError as e:
+        raise _err(e) from e
+    return _msg_out(msg)
+
+
+@router.post("/{client_id}/messages/template")
+def send_template_reply(
+    client_id: str, data: SendTemplateRequest,
+    user: CurrentUser = Depends(_guard), db: Session = Depends(get_tenant_db),
+) -> dict:
+    try:
+        msg = service.send_reply_template(
+            db, tenant_id=user.tenant_id, actor=user.user_id, client_id=client_id,
+            template_id=data.template_id, variables=data.variables,
+        )
+    except service.WhatsappInboxError as e:
+        raise _err(e) from e
+    return _msg_out(msg)

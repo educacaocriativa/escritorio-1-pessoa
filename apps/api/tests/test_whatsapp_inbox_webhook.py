@@ -77,7 +77,14 @@ def test_webhook_post_creates_message_with_valid_signature(client, db):
 
 def test_webhook_post_rejects_invalid_signature(client, db):
     _seed_account(db, phone_number_id="phone-def", tenant_id="t-3", app_secret="segredo-3")
-    payload = {"entry": []}
+    # O payload precisa resolver a conta (via phone_number_id) para a request chegar até a
+    # checagem de assinatura — um `entry` vazio nunca alcança essa validação (cai antes, em
+    # 404 "phone_number_id não encontrado"). Ver `router._extract_phone_number_id`.
+    payload = {
+        "entry": [{
+            "changes": [{"value": {"metadata": {"phone_number_id": "phone-def"}, "messages": []}}],
+        }],
+    }
     body = json.dumps(payload).encode()
     resp = client.post(
         "/public/whatsapp/webhook", content=body,
