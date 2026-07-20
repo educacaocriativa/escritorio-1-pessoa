@@ -43,14 +43,19 @@ simples, sem risco de colisão e sem depender de constraint de unicidade que nã
 - **`service.py`, `create_stage()`**:
   1. Buscar etapas ativas ordenadas do tenant (`_ordered_stages()` já existe, filtrando
      `is_archived=False`).
-  2. Validar `after_stage_id`, se enviado: deve pertencer ao tenant e não estar arquivada; senão
-     `422`.
-  3. Calcular índice de inserção: `after_stage_id is None` → índice `0` (início da lista);
-     senão, índice = posição da etapa referenciada na lista ordenada `+ 1`.
-  4. Numa única transação: montar a lista final de ids (etapas existentes + a nova, no índice
-     calculado) e escrever `position = 0..N-1` para cada uma, na ordem.
+  2. Validar `after_stage_id`, se enviado: deve existir entre as etapas ativas do tenant (a
+     query já é filtrada por RLS); senão `422`. Referenciar uma etapa arquivada também cai
+     nesse `422`, pois `_ordered_stages()` já as exclui da lista de ativas.
+  3. Calcular índice de inserção: `after_stage_id` **ausente/`None`** → **acrescenta ao final**
+     (idêntico ao comportamento atual — preserva compatibilidade para qualquer chamador que não
+     use o campo novo); caso contrário, índice = posição da etapa referenciada na lista ordenada
+     `+ 1`. **Não há suporte a inserir antes da primeira etapa** nesta entrega — não é alcançável
+     pela UI (o select sempre lista etapas reais) e evita ambiguidade entre "campo omitido" e
+     "inserir no início" (que o JSON não distingue).
+  4. Numa única transação: montar a lista final de objetos (etapas existentes + a nova, no
+     índice calculado) e escrever `position = 0..N-1` para cada um, na ordem.
   5. Etapas arquivadas mantêm seu `position` atual (não entram na renumeração, não aparecem no
-     board mesmo assim).
+     board mesmo assim, e não são um `after_stage_id` válido).
 - **`router.py`** — `POST /crm/stages` já recebe o body completo; só passa o novo campo adiante,
   sem mudança de assinatura de rota.
 
@@ -70,11 +75,15 @@ simples, sem risco de colisão e sem depender de constraint de unicidade que nã
 ## 4. Testes
 
 Estender `apps/api/tests/test_crm.py`:
-- Inserir etapa no início (`after_stage_id=None`) → nova etapa fica em `position=0`, demais
-  deslocadas.
+- Criar etapa sem `after_stage_id` → continua indo para o final (comportamento atual
+  preservado).
 - Inserir etapa no meio (`after_stage_id` de uma etapa intermediária) → ordem final correta.
-- Inserir etapa no fim (`after_stage_id` da última etapa, comportamento default do frontend) →
-  equivalente ao comportamento atual (append).
-- Etapa arquivada não é afetada pela renumeração e não aparece como opção válida de
-  `after_stage_id` (referenciar uma arquivada → `422`).
-- `after_stage_id` de outro tenant → `422`/não encontrado (isolamento RLS).
+- Inserir etapa depois da última etapa (`after_stage_id` da última) → equivalente a acrescentar
+  ao final.
+- `after_stage_id` de uma etapa arquivada → `422`.
+- `after_stage_id` desconhecido/inexistente → `422`.
+
+(Teste de isolamento cross-tenant fica de fora da suíte unitária: os testes de `test_crm.py`
+rodam sobre SQLite, que não aplica RLS — a mesma lacuna já documentada no `CLAUDE.md` §6.1 para
+todo o módulo. `after_stage_id` de outro tenant já cai automaticamente no caso "não encontrado"
+em produção, porque `_ordered_stages()` só enxerga o tenant da sessão via RLS.)
