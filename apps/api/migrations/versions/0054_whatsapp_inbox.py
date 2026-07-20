@@ -46,6 +46,7 @@ def upgrade() -> None:
         sa.Column("media_attachment_id", sa.String(36), nullable=True),
         sa.Column("media_status", sa.String(16), nullable=False, server_default="none"),
         sa.Column("wa_message_id", sa.String(128), nullable=True),
+        sa.Column("meta_media_id", sa.String(128), nullable=True),
         sa.Column("status", sa.String(16), nullable=False, server_default="sent"),
         sa.Column("created_at", sa.DateTime(timezone=True), server_default=sa.func.now()),
         sa.Column("updated_at", sa.DateTime(timezone=True), server_default=sa.func.now()),

@@ -11,7 +11,7 @@ def test_whatsapp_message_columns():
     cols = {c.name for c in WhatsappMessage.__table__.columns}
     assert cols == {
         "id", "tenant_id", "client_id", "direction", "kind", "text_body",
-        "media_attachment_id", "media_status", "wa_message_id", "status",
+        "media_attachment_id", "media_status", "wa_message_id", "meta_media_id", "status",
         "created_at", "updated_at",
     }
 

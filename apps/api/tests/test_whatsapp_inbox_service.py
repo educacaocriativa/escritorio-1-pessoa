@@ -499,7 +499,7 @@ def test_send_reply_media_rejects_disallowed_mime_type_before_sending(
     with pytest.raises(inbox_service.WhatsappInboxError):
         inbox_service.send_reply_media(
             db, tenant_id=TENANT_ID, actor="user-1", client_id=client.id,
-            file_bytes=b"fake-audio-bytes", filename="audio.mp3", mime_type="audio/mpeg",
+            file_bytes=b"fake-audio-bytes", filename="audio.mp3", mime_type="text/plain",
         )
 
     count = db.scalar(

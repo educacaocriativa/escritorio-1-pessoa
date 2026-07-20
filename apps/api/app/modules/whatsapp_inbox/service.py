@@ -25,6 +25,8 @@ from app.modules.whatsapp_inbox.models import (
     DIRECTION_IN,
     DIRECTION_OUT,
     KIND_TEXT,
+    MEDIA_STATUS_DOWNLOADED,
+    MEDIA_STATUS_FAILED,
     MEDIA_STATUS_NONE,
     MEDIA_STATUS_PENDING,
     PublicWhatsappAccount,
@@ -179,6 +181,7 @@ def ingest_webhook_payload(db: Session, *, tenant_id: str, payload: dict) -> Non
             kind = msg.get("type", "text")
             text_body = ""
             media_status = MEDIA_STATUS_NONE
+            meta_media_id = None
 
             if kind == "text":
                 text_field = msg.get("text", {})
@@ -191,6 +194,7 @@ def ingest_webhook_payload(db: Session, *, tenant_id: str, payload: dict) -> Non
                     raise WhatsappInboxError(f"Payload inválido: campo '{kind}' malformado", 400)
                 text_body = media_obj.get("caption", "")
                 media_status = MEDIA_STATUS_PENDING
+                meta_media_id = media_obj.get("id")
             else:
                 kind = "text"
                 text_body = "[tipo de mensagem não suportado]"
@@ -201,6 +205,7 @@ def ingest_webhook_payload(db: Session, *, tenant_id: str, payload: dict) -> Non
             db.add(WhatsappMessage(
                 tenant_id=tenant_id, client_id=client.id, direction=DIRECTION_IN, kind=kind,
                 text_body=text_body, media_status=media_status, wa_message_id=wa_message_id,
+                meta_media_id=meta_media_id if kind != "text" else None,
                 status="sent",
             ))
             audit.record(
@@ -228,6 +233,47 @@ def ingest_webhook_payload(db: Session, *, tenant_id: str, payload: dict) -> Non
             )
             continue
     # NENHUM db.commit() aqui: cada mensagem já commitou (ou fez rollback) a si mesma acima.
+
+
+# ── Worker: download assíncrono de mídia recebida ───────────────────────────
+
+
+def process_pending_media(db: Session, *, tenant_id: str) -> int:
+    """Baixa mídia pendente de mensagens recebidas (chamado pelo worker, `run_sweep`).
+
+    A sessão já chega escopada por RLS (`tenant_session`), então o `select` abaixo só enxerga
+    mensagens deste tenant — mesma convenção do resto do módulo. Uma falha isolada (rede,
+    credencial ausente/inválida, media_id inválido) NÃO trava as demais mensagens pendentes: a
+    mensagem falha é marcada `MEDIA_STATUS_FAILED` e o loop segue (IV2, mesmo princípio de
+    `ingest_webhook_payload`/`notifications.service.process_pending`)."""
+    profile = settings_service.get_profile(db, tenant_id)
+    pending = db.scalars(
+        select(WhatsappMessage).where(WhatsappMessage.media_status == MEDIA_STATUS_PENDING)
+    ).all()
+    processed = 0
+    for msg in pending:
+        try:
+            url = whatsapp.fetch_media_url(
+                token=profile.whatsapp_token or "", media_id=msg.meta_media_id or ""
+            )
+            data = whatsapp.download_media(token=profile.whatsapp_token or "", url=url)
+            mime_type = {
+                "image": "image/jpeg", "audio": "audio/ogg",
+                "document": "application/octet-stream", "video": "video/mp4",
+            }.get(msg.kind, "application/octet-stream")
+            attachment = attachments_service.create_attachment(
+                db, tenant_id=tenant_id, actor="system:worker", owner_type="whatsapp_message",
+                owner_id=msg.id, label="outro", filename=f"{msg.kind}-{msg.id}",
+                content_type=mime_type, data=data,
+            )
+            msg.media_attachment_id = attachment.id
+            msg.media_status = MEDIA_STATUS_DOWNLOADED
+        except Exception:  # noqa: BLE001 — isola a falha por mensagem (IV2)
+            logger.exception("[whatsapp_inbox] falha ao baixar mídia msg=%s", msg.id)
+            msg.media_status = MEDIA_STATUS_FAILED
+        processed += 1
+    db.commit()
+    return processed
 
 
 # ── Timeline unificada + janela de 24h ──────────────────────────────────────

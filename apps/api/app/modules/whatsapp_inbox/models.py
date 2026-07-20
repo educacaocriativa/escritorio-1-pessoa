@@ -52,6 +52,9 @@ class WhatsappMessage(Base, TenantMixin, TimestampMixin):
     )
     # ID da própria Meta — evita duplicar se o webhook reentregar a mesma mensagem.
     wa_message_id: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    # ID de mídia da Meta (distinto de wa_message_id, que é o ID da MENSAGEM) — só setado
+    # quando kind != "text" e ainda não baixamos os bytes.
+    meta_media_id: Mapped[str | None] = mapped_column(String(128), nullable=True)
     # Só relevante pra `direction=out` ("sent"|"logged"|"failed", mesmo vocabulário de sempre).
     status: Mapped[str] = mapped_column(String(16), default="sent", nullable=False)
 
