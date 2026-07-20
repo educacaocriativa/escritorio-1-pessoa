@@ -59,6 +59,38 @@ def _text_message_payload(*, phone_number_id: str, wa_id: str, from_number: str,
     }
 
 
+def test_resolve_account_finds_by_phone_number_id(db):
+    db.add(PublicWhatsappAccount(
+        phone_number_id="phone-resolve-1", tenant_id=TENANT_ID, app_secret="segredo-resolve",
+        verify_token="verify-resolve-1",
+    ))
+    db.commit()
+    account = inbox_service.resolve_account(db, phone_number_id="phone-resolve-1")
+    assert account is not None
+    assert account.tenant_id == TENANT_ID
+    assert account.app_secret == "segredo-resolve"
+
+
+def test_resolve_account_returns_none_for_unknown_number(db):
+    assert inbox_service.resolve_account(db, phone_number_id="numero-inexistente") is None
+
+
+def test_resolve_by_verify_token_finds_by_token(db):
+    db.add(PublicWhatsappAccount(
+        phone_number_id="phone-resolve-2", tenant_id=TENANT_ID, app_secret="segredo-resolve-2",
+        verify_token="verify-resolve-2",
+    ))
+    db.commit()
+    account = inbox_service.resolve_by_verify_token(db, verify_token="verify-resolve-2")
+    assert account is not None
+    assert account.tenant_id == TENANT_ID
+    assert account.phone_number_id == "phone-resolve-2"
+
+
+def test_resolve_by_verify_token_returns_none_for_unknown_token(db):
+    assert inbox_service.resolve_by_verify_token(db, verify_token="token-inexistente") is None
+
+
 def test_ingest_creates_lead_for_unknown_number(db):
     _configure_credentials(db)
     inbox_service.ingest_webhook_payload(

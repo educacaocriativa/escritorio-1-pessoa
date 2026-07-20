@@ -86,6 +86,17 @@ def test_webhook_post_rejects_invalid_signature(client, db):
     assert resp.status_code == 403
 
 
+def test_webhook_post_rejects_malformed_json(client, db):
+    # JSON malformado falha no parse antes mesmo de extrair phone_number_id — não dá pra
+    # resolver a conta nem calcular assinatura correta, então nem uma assinatura válida
+    # evitaria o 400 aqui (a checagem de JSON acontece primeiro).
+    resp = client.post(
+        "/public/whatsapp/webhook", content=b"isto nao e json{{{",
+        headers={"content-type": "application/json", "x-hub-signature-256": "sha256=irrelevante"},
+    )
+    assert resp.status_code == 400
+
+
 def test_webhook_post_rejects_unknown_phone_number_id(client, db):
     payload = {
         "entry": [{

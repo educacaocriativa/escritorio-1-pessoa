@@ -46,7 +46,10 @@ async def receive_webhook(
     validar a assinatura (a assinatura usa o `app_secret` DAQUELE tenant, então precisamos saber
     quem é primeiro). Se a assinatura não bater, rejeita sem processar nada."""
     body = await request.body()
-    payload = json.loads(body) if body else {}
+    try:
+        payload = json.loads(body) if body else {}
+    except json.JSONDecodeError as exc:
+        raise HTTPException(status_code=400, detail="JSON inválido") from exc
     phone_number_id = None
     for entry in payload.get("entry", []):
         for change in entry.get("changes", []):
