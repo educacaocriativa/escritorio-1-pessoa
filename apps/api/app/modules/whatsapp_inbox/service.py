@@ -10,6 +10,7 @@ import logging
 from datetime import UTC, datetime, timedelta
 
 from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.core import audit, whatsapp
@@ -399,6 +400,23 @@ def is_within_session_window(db: Session, *, client_id: str) -> bool:
 
 
 def mark_read(db: Session, *, tenant_id: str, client_id: str) -> None:
+    """Marca a conversa como lida (`last_read_at = agora`).
+
+    CHECK-THEN-ACT contra `uq_whatsapp_conv_state_tenant_client` (achado em smoke test manual:
+    clicar numa conversa dispara `/read` de mais de um lugar quase ao mesmo tempo — ex. a lista
+    de conversas E a thread aberta — e ambas as requests chegam aqui antes de qualquer uma
+    commitar). O SELECT abaixo pode devolver `None` para as duas; as duas tentam INSERIR a
+    mesma linha (tenant_id, client_id) e a que commita por último esbarra num
+    `IntegrityError` (UniqueViolation) não tratado, virando 500.
+
+    Mesma classe de corrida já resolvida em `crm_service._ordered_stages` (não a de
+    `create_stage`): a linha já existir NÃO é um conflito de negócio a rejeitar — só significa
+    que outra request venceu a corrida e já criou o estado; a ação correta é recuperar (rollback
+    + reconsultar) e atualizar essa linha, nunca deixar o IntegrityError escapar. Mesmo
+    `db.rollback()`-antes-de-reusar já documentado em `ingest_webhook_payload`/
+    `process_pending_media` acima: o commit que falhou deixa a Session "poisoned" e qualquer
+    uso posterior (inclusive o SELECT de recuperação) precisa do rollback explícito primeiro.
+    """
     state = db.scalar(
         select(WhatsappConversationState).where(
             WhatsappConversationState.client_id == client_id
@@ -412,7 +430,29 @@ def mark_read(db: Session, *, tenant_id: str, client_id: str) -> None:
         db, tenant_id=tenant_id, actor="whatsapp:inbox",
         action="whatsapp_inbox.conversation.mark_read", target=client_id,
     )
-    db.commit()
+    try:
+        db.commit()
+    except IntegrityError:
+        db.rollback()  # desfaz nosso INSERT perdedor (e o audit.record da mesma transação) —
+        # a linha vencedora da corrida já está commitada por quem chegou primeiro; sem este
+        # rollback a Session fica poisoned e o SELECT de recuperação abaixo levantaria
+        # PendingRollbackError em vez de simplesmente reconsultar.
+        state = db.scalar(
+            select(WhatsappConversationState).where(
+                WhatsappConversationState.client_id == client_id
+            )
+        )
+        if state is None:
+            # Não deveria acontecer (o IntegrityError só dispara se a linha já existe pra
+            # alguém ter vencido a corrida), mas não escondemos um bug diferente atrás de um
+            # AttributeError em `state.last_read_at` — propaga o erro original.
+            raise
+        state.last_read_at = datetime.now(UTC)
+        audit.record(
+            db, tenant_id=tenant_id, actor="whatsapp:inbox",
+            action="whatsapp_inbox.conversation.mark_read", target=client_id,
+        )
+        db.commit()
 
 
 # ── Envio de resposta ────────────────────────────────────────────────────────

@@ -3,6 +3,7 @@
 unificada, janela de 24h, resposta (texto/mídia/template)."""
 import pytest
 from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
 
 from app.core import whatsapp
 from app.core.audit import AuditEntry
@@ -617,3 +618,57 @@ def test_mark_read_updates_state(db):
     )
     assert audit_entry is not None
     assert audit_entry.target == client.id
+
+
+def test_mark_read_recovers_from_concurrent_insert_race(db, monkeypatch: pytest.MonkeyPatch):
+    """Reproduz o 500 do smoke test manual: duas requests concorrentes para o MESMO client_id
+    disparam `mark_read` quase ao mesmo tempo, ambas veem `state is None` no SELECT (nenhuma
+    commitou ainda) e tentam inserir a mesma linha (tenant_id, client_id) — a que commita por
+    último esbarra em `uq_whatsapp_conv_state_tenant_client` (IntegrityError/UniqueViolation).
+
+    Sem threads reais: um monkeypatch em `db.commit` intercepta a PRIMEIRA chamada (a tentativa
+    de INSERT do nosso `mark_read`, o "perdedor" da corrida) e, antes de levantar o
+    `IntegrityError`, insere e commita de verdade a linha "vencedora" — simulando a OUTRA
+    request que já teria commitado bem antes. Assim o SELECT de recuperação de `mark_read`
+    encontra uma linha genuína no banco, exatamente como aconteceria em produção."""
+    _configure_credentials(db)
+    client = Client(tenant_id=TENANT_ID, name="Cliente", phone="5511900006666", source="manual")
+    db.add(client)
+    db.commit()
+
+    real_commit = db.commit
+    calls = {"n": 0}
+
+    def _commit_with_race(*args, **kwargs):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            db.rollback()  # descarta nosso INSERT + audit.record pendentes (o "perdedor")
+            winner = WhatsappConversationState(tenant_id=TENANT_ID, client_id=client.id)
+            db.add(winner)
+            real_commit()  # a linha da "outra request" agora existe de verdade no banco
+            raise IntegrityError(
+                "INSERT INTO whatsapp_conversation_states ...", {},
+                Exception(
+                    'duplicate key value violates unique constraint '
+                    '"uq_whatsapp_conv_state_tenant_client"'
+                ),
+            )
+        return real_commit(*args, **kwargs)
+
+    monkeypatch.setattr(db, "commit", _commit_with_race)
+
+    inbox_service.mark_read(db, tenant_id=TENANT_ID, client_id=client.id)  # não pode levantar
+
+    states = db.scalars(
+        select(WhatsappConversationState).where(
+            WhatsappConversationState.client_id == client.id
+        )
+    ).all()
+    assert len(states) == 1  # nenhuma linha duplicada — recuperou atualizando a existente
+    assert states[0].last_read_at is not None
+
+    audit_entries = db.scalars(
+        select(AuditEntry).where(AuditEntry.action == "whatsapp_inbox.conversation.mark_read")
+    ).all()
+    assert len(audit_entries) == 1  # o audit da tentativa perdedora foi descartado no rollback
+    assert audit_entries[0].target == client.id
