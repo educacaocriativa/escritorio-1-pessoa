@@ -12,6 +12,7 @@ from datetime import datetime
 from sqlalchemy import DateTime, String, Text, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column
 
+from app.core.token_crypto import EncryptedToken
 from app.db.base import Base, TenantMixin, TimestampMixin, _uuid
 
 DIRECTION_IN = "in"
@@ -89,5 +90,9 @@ class PublicWhatsappAccount(Base, TimestampMixin):
 
     phone_number_id: Mapped[str] = mapped_column(String(64), primary_key=True)
     tenant_id: Mapped[str] = mapped_column(String(36), nullable=False)
-    app_secret: Mapped[str] = mapped_column(String(255), nullable=False)
+    # Cifrado em repouso (mesmo padrão de `TenantProfile.whatsapp_app_secret`, ver
+    # `core/token_crypto.py`) — vazamento de dump/backup não deve expor o segredo do App da Meta,
+    # que forjaria a assinatura do webhook. Transparente: leitura/escrita seguem em texto plano
+    # no nível Python (migration 0056 ajusta o tipo SQL subjacente p/ TEXT).
+    app_secret: Mapped[str] = mapped_column(EncryptedToken, nullable=False)
     verify_token: Mapped[str] = mapped_column(String(64), nullable=False)
