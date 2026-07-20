@@ -327,6 +327,26 @@ def test_run_send_email_resolves_client_placeholders(client: TestClient, headers
     assert "{{" not in notif["message"]
 
 
+def test_run_send_email_placeholder_shows_fallback_when_empty(client: TestClient, headers):
+    # {{cliente.email}}/{{cliente.telefone}} sem valor viram "(não informado)" em vez de
+    # deixar a linha em branco no e-mail (ex.: "E-mail: " sem nada depois, confuso pra quem lê).
+    cl = client.post("/crm/clients", json={"name": "Sem Contato"}, headers=headers).json()
+    resp = client.post(
+        "/funnels/run-node",
+        json={"action": "send_email", "client_id": cl["id"],
+              "params": {
+                  "subject": "x",
+                  "message": "E-mail: {{cliente.email}}\nWhatsApp: {{cliente.telefone}}",
+                  "recipient": "team",
+              }},
+        headers=headers,
+    )
+    assert resp.status_code == 200, resp.text
+    notifs = client.get("/notifications", headers=headers).json()
+    notif = next(n for n in notifs if n["client_id"] == cl["id"])
+    assert notif["message"] == "E-mail: (não informado)\nWhatsApp: (não informado)"
+
+
 def test_run_requires_client(client: TestClient, headers):
     resp = client.post(
         "/funnels/run-node",
