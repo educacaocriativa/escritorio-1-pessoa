@@ -33,6 +33,9 @@ type NodeConfig = {
   amount_cents?: number; method?: "boleto" | "pix"; tag?: string;
   // WhatsApp: template Meta aprovado + valores posicionais (literal ou {{cliente.*}}).
   template_id?: string; variables?: string[];
+  // E-mail/WhatsApp: para quem vai — o lead (padrão) ou a equipe (alerta interno, ex.: "novo
+  // lead chegou"). "team" resolve pro e-mail/telefone do escritório (Configurações → Perfil).
+  recipient?: "client" | "team";
 };
 type NodeData = {
   label: string; description: string; color: string; category: string; key: string;
@@ -577,10 +580,12 @@ function RunNodeModal({
     if (action === "send_email") {
       params.subject = subject;
       params.message = message;
+      params.recipient = node.data.config?.recipient ?? "client";
     }
     if (action === "send_message") {
       params.template_id = node.data.config?.template_id;
       params.variables = node.data.config?.variables ?? [];
+      params.recipient = node.data.config?.recipient ?? "client";
     }
     try {
       const { data } = await api.post<{ message: string }>("/funnels/run-node", {
@@ -634,6 +639,12 @@ function RunNodeModal({
             </>
           )}
           {money && <Field label="Valor (R$)" value={amount} onChange={setAmount} placeholder="0,00" />}
+          {(action === "send_email" || action === "send_message") && node.data.config?.recipient === "team" && (
+            <p className="rounded-lg bg-primary-50 p-2 text-xs text-primary-700">
+              Destinatário configurado no nó: <strong>Equipe</strong> — vai pro e-mail/telefone do
+              escritório, não pro cliente selecionado.
+            </p>
+          )}
           {action === "send_email" && <Field label="Assunto" value={subject} onChange={setSubject} />}
           {action === "send_email" && (
             <label className="block">
@@ -701,6 +712,7 @@ function NodeContentEditor({
   const [templates, setTemplates] = useState<WhatsappTemplate[]>([]);
   const [templateId, setTemplateId] = useState(node.data.config?.template_id ?? "");
   const [variables, setVariables] = useState<string[]>(node.data.config?.variables ?? []);
+  const [recipient, setRecipient] = useState<"client" | "team">(node.data.config?.recipient ?? "client");
 
   useEffect(() => {
     if (!isWhatsapp) return;
@@ -753,6 +765,26 @@ function NodeContentEditor({
           <h3 className="text-lg font-bold text-neutral-800">{title}</h3>
         </div>
         <p className="mb-4 text-xs text-neutral-400">{node.data.label}</p>
+
+        {(isEmail || isWhatsapp) && (
+          <label className="mb-3 block">
+            <span className="mb-1 block text-xs font-medium text-neutral-600">Destinatário</span>
+            <select
+              value={recipient}
+              onChange={(e) => setRecipient(e.target.value as "client" | "team")}
+              className="w-full rounded-lg border border-neutral-200 px-3 py-2 text-sm outline-none focus:border-primary-400"
+            >
+              <option value="client">Cliente (o lead da jornada)</option>
+              <option value="team">Equipe (alerta interno — e-mail/telefone do escritório)</option>
+            </select>
+            {recipient === "team" && (
+              <p className="mt-1 text-[11px] text-neutral-400">
+                Usa o e-mail/telefone de Configurações → Perfil da empresa (ou o do dono da conta,
+                se não estiver preenchido).
+              </p>
+            )}
+          </label>
+        )}
 
         {isPage && (
           <label className="mb-3 block">
@@ -846,8 +878,11 @@ function NodeContentEditor({
             onClick={() =>
               onSave(
                 isWhatsapp
-                  ? { template_id: templateId, variables }
-                  : { subject: isEmail ? subject : "", body, model: isPage ? model : undefined },
+                  ? { template_id: templateId, variables, recipient }
+                  : {
+                      subject: isEmail ? subject : "", body, model: isPage ? model : undefined,
+                      recipient: isEmail ? recipient : undefined,
+                    },
               )
             }
             disabled={isWhatsapp && !templateId}
