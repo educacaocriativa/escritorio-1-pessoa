@@ -1,6 +1,18 @@
 import type { PageBlock, PageStyle } from "@e1p/shared-types";
 import { useState } from "react";
 
+export type LeadPayload = { name: string; email: string; phone: string; fields: Record<string, string> };
+
+export type ExtraField = {
+  key: string;
+  label: string;
+  kind: "text" | "select";
+  placeholder?: string;
+  helper?: string;
+  options?: string[];
+  fullWidth?: boolean;
+};
+
 const safeSrc = (u: unknown) =>
   typeof u === "string" && /^(https?:\/\/|\/)/i.test(u.trim()) ? u.trim() : "";
 
@@ -12,7 +24,7 @@ export default function PageBlocks({
 }: {
   blocks: PageBlock[];
   style: PageStyle;
-  onLead?: (lead: { name: string; email: string; phone: string }) => Promise<void>;
+  onLead?: (lead: LeadPayload) => Promise<void>;
 }) {
   return (
     <div
@@ -36,7 +48,7 @@ function Block({
 }: {
   block: PageBlock;
   style: PageStyle;
-  onLead?: (lead: { name: string; email: string; phone: string }) => Promise<void>;
+  onLead?: (lead: LeadPayload) => Promise<void>;
 }) {
   const s = (k: string) => (typeof block[k] === "string" ? (block[k] as string) : "");
   switch (block.type) {
@@ -79,7 +91,7 @@ function Block({
         </div>
       );
     case "form":
-      return <LeadForm button={s("button") || "Enviar"} style={style} onLead={onLead} />;
+      return <LeadForm block={block} style={style} onLead={onLead} />;
     case "divider":
       return <hr className="border-black/10" />;
     default:
@@ -88,25 +100,37 @@ function Block({
 }
 
 function LeadForm({
-  button,
+  block,
   style,
   onLead,
 }: {
-  button: string;
+  block: PageBlock;
   style: PageStyle;
-  onLead?: (lead: { name: string; email: string; phone: string }) => Promise<void>;
+  onLead?: (lead: LeadPayload) => Promise<void>;
 }) {
+  const s = (k: string) => (typeof block[k] === "string" ? (block[k] as string) : "");
+  const showEmail = block.showEmail === true;
+  const extraFields: ExtraField[] = Array.isArray(block.extraFields) ? (block.extraFields as ExtraField[]) : [];
+  const button = s("button") || "Enviar";
+  const disclaimer = s("disclaimer");
+
   const [name, setName] = useState("");
   const [email, setEmail] = useState("");
   const [phone, setPhone] = useState("");
+  const [values, setValues] = useState<Record<string, string>>({});
   const [done, setDone] = useState(false);
   const [busy, setBusy] = useState(false);
 
   async function submit() {
-    if (!name.trim() || !onLead) return;
+    if (!name.trim() || !phone.trim() || !onLead) return;
     setBusy(true);
     try {
-      await onLead({ name, email, phone });
+      const fields: Record<string, string> = {};
+      for (const f of extraFields) {
+        const v = values[f.key];
+        if (v && v.trim()) fields[f.label] = v.trim();
+      }
+      await onLead({ name, email, phone, fields });
       setDone(true);
     } finally {
       setBusy(false);
@@ -121,20 +145,93 @@ function LeadForm({
     );
   }
 
-  const inp = "w-full rounded-lg border border-black/10 bg-white px-3 py-2 text-sm text-neutral-800 outline-none";
+  const border = `${style.text_color}33`;
+  const inputBg = `${style.text_color}0d`;
+  const mutedText = `${style.text_color}99`;
+  const label = "mb-1 block text-sm font-semibold";
+  const inp = "w-full rounded-lg px-3 py-2.5 text-sm outline-none";
+  const inpStyle = { background: inputBg, border: `1px solid ${border}`, color: style.text_color };
+
   return (
-    <div className="space-y-2 rounded-xl bg-black/5 p-4">
-      <input value={name} onChange={(e) => setName(e.target.value)} placeholder="Seu nome" className={inp} />
-      <input value={email} onChange={(e) => setEmail(e.target.value)} placeholder="Seu e-mail" className={inp} />
-      <input value={phone} onChange={(e) => setPhone(e.target.value)} placeholder="Seu WhatsApp" className={inp} />
+    <div
+      className="rounded-2xl p-6 sm:p-7"
+      style={{ background: `${style.accent_color}14`, border: `1px solid ${border}` }}
+    >
+      <div className="grid grid-cols-1 gap-x-4 gap-y-4 sm:grid-cols-2">
+        <div>
+          <span className={label}>{s("nameLabel") || "Seu nome"}</span>
+          <input
+            value={name}
+            onChange={(e) => setName(e.target.value)}
+            placeholder={s("namePlaceholder") || "Como podemos te chamar?"}
+            className={inp}
+            style={inpStyle}
+          />
+        </div>
+        <div>
+          <span className={label}>{s("phoneLabel") || "Seu WhatsApp"}</span>
+          <input
+            value={phone}
+            onChange={(e) => setPhone(e.target.value)}
+            placeholder={s("phonePlaceholder") || "(43) 9 9999-9999"}
+            className={inp}
+            style={inpStyle}
+          />
+          {s("phoneHelper") && (
+            <p className="mt-1 text-xs" style={{ color: mutedText }}>{s("phoneHelper")}</p>
+          )}
+        </div>
+        {showEmail && (
+          <div className="sm:col-span-2">
+            <span className={label}>{s("emailLabel") || "Seu e-mail"}</span>
+            <input
+              value={email}
+              onChange={(e) => setEmail(e.target.value)}
+              placeholder={s("emailPlaceholder") || "seu@email.com"}
+              className={inp}
+              style={inpStyle}
+            />
+          </div>
+        )}
+        {extraFields.map((f) => (
+          <div key={f.key} className={f.fullWidth ? "sm:col-span-2" : undefined}>
+            <span className={label}>{f.label}</span>
+            {f.kind === "select" ? (
+              <select
+                value={values[f.key] ?? ""}
+                onChange={(e) => setValues((v) => ({ ...v, [f.key]: e.target.value }))}
+                className={inp}
+                style={inpStyle}
+              >
+                <option value="">{f.placeholder || "Selecione"}</option>
+                {(f.options ?? []).map((o) => (
+                  <option key={o} value={o}>{o}</option>
+                ))}
+              </select>
+            ) : (
+              <input
+                value={values[f.key] ?? ""}
+                onChange={(e) => setValues((v) => ({ ...v, [f.key]: e.target.value }))}
+                placeholder={f.placeholder}
+                className={inp}
+                style={inpStyle}
+              />
+            )}
+            {f.helper && <p className="mt-1 text-xs" style={{ color: mutedText }}>{f.helper}</p>}
+          </div>
+        ))}
+      </div>
       <button
         onClick={submit}
-        disabled={busy || !name.trim() || !onLead}
-        className="w-full rounded-pill py-2.5 font-bold text-white disabled:opacity-60"
-        style={{ background: style.accent_color }}
+        disabled={busy || !name.trim() || !phone.trim() || !onLead}
+        className="mt-5 w-full rounded-pill py-3 text-base font-bold disabled:opacity-60"
+        style={{ background: style.accent_color, color: style.primary_color }}
       >
         {busy ? "Enviando..." : button}
       </button>
+      {disclaimer && (
+        <p className="mt-3 text-center text-xs" style={{ color: mutedText }}>{disclaimer}</p>
+      )}
     </div>
   );
 }

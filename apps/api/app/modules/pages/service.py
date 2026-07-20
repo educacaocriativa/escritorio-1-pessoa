@@ -31,7 +31,9 @@ def _btn(label: str, url: str = "") -> dict:
 
 
 def _form(button: str = "Enviar") -> dict:
-    return {"type": "form", "fields": ["name", "email", "phone"], "button": button}
+    return {
+        "type": "form", "button": button, "showEmail": True, "extraFields": [], "disclaimer": "",
+    }
 
 
 # Templates iniciais por modelo de página (mesmos modelos dos nós-página do funil).
@@ -189,8 +191,22 @@ def public_view(db: Session, *, slug: str) -> dict:
     return snap.data
 
 
+def _format_fields(fields: dict[str, str] | None) -> str:
+    if not fields:
+        return ""
+    lines = "\n".join(f"{k}: {v}" for k, v in fields.items() if v)
+    return f"Campos do formulário:\n{lines}" if lines else ""
+
+
 def public_submit(
-    db: Session, *, slug: str, name: str, email: str | None, phone: str, session_factory
+    db: Session,
+    *,
+    slug: str,
+    name: str,
+    email: str | None,
+    phone: str,
+    fields: dict[str, str] | None = None,
+    session_factory,
 ) -> None:
     """Formulário de captura → cria um LEAD no CRM do tenant dono da página."""
     snap = db.get(PublishedPage, slug)
@@ -202,5 +218,8 @@ def public_submit(
     with session_factory(snap.tenant_id) as tdb:
         crm_service.create_client(
             tdb, tenant_id=snap.tenant_id, actor="pagina:lead",
-            data=ClientCreate(name=name, email=email, phone=phone or None, source="landing"),
+            data=ClientCreate(
+                name=name, email=email, phone=phone or None, source="landing",
+                notes=_format_fields(fields),
+            ),
         )

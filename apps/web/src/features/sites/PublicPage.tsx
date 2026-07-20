@@ -2,7 +2,7 @@ import type { PublicPage as PublicPageT } from "@e1p/shared-types";
 import { useCallback, useEffect, useState } from "react";
 import { useParams } from "react-router-dom";
 import { publicApi } from "../../lib/api";
-import PageBlocks from "./PageBlocks";
+import PageBlocks, { type LeadPayload } from "./PageBlocks";
 
 /** Página pública (visitante abre sem login). */
 export default function PublicPage() {
@@ -25,11 +25,12 @@ export default function PublicPage() {
     load();
   }, [load]);
 
-  async function lead(l: { name: string; email: string; phone: string }) {
+  async function lead(l: LeadPayload) {
     await publicApi.post(`/public/pages/${slug}/submit`, {
       name: l.name,
       email: l.email || null,
       phone: l.phone,
+      fields: Object.keys(l.fields).length ? l.fields : null,
     });
   }
 
