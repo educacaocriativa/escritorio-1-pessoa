@@ -21,6 +21,10 @@ Allowlist (usos legítimos, documentados com guarda explícita no próprio códi
   - integrations → idem, `capture_lead` (API pública de captura de lead) resolve a chave via
                   `public_integration_keys` (snapshot GLOBAL sem RLS) antes de abrir a
                   tenant_session real — mesmo padrão de pages/quotes/contracts.
+  - whatsapp_inbox → idem, `verify_webhook`/`receive_webhook` (webhook público da Meta) resolvem
+                  o tenant via `public_whatsapp_accounts` (snapshot GLOBAL sem RLS) pelo
+                  `phone_number_id`/`verify_token` antes de abrir a tenant_session real — mesmo
+                  padrão de pages/quotes/contracts/integrations.
 """
 from __future__ import annotations
 
@@ -31,6 +35,7 @@ MODULES_DIR = pathlib.Path(__file__).resolve().parents[1] / "app" / "modules"
 # Módulos onde `get_db` (sessão global) é um uso legítimo e já auditado (ver docstring acima).
 ALLOWLIST = {
     "auth", "platform", "contracts", "pages", "quotes", "wallet", "attachments", "integrations",
+    "whatsapp_inbox",
 }
 
 

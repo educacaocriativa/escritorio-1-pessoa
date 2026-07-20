@@ -26,6 +26,7 @@ from app.modules.whatsapp_inbox.models import (
     KIND_TEXT,
     MEDIA_STATUS_NONE,
     MEDIA_STATUS_PENDING,
+    PublicWhatsappAccount,
     WhatsappConversationState,
     WhatsappMessage,
 )
@@ -54,6 +55,24 @@ class WhatsappInboxError(Exception):
     def __init__(self, message: str, status_code: int = 422) -> None:
         super().__init__(message)
         self.status_code = status_code
+
+
+# ── Resolução de tenant (pré-autenticação do webhook) ───────────────────────
+
+
+def resolve_account(db: Session, *, phone_number_id: str) -> PublicWhatsappAccount | None:
+    """Resolve tenant/app_secret pelo `phone_number_id` — chamado numa sessão SEM tenant
+    (`get_db`), ANTES de qualquer autenticação, mesmo padrão de `PublicIntegrationKey`."""
+    return db.get(PublicWhatsappAccount, phone_number_id)
+
+
+def resolve_by_verify_token(db: Session, *, verify_token: str) -> PublicWhatsappAccount | None:
+    """Usado só no handshake GET — confere se o token bate com ALGUM tenant cadastrado."""
+    return db.scalar(
+        select(PublicWhatsappAccount).where(
+            PublicWhatsappAccount.verify_token == verify_token
+        )
+    )
 
 
 # ── Ingestão (webhook) ──────────────────────────────────────────────────────
