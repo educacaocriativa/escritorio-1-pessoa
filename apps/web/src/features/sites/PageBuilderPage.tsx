@@ -159,8 +159,13 @@ export default function PageBuilderPage() {
         <div className="flex flex-col gap-3 overflow-auto rounded-2xl bg-white p-4 shadow-sm">
           {/* Aparência */}
           <div className="grid grid-cols-2 gap-2 rounded-xl bg-neutral-50 p-3">
-            {([["Primária", "primary_color"], ["Fundo", "bg_color"], ["Texto", "text_color"], ["Destaque", "accent_color"]] as [string, keyof Page][]).map(([label, key]) => (
-              <div key={key} className="flex items-center gap-1.5">
+            {([
+              ["Primária", "primary_color", "Cor do título e do texto do botão"],
+              ["Fundo", "bg_color", "Cor de fundo da página inteira"],
+              ["Texto", "text_color", "Cor dos rótulos, textos de ajuda e do que você digita nos campos"],
+              ["Destaque", "accent_color", "Cor de fundo do botão e do cartão do formulário"],
+            ] as [string, keyof Page, string][]).map(([label, key, hint]) => (
+              <div key={key} className="flex items-center gap-1.5" title={hint}>
                 <input type="color" value={page[key] as string} onChange={(e) => setStyle({ [key]: e.target.value } as Partial<Page>)} className="h-7 w-8 cursor-pointer rounded border border-neutral-200" />
                 <span className="text-xs text-neutral-500">{label}</span>
               </div>
