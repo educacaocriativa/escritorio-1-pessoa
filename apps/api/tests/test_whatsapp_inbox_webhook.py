@@ -97,6 +97,17 @@ def test_webhook_post_rejects_malformed_json(client, db):
     assert resp.status_code == 400
 
 
+def test_webhook_post_rejects_invalid_utf8_body(client, db):
+    # Bytes que não são UTF-8 válido levantam `UnicodeDecodeError` dentro de `json.loads`, uma
+    # exceção IRMÃ de `JSONDecodeError` sob `ValueError` (não subclasse) — sem capturá-la também,
+    # o parse quebra com 500 cru antes de chegar em qualquer resolução de tenant/assinatura.
+    resp = client.post(
+        "/public/whatsapp/webhook", content=b"\xff\xff\xff",
+        headers={"content-type": "application/json", "x-hub-signature-256": "sha256=irrelevante"},
+    )
+    assert resp.status_code == 400
+
+
 def test_webhook_post_rejects_json_null(client, db):
     # `null` é JSON sintaticamente válido (json.loads não levanta JSONDecodeError), mas não é um
     # dict — sem a checagem de shape, `payload.get("entry", [])` explodiria com AttributeError.

@@ -69,7 +69,7 @@ async def receive_webhook(
     body = await request.body()
     try:
         payload = json.loads(body) if body else {}
-    except json.JSONDecodeError as exc:
+    except (json.JSONDecodeError, UnicodeDecodeError) as exc:
         raise HTTPException(status_code=400, detail="JSON inválido") from exc
     if not isinstance(payload, dict):
         raise HTTPException(status_code=400, detail="JSON inválido")
