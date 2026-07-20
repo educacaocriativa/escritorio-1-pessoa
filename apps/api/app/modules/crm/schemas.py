@@ -14,6 +14,7 @@ from app.modules.crm.models import GENDER_VALUES, SOURCE_VALUES
 class StageCreate(BaseModel):
     name: str = Field(min_length=1, max_length=64)
     position: int | None = None
+    after_stage_id: str | None = None
     is_won: bool = False
     is_lost: bool = False
 

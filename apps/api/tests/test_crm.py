@@ -144,6 +144,62 @@ def test_create_custom_stage(client: TestClient, headers):
     assert resp.json()["name"] == "Negociação"
 
 
+def test_create_stage_without_after_appends_to_end(client: TestClient, headers):
+    client.get("/crm/board", headers=headers)  # seed
+    resp = client.post("/crm/stages", json={"name": "Fechamento"}, headers=headers)
+    assert resp.status_code == 201
+    names = [s["name"] for s in client.get("/crm/stages", headers=headers).json()]
+    assert names[-1] == "Fechamento"
+
+
+def test_create_stage_after_stage_inserts_in_the_middle(client: TestClient, headers):
+    stages = client.get("/crm/stages", headers=headers).json()
+    em_contato = next(s for s in stages if s["name"] == "Em contato")
+    resp = client.post(
+        "/crm/stages",
+        json={"name": "Qualificação", "after_stage_id": em_contato["id"]},
+        headers=headers,
+    )
+    assert resp.status_code == 201
+    names = [s["name"] for s in client.get("/crm/stages", headers=headers).json()]
+    assert names == ["Entrada", "Em contato", "Qualificação", "Proposta", "Ganho", "Perda"]
+
+
+def test_create_stage_after_last_stage_is_equivalent_to_append(client: TestClient, headers):
+    stages = client.get("/crm/stages", headers=headers).json()
+    perda = next(s for s in stages if s["name"] == "Perda")
+    resp = client.post(
+        "/crm/stages",
+        json={"name": "Pós-venda", "after_stage_id": perda["id"]},
+        headers=headers,
+    )
+    assert resp.status_code == 201
+    names = [s["name"] for s in client.get("/crm/stages", headers=headers).json()]
+    assert names[-1] == "Pós-venda"
+
+
+def test_create_stage_after_archived_stage_rejected(client: TestClient, headers):
+    stages = client.get("/crm/stages", headers=headers).json()
+    proposta = next(s for s in stages if s["name"] == "Proposta")
+    client.post(f"/crm/stages/{proposta['id']}/archive", headers=headers)
+    resp = client.post(
+        "/crm/stages",
+        json={"name": "Depois", "after_stage_id": proposta["id"]},
+        headers=headers,
+    )
+    assert resp.status_code == 422
+
+
+def test_create_stage_after_unknown_id_rejected(client: TestClient, headers):
+    client.get("/crm/board", headers=headers)  # seed
+    resp = client.post(
+        "/crm/stages",
+        json={"name": "X", "after_stage_id": "nao-existe"},
+        headers=headers,
+    )
+    assert resp.status_code == 422
+
+
 def test_stage_cannot_be_won_and_lost(client: TestClient, headers):
     resp = client.post(
         "/crm/stages", json={"name": "Bug", "is_won": True, "is_lost": True}, headers=headers

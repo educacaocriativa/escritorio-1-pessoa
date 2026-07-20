@@ -55,18 +55,28 @@ def ensure_stages(db: Session, tenant_id: str) -> list[PipelineStage]:
 
 
 def create_stage(db: Session, *, tenant_id: str, actor: str, data: StageCreate) -> PipelineStage:
-    if data.position is None:
-        max_pos = db.scalar(select(func.max(PipelineStage.position)))
-        position = 0 if max_pos is None else max_pos + 1
+    active = _ordered_stages(db)
+    if data.after_stage_id is not None:
+        try:
+            after_index = next(
+                i for i, s in enumerate(active) if s.id == data.after_stage_id
+            )
+        except StopIteration as e:
+            raise CrmError("Etapa de referência não encontrada", 422) from e
+        insert_index = after_index + 1
     else:
-        position = data.position
+        insert_index = len(active)
+
     stage = PipelineStage(
         tenant_id=tenant_id,
         name=data.name,
-        position=position,
         is_won=data.is_won,
         is_lost=data.is_lost,
     )
+    ordered = active[:insert_index] + [stage] + active[insert_index:]
+    for index, s in enumerate(ordered):
+        s.position = index
+
     db.add(stage)
     audit.record(db, tenant_id=tenant_id, actor=actor, action="crm.stage.create", target=stage.id)
     try:
