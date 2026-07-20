@@ -200,6 +200,33 @@ def test_create_stage_after_unknown_id_rejected(client: TestClient, headers):
     assert resp.status_code == 422
 
 
+def test_create_stage_after_empty_string_id_rejected(client: TestClient, headers):
+    client.get("/crm/board", headers=headers)  # seed
+    resp = client.post(
+        "/crm/stages",
+        json={"name": "X", "after_stage_id": ""},
+        headers=headers,
+    )
+    assert resp.status_code == 422
+
+
+def test_stage_name_is_trimmed(client: TestClient, headers):
+    client.get("/crm/board", headers=headers)  # seed
+    resp = client.post(
+        "/crm/stages", json={"name": "  Negociação  "}, headers=headers
+    )
+    assert resp.status_code == 201
+    assert resp.json()["name"] == "Negociação"
+
+
+def test_blank_stage_name_rejected(client: TestClient, headers):
+    client.get("/crm/board", headers=headers)  # seed
+    resp = client.post(
+        "/crm/stages", json={"name": "   "}, headers=headers
+    )
+    assert resp.status_code == 422
+
+
 def test_stage_cannot_be_won_and_lost(client: TestClient, headers):
     resp = client.post(
         "/crm/stages", json={"name": "Bug", "is_won": True, "is_lost": True}, headers=headers

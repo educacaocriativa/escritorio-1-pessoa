@@ -18,6 +18,14 @@ class StageCreate(BaseModel):
     is_won: bool = False
     is_lost: bool = False
 
+    @field_validator("name")
+    @classmethod
+    def _name(cls, v: str) -> str:
+        v = v.strip()
+        if not v:
+            raise ValueError("nome não pode ser vazio")
+        return v
+
     @model_validator(mode="after")
     def _validate(self) -> StageCreate:
         if self.is_won and self.is_lost:
