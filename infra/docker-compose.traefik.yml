@@ -129,6 +129,34 @@ services:
       - traefik.http.routers.e1p-web.middlewares=security-headers@file
       - traefik.http.services.e1p-web.loadbalancer.server.port=80
 
+      # Páginas públicas (Sites/Páginas — `/p/:slug`, sem login) são feitas pra serem embutidas
+      # via <iframe> no site externo do próprio tenant (ex.: formulário de captura). O middleware
+      # `security-headers@file` compartilhado do Traefik seta `frameDeny: true` (X-Frame-Options:
+      # DENY) em TODA resposta de e1p-web — correto pro app autenticado (login/CRM/dashboard,
+      # onde framing é risco real de clickjacking), mas quebra esse embed de propósito, sem
+      # exceção por rota. Em vez de editar o arquivo compartilhado (fora deste repo, arriscado —
+      # afeta outros projetos na mesma VPS), definimos aqui um middleware PRÓPRIO com os mesmos
+      # headers (HSTS, nosniff, referrer-policy, esconder Server) exceto frameDeny, e um router
+      # mais específico (maior prioridade) só pra `/p/`. `/p/:slug` já é público/sem-sessão por
+      # design (mesmo padrão de CORS aberto de `/public/leads/*` — ver PublicLeadsCORSMiddleware),
+      # então não há dado sensível em jogo pra esse risco de clickjacking valer a pena.
+      - traefik.http.middlewares.e1p-public-headers.headers.stsSeconds=31536000
+      - traefik.http.middlewares.e1p-public-headers.headers.stsIncludeSubdomains=true
+      - traefik.http.middlewares.e1p-public-headers.headers.stsPreload=true
+      - traefik.http.middlewares.e1p-public-headers.headers.contentTypeNosniff=true
+      - traefik.http.middlewares.e1p-public-headers.headers.referrerPolicy=strict-origin-when-cross-origin
+      - traefik.http.middlewares.e1p-public-headers.headers.customResponseHeaders.Server=
+      - traefik.http.routers.e1p-web-public.rule=(Host(`${DOMAIN}`) || HostRegexp(`^[a-z0-9-]+\.${ROOT_DOMAIN}$`)) && PathPrefix(`/p/`)
+      - traefik.http.routers.e1p-web-public.entrypoints=websecure
+      - traefik.http.routers.e1p-web-public.tls.certresolver=letsencrypt-dns
+      - traefik.http.routers.e1p-web-public.tls.domains[0].main=${ROOT_DOMAIN}
+      - traefik.http.routers.e1p-web-public.tls.domains[0].sans=*.${ROOT_DOMAIN}
+      # Maior que o catch-all (1), menor que /api (20) — não há sobreposição real com /api de
+      # qualquer forma (prefixos distintos), só segue o mesmo estilo explícito já usado acima.
+      - traefik.http.routers.e1p-web-public.priority=15
+      - traefik.http.routers.e1p-web-public.middlewares=e1p-public-headers@docker
+      - traefik.http.routers.e1p-web-public.service=e1p-web
+
 networks:
   db_internal:
     internal: true
