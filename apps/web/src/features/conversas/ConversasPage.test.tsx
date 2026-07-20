@@ -86,4 +86,68 @@ describe("ConversasPage", () => {
     // O texto exato da option ("Selecione um template") é único.
     expect(screen.getByText("Selecione um template")).toBeInTheDocument();
   });
+
+  it("limpa o rascunho e o fio anterior ao trocar de conversa", async () => {
+    vi.mocked(api.get).mockImplementation((url: string) => {
+      if (url === "/whatsapp-conversations") {
+        return Promise.resolve({
+          data: [
+            {
+              client_id: "c1", client_name: "Cliente A", client_phone: "5511111111111",
+              last_message_at: "2026-07-19T10:00:00Z", last_message_preview: "prévia A",
+              unread: false,
+            },
+            {
+              client_id: "c2", client_name: "Cliente B", client_phone: "5511222222222",
+              last_message_at: "2026-07-19T11:00:00Z", last_message_preview: "prévia B",
+              unread: false,
+            },
+          ],
+        });
+      }
+      if (url === "/whatsapp-conversations/c1/timeline") {
+        return Promise.resolve({
+          data: [{
+            source: "conversation", direction: "in", kind: "text",
+            text_body: "Mensagem da conversa A", media_attachment_id: null, purpose_label: null,
+            created_at: "2026-07-19T10:00:00Z",
+          }],
+        });
+      }
+      if (url === "/whatsapp-conversations/c1/window") {
+        return Promise.resolve({ data: { within_session_window: true } });
+      }
+      if (url === "/whatsapp-conversations/c2/timeline") {
+        return Promise.resolve({
+          data: [{
+            source: "conversation", direction: "in", kind: "text",
+            text_body: "Mensagem da conversa B", media_attachment_id: null, purpose_label: null,
+            created_at: "2026-07-19T11:00:00Z",
+          }],
+        });
+      }
+      if (url === "/whatsapp-conversations/c2/window") {
+        return Promise.resolve({ data: { within_session_window: true } });
+      }
+      if (url === "/whatsapp-templates") return Promise.resolve({ data: [] });
+      return Promise.resolve({ data: [] });
+    });
+    vi.mocked(api.post).mockResolvedValue({ data: {} } as never);
+
+    render(<ConversasPage />);
+    await waitFor(() => screen.getByText("Cliente A"));
+
+    await userEvent.click(screen.getByText("Cliente A"));
+    await waitFor(() => screen.getByText("Mensagem da conversa A"));
+
+    const input = screen.getByPlaceholderText(/mensagem/i) as HTMLInputElement;
+    await userEvent.type(input, "rascunho para A");
+    expect(input).toHaveValue("rascunho para A");
+
+    await userEvent.click(screen.getByText("Cliente B"));
+    await waitFor(() => screen.getByText("Mensagem da conversa B"));
+
+    expect(screen.queryByText("Mensagem da conversa A")).not.toBeInTheDocument();
+    expect(screen.getByPlaceholderText(/mensagem/i)).toHaveValue("");
+  });
 });

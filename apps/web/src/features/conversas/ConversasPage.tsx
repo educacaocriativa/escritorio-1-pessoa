@@ -52,7 +52,7 @@ export default function ConversasPage() {
       </div>
       <div className="flex-1 rounded-2xl bg-white shadow-sm">
         {selected ? (
-          <ConversationThread clientId={selected} onSent={loadConversations} />
+          <ConversationThread key={selected} clientId={selected} onSent={loadConversations} />
         ) : (
           <div className="flex h-full items-center justify-center text-sm text-neutral-400">
             Selecione uma conversa
