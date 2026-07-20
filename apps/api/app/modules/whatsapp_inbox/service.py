@@ -64,11 +64,18 @@ class WhatsappInboxError(Exception):
 
 
 def _is_safe_identifier(value: str) -> bool:
-    """Recusa caracteres de controle (NUL em especial) que o driver do Postgres rejeita na
-    hora de fazer bind do parâmetro (psycopg.DataError) — inofensivo no SQLite dos testes,
-    mas quebra em produção. Ambos os identificadores vêm de entrada não confiável (payload
-    público do webhook / query param do handshake), então validamos antes de qualquer lookup."""
-    return "\x00" not in value
+    """Recusa NUL e qualquer string que não codifique em UTF-8 (ex.: surrogate solto) — ambos
+    quebram o driver do Postgres na hora de fazer bind do parâmetro (psycopg.DataError /
+    UnicodeEncodeError). Inofensivo pra maioria dos back-ends de teste, mas explode em
+    produção. Ambos os identificadores vêm de entrada não confiável (payload público do
+    webhook / query param do handshake), então validamos antes de qualquer lookup."""
+    if "\x00" in value:
+        return False
+    try:
+        value.encode("utf-8")
+    except UnicodeEncodeError:
+        return False
+    return True
 
 
 def resolve_account(db: Session, *, phone_number_id: str) -> PublicWhatsappAccount | None:

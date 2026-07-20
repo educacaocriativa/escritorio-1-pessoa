@@ -100,10 +100,29 @@ def test_resolve_account_rejects_phone_number_id_with_nul_byte(db):
     assert inbox_service.resolve_account(db, phone_number_id="pn\x00id") is None
 
 
+def test_resolve_account_rejects_phone_number_id_with_lone_surrogate(db):
+    # JSON permite um escape de surrogate solto (`"\uD800"`) numa string, e `json.loads` produz
+    # um `str` Python de verdade contendo o surrogate — de um payload/UTF-8 perfeitamente válido.
+    # Diferente do NUL (que o SQLite tolera de boa), um surrogate solto NÃO pode ser codificado
+    # em UTF-8 (`'\ud800'.encode('utf-8')` levanta `UnicodeEncodeError`) e o driver `sqlite3` do
+    # Python também rejeita na hora do bind — sem a guarda, esta chamada RAISES em vez de
+    # retornar None (prova que a guarda discrimina de verdade, ao contrário do caso do NUL).
+    assert inbox_service.resolve_account(db, phone_number_id="\ud800") is None
+
+
 def test_resolve_by_verify_token_rejects_verify_token_with_nul_byte(db):
     # Mesmo raciocínio para o handshake GET: `hub.verify_token` é um query param de um chamador
     # anônimo (Meta ou qualquer um), e um NUL codificado (`%00`) chega intacto como `str`.
     assert inbox_service.resolve_by_verify_token(db, verify_token="tok\x00en") is None
+
+
+def test_resolve_by_verify_token_rejects_verify_token_with_lone_surrogate(db):
+    # Mesmo caso do surrogate solto, mas para o handshake GET. Note que isso é só um teste de
+    # defesa em profundidade do `_is_safe_identifier`: na prática o `verify_token` chega como
+    # query param de URL, e um surrogate inválido percent-decodificado vira `U+FFFD`, não um
+    # surrogate de verdade — então esta entrada específica não é alcançável via HTTP real, mas a
+    # guarda protege ainda assim caso o valor chegue por outro caminho (ex.: chamada direta).
+    assert inbox_service.resolve_by_verify_token(db, verify_token="\ud800") is None
 
 
 def test_ingest_creates_lead_for_unknown_number(db):
