@@ -132,3 +132,21 @@ describe("PageBuilderPage — publicar: tratamento de erro (Story 7.19)", () => 
     expect(screen.getByRole("button", { name: "Publicar" })).toBeEnabled();
   });
 });
+
+describe("PageBuilderPage — copiar código do iframe", () => {
+  it("salva a página e copia o <iframe> pronto pra colar em outro site", async () => {
+    const user = userEvent.setup();
+    const writeText = vi.fn().mockResolvedValue(undefined);
+    Object.defineProperty(navigator, "clipboard", { value: { writeText }, configurable: true });
+    vi.mocked(api.patch).mockResolvedValue({ data: draftPage } as never);
+    renderPage();
+
+    await user.click(await screen.findByRole("button", { name: /Copiar código/ }));
+
+    await waitFor(() => expect(writeText).toHaveBeenCalledTimes(1));
+    const snippet = writeText.mock.calls[0][0] as string;
+    expect(snippet).toContain("<iframe");
+    expect(snippet).toContain(`src="${window.location.origin}/p/slug-teste"`);
+    expect(await screen.findByRole("button", { name: /Copiado!/ })).toBeInTheDocument();
+  });
+});
