@@ -177,12 +177,17 @@ class FunnelError(Exception):
         self.status_code = status_code
 
 
-# ── WhatsApp: resolução de variáveis de template ({{cliente.*}} ou texto literal) ──
+# ── WhatsApp/E-mail: resolução de placeholders ({{cliente.*}} ou texto literal) ──
 _CLIENT_KEYWORDS = {
     "cliente.nome": lambda c: c.name,
     "cliente.telefone": lambda c: c.phone or "",
     "cliente.email": lambda c: c.email or "",
+    # Bloco de Observações do lead — já traz as respostas de campos customizados de
+    # formulários (Sites/Integrações), sem precisar de uma keyword por campo (que varia
+    # de página pra página).
+    "cliente.notas": lambda c: c.notes or "",
 }
+_KEYWORD_PATTERN = re.compile(r"\{\{\s*(cliente\.\w+)\s*\}\}")
 
 
 def _resolve_template_variable(raw: str, client) -> str:
@@ -192,6 +197,18 @@ def _resolve_template_variable(raw: str, client) -> str:
         if resolver is not None:
             return resolver(client) or ""
     return raw  # texto fixo, literal
+
+
+def _render_client_placeholders(text: str, client) -> str:
+    """Substitui `{{cliente.*}}` NO MEIO de um texto livre (assunto/corpo de e-mail) — ao
+    contrário de `_resolve_template_variable` (variável posicional inteira do WhatsApp), aqui
+    o placeholder pode aparecer misturado com texto fixo."""
+
+    def _sub(m: re.Match[str]) -> str:
+        resolver = _CLIENT_KEYWORDS.get(m.group(1))
+        return (resolver(client) or "") if resolver else m.group(0)
+
+    return _KEYWORD_PATTERN.sub(_sub, text)
 
 
 def _render_template_preview(body_text: str, variables: list[str]) -> str:
@@ -408,7 +425,8 @@ def run_node(
             raise FunnelError("Escreva a mensagem (ou gere com IA) antes de enviar", 422)
         to_team = params.get("recipient") == "team"
         recipient = _team_email() if to_team else (c.email or c.name)
-        subject = (params.get("subject") or "Mensagem").strip()
+        subject = _render_client_placeholders((params.get("subject") or "Mensagem").strip(), c)
+        msg = _render_client_placeholders(msg, c)
         status = email.send_email(to=recipient, subject=subject, body=msg)
         db.add(Notification(
             tenant_id=tenant_id, channel="email", recipient=recipient,
