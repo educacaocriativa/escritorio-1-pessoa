@@ -203,9 +203,17 @@ function LeadForm({
                 className={inp}
                 style={inpStyle}
               >
-                <option value="">{f.placeholder || "Selecione"}</option>
+                {/* A lista aberta é renderizada pelo navegador/SO, não pelo CSS da página — em
+                    temas escuros o texto claro herdado do <select> fica ilegível num popup que
+                    normalmente vem com fundo claro. Forçamos texto escuro sobre fundo claro só
+                    nas <option>, garantindo contraste independente do tema da página. */}
+                <option value="" style={{ color: "#1f2937", background: "#ffffff" }}>
+                  {f.placeholder || "Selecione"}
+                </option>
                 {(f.options ?? []).map((o) => (
-                  <option key={o} value={o}>{o}</option>
+                  <option key={o} value={o} style={{ color: "#1f2937", background: "#ffffff" }}>
+                    {o}
+                  </option>
                 ))}
               </select>
             ) : (
