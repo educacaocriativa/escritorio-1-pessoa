@@ -180,11 +180,11 @@ class FunnelError(Exception):
 # ── WhatsApp/E-mail: resolução de placeholders ({{cliente.*}} ou texto literal) ──
 _CLIENT_KEYWORDS = {
     "cliente.nome": lambda c: c.name,
-    "cliente.telefone": lambda c: c.phone or "",
-    "cliente.email": lambda c: c.email or "",
+    "cliente.telefone": lambda c: c.phone or "(não informado)",
+    "cliente.email": lambda c: c.email or "(não informado)",
     # Bloco de Observações do lead — já traz as respostas de campos customizados de
     # formulários (Sites/Integrações), sem precisar de uma keyword por campo (que varia
-    # de página pra página).
+    # de página pra página). Vazio fica "" (não é um valor único tipo telefone/e-mail).
     "cliente.notas": lambda c: c.notes or "",
 }
 _KEYWORD_PATTERN = re.compile(r"\{\{\s*(cliente\.\w+)\s*\}\}")
