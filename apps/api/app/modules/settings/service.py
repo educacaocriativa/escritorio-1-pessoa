@@ -1,6 +1,8 @@
 """Configurações: perfil da empresa + Brand Kit (um por tenant, criado sob demanda)."""
 from __future__ import annotations
 
+import secrets
+
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
@@ -8,6 +10,7 @@ from app.core import audit
 from app.modules.auth.models import Tenant
 from app.modules.settings.models import TenantProfile
 from app.modules.settings.schemas import ProfileUpdate
+from app.modules.whatsapp_inbox.models import PublicWhatsappAccount
 from app.modules.whatsapp_templates.models import (
     PURPOSE_VARIABLE_SPECS,
     STATUS_APPROVED,
@@ -53,7 +56,7 @@ _FIELDS = (
     "display_name", "document", "email", "phone", "address", "website", "about",
     "logo_url", "primary_color", "secondary_color", "accent_color", "text_color",
     "bg_color", "font", "timezone",
-    "whatsapp_token", "whatsapp_phone_id", "whatsapp_waba_id",
+    "whatsapp_token", "whatsapp_phone_id", "whatsapp_waba_id", "whatsapp_app_secret",
 )
 
 
@@ -73,6 +76,43 @@ def get_profile(db: Session, tenant_id: str) -> TenantProfile:
     return profile
 
 
+def _sync_whatsapp_webhook_snapshot(db: Session, profile: TenantProfile) -> None:
+    """Mantém `public_whatsapp_accounts` em sincronia com as credenciais do tenant — dual-write
+    no mesmo espírito de `integration_keys`/`public_integration_keys`. Remove qualquer snapshot
+    antigo do tenant (cobre o caso de `phone_id` ter mudado) e recria só se as 4 credenciais
+    (token/phone_id/waba_id/app_secret) estiverem TODAS presentes. Gera `verify_token`
+    automaticamente na primeira vez que isso acontece."""
+    existing = db.scalars(
+        select(PublicWhatsappAccount).where(
+            PublicWhatsappAccount.tenant_id == profile.tenant_id
+        )
+    ).all()
+    for row in existing:
+        db.delete(row)
+
+    fully_configured = bool(
+        profile.whatsapp_token
+        and profile.whatsapp_phone_id
+        and profile.whatsapp_waba_id
+        and profile.whatsapp_app_secret
+    )
+    if not fully_configured:
+        profile.whatsapp_verify_token = None
+        return
+
+    if not profile.whatsapp_verify_token:
+        profile.whatsapp_verify_token = secrets.token_urlsafe(24)
+
+    db.add(
+        PublicWhatsappAccount(
+            phone_number_id=profile.whatsapp_phone_id,
+            tenant_id=profile.tenant_id,
+            app_secret=profile.whatsapp_app_secret,
+            verify_token=profile.whatsapp_verify_token,
+        )
+    )
+
+
 def update_profile(
     db: Session, *, tenant_id: str, actor: str, data: ProfileUpdate
 ) -> TenantProfile:
@@ -88,6 +128,7 @@ def update_profile(
     if data.whatsapp_template_bindings is not None:
         _validate_template_bindings(db, data.whatsapp_template_bindings)
         profile.whatsapp_template_bindings = data.whatsapp_template_bindings
+    _sync_whatsapp_webhook_snapshot(db, profile)
     audit.record(db, tenant_id=tenant_id, actor=actor, action="settings.profile.update",
                  target=profile.id)
     db.commit()

@@ -7,6 +7,9 @@ Cobre os 3 status possíveis de `send_text`:
 
 A chamada real (`httpx.post`) é sempre mockada — este ambiente não tem credenciais reais.
 """
+import hashlib
+import hmac
+
 import httpx
 import pytest
 
@@ -15,16 +18,26 @@ from app.core import whatsapp
 
 
 class _FakeResponse:
-    """Resposta mínima com o contrato usado por send_text (raise_for_status)."""
+    """Resposta mínima com o contrato usado por send_text/send_template (raise_for_status) +
+    .json()/.content pros novos testes de mídia."""
 
     def __init__(self, status_code: int = 200) -> None:
         self.status_code = status_code
+        self._json: dict = {}
+        self._content: bytes = b""
 
     def raise_for_status(self) -> None:
         if self.status_code >= 400:
             raise httpx.HTTPStatusError(
                 "erro", request=httpx.Request("POST", "https://x"), response=self
             )
+
+    def json(self) -> dict:
+        return self._json
+
+    @property
+    def content(self) -> bytes:
+        return self._content
 
 
 @pytest.fixture()
@@ -301,3 +314,171 @@ def test_send_template_failed_on_error_status(monkeypatch: pytest.MonkeyPatch) -
         language="pt_BR", variables=[],
     )
     assert status == "failed"
+
+
+# ── Webhook, media upload/download/send ───────────────────────────────────────────────────
+
+
+def test_verify_webhook_signature_valid():
+    body = b'{"hello":"world"}'
+    secret = "shh-its-a-secret"
+    sig = "sha256=" + hmac.new(secret.encode(), body, hashlib.sha256).hexdigest()
+    assert whatsapp.verify_webhook_signature(
+        app_secret=secret, body=body, signature_header=sig
+    ) is True
+
+
+def test_verify_webhook_signature_invalid():
+    assert whatsapp.verify_webhook_signature(
+        app_secret="shh-its-a-secret", body=b'{"hello":"world"}',
+        signature_header="sha256=deadbeef",
+    ) is False
+
+
+def test_verify_webhook_signature_missing_header():
+    assert whatsapp.verify_webhook_signature(
+        app_secret="shh-its-a-secret", body=b"{}", signature_header=None
+    ) is False
+
+
+def test_upload_media_success(monkeypatch: pytest.MonkeyPatch) -> None:
+    captured: dict[str, object] = {}
+
+    def _fake_post(url: str, **kwargs: object) -> _FakeResponse:
+        captured["url"] = url
+        captured["files"] = kwargs.get("files")
+        resp = _FakeResponse(200)
+        resp._json = {"id": "media-123"}
+        return resp
+
+    monkeypatch.setattr(httpx, "post", _fake_post)
+    media_id = whatsapp.upload_media(
+        phone_id="123456789", token="fake-token", file_bytes=b"fake-bytes",
+        filename="cardapio.pdf", mime_type="application/pdf",
+    )
+    assert media_id == "media-123"
+    assert captured["url"] == "https://graph.facebook.com/v21.0/123456789/media"
+
+
+def test_upload_media_raises_on_error(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(httpx, "post", lambda *_a, **_k: _FakeResponse(500))
+    with pytest.raises(whatsapp.WhatsappApiError):
+        whatsapp.upload_media(
+            phone_id="123", token="tok", file_bytes=b"x", filename="a.pdf",
+            mime_type="application/pdf",
+        )
+
+
+def test_fetch_media_url_success(monkeypatch: pytest.MonkeyPatch) -> None:
+    def _fake_get(url: str, **_k: object) -> _FakeResponse:
+        resp = _FakeResponse(200)
+        resp._json = {"url": "https://lookaside.fbsbx.com/whatsapp_business/temp/abc"}
+        return resp
+
+    monkeypatch.setattr(httpx, "get", _fake_get)
+    url = whatsapp.fetch_media_url(token="tok", media_id="media-123")
+    assert url == "https://lookaside.fbsbx.com/whatsapp_business/temp/abc"
+
+
+def test_download_media_success(monkeypatch: pytest.MonkeyPatch) -> None:
+    def _fake_get(url: str, **_k: object) -> _FakeResponse:
+        resp = _FakeResponse(200)
+        resp._content = b"file-bytes-here"
+        return resp
+
+    monkeypatch.setattr(httpx, "get", _fake_get)
+    data = whatsapp.download_media(token="tok", url="https://example.com/f")
+    assert data == b"file-bytes-here"
+
+
+def test_send_media_logged_without_config(monkeypatch: pytest.MonkeyPatch) -> None:
+    def _boom(*_a: object, **_k: object) -> None:
+        raise AssertionError("httpx.post não deveria ser chamado no caminho 'logged'")
+
+    monkeypatch.setattr(httpx, "post", _boom)
+    status = whatsapp.send_media(
+        to="5511999999999", token="", phone_id="", kind="image", media_id="m1"
+    )
+    assert status == "logged"
+
+
+def test_send_media_sent(monkeypatch: pytest.MonkeyPatch) -> None:
+    captured: dict[str, object] = {}
+
+    def _fake_post(url: str, **kwargs: object) -> _FakeResponse:
+        captured["json"] = kwargs.get("json")
+        return _FakeResponse(200)
+
+    monkeypatch.setattr(httpx, "post", _fake_post)
+    status = whatsapp.send_media(
+        to="5511988887777", token="tok", phone_id="123", kind="document",
+        media_id="media-123", caption="Cardápio",
+    )
+    assert status == "sent"
+    assert captured["json"] == {
+        "messaging_product": "whatsapp", "to": "5511988887777", "type": "document",
+        "document": {"id": "media-123", "caption": "Cardápio"},
+    }
+
+
+def test_send_media_failed_when_provider_raises(monkeypatch: pytest.MonkeyPatch) -> None:
+    def _raise(*_a: object, **_k: object) -> None:
+        raise httpx.ConnectError("sem rede")
+
+    monkeypatch.setattr(httpx, "post", _raise)
+    # Falha do provedor não propaga (IV3): retorna "failed".
+    assert whatsapp.send_media(
+        to="5511988887777", token="tok", phone_id="123", kind="image", media_id="m1"
+    ) == "failed"
+
+
+def test_send_media_failed_when_provider_returns_error_status(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(httpx, "post", lambda *_a, **_k: _FakeResponse(500))
+    # HTTPStatusError (via raise_for_status) também é capturado → "failed".
+    assert whatsapp.send_media(
+        to="5511988887777", token="tok", phone_id="123", kind="image", media_id="m1"
+    ) == "failed"
+
+
+def test_upload_media_raises_on_network_error(monkeypatch: pytest.MonkeyPatch) -> None:
+    def _raise(*_a: object, **_k: object) -> None:
+        raise httpx.ConnectError("sem rede")
+
+    monkeypatch.setattr(httpx, "post", _raise)
+    with pytest.raises(whatsapp.WhatsappApiError):
+        whatsapp.upload_media(
+            phone_id="123", token="tok", file_bytes=b"x", filename="a.pdf",
+            mime_type="application/pdf",
+        )
+
+
+def test_fetch_media_url_raises_on_network_error(monkeypatch: pytest.MonkeyPatch) -> None:
+    def _raise(*_a: object, **_k: object) -> None:
+        raise httpx.ConnectError("sem rede")
+
+    monkeypatch.setattr(httpx, "get", _raise)
+    with pytest.raises(whatsapp.WhatsappApiError):
+        whatsapp.fetch_media_url(token="tok", media_id="media-123")
+
+
+def test_fetch_media_url_raises_on_error_status(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(httpx, "get", lambda *_a, **_k: _FakeResponse(404))
+    with pytest.raises(whatsapp.WhatsappApiError):
+        whatsapp.fetch_media_url(token="tok", media_id="media-123")
+
+
+def test_download_media_raises_on_network_error(monkeypatch: pytest.MonkeyPatch) -> None:
+    def _raise(*_a: object, **_k: object) -> None:
+        raise httpx.ConnectError("sem rede")
+
+    monkeypatch.setattr(httpx, "get", _raise)
+    with pytest.raises(whatsapp.WhatsappApiError):
+        whatsapp.download_media(token="tok", url="https://example.com/f")
+
+
+def test_download_media_raises_on_error_status(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(httpx, "get", lambda *_a, **_k: _FakeResponse(500))
+    with pytest.raises(whatsapp.WhatsappApiError):
+        whatsapp.download_media(token="tok", url="https://example.com/f")

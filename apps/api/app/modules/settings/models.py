@@ -59,6 +59,13 @@ class TenantProfile(Base, TenantMixin, TimestampMixin):
     whatsapp_token: Mapped[str | None] = mapped_column(EncryptedToken, nullable=True)
     whatsapp_phone_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
     whatsapp_waba_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    # Segredo do App da Meta (cifrado, mesmo padrão do token) — valida a assinatura
+    # X-Hub-Signature-256 do webhook de mensagens recebidas (ver whatsapp_inbox).
+    whatsapp_app_secret: Mapped[str | None] = mapped_column(EncryptedToken, nullable=True)
+    # Token de verificação do webhook (texto simples, NÃO é segredo — só combina com o que a
+    # Meta ecoa no handshake GET). Gerado automaticamente na 1ª vez que as 4 credenciais ficam
+    # completas (ver settings/service.py::update_profile).
+    whatsapp_verify_token: Mapped[str | None] = mapped_column(String(64), nullable=True)
     # Vínculo propósito→template (dict[str, str], chaves em whatsapp_templates.PURPOSES).
     # Propósito ausente/sem valor = fluxo correspondente ainda usa texto livre (send_text).
     whatsapp_template_bindings: Mapped[dict] = mapped_column(JSON, default=dict, nullable=False)

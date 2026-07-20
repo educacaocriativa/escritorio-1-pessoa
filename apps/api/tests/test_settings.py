@@ -231,3 +231,69 @@ def test_whatsapp_token_encrypted_at_rest(client: TestClient, headers, db: Sessi
     ).scalar()
     assert stored_raw != plaintext
     assert stored_raw.startswith("enc:v1:")
+
+
+def test_whatsapp_verify_token_generated_when_fully_configured(
+    client: TestClient, headers, db: Session
+) -> None:
+    """Ao completar as 4 credenciais (token/phone_id/waba_id/app_secret), o backend gera
+    sozinho o verify_token e cria o snapshot público."""
+    from app.modules.whatsapp_inbox.models import PublicWhatsappAccount
+
+    resp = client.patch(
+        "/settings/profile",
+        json={
+            "whatsapp_token": "tok-abc", "whatsapp_phone_id": "phone-123",
+            "whatsapp_waba_id": "waba-456", "whatsapp_app_secret": "secret-xyz",
+        },
+        headers=headers,
+    )
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["whatsapp_verify_token"]  # gerado, não vazio
+    assert "whatsapp_app_secret" not in body  # nunca exposto em claro
+
+    snap = db.get(PublicWhatsappAccount, "phone-123")
+    assert snap is not None
+    assert snap.app_secret == "secret-xyz"
+    assert snap.verify_token == body["whatsapp_verify_token"]
+
+
+def test_whatsapp_public_snapshot_removed_when_incomplete(
+    client: TestClient, headers, db: Session
+) -> None:
+    """Se as credenciais ficam incompletas de novo (ex.: limpar o app_secret), o snapshot
+    público é removido — o webhook não deve mais resolver esse phone_number_id."""
+    from app.modules.whatsapp_inbox.models import PublicWhatsappAccount
+
+    client.patch(
+        "/settings/profile",
+        json={
+            "whatsapp_token": "tok", "whatsapp_phone_id": "phone-999",
+            "whatsapp_waba_id": "waba", "whatsapp_app_secret": "secret",
+        },
+        headers=headers,
+    )
+    assert db.get(PublicWhatsappAccount, "phone-999") is not None
+
+    client.patch("/settings/profile", json={"whatsapp_app_secret": ""}, headers=headers)
+    assert db.get(PublicWhatsappAccount, "phone-999") is None
+
+
+def test_whatsapp_public_snapshot_moves_when_phone_id_changes(
+    client: TestClient, headers, db: Session
+) -> None:
+    """Trocar o phone_id remove o snapshot antigo e cria um novo na chave certa."""
+    from app.modules.whatsapp_inbox.models import PublicWhatsappAccount
+
+    client.patch(
+        "/settings/profile",
+        json={
+            "whatsapp_token": "tok", "whatsapp_phone_id": "phone-old",
+            "whatsapp_waba_id": "waba", "whatsapp_app_secret": "secret",
+        },
+        headers=headers,
+    )
+    client.patch("/settings/profile", json={"whatsapp_phone_id": "phone-new"}, headers=headers)
+    assert db.get(PublicWhatsappAccount, "phone-old") is None
+    assert db.get(PublicWhatsappAccount, "phone-new") is not None

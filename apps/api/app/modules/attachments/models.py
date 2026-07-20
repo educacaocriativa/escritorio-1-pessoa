@@ -12,8 +12,12 @@ from sqlalchemy.orm import Mapped, mapped_column
 
 from app.db.base import Base, TenantMixin, TimestampMixin, _uuid
 
-# tipos de arquivo aceitos
-ALLOWED_TYPES = {"application/pdf", "image/jpeg", "image/png"}
+# tipos de arquivo aceitos (inclui mídia recebida/enviada via WhatsApp — áudio/vídeo/documento
+# genérico — ver whatsapp_inbox)
+ALLOWED_TYPES = {
+    "application/pdf", "image/jpeg", "image/png",
+    "audio/ogg", "audio/mpeg", "video/mp4", "application/octet-stream",
+}
 MAX_BYTES = 10 * 1024 * 1024  # 10 MB
 
 # Imagens INTENCIONALMENTE públicas (logo/fotos): só formatos renderizáveis em <img>/CSS.

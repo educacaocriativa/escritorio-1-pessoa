@@ -33,6 +33,7 @@ from app.db.session import SessionLocal, tenant_session
 from app.modules.auth.models import Tenant
 from app.modules.funnels import engine as funnels_engine
 from app.modules.notifications import service as notifications_service
+from app.modules.whatsapp_inbox import service as whatsapp_inbox_service
 from app.seed import PLATFORM_SLUG
 
 logging.basicConfig(level=logging.INFO)
@@ -65,6 +66,7 @@ def run_sweep(
         "tenants_checked": 0,
         "funnel_resumed": 0,
         "notifications_processed": 0,
+        "whatsapp_media_processed": 0,
         "errors": [],
     }
 
@@ -96,11 +98,25 @@ def run_sweep(
                 {"tenant_id": tenant_id, "stage": "notifications", "error": str(exc)}
             )
 
+        # Etapa 3 — mídia pendente do inbox de WhatsApp (sessão SEPARADA das outras duas).
+        try:
+            with tenant_session_factory(tenant_id) as db:
+                media_processed = whatsapp_inbox_service.process_pending_media(
+                    db, tenant_id=tenant_id
+                )
+            result["whatsapp_media_processed"] += media_processed
+        except Exception as exc:  # noqa: BLE001 — idem: isola a falha por tenant (IV2)
+            logger.exception("[worker] mídia do whatsapp falhou tenant=%s", tenant_id)
+            result["errors"].append(
+                {"tenant_id": tenant_id, "stage": "whatsapp_media", "error": str(exc)}
+            )
+
     logger.info(
-        "[worker] sweep: tenants=%s funil_resumido=%s notificacoes=%s erros=%s",
+        "[worker] sweep: tenants=%s funil_resumido=%s notificacoes=%s midia_whatsapp=%s erros=%s",
         result["tenants_checked"],
         result["funnel_resumed"],
         result["notifications_processed"],
+        result["whatsapp_media_processed"],
         len(result["errors"]),
     )
     return result

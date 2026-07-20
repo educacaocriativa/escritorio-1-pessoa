@@ -24,6 +24,7 @@ def _out(p: TenantProfile) -> ProfileOut:
         whatsapp_configured=bool(p.whatsapp_token and p.whatsapp_phone_id and p.whatsapp_waba_id),
         whatsapp_phone_id=p.whatsapp_phone_id or "",
         whatsapp_waba_id=p.whatsapp_waba_id or "",
+        whatsapp_verify_token=p.whatsapp_verify_token or "",
         whatsapp_template_bindings=p.whatsapp_template_bindings or {},
     )
 

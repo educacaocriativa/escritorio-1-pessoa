@@ -23,7 +23,7 @@ from app.db.base import Base, TenantMixin, TimestampMixin, _uuid
 
 # Gênero (para segmentação demográfica citada na spec).
 GENDER_VALUES = {"male", "female", "other", "unspecified"}
-SOURCE_VALUES = {"manual", "landing", "ai", "import", "api"}
+SOURCE_VALUES = {"manual", "landing", "ai", "import", "api", "whatsapp"}
 
 # Colunas padrão criadas no primeiro acesso ao board de um tenant.
 DEFAULT_STAGES = [

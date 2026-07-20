@@ -665,9 +665,15 @@ export interface TenantProfile {
   whatsapp_configured: boolean;
   whatsapp_phone_id: string;
   whatsapp_waba_id: string;
+  /** Só-leitura: token de verificação do webhook (auto-gerado pelo backend), usado para
+   * configurar o callback no painel da Meta. */
+  whatsapp_verify_token: string;
   /** Só-escrita: nunca vem preenchido no GET (o token nunca é devolvido em claro).
    * Setar antes do PATCH para configurar/trocar; "" limpa a credencial. */
   whatsapp_token?: string;
+  /** Só-escrita: App Secret do App na Meta, usado para validar a assinatura do webhook.
+   * Nunca vem preenchido no GET. Setar antes do PATCH para configurar/trocar. */
+  whatsapp_app_secret?: string;
   /** Vínculo propósito→template_id para os fluxos FIXOS do sistema (lembrete de cobrança,
    * envio de contrato/orçamento, convite de staff, aviso de card movido) — diferente do nó
    * livre do Funil de Vendas, aqui o tenant vincula UM template aprovado por propósito.
@@ -730,6 +736,35 @@ export interface WhatsappTemplateCreate {
   category: WhatsappTemplateCategory;
   body_text: string;
   variable_examples: string[];
+}
+
+// ── Inbox de WhatsApp (conversa de verdade com clientes) ────
+export interface ConversationSummary {
+  client_id: UUID;
+  client_name: string;
+  client_phone: string | null;
+  last_message_at: string | null;
+  last_message_preview: string;
+  unread: boolean;
+}
+
+export interface TimelineEntry {
+  source: "conversation" | "automated";
+  direction: "in" | "out";
+  kind: "text" | "image" | "audio" | "document" | "video";
+  text_body: string;
+  media_attachment_id: string | null;
+  purpose_label: string | null;
+  created_at: string;
+}
+
+export interface WhatsappMessageOut {
+  id: UUID;
+  direction: "in" | "out";
+  kind: "text" | "image" | "audio" | "document" | "video";
+  text_body: string;
+  status: "sent" | "logged" | "failed";
+  created_at: string;
 }
 
 // ── Integrações (captura de lead de sites externos) ────
