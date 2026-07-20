@@ -97,9 +97,11 @@ def _params(data: dict) -> dict:
                 "amount_cents": cfg.get("amount_cents", 0)}
     if action == "send_email":
         return {"subject": cfg.get("subject", ""),
-                "message": cfg.get("body") or cfg.get("message", "")}
+                "message": cfg.get("body") or cfg.get("message", ""),
+                "recipient": cfg.get("recipient", "client")}
     if action == "send_message":
-        return {"template_id": cfg.get("template_id"), "variables": cfg.get("variables") or []}
+        return {"template_id": cfg.get("template_id"), "variables": cfg.get("variables") or [],
+                "recipient": cfg.get("recipient", "client")}
     if action == "create_client":
         return {"name": cfg.get("name", "")}
     return {}

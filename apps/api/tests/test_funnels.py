@@ -273,6 +273,29 @@ def test_run_send_email(client: TestClient, headers):
     )
 
 
+def test_run_send_email_to_team(client: TestClient, headers):
+    # Nó configurado com destinatário="team" (ex.: alertar a equipe de um lead novo) envia pro
+    # e-mail do escritório (perfil), não pro cliente — sem perfil.email configurado, cai no
+    # e-mail do owner (fallback, garante que o nó funcione fora da caixa).
+    cl = client.post(
+        "/crm/clients", json={"name": "Lead Site", "email": "lead@example.com"}, headers=headers
+    ).json()
+    resp = client.post(
+        "/funnels/run-node",
+        json={"action": "send_email", "client_id": cl["id"],
+              "params": {"subject": "Novo lead", "message": "Chegou um lead novo!",
+                         "recipient": "team"}},
+        headers=headers,
+    )
+    assert resp.status_code == 200, resp.text
+    notifs = client.get("/notifications", headers=headers).json()
+    assert any(
+        n["message"] == "Chegou um lead novo!" and n["channel"] == "email"
+        and n["recipient"] == "funil@example.com"  # owner (REGISTER["email"]), não o lead
+        for n in notifs
+    )
+
+
 def test_run_requires_client(client: TestClient, headers):
     resp = client.post(
         "/funnels/run-node",

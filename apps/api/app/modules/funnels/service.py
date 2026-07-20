@@ -313,6 +313,7 @@ def run_node(
     from datetime import UTC, datetime, timedelta
 
     from app.core import email, whatsapp
+    from app.modules.auth.models import User
     from app.modules.crm import service as crm_service
     from app.modules.crm.models import Client
     from app.modules.crm.schemas import ClientCreate
@@ -329,6 +330,27 @@ def run_node(
         if c is None:
             raise FunnelError("Selecione um cliente para executar esta ação", 422)
         return c
+
+    def _team_owner() -> User | None:
+        return db.scalar(select(User).where(User.tenant_id == tenant_id, User.role == "owner"))
+
+    def _team_email() -> str:
+        """E-mail da equipe (nó com destinatário="team"): TenantProfile.email → User.email
+        do owner (fallback — sempre existe, garante que o nó funcione mesmo sem configurar)."""
+        profile = settings_service.get_profile(db, tenant_id)
+        if profile.email:
+            return profile.email
+        owner = _team_owner()
+        return owner.email if owner else ""
+
+    def _team_phone() -> str:
+        """Telefone da equipe (nó com destinatário="team"): TenantProfile.phone → User.phone
+        do owner."""
+        profile = settings_service.get_profile(db, tenant_id)
+        if profile.phone:
+            return profile.phone
+        owner = _team_owner()
+        return (owner.phone or "") if owner else ""
 
     if action == "create_client":
         name = (params.get("name") or "").strip()
@@ -384,7 +406,8 @@ def run_node(
         msg = (params.get("message") or "").strip()
         if not msg:
             raise FunnelError("Escreva a mensagem (ou gere com IA) antes de enviar", 422)
-        recipient = c.email or c.name
+        to_team = params.get("recipient") == "team"
+        recipient = _team_email() if to_team else (c.email or c.name)
         subject = (params.get("subject") or "Mensagem").strip()
         status = email.send_email(to=recipient, subject=subject, body=msg)
         db.add(Notification(
@@ -393,7 +416,8 @@ def run_node(
         ))
         audit.record(db, tenant_id=tenant_id, actor=actor, action="funnel.run.message", target=c.id)
         db.commit()
-        return {"message": f"Mensagem registrada para {c.name} (email)", "kind": "message",
+        who = "equipe" if to_team else c.name
+        return {"message": f"Mensagem registrada para {who} (email)", "kind": "message",
                 "ref_id": c.id}
 
     if action == "send_message":
@@ -404,11 +428,13 @@ def run_node(
         tpl = db.get(WhatsappTemplate, template_id)
         if tpl is None or tpl.status != STATUS_APPROVED:
             raise FunnelError("Template não encontrado ou ainda não aprovado pela Meta", 422)
-        recipient = c.phone or c.name
+        to_team = params.get("recipient") == "team"
+        to_phone = _team_phone() if to_team else (c.phone or "")
+        recipient = to_phone or c.name
         resolved_vars = [_resolve_template_variable(v, c) for v in (params.get("variables") or [])]
         profile = settings_service.get_profile(db, tenant_id)
         status = whatsapp.send_template(
-            to=c.phone or "", token=profile.whatsapp_token or "",
+            to=to_phone, token=profile.whatsapp_token or "",
             phone_id=profile.whatsapp_phone_id or "",
             template_name=tpl.name, language=tpl.language, variables=resolved_vars,
         )
@@ -419,7 +445,8 @@ def run_node(
         ))
         audit.record(db, tenant_id=tenant_id, actor=actor, action="funnel.run.message", target=c.id)
         db.commit()
-        return {"message": f"Mensagem registrada para {c.name} (whatsapp)", "kind": "message",
+        who = "equipe" if to_team else c.name
+        return {"message": f"Mensagem registrada para {who} (whatsapp)", "kind": "message",
                 "ref_id": c.id}
 
     raise FunnelError("Este componente ainda não executa uma ação automática", 400)
