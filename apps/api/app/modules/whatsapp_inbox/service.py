@@ -81,15 +81,25 @@ def resolve_by_verify_token(db: Session, *, verify_token: str) -> PublicWhatsapp
 def _extract_messages(payload: dict) -> list[tuple[dict, str]]:
     """Devolve [(mensagem, nome_do_contato)] achatando o formato aninhado do payload da Meta.
     O `tenant_id` já vem resolvido e validado pelo chamador (ver `ingest_webhook_payload`) — não
-    precisamos extrair `phone_number_id` aqui."""
+    precisamos extrair `phone_number_id` aqui.
+
+    Este método é chamado DEPOIS que a assinatura do webhook já foi verificada (ver router), mas
+    o CONTEÚDO do payload continua não confiável — a Meta não garante o shape interno. Em vez de
+    `isinstance` a cada nível aninhado (mesmo histórico de gaps do router — ver
+    `router._extract_phone_number_id`), captura a classe inteira de erro de shape inesperado de
+    uma vez: `AttributeError` (`.get()` em algo que não é dict), `TypeError` (iterar algo
+    não-iterável), `KeyError` (defensivo, ex.: `contacts[0]["profile"]` sem essas chaves)."""
     out: list[tuple[dict, str]] = []
-    for entry in payload.get("entry", []):
-        for change in entry.get("changes", []):
-            value = change.get("value", {})
-            contacts = value.get("contacts", [])
-            name = contacts[0]["profile"]["name"] if contacts else "Cliente"
-            for msg in value.get("messages", []):
-                out.append((msg, name))
+    try:
+        for entry in payload.get("entry", []):
+            for change in entry.get("changes", []):
+                value = change.get("value", {})
+                contacts = value.get("contacts", [])
+                name = contacts[0]["profile"]["name"] if contacts else "Cliente"
+                for msg in value.get("messages", []):
+                    out.append((msg, name))
+    except (AttributeError, TypeError, KeyError) as exc:
+        raise WhatsappInboxError("Payload inválido", 400) from exc
     return out
 
 

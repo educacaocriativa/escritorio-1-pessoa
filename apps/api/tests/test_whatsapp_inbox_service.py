@@ -177,6 +177,16 @@ def test_ingest_image_message_marks_media_pending(db):
     assert msg.media_status == MEDIA_STATUS_PENDING
 
 
+def test_ingest_raises_on_non_dict_value(db):
+    # `change["value"]` não é dict — `_extract_messages` agora captura essa classe inteira de
+    # erro de shape (AttributeError/TypeError/KeyError) num único try/except e converte em
+    # `WhatsappInboxError`, em vez de deixar o AttributeError escapar sem tratamento.
+    _configure_credentials(db)
+    payload = {"entry": [{"changes": [{"value": "boom"}]}]}
+    with pytest.raises(inbox_service.WhatsappInboxError):
+        inbox_service.ingest_webhook_payload(db, tenant_id=TENANT_ID, payload=payload)
+
+
 def test_is_within_session_window_true_right_after_inbound(db):
     _configure_credentials(db)
     client = Client(tenant_id=TENANT_ID, name="Cliente", phone="5511900001111", source="manual")

@@ -36,6 +36,27 @@ def verify_webhook(
     return PlainTextResponse(content=hub_challenge)
 
 
+def _extract_phone_number_id(payload: dict) -> str | None:
+    """Extrai o `phone_number_id` do payload da Meta. Levanta `HTTPException(400)` para
+    QUALQUER formato inesperado dentro de um JSON sintaticamente válido (o payload vem de uma
+    fonte não confiável — este endpoint é público): não tenta adivinhar `isinstance` a cada
+    nível aninhado (histórico: rounds 1-2 de review já encontraram gaps assim duas vezes,
+    sempre um nível mais fundo); captura toda a classe de erro de indexação inesperada de uma
+    vez só (`AttributeError` de `.get()` em algo que não é dict, `TypeError` de iterar algo
+    não-iterável, `KeyError` defensivo)."""
+    try:
+        for entry in payload.get("entry", []):
+            for change in entry.get("changes", []):
+                value = change.get("value", {})
+                metadata = value.get("metadata", {})
+                phone_number_id = metadata.get("phone_number_id")
+                if phone_number_id:
+                    return phone_number_id
+    except (AttributeError, TypeError, KeyError) as exc:
+        raise HTTPException(status_code=400, detail="Payload inválido") from exc
+    return None
+
+
 @public_router.post("/webhook")
 async def receive_webhook(
     request: Request,
@@ -52,25 +73,13 @@ async def receive_webhook(
         raise HTTPException(status_code=400, detail="JSON inválido") from exc
     if not isinstance(payload, dict):
         raise HTTPException(status_code=400, detail="JSON inválido")
-    entries = payload.get("entry", [])
-    if not isinstance(entries, list):
-        raise HTTPException(status_code=400, detail="JSON inválido")
-    phone_number_id = None
-    for entry in entries:
-        if not isinstance(entry, dict):
-            raise HTTPException(status_code=400, detail="JSON inválido")
-        changes = entry.get("changes", [])
-        if not isinstance(changes, list):
-            raise HTTPException(status_code=400, detail="JSON inválido")
-        for change in changes:
-            if not isinstance(change, dict):
-                raise HTTPException(status_code=400, detail="JSON inválido")
-            phone_number_id = change.get("value", {}).get("metadata", {}).get("phone_number_id")
-            if phone_number_id:
-                break
-        if phone_number_id:
-            break
 
+    phone_number_id = _extract_phone_number_id(payload)
+    if phone_number_id is not None and not isinstance(phone_number_id, str):
+        # Presente mas com tipo errado (dict/list) — passaria direto pro `if not phone_number_id`
+        # abaixo (valores truthy) e quebraria `resolve_account`'s `db.get()` com
+        # `sqlalchemy.exc.InvalidRequestError`. Barra aqui, antes de chegar no service.
+        raise HTTPException(status_code=400, detail="Payload inválido")
     if not phone_number_id:
         raise HTTPException(status_code=404, detail="phone_number_id não encontrado no payload")
 

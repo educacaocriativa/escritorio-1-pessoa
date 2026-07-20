@@ -127,6 +127,45 @@ def test_webhook_post_rejects_entry_not_a_list(client, db):
     assert resp.status_code == 400
 
 
+def test_webhook_post_rejects_non_dict_value(client, db):
+    # `value` não é dict — `.get("metadata", {})` quebraria com AttributeError sem a extração
+    # estar protegida por um único try/except (round 3 de review).
+    body = json.dumps({"entry": [{"changes": [{"value": "boom"}]}]}).encode()
+    resp = client.post(
+        "/public/whatsapp/webhook", content=body,
+        headers={"content-type": "application/json", "x-hub-signature-256": "sha256=irrelevante"},
+    )
+    assert resp.status_code == 400
+
+
+def test_webhook_post_rejects_non_dict_metadata(client, db):
+    # `metadata` não é dict — mesma classe de falha, um nível mais fundo.
+    body = json.dumps({"entry": [{"changes": [{"value": {"metadata": "boom"}}]}]}).encode()
+    resp = client.post(
+        "/public/whatsapp/webhook", content=body,
+        headers={"content-type": "application/json", "x-hub-signature-256": "sha256=irrelevante"},
+    )
+    assert resp.status_code == 400
+
+
+def test_webhook_post_rejects_non_string_phone_number_id(client, db):
+    # `phone_number_id` presente mas com tipo errado (dict) — é truthy, então passaria pelo
+    # `if not phone_number_id` e quebraria `resolve_account`'s `db.get()` com
+    # `sqlalchemy.exc.InvalidRequestError` sem a guarda extra logo após a extração.
+    body = json.dumps({
+        "entry": [{
+            "changes": [{
+                "value": {"metadata": {"phone_number_id": {"nested": "x"}}},
+            }],
+        }],
+    }).encode()
+    resp = client.post(
+        "/public/whatsapp/webhook", content=body,
+        headers={"content-type": "application/json", "x-hub-signature-256": "sha256=irrelevante"},
+    )
+    assert resp.status_code == 400
+
+
 def test_webhook_post_rejects_unknown_phone_number_id(client, db):
     payload = {
         "entry": [{
