@@ -6,6 +6,7 @@ Ver docs/superpowers/specs/2026-07-19-whatsapp-inbox-design.md para o desenho co
 """
 from __future__ import annotations
 
+import logging
 from datetime import UTC, datetime, timedelta
 
 from sqlalchemy import select
@@ -31,6 +32,8 @@ from app.modules.whatsapp_inbox.models import (
     WhatsappMessage,
 )
 from app.modules.whatsapp_templates.models import STATUS_APPROVED, WhatsappTemplate
+
+logger = logging.getLogger("e1p.whatsapp_inbox")
 
 SESSION_WINDOW = timedelta(hours=24)
 
@@ -122,40 +125,67 @@ def ingest_webhook_payload(db: Session, *, tenant_id: str, payload: dict) -> Non
     assinatura do webhook — reaproveitamos aqui o mesmo `tenant_id` já validado, sem resolvê-lo
     de novo. Idempotente: mensagens com `wa_message_id` já visto são ignoradas (a Meta reentrega
     o mesmo evento às vezes)."""
+    # Cada mensagem do lote é processada de forma ISOLADA: uma mensagem malformada (campo `text`/
+    # mídia com tipo errado, `contacts[0].profile.name` não-string que quebra o `ClientCreate`, ou
+    # qualquer outra falha de UMA mensagem) NUNCA derruba a request inteira nem bloqueia as demais
+    # mensagens válidas do MESMO lote. Mesmo princípio de isolamento de
+    # `notifications/service.py::process_pending` (uma falha por item, logada, sem travar o resto).
+    # A validação estrutural do payload como um todo continua em `_extract_messages` (antes deste
+    # loop) — falha lá é uma classe diferente (não dá nem pra identificar as mensagens) e ainda
+    # levanta `WhatsappInboxError` para a request toda, corretamente.
     for msg, contact_name in _extract_messages(payload):
-        wa_message_id = msg.get("id")
-        if wa_message_id and db.scalar(
-            select(WhatsappMessage).where(WhatsappMessage.wa_message_id == wa_message_id)
-        ):
-            continue  # duplicata — ignora
+        try:
+            wa_message_id = msg.get("id")
+            if wa_message_id and db.scalar(
+                select(WhatsappMessage).where(WhatsappMessage.wa_message_id == wa_message_id)
+            ):
+                continue  # duplicata — ignora
 
-        from_number = msg.get("from", "")
-        kind = msg.get("type", "text")
-        text_body = ""
-        media_status = MEDIA_STATUS_NONE
+            from_number = msg.get("from", "")
+            kind = msg.get("type", "text")
+            text_body = ""
+            media_status = MEDIA_STATUS_NONE
 
-        if kind == "text":
-            text_body = msg.get("text", {}).get("body", "")
-        elif kind in ("image", "audio", "document", "video"):
-            media_obj = msg.get(kind, {})
-            text_body = media_obj.get("caption", "")
-            media_status = MEDIA_STATUS_PENDING
-        else:
-            kind = "text"
-            text_body = "[tipo de mensagem não suportado]"
+            if kind == "text":
+                text_field = msg.get("text", {})
+                if not isinstance(text_field, dict):
+                    raise WhatsappInboxError("Payload inválido: campo 'text' malformado", 400)
+                text_body = text_field.get("body", "")
+            elif kind in ("image", "audio", "document", "video"):
+                media_obj = msg.get(kind, {})
+                if not isinstance(media_obj, dict):
+                    raise WhatsappInboxError(f"Payload inválido: campo '{kind}' malformado", 400)
+                text_body = media_obj.get("caption", "")
+                media_status = MEDIA_STATUS_PENDING
+            else:
+                kind = "text"
+                text_body = "[tipo de mensagem não suportado]"
 
-        client = _get_or_create_client(
-            db, tenant_id=tenant_id, phone=from_number, name=contact_name
-        )
-        db.add(WhatsappMessage(
-            tenant_id=tenant_id, client_id=client.id, direction=DIRECTION_IN, kind=kind,
-            text_body=text_body, media_status=media_status, wa_message_id=wa_message_id,
-            status="sent",
-        ))
-        audit.record(
-            db, tenant_id=tenant_id, actor="whatsapp:inbox",
-            action="whatsapp_inbox.message.received", target=client.id,
-        )
+            client = _get_or_create_client(
+                db, tenant_id=tenant_id, phone=from_number, name=contact_name
+            )
+            db.add(WhatsappMessage(
+                tenant_id=tenant_id, client_id=client.id, direction=DIRECTION_IN, kind=kind,
+                text_body=text_body, media_status=media_status, wa_message_id=wa_message_id,
+                status="sent",
+            ))
+            audit.record(
+                db, tenant_id=tenant_id, actor="whatsapp:inbox",
+                action="whatsapp_inbox.message.received", target=client.id,
+            )
+        except (AttributeError, TypeError, KeyError, WhatsappInboxError) as exc:
+            logger.warning(
+                "[whatsapp_inbox] mensagem malformada ignorada, wa_message_id=%s: %s",
+                msg.get("id") if isinstance(msg, dict) else None, exc,
+            )
+            continue
+        except Exception as exc:  # noqa: BLE001 — isola a falha de UMA mensagem (inclui
+            # pydantic.ValidationError de ClientCreate e qualquer outra falha inesperada); não trava
+            # o restante do lote (mesmo princípio de process_pending)
+            logger.warning(
+                "[whatsapp_inbox] falha inesperada processando mensagem, ignorada: %s", exc
+            )
+            continue
     db.commit()
 
 

@@ -209,6 +209,120 @@ def test_ingest_skips_or_rejects_non_dict_message_item(db):
         inbox_service.ingest_webhook_payload(db, tenant_id=TENANT_ID, payload=payload)
 
 
+def test_ingest_skips_malformed_text_field_without_crashing(db):
+    # Isolamento por mensagem (review round 5): `text` é uma string, não um dict — o acesso
+    # `.get("body")` quebraria. Em vez de derrubar a request inteira, a mensagem malformada é
+    # logada e ignorada; nenhuma linha é criada para ela.
+    _configure_credentials(db)
+    payload = {
+        "entry": [{
+            "changes": [{
+                "value": {
+                    "metadata": {"phone_number_id": "phone-123"},
+                    "contacts": [{"profile": {"name": "Fulano"}, "wa_id": "5511900000001"}],
+                    "messages": [{
+                        "id": "w1", "from": "5511900000001", "type": "text",
+                        "text": "not-a-dict",
+                    }],
+                },
+                "field": "messages",
+            }],
+        }],
+    }
+    inbox_service.ingest_webhook_payload(db, tenant_id=TENANT_ID, payload=payload)  # não levanta
+    assert db.scalar(
+        select(WhatsappMessage).where(WhatsappMessage.wa_message_id == "w1")
+    ) is None
+
+
+def test_ingest_skips_malformed_media_field_without_crashing(db):
+    # Mesma isolação para mídia: `image` é uma string, não um dict.
+    _configure_credentials(db)
+    payload = {
+        "entry": [{
+            "changes": [{
+                "value": {
+                    "metadata": {"phone_number_id": "phone-123"},
+                    "contacts": [{"profile": {"name": "Fulano"}, "wa_id": "5511900000002"}],
+                    "messages": [{
+                        "id": "w2", "from": "5511900000002", "type": "image",
+                        "image": "not-a-dict",
+                    }],
+                },
+                "field": "messages",
+            }],
+        }],
+    }
+    inbox_service.ingest_webhook_payload(db, tenant_id=TENANT_ID, payload=payload)  # não levanta
+    assert db.scalar(
+        select(WhatsappMessage).where(WhatsappMessage.wa_message_id == "w2")
+    ) is None
+
+
+def test_ingest_skips_message_with_non_string_contact_name(db):
+    # `contacts[0].profile.name` é um dict aninhado (não uma string) — estruturalmente válido em
+    # `_extract_messages`, mas quebra o `ClientCreate(name=...)` dentro de `_get_or_create_client`
+    # com um pydantic.ValidationError. O `except Exception` por mensagem isola essa falha.
+    _configure_credentials(db)
+    payload = {
+        "entry": [{
+            "changes": [{
+                "value": {
+                    "metadata": {"phone_number_id": "phone-123"},
+                    "contacts": [{"profile": {"name": {"a": "b"}}, "wa_id": "5511900000003"}],
+                    "messages": [{
+                        "id": "w3", "from": "5511900000003", "type": "text",
+                        "text": {"body": "oi"},
+                    }],
+                },
+                "field": "messages",
+            }],
+        }],
+    }
+    inbox_service.ingest_webhook_payload(db, tenant_id=TENANT_ID, payload=payload)  # não levanta
+    assert db.scalar(
+        select(WhatsappMessage).where(WhatsappMessage.wa_message_id == "w3")
+    ) is None
+
+
+def test_ingest_processes_valid_message_even_when_another_in_same_payload_is_malformed(db):
+    # O TESTE-PAYOFF desta rodada: prova que o isolamento funciona ponta-a-ponta. Duas mensagens no
+    # MESMO lote — uma malformada (`text` é string) e uma válida. A malformada é ignorada, a válida
+    # é processada normalmente. Uma mensagem ruim NÃO bloqueia as outras válidas do mesmo lote.
+    _configure_credentials(db)
+    payload = {
+        "entry": [{
+            "changes": [{
+                "value": {
+                    "metadata": {"phone_number_id": "phone-123"},
+                    "contacts": [{"profile": {"name": "Fulano"}, "wa_id": "5511900000004"}],
+                    "messages": [
+                        {
+                            "id": "bad-1", "from": "5511900000004", "type": "text",
+                            "text": "not-a-dict",
+                        },
+                        {
+                            "id": "good-1", "from": "5511900000004", "type": "text",
+                            "text": {"body": "mensagem válida"},
+                        },
+                    ],
+                },
+                "field": "messages",
+            }],
+        }],
+    }
+    inbox_service.ingest_webhook_payload(db, tenant_id=TENANT_ID, payload=payload)  # não levanta
+
+    assert db.scalar(
+        select(WhatsappMessage).where(WhatsappMessage.wa_message_id == "bad-1")
+    ) is None
+    good = db.scalar(
+        select(WhatsappMessage).where(WhatsappMessage.wa_message_id == "good-1")
+    )
+    assert good is not None
+    assert good.text_body == "mensagem válida"
+
+
 def test_is_within_session_window_true_right_after_inbound(db):
     _configure_credentials(db)
     client = Client(tenant_id=TENANT_ID, name="Cliente", phone="5511900001111", source="manual")
