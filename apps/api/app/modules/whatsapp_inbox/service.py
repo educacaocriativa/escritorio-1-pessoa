@@ -245,13 +245,32 @@ def process_pending_media(db: Session, *, tenant_id: str) -> int:
     mensagens deste tenant — mesma convenção do resto do módulo. Uma falha isolada (rede,
     credencial ausente/inválida, media_id inválido) NÃO trava as demais mensagens pendentes: a
     mensagem falha é marcada `MEDIA_STATUS_FAILED` e o loop segue (IV2, mesmo princípio de
-    `ingest_webhook_payload`/`notifications.service.process_pending`)."""
+    `ingest_webhook_payload`/`notifications.service.process_pending`).
+
+    CRÍTICO — commit POR MENSAGEM (não um único commit no fim do laço): `create_attachment` já
+    faz seu PRÓPRIO `db.commit()`/`db.refresh()` internamente, então a Session já sofre um commit
+    real a cada iteração bem-sucedida — não existe "commit único no fim" de fato, só a ILUSÃO de
+    um. Se o `create_attachment` de UMA mensagem falhar no meio (erro transitório de rede/storage,
+    plausível para bytes de mídia reais de vários MB), o SQLAlchemy 2.0 deixa a Session "poisoned"
+    (exige `db.rollback()` explícito antes de qualquer novo uso); sem esse rollback aqui, a
+    PRÓXIMA mensagem do mesmo lote (ou o commit final) levantaria `PendingRollbackError` e
+    contaminaria em cascata mensagens seguintes que seriam bem-sucedidas. Por isso, mesmo padrão de
+    `ingest_webhook_payload`: cada mensagem commita a si mesma (sucesso OU falha) e o `except`
+    chama `db.rollback()` ANTES de marcar `MEDIA_STATUS_FAILED`, para garantir que a Session volte
+    a um estado limpo antes de seguir para a próxima."""
     profile = settings_service.get_profile(db, tenant_id)
     pending = db.scalars(
-        select(WhatsappMessage).where(WhatsappMessage.media_status == MEDIA_STATUS_PENDING)
+        select(WhatsappMessage)
+        .where(WhatsappMessage.media_status == MEDIA_STATUS_PENDING)
+        .limit(50)
     ).all()
     processed = 0
     for msg in pending:
+        # `msg_id`/`msg_kind` capturados ANTES do try: se `create_attachment` falhar no meio do
+        # seu próprio commit, a Session fica "poisoned" e QUALQUER acesso a atributo de `msg`
+        # depois disso (inclusive para logar) levantaria PendingRollbackError de novo — capturar
+        # antes garante que já temos os valores em mãos, sem tocar a Session no `except`.
+        msg_id = msg.id
         try:
             url = whatsapp.fetch_media_url(
                 token=profile.whatsapp_token or "", media_id=msg.meta_media_id or ""
@@ -263,16 +282,21 @@ def process_pending_media(db: Session, *, tenant_id: str) -> int:
             }.get(msg.kind, "application/octet-stream")
             attachment = attachments_service.create_attachment(
                 db, tenant_id=tenant_id, actor="system:worker", owner_type="whatsapp_message",
-                owner_id=msg.id, label="outro", filename=f"{msg.kind}-{msg.id}",
+                owner_id=msg_id, label="outro", filename=f"{msg.kind}-{msg_id}",
                 content_type=mime_type, data=data,
             )
             msg.media_attachment_id = attachment.id
             msg.media_status = MEDIA_STATUS_DOWNLOADED
+            db.commit()  # commita SÓ esta mensagem — transação isolada da próxima do lote.
         except Exception:  # noqa: BLE001 — isola a falha por mensagem (IV2)
-            logger.exception("[whatsapp_inbox] falha ao baixar mídia msg=%s", msg.id)
+            db.rollback()  # limpa a Session (possivelmente "poisoned" pelo create_attachment
+            # que falhou no meio) ANTES de qualquer outro uso — senão o log abaixo, a marcação de
+            # status ou o próximo db.add/commit (desta mensagem ou da seguinte) levantaria
+            # PendingRollbackError.
+            logger.exception("[whatsapp_inbox] falha ao baixar mídia msg=%s", msg_id)
             msg.media_status = MEDIA_STATUS_FAILED
+            db.commit()  # commita só a marcação de falha desta mensagem.
         processed += 1
-    db.commit()
     return processed
 
 
