@@ -1683,7 +1683,7 @@ async def receive_webhook(
         raise HTTPException(status_code=403, detail="Assinatura inválida")
 
     with session_factory(account.tenant_id) as tdb:
-        service.ingest_webhook_payload(tdb, tenant_id=account.tenant_id, payload=payload)
+        service.ingest_webhook_payload(tdb, payload=payload)
 
     return {"status": "ok"}
 
