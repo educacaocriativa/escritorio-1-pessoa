@@ -97,6 +97,8 @@ def _extract_messages(payload: dict) -> list[tuple[dict, str]]:
                 contacts = value.get("contacts", [])
                 name = contacts[0]["profile"]["name"] if contacts else "Cliente"
                 for msg in value.get("messages", []):
+                    if not isinstance(msg, dict):
+                        raise WhatsappInboxError("Payload inválido", 400)
                     out.append((msg, name))
     except (AttributeError, TypeError, KeyError) as exc:
         raise WhatsappInboxError("Payload inválido", 400) from exc

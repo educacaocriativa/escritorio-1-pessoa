@@ -166,6 +166,32 @@ def test_webhook_post_rejects_non_string_phone_number_id(client, db):
     assert resp.status_code == 400
 
 
+def test_webhook_post_rejects_malformed_messages_field(client, db):
+    # `phone_number_id` é válido e resolve uma conta real (passa extração + assinatura), mas
+    # `contacts`/`messages` são strings em vez de listas — `_extract_messages` (service.py) deve
+    # rejeitar isso com `WhatsappInboxError(400)`, e o router precisa capturar essa exceção (Gap A
+    # da review round 4) e convertê-la em HTTPException(400) em vez de deixar um 500 cru escapar.
+    _seed_account(db, phone_number_id="phone-malformed", tenant_id="t-4", app_secret="segredo-4")
+    payload = {
+        "entry": [{
+            "changes": [{
+                "value": {
+                    "metadata": {"phone_number_id": "phone-malformed"},
+                    "contacts": "x",
+                    "messages": "y",
+                },
+            }],
+        }],
+    }
+    body = json.dumps(payload).encode()
+    sig = _sign(body, "segredo-4")
+    resp = client.post(
+        "/public/whatsapp/webhook", content=body,
+        headers={"content-type": "application/json", "x-hub-signature-256": sig},
+    )
+    assert resp.status_code == 400
+
+
 def test_webhook_post_rejects_unknown_phone_number_id(client, db):
     payload = {
         "entry": [{

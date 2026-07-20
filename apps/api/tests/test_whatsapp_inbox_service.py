@@ -187,6 +187,28 @@ def test_ingest_raises_on_non_dict_value(db):
         inbox_service.ingest_webhook_payload(db, tenant_id=TENANT_ID, payload=payload)
 
 
+def test_ingest_skips_or_rejects_non_dict_message_item(db):
+    # `value["messages"]` é uma string (não uma lista de dicts) — iterar sobre ela produz
+    # caracteres individuais (strings de 1 char), que `_extract_messages` deve rejeitar ANTES de
+    # devolvê-los para `ingest_webhook_payload`. Sem a guarda, `msg.get("id")` no loop de
+    # `ingest_webhook_payload` levantaria um `AttributeError` cru (Gap B da review round 4).
+    _configure_credentials(db)
+    payload = {
+        "entry": [{
+            "changes": [{
+                "value": {
+                    "metadata": {"phone_number_id": "phone-123"},
+                    "contacts": [{"profile": {"name": "Fulano"}, "wa_id": "5511900009999"}],
+                    "messages": "not-a-list",
+                },
+                "field": "messages",
+            }],
+        }],
+    }
+    with pytest.raises(inbox_service.WhatsappInboxError):
+        inbox_service.ingest_webhook_payload(db, tenant_id=TENANT_ID, payload=payload)
+
+
 def test_is_within_session_window_true_right_after_inbound(db):
     _configure_credentials(db)
     client = Client(tenant_id=TENANT_ID, name="Cliente", phone="5511900001111", source="manual")
