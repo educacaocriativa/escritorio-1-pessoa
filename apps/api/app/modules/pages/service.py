@@ -31,7 +31,9 @@ def _btn(label: str, url: str = "") -> dict:
 
 
 def _form(button: str = "Enviar") -> dict:
-    return {"type": "form", "button": button, "showEmail": True, "extraFields": [], "disclaimer": ""}
+    return {
+        "type": "form", "button": button, "showEmail": True, "extraFields": [], "disclaimer": "",
+    }
 
 
 # Templates iniciais por modelo de página (mesmos modelos dos nós-página do funil).
