@@ -169,3 +169,31 @@ class DiagnosticsOut(BaseModel):
     signals: list[SignalOut]
     narrative: str
     narrative_source: str  # "ai" | "template"
+
+
+# ── DRE em matriz mensal (Story 5.11) ───────────────────────────────────────
+class DreMatrixRowOut(BaseModel):
+    label: str
+    kind: str  # "result" | "informational" | "uncategorized"
+    monthly_cents: list[int]
+    total_cents: int
+
+
+class DreMatrixGroupOut(BaseModel):
+    key: str
+    label: str | None
+    rows: list[DreMatrixRowOut]
+    subtotal_cents: list[int]
+    subtotal_total: int
+
+
+class DreMatrixReportOut(BaseModel):
+    """Matriz mês x categoria (Story 5.11). `groups` é a hierarquia grupo/centro-de-custo ->
+    categoria; cada linha carrega seu próprio `kind` (ver docstring de `dre_matrix_report`).
+    `grand_total_cents` soma só as linhas `kind="result"` de todos os grupos, mês a mês."""
+
+    months: list[str]
+    groups: list[DreMatrixGroupOut]
+    grand_total_cents: list[int]
+    grand_total: int
+    notes: list[str]

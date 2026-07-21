@@ -24,6 +24,9 @@ from app.modules.financial_intelligence.schemas import (
     DiagnosticsOut,
     DreCategoryOut,
     DreGroupOut,
+    DreMatrixGroupOut,
+    DreMatrixReportOut,
+    DreMatrixRowOut,
     DreReportOut,
     ProjectionOut,
     ProjectionWindowOut,
@@ -85,6 +88,52 @@ def dre(
     _require_cost_center(db, cost_center_id)
     report = dre_service.dre_report(db, start=start, end=end, cost_center_id=cost_center_id)
     return _report_out(report)
+
+
+def _matrix_row_out(r: dre_service.DreMatrixRow) -> DreMatrixRowOut:
+    return DreMatrixRowOut(
+        label=r.label, kind=r.kind, monthly_cents=r.monthly_cents, total_cents=r.total_cents,
+    )
+
+
+def _matrix_group_out(g: dre_service.DreMatrixGroup) -> DreMatrixGroupOut:
+    return DreMatrixGroupOut(
+        key=g.key, label=g.label, rows=[_matrix_row_out(r) for r in g.rows],
+        subtotal_cents=g.subtotal_cents, subtotal_total=g.subtotal_total,
+    )
+
+
+def _matrix_report_out(r: dre_service.DreMatrixReport) -> DreMatrixReportOut:
+    return DreMatrixReportOut(
+        months=r.months, groups=[_matrix_group_out(g) for g in r.groups],
+        grand_total_cents=r.grand_total_cents, grand_total=r.grand_total, notes=r.notes,
+    )
+
+
+@router.get("/dre/matrix", response_model=DreMatrixReportOut)
+def dre_matrix(
+    start: date = Query(..., description="Início do período (data de competência), YYYY-MM-DD"),
+    end: date = Query(..., description="Fim do período (data de competência), YYYY-MM-DD"),
+    group_by: str = Query(
+        default="dre",
+        pattern="^(dre|cost_center)$",
+        description="Story 5.11: 'dre' (grupo DRE, padrão) ou 'cost_center' (centro de custo).",
+    ),
+    cost_center_id: str | None = Query(
+        default=None,
+        description="Filtra por centro de custo — só se aplica quando group_by='dre'.",
+    ),
+    _user: CurrentUser = Depends(_guard),
+    db: Session = Depends(get_tenant_db),
+) -> DreMatrixReportOut:
+    if end < start:
+        raise HTTPException(status_code=422, detail="'end' não pode ser anterior a 'start'")
+    cost_center_id = cost_center_id or None
+    _require_cost_center(db, cost_center_id)
+    report = dre_service.dre_matrix_report(
+        db, start=start, end=end, group_by=group_by, cost_center_id=cost_center_id,
+    )
+    return _matrix_report_out(report)
 
 
 def _cost_center_bucket_out(b: dre_service.CostCenterBucket) -> CostCenterBucketOut:
