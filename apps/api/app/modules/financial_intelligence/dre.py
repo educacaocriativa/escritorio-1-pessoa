@@ -505,14 +505,25 @@ def _row_kind(grupo: str | None) -> str:
 def _build_matrix_group(
     key: str,
     label: str | None,
-    cats: dict[str, list[int]],
-    kind_of: Callable[[str], str],
+    cats: dict[tuple[str | None, str], list[int]],
+    kind_of: Callable[[tuple[str | None, str]], str],
     n: int,
 ) -> DreMatrixGroup:
-    rows = [
-        DreMatrixRow(label=cat, kind=kind_of(cat), monthly_cents=cents, total_cents=sum(cents))
-        for cat, cents in sorted(cats.items())
-    ]
+    """`cats` é chaveado por (grupo_dre_de_origem | None, categoria) — NÃO só por categoria —
+    porque `categoria` é única apenas DENTRO de um grupo_dre (constraint do plano de contas),
+    nunca por tenant inteiro. Em group_by="cost_center" um único centro de custo pode ter duas
+    contas com o MESMO nome de categoria em grupos DIFERENTES (ex.: "Equipamentos" em
+    INVESTIMENTO e em CUSTO_DIRETO); sem essa chave composta, as duas se fundiriam numa linha só
+    e o `kind` (result/informational) de uma sobrescreveria o da outra silenciosamente."""
+    rows = []
+    for cat_key in sorted(cats, key=lambda k: k[1]):
+        cents = cats[cat_key]
+        rows.append(
+            DreMatrixRow(
+                label=cat_key[1], kind=kind_of(cat_key), monthly_cents=cents,
+                total_cents=sum(cents),
+            )
+        )
     subtotal = [sum(r.monthly_cents[i] for r in rows if r.kind == "result") for i in range(n)]
     return DreMatrixGroup(
         key=key, label=label, rows=rows, subtotal_cents=subtotal, subtotal_total=sum(subtotal),
@@ -564,7 +575,7 @@ def dre_matrix_report(
         db, start=start, end=end, cost_center_id=cost_center_id,
     )
 
-    by_group: dict[str, dict[str, list[int]]] = {g: {} for g in GROUP_ORDER}
+    by_group: dict[str, dict[tuple[str | None, str], list[int]]] = {g: {} for g in GROUP_ORDER}
     sem_by_month = [0] * n
 
     for month, acc_id, amount in aggregated:
@@ -574,22 +585,19 @@ def dre_matrix_report(
             sem_by_month[idx] += amount
             continue
         grupo, categoria = resolved
-        cents = by_group.setdefault(grupo, {}).setdefault(categoria, [0] * n)
+        cents = by_group.setdefault(grupo, {}).setdefault((grupo, categoria), [0] * n)
         cents[idx] += amount
 
     groups = [
-        # `g=grupo` fixa o valor NESTA iteração (sem isso, todas as lambdas capturariam a
-        # referência da variável `grupo` e, no fim do loop, resolveriam para o ÚLTIMO grupo —
-        # clássica armadilha de closure tardia em Python).
-        _build_matrix_group(grupo, None, by_group[grupo], lambda _c, g=grupo: _row_kind(g), n)
+        _build_matrix_group(grupo, None, by_group[grupo], lambda k: _row_kind(k[0]), n)
         for grupo in GROUP_ORDER
     ]
     has_sem_categoria = any(c != 0 for c in sem_by_month)
     if has_sem_categoria:
         groups.append(
             _build_matrix_group(
-                "SEM_CATEGORIA", None, {"Sem categoria": sem_by_month},
-                lambda _c: "uncategorized", n,
+                "SEM_CATEGORIA", None, {(None, "Sem categoria"): sem_by_month},
+                lambda k: _row_kind(k[0]), n,
             )
         )
 
@@ -662,38 +670,32 @@ def _dre_matrix_by_cost_center(
         db, Payable, start=start, end=end, canceled=PAYABLE_CANCELED, sign=-1,
     ) + _sum_transactions_by_cost_center_and_account_monthly(db, start=start, end=end)
 
-    # cost_center_id | None -> categoria -> cents_por_mes
-    # cost_center_id | None -> categoria -> kind
-    by_cc: dict[str | None, dict[str, list[int]]] = {}
-    kind_by_cc_cat: dict[str | None, dict[str, str]] = {}
+    # cost_center_id | None -> (grupo_dre | None, categoria) -> cents_por_mes
+    by_cc: dict[str | None, dict[tuple[str | None, str], list[int]]] = {}
     for month, cc_id, acc_id, amount in aggregated:
         idx = month_index[month]
         resolved = account_map.get(acc_id) if acc_id else None
         grupo = resolved[0] if resolved else None
         categoria = resolved[1] if resolved else "Sem categoria"
-        cents = by_cc.setdefault(cc_id, {}).setdefault(categoria, [0] * n)
+        cents = by_cc.setdefault(cc_id, {}).setdefault((grupo, categoria), [0] * n)
         cents[idx] += amount
-        kind_by_cc_cat.setdefault(cc_id, {})[categoria] = _row_kind(grupo)
 
     groups: list[DreMatrixGroup] = []
     seen: set[str] = set()
     for c in sorted((c for c in centers if c.archived_at is None), key=lambda c: c.name.lower()):
         cats = by_cc.get(c.id, {})
-        kinds = kind_by_cc_cat.get(c.id, {})
-        groups.append(_build_matrix_group(c.id, c.name, cats, lambda cat, k=kinds: k[cat], n))
+        groups.append(_build_matrix_group(c.id, c.name, cats, lambda k: _row_kind(k[0]), n))
         seen.add(c.id)
     for cc_id, cats in by_cc.items():
         if cc_id is None or cc_id in seen:
             continue
         c = cc_map.get(cc_id)
-        kinds = kind_by_cc_cat.get(cc_id, {})
         label = c.name if c else "(centro removido)"
-        groups.append(_build_matrix_group(cc_id, label, cats, lambda cat, k=kinds: k[cat], n))
+        groups.append(_build_matrix_group(cc_id, label, cats, lambda k: _row_kind(k[0]), n))
     if None in by_cc:
-        kinds = kind_by_cc_cat.get(None, {})
         groups.append(
             _build_matrix_group(
-                "_unassigned", NAO_ATRIBUIDO, by_cc[None], lambda cat, k=kinds: k[cat], n
+                "_unassigned", NAO_ATRIBUIDO, by_cc[None], lambda k: _row_kind(k[0]), n,
             )
         )
 

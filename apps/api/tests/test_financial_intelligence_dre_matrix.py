@@ -271,3 +271,47 @@ def test_cost_center_grouping_mixes_kinds_within_one_center(client: TestClient, 
     kinds = {r["label"]: r["kind"] for r in group["rows"]}
     assert kinds == {"Consultoria": "result", "Equipamentos": "informational"}
     assert group["subtotal_cents"] == [100000]  # só a Consultoria — o investimento é informativo
+
+
+def test_cost_center_grouping_keeps_same_categoria_name_across_different_groups_separate(
+    client: TestClient, headers
+):
+    """Duas contas com o MESMO nome de categoria em grupos DRE DIFERENTES, sob o MESMO centro de
+    custo, não podem se fundir numa linha só (bug encontrado na revisão da Task 4: categoria é
+    única só DENTRO do grupo, nunca por tenant inteiro)."""
+    cc = _cost_center(client, headers, name="Sócio B")
+    inv_acc = _account(client, headers, "INVESTIMENTO", "Equipamentos")
+    # MESMO nome, grupo diferente
+    custo_acc = _account(client, headers, "CUSTO_DIRETO", "Equipamentos")
+
+    r1 = client.post(
+        "/payables/bills",
+        json={
+            "description": "notebook", "amount_cents": 300000,
+            "due_date": "2026-01-06", "competence_date": "2026-01-06",
+            "chart_account_id": inv_acc, "cost_center_id": cc,
+        },
+        headers=headers,
+    )
+    assert r1.status_code == 201, r1.text
+    r2 = client.post(
+        "/payables/bills",
+        json={
+            "description": "manutenção", "amount_cents": 5000,
+            "due_date": "2026-01-07", "competence_date": "2026-01-07",
+            "chart_account_id": custo_acc, "cost_center_id": cc,
+        },
+        headers=headers,
+    )
+    assert r2.status_code == 201, r2.text
+
+    body = _matrix(client, headers, start="2026-01-01", end="2026-01-31", group_by="cost_center")
+    group = _group(body, cc)
+    equipamentos_rows = [r for r in group["rows"] if r["label"] == "Equipamentos"]
+    assert len(equipamentos_rows) == 2, "as duas contas 'Equipamentos' foram fundidas numa só linha"
+    kinds = {r["kind"] for r in equipamentos_rows}
+    assert kinds == {"informational", "result"}
+    amounts = sorted(r["monthly_cents"][0] for r in equipamentos_rows)
+    assert amounts == [-300000, -5000]
+    # subtotal soma só a linha kind=result (CUSTO_DIRETO), não a informational (INVESTIMENTO)
+    assert group["subtotal_cents"] == [-5000]
