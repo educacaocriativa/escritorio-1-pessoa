@@ -449,7 +449,14 @@ def contracts_dre_report(
     """Ranking de lucratividade de TODOS os contratos ASSINADOS do tenant (Story 5.12). Contrato
     signed sem lançamento no período aparece com tudo zerado (não é filtrado) — permite comparar
     quem está "parado" vs. em execução. SOMENTE LEITURA; reusa `contract_dre` por contrato (mesma
-    convenção de sinal/competência já ratificada), sem alterar nenhuma linha."""
+    convenção de sinal/competência já ratificada), sem alterar nenhuma linha.
+
+    Custo conhecido, aceito de propósito: chama `contract_dre` (que recarrega o plano de contas
+    inteiro a cada chamada) uma vez por contrato — com `include_overhead=True`, `allocate_overhead`
+    ainda recalcula a receita total de TODOS os contratos a cada linha, tornando esse caminho O(N²)
+    no nº de contratos assinados. Aceitável para o volume esperado por tenant nesta primeira versão
+    (decisão registrada no spec da Lucratividade por Contrato); otimizar (account_map compartilhado
+    entre chamadas, cache da receita total) só se o volume real justificar."""
     contracts = contracts_service.list_contracts(db, status=STATUS_SIGNED)
     summaries: list[ContractDreSummary] = []
     for contract in contracts:
