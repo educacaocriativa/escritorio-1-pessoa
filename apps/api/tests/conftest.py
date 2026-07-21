@@ -54,7 +54,14 @@ def client(db: Session) -> Iterator[TestClient]:
     def _override_factory():
         @contextmanager
         def _factory(_tenant_id: str) -> Iterator[Session]:
+            # Espelha `tenant_session` de produção (app/db/session.py): commita ao sair do
+            # `with`. Sem isso, mudanças feitas aqui (ex.: assinatura de contrato via link
+            # público) ficam pendentes na sessão (autoflush=False) e uma query FILTRADA
+            # subsequente (ex.: `WHERE status='signed'`) não as enxerga — só um lookup por PK
+            # bateria no identity map. Único ponto de "escrita" do teste que não passava por um
+            # commit explícito de service.
             yield db
+            db.commit()
 
         return _factory
 

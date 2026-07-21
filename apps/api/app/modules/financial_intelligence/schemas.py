@@ -71,6 +71,21 @@ class ContractDreOut(BaseModel):
     notes: list[str]
 
 
+class ContractDreSummaryOut(BaseModel):
+    """Uma linha do ranking de lucratividade (Story 5.12) — mesmos campos-chave do `ContractDreOut`
+    de um contrato só, sem o detalhe de categorias (a lista completa é obtida via `/ledger`)."""
+
+    contract_id: str
+    title: str
+    client_name: str | None
+    receita_cents: int
+    custo_direto_cents: int
+    margem_contribuicao_cents: int
+    margem_contribuicao_pct: float | None
+    overhead_allocated_cents: int
+    resultado_cents: int
+
+
 # ── Projeção de fluxo de caixa 30/60/90 + runway (Story 5.7) ────────────────
 class ProjectionWindowOut(BaseModel):
     """Saldo de caixa projetado para uma janela (dias a partir de hoje), em regime de CAIXA.

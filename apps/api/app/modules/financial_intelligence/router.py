@@ -19,6 +19,7 @@ from app.modules.financial_intelligence.profitability import ContractDre, Contra
 from app.modules.financial_intelligence.projection import CashProjection
 from app.modules.financial_intelligence.schemas import (
     ContractDreOut,
+    ContractDreSummaryOut,
     CostCenterBucketOut,
     CostCenterReportOut,
     DiagnosticsOut,
@@ -266,6 +267,34 @@ def contract_dre(
         cost_center_id=cost_center_id,
     )
     return _contract_dre_out(report)
+
+
+def _contract_dre_summary_out(s: profitability_service.ContractDreSummary) -> ContractDreSummaryOut:
+    return ContractDreSummaryOut(
+        contract_id=s.contract_id, title=s.title, client_name=s.client_name,
+        receita_cents=s.receita_cents, custo_direto_cents=s.custo_direto_cents,
+        margem_contribuicao_cents=s.margem_contribuicao_cents,
+        margem_contribuicao_pct=s.margem_contribuicao_pct,
+        overhead_allocated_cents=s.overhead_allocated_cents, resultado_cents=s.resultado_cents,
+    )
+
+
+@router.get("/contracts-dre", response_model=list[ContractDreSummaryOut])
+def contracts_dre(
+    start: date = Query(..., description="Início do período (data de competência), YYYY-MM-DD"),
+    end: date = Query(..., description="Fim do período (data de competência), YYYY-MM-DD"),
+    include_overhead: bool = Query(
+        default=False, description="Inclui o rateio de overhead em todas as linhas do ranking.",
+    ),
+    _user: CurrentUser = Depends(_guard),
+    db: Session = Depends(get_tenant_db),
+) -> list[ContractDreSummaryOut]:
+    if end < start:
+        raise HTTPException(status_code=422, detail="'end' não pode ser anterior a 'start'")
+    summaries = profitability_service.contracts_dre_report(
+        db, start=start, end=end, include_overhead=include_overhead,
+    )
+    return [_contract_dre_summary_out(s) for s in summaries]
 
 
 @router.get("/diagnostics", response_model=DiagnosticsOut)

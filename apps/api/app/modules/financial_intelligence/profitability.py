@@ -40,7 +40,9 @@ from app.modules.chart_of_accounts.models import (
     GRUPO_RECEITA,
     ChartAccount,
 )
-from app.modules.contracts.models import Contract
+from app.modules.contracts import service as contracts_service
+from app.modules.contracts.models import STATUS_SIGNED, Contract
+from app.modules.crm.models import Client
 from app.modules.payables.models import STATUS_CANCELED as PAYABLE_CANCELED
 from app.modules.payables.models import Payable
 from app.modules.receivables.models import STATUS_CANCELED as CHARGE_CANCELED
@@ -425,3 +427,50 @@ def _overhead_pool(
         )
         signed += sign * int(total or 0)
     return -signed  # despesa (negativa) → magnitude positiva
+
+
+# ── Ranking de lucratividade de todos os contratos (Story 5.12) ────────────────────────────────
+@dataclass
+class ContractDreSummary:
+    contract_id: str
+    title: str
+    client_name: str | None
+    receita_cents: int
+    custo_direto_cents: int
+    margem_contribuicao_cents: int
+    margem_contribuicao_pct: float | None
+    overhead_allocated_cents: int
+    resultado_cents: int
+
+
+def contracts_dre_report(
+    db: Session, *, start: date, end: date, include_overhead: bool = False,
+) -> list[ContractDreSummary]:
+    """Ranking de lucratividade de TODOS os contratos ASSINADOS do tenant (Story 5.12). Contrato
+    signed sem lançamento no período aparece com tudo zerado (não é filtrado) — permite comparar
+    quem está "parado" vs. em execução. SOMENTE LEITURA; reusa `contract_dre` por contrato (mesma
+    convenção de sinal/competência já ratificada), sem alterar nenhuma linha."""
+    contracts = contracts_service.list_contracts(db, status=STATUS_SIGNED)
+    summaries: list[ContractDreSummary] = []
+    for contract in contracts:
+        dre = contract_dre(
+            db, contract=contract, start=start, end=end, include_overhead=include_overhead
+        )
+        client_name = None
+        if contract.client_id:
+            client = db.get(Client, contract.client_id)
+            client_name = client.name if client else None
+        summaries.append(
+            ContractDreSummary(
+                contract_id=contract.id,
+                title=contract.title,
+                client_name=client_name,
+                receita_cents=dre.receita_cents,
+                custo_direto_cents=dre.custo_direto_cents,
+                margem_contribuicao_cents=dre.margem_contribuicao_cents,
+                margem_contribuicao_pct=dre.margem_contribuicao_pct,
+                overhead_allocated_cents=dre.overhead_allocated_cents,
+                resultado_cents=dre.resultado_cents,
+            )
+        )
+    return summaries

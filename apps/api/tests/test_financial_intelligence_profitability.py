@@ -374,3 +374,81 @@ def test_link_to_missing_contract_is_404(client: TestClient, headers):
         headers=headers,
     )
     assert r.status_code == 404
+
+
+def _ranking(client, headers, *, start=START, end=END, include_overhead=False):
+    r = client.get(
+        "/financial-intelligence/contracts-dre",
+        params={"start": start, "end": end, "include_overhead": include_overhead},
+        headers=headers,
+    )
+    assert r.status_code == 200, r.text
+    return r.json()
+
+
+def _sign_contract_via_link(client, headers, contract_id: str) -> None:
+    """Assina o contrato pelo link público (é o único caminho de negócio até status='signed')."""
+    slug = None
+    # o slug não é devolvido pelo POST /contracts padrão do fixture `_contract`; buscamos direto.
+    # NOTA: GET /contracts/{id} exige auth (Depends(_guard)) — headers precisa ser repassado aqui,
+    # senão a chamada devolve 401 antes mesmo de chegar ao endpoint de ranking sob teste.
+    r = client.get(f"/contracts/{contract_id}", headers=headers)
+    slug = r.json()["public_slug"]
+    r2 = client.post(
+        f"/public/contracts/{slug}/sign",
+        json={"name": "Cliente Teste", "document": "52998224725"},
+    )
+    assert r2.status_code == 200, r2.text
+
+
+def test_ranking_only_lists_signed_contracts(client: TestClient, headers):
+    draft = _contract(client, headers, title="Rascunho")
+    signed = _contract(client, headers, title="Assinado")
+    _sign_contract_via_link(client, headers, signed["id"])
+
+    body = _ranking(client, headers)
+    titles = {row["title"] for row in body}
+    assert titles == {"Assinado"}
+    assert draft["title"] not in titles
+
+
+def test_ranking_includes_signed_contract_with_zero_movement(client: TestClient, headers):
+    signed = _contract(client, headers, title="Parado")
+    _sign_contract_via_link(client, headers, signed["id"])
+
+    body = _ranking(client, headers)
+    row = next(r for r in body if r["title"] == "Parado")
+    assert row["receita_cents"] == 0
+    assert row["custo_direto_cents"] == 0
+    assert row["margem_contribuicao_cents"] == 0
+    assert row["margem_contribuicao_pct"] is None
+    assert row["resultado_cents"] == 0
+
+
+def test_ranking_reflects_margin_and_include_overhead(client: TestClient, headers):
+    acc_receita = _account(client, headers, "RECEITA", "Consultoria")
+    acc_custo = _account(client, headers, "CUSTO_DIRETO", "Insumos")
+    contract = _contract(client, headers, title="Projeto A")
+    _sign_contract_via_link(client, headers, contract["id"])
+    _charge(
+        client, headers, amount=100000, competence="2026-07-10",
+        account_id=acc_receita, contract_id=contract["id"],
+    )
+    _payable(
+        client, headers, amount=20000, competence="2026-07-08",
+        account_id=acc_custo, contract_id=contract["id"],
+    )
+
+    body = _ranking(client, headers)
+    row = next(r for r in body if r["title"] == "Projeto A")
+    assert row["receita_cents"] == 100000
+    assert row["custo_direto_cents"] == -20000
+    assert row["margem_contribuicao_cents"] == 80000
+    assert row["overhead_allocated_cents"] == 0  # include_overhead=False por padrão
+
+    body_with_overhead = _ranking(client, headers, include_overhead=True)
+    row2 = next(r for r in body_with_overhead if r["title"] == "Projeto A")
+    # overhead pode ser 0 (sem despesa fixa "Empresa" no cenário) — o que importa é que o campo
+    # responde ao toggle sem quebrar; a lógica de rateio em si já é coberta pelos testes de
+    # contract_dre/allocate_overhead existentes acima neste arquivo.
+    assert "overhead_allocated_cents" in row2
