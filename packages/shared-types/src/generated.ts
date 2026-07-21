@@ -612,9 +612,16 @@ export interface paths {
         put?: never;
         /**
          * Payment Webhook
-         * @description Webhook do gateway: reconhece o pagamento AUTOMATICAMENTE (sem login). Em produção,
-         *     defina GATEWAY_WEBHOOK_SECRET para que só o gateway confirme; em dev (segredo vazio) fica
-         *     aberto para testes. O dono NUNCA marca pago manualmente — só saca o que entra por aqui.
+         * @description Webhook do gateway: reconhece o pagamento AUTOMATICAMENTE (sem login). Aceita o payload
+         *     REAL do provedor (Asaas: {event, payment.externalReference}) OU o payload interno de dev/teste
+         *     ({tenant_id, charge_id, status, secret}) — o link 'simular pgto' continua funcionando.
+         *
+         *     Segurança (fail-closed): com GATEWAY_WEBHOOK_SECRET definido, só o gateway confirma — para o
+         *     payload real valida o token do header (`asaas-access-token`), para o interno valida `secret`
+         *     no corpo. Segredo vazio (dev) = aberto para testes. O dono NUNCA marca pago manualmente.
+         *
+         *     Nota (No Invention): o nome do header de autenticação do Asaas deve ser confirmado contra a
+         *     documentação vigente do provedor antes do go-live.
          */
         post: operations["payment_webhook_receivables_webhook_post"];
         delete?: never;
@@ -815,6 +822,27 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/payables/queue": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Payment Queue
+         * @description Story 5.9 — fila de pagamentos: Payables em aberto agrupados por janela de vencimento.
+         *     Mesmo módulo/guard (`require_module('payables')`), sem autorização nova.
+         */
+        get: operations["payment_queue_payables_queue_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/payables/categories": {
         parameters: {
             query?: never;
@@ -896,6 +924,316 @@ export interface paths {
         put?: never;
         /** Cancel Bill */
         post: operations["cancel_bill_payables_bills__payable_id__cancel_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/chart-of-accounts": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List Accounts */
+        get: operations["list_accounts_chart_of_accounts_get"];
+        put?: never;
+        /** Create Account */
+        post: operations["create_account_chart_of_accounts_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/chart-of-accounts/hierarchy": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Hierarchy */
+        get: operations["hierarchy_chart_of_accounts_hierarchy_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/chart-of-accounts/{account_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        /** Update Account */
+        patch: operations["update_account_chart_of_accounts__account_id__patch"];
+        trace?: never;
+    };
+    "/chart-of-accounts/{account_id}/archive": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Archive Account */
+        post: operations["archive_account_chart_of_accounts__account_id__archive_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/chart-of-accounts/seed": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Seed */
+        post: operations["seed_chart_of_accounts_seed_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/cost-centers": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List Cost Centers */
+        get: operations["list_cost_centers_cost_centers_get"];
+        put?: never;
+        /** Create Cost Center */
+        post: operations["create_cost_center_cost_centers_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/cost-centers/{cost_center_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        /** Update Cost Center */
+        patch: operations["update_cost_center_cost_centers__cost_center_id__patch"];
+        trace?: never;
+    };
+    "/cost-centers/{cost_center_id}/archive": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Archive Cost Center */
+        post: operations["archive_cost_center_cost_centers__cost_center_id__archive_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/financial-intelligence/dre": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Dre */
+        get: operations["dre_financial_intelligence_dre_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/financial-intelligence/by-cost-center": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * By Cost Center
+         * @description Cruza o resultado do período por centro de custo (2ª dimensão), incluindo o bucket 'Não
+         *     atribuído' — comparação lado a lado de sócios/áreas/unidades (Story 5.5, AC2/AC3).
+         */
+        get: operations["by_cost_center_financial_intelligence_by_cost_center_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/financial-intelligence/projection": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Projection
+         * @description Projeta o saldo de caixa para 30/60/90 dias e o runway (Story 5.7), em regime de CAIXA.
+         *
+         *     SOMENTE LEITURA: usa a data de pagamento prevista (vencimento dos itens em aberto), nunca a de
+         *     competência — não escreve nem cria contas (IV1/IV2).
+         */
+        get: operations["projection_financial_intelligence_projection_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/financial-intelligence/contracts/{contract_id}/dre": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Contract Dre */
+        get: operations["contract_dre_financial_intelligence_contracts__contract_id__dre_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/financial-intelligence/diagnostics": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Diagnostics
+         * @description Diagnóstico financeiro (Story 5.8): sinais determinísticos 🟢🟡🔴 (motor PURO) + narrativa.
+         *
+         *     O motor SEMPRE calcula e retorna os sinais, mesmo sem `ANTHROPIC_API_KEY` (AC2/IV3): a narrativa
+         *     da IA é isolada e cai num fallback por template em qualquer erro/chave ausente — nunca derruba o
+         *     endpoint. Quando a IA narra de fato, o texto passa pelo anonimizador ANTES do Claude (Regra de
+         *     Ouro nº 2) e grava rastro "Ação executada pela IA" (Regra de Ouro nº 3).
+         */
+        get: operations["diagnostics_financial_intelligence_diagnostics_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/investments": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List Accounts */
+        get: operations["list_accounts_investments_get"];
+        put?: never;
+        /** Create Account */
+        post: operations["create_account_investments_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/investments/{account_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        /** Update Account */
+        patch: operations["update_account_investments__account_id__patch"];
+        trace?: never;
+    };
+    "/investments/{account_id}/yield": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Register Yield */
+        post: operations["register_yield_investments__account_id__yield_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/investments/{account_id}/rentability": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Rentability */
+        get: operations["rentability_investments__account_id__rentability_get"];
+        put?: never;
+        post?: never;
         delete?: never;
         options?: never;
         head?: never;
@@ -1803,6 +2141,205 @@ export interface paths {
         patch: operations["update_profile_settings_profile_patch"];
         trace?: never;
     };
+    "/whatsapp-templates": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List Templates */
+        get: operations["list_templates_whatsapp_templates_get"];
+        put?: never;
+        /** Create Template */
+        post: operations["create_template_whatsapp_templates_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/whatsapp-templates/{template_id}/sync": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Sync Template */
+        post: operations["sync_template_whatsapp_templates__template_id__sync_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/whatsapp-templates/{template_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /** Delete Template */
+        delete: operations["delete_template_whatsapp_templates__template_id__delete"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/whatsapp-conversations": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List Conversations */
+        get: operations["list_conversations_whatsapp_conversations_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/whatsapp-conversations/{client_id}/timeline": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Timeline */
+        get: operations["get_timeline_whatsapp_conversations__client_id__timeline_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/whatsapp-conversations/{client_id}/window": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Window */
+        get: operations["get_window_whatsapp_conversations__client_id__window_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/whatsapp-conversations/{client_id}/read": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Mark Read */
+        post: operations["mark_read_whatsapp_conversations__client_id__read_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/whatsapp-conversations/{client_id}/messages/text": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Send Text Reply */
+        post: operations["send_text_reply_whatsapp_conversations__client_id__messages_text_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/whatsapp-conversations/{client_id}/messages/media": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Send Media Reply */
+        post: operations["send_media_reply_whatsapp_conversations__client_id__messages_media_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/whatsapp-conversations/{client_id}/messages/template": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Send Template Reply */
+        post: operations["send_template_reply_whatsapp_conversations__client_id__messages_template_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/public/whatsapp/webhook": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Verify Webhook
+         * @description Handshake de verificação chamado 1x pela Meta quando o tenant configura o webhook no
+         *     painel dele. Uso LEGÍTIMO de `get_db` (sem tenant): resolve `public_whatsapp_accounts`,
+         *     tabela GLOBAL sem RLS, pelo verify_token — não toca tabela de negócio.
+         */
+        get: operations["verify_webhook_public_whatsapp_webhook_get"];
+        put?: never;
+        /**
+         * Receive Webhook
+         * @description Recebe o evento da Meta. Descobre o tenant pelo `phone_number_id` do payload ANTES de
+         *     validar a assinatura (a assinatura usa o `app_secret` DAQUELE tenant, então precisamos saber
+         *     quem é primeiro). Se a assinatura não bater, rejeita sem processar nada.
+         */
+        post: operations["receive_webhook_public_whatsapp_webhook_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/pages": {
         parameters: {
             query?: never;
@@ -1965,6 +2502,179 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/attachments/public-images": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Upload Public Image
+         * @description Upload autenticado de imagem intencionalmente pública (logo/foto). A leitura depois é
+         *     pública (ver `serve_public_image`). Devolve o caminho da rota de leitura no backend; o
+         *     frontend prefixa o proxy `/api` para obter a URL renderável em `<img src>`.
+         */
+        post: operations["upload_public_image_attachments_public_images_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/public-images/{image_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Serve Public Image
+         * @description Uso LEGÍTIMO de `get_db` (sem tenant): rota pública lê `public_images`, tabela GLOBAL
+         *     sem RLS. NÃO toca `users` nem tabelas de negócio por tenant — seguro por design. Serve os
+         *     bytes inline (sem `Content-Disposition: attachment`) para renderizar como `<img>`.
+         */
+        get: operations["serve_public_image_public_images__image_id__get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/integrations/google/status": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Status */
+        get: operations["status_integrations_google_status_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/integrations/google/connect": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Connect */
+        get: operations["connect_integrations_google_connect_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/integrations/google/disconnect": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Disconnect */
+        post: operations["disconnect_integrations_google_disconnect_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/integrations/google/callback": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Callback
+         * @description O Google redireciona para cá após o consent. Valida o `state`, troca o `code` por tokens
+         *     e persiste a credencial no tenant. Sempre redireciona de volta ao frontend.
+         */
+        get: operations["callback_integrations_google_callback_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/integrations/leads/keys": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List Keys */
+        get: operations["list_keys_integrations_leads_keys_get"];
+        put?: never;
+        /** Create Key */
+        post: operations["create_key_integrations_leads_keys_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/integrations/leads/keys/{key_id}/revoke": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Revoke Key */
+        post: operations["revoke_key_integrations_leads_keys__key_id__revoke_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/public/leads/{key}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Capture Lead
+         * @description Uso LEGÍTIMO de `get_db` (sem tenant): resolve `public_integration_keys`, snapshot
+         *     GLOBAL sem RLS, pelo hash da chave. Nunca toca tabela de negócio por aqui — a escrita
+         *     real acontece dentro de `session_factory(tenant_id)` (ver service.capture_lead).
+         */
+        post: operations["capture_lead_public_leads__key__post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/health": {
         parameters: {
             query?: never;
@@ -1994,7 +2704,7 @@ export interface components {
             tenant: components["schemas"]["TenantOut"];
             owner: components["schemas"]["UserOut"];
             /** Temp Password */
-            temp_password: string;
+            temp_password?: string | null;
             /** Delivery */
             delivery: string;
             /** Delivery Status */
@@ -2085,6 +2795,19 @@ export interface components {
              */
             file: string;
         };
+        /** Body_send_media_reply_whatsapp_conversations__client_id__messages_media_post */
+        Body_send_media_reply_whatsapp_conversations__client_id__messages_media_post: {
+            /**
+             * Caption
+             * @default
+             */
+            caption: string;
+            /**
+             * File
+             * Format: binary
+             */
+            file: string;
+        };
         /** Body_upload_attachment_attachments_post */
         Body_upload_attachment_attachments_post: {
             /** Owner Type */
@@ -2096,6 +2819,14 @@ export interface components {
              * @default outro
              */
             label: string;
+            /**
+             * File
+             * Format: binary
+             */
+            file: string;
+        };
+        /** Body_upload_public_image_attachments_public_images_post */
+        Body_upload_public_image_attachments_public_images_post: {
             /**
              * File
              * Format: binary
@@ -2244,6 +2975,14 @@ export interface components {
              * Format: date
              */
             due_date: string;
+            /** Competence Date */
+            competence_date?: string | null;
+            /** Chart Account Id */
+            chart_account_id?: string | null;
+            /** Contract Id */
+            contract_id?: string | null;
+            /** Cost Center Id */
+            cost_center_id?: string | null;
             /**
              * Recurrence
              * @default none
@@ -2278,6 +3017,16 @@ export interface components {
              * Format: date
              */
             due_date: string;
+            /** Competence Date */
+            competence_date: string | null;
+            /** Paid At */
+            paid_at: string | null;
+            /** Chart Account Id */
+            chart_account_id: string | null;
+            /** Contract Id */
+            contract_id: string | null;
+            /** Cost Center Id */
+            cost_center_id: string | null;
             /** Status */
             status: string;
             /** Is Overdue */
@@ -2297,6 +3046,10 @@ export interface components {
              * Format: date-time
              */
             created_at: string;
+            /** Gateway Provider */
+            gateway_provider?: string | null;
+            /** Gateway Status Raw */
+            gateway_status_raw?: string | null;
         };
         /** ChargeUpdate */
         ChargeUpdate: {
@@ -2306,6 +3059,14 @@ export interface components {
             amount_cents?: number | null;
             /** Due Date */
             due_date?: string | null;
+            /** Competence Date */
+            competence_date?: string | null;
+            /** Chart Account Id */
+            chart_account_id?: string | null;
+            /** Contract Id */
+            contract_id?: string | null;
+            /** Cost Center Id */
+            cost_center_id?: string | null;
         };
         /** ChargesSummary */
         ChargesSummary: {
@@ -2319,6 +3080,44 @@ export interface components {
             open_count: number;
             /** Overdue Count */
             overdue_count: number;
+        };
+        /** ChartAccountCreate */
+        ChartAccountCreate: {
+            /** Grupo Dre */
+            grupo_dre: string;
+            /** Categoria */
+            categoria: string;
+        };
+        /** ChartAccountOut */
+        ChartAccountOut: {
+            /** Id */
+            id: string;
+            /** Grupo Dre */
+            grupo_dre: string;
+            /** Categoria */
+            categoria: string;
+            /** Archived At */
+            archived_at: string | null;
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+        };
+        /** ChartAccountUpdate */
+        ChartAccountUpdate: {
+            /** Categoria */
+            categoria?: string | null;
+        };
+        /**
+         * ChartGroupOut
+         * @description Um grupo DRE com suas categorias (nó da hierarquia grupo → categorias — AC3).
+         */
+        ChartGroupOut: {
+            /** Grupo Dre */
+            grupo_dre: string;
+            /** Categorias */
+            categorias: components["schemas"]["ChartAccountOut"][];
         };
         /** Clause */
         Clause: {
@@ -2489,6 +3288,62 @@ export interface components {
                 [key: string]: string;
             };
         };
+        /**
+         * ContractDreOut
+         * @description DRE de margem de contribuição de UM contrato (Story 5.4), em regime de competência.
+         *
+         *     Sinal canônico (herdado da 5.3): totais já ASSINADOS (Receber=+, Pagar=−). `custo_direto_cents`
+         *     normalmente é NEGATIVO; a margem é a SOMA `receita_cents + custo_direto_cents` (não subtração).
+         *     `margem_contribuicao_pct` é a RAZÃO MC/Receita (fração, ex.: 0.6 = 60%; multiplique por 100 para
+         *     exibir %), ou None quando não há receita (proteção contra divisão por zero). `break_even_cents`
+         *     é a receita necessária para empatar os custos fixos; None + `break_even_reachable=false` quando
+         *     a margem não-positiva impede o break-even (estado explícito, nunca erro 500).
+         *     `overhead_allocated_cents` só é != 0 quando o rateio é solicitado (`include_overhead=true`) —
+         *     calculado na leitura, JAMAIS gravado no lançamento (AC3/IV2).
+         *
+         *     `outros_resultado_cents` é a soma assinada dos lançamentos do contrato em grupos de resultado
+         *     ALÉM da margem (Despesa Fixa/Tributos/Financeiro): NÃO entra na margem de contribuição, mas
+         *     COMPÕE o resultado (`resultado = margem + outros_resultado − custos fixos − overhead`).
+         *     INVESTIMENTO e lançamentos sem categoria ficam fora do resultado (sinalizados em `notes`).
+         */
+        ContractDreOut: {
+            /** Contract Id */
+            contract_id: string;
+            /**
+             * Start
+             * Format: date
+             */
+            start: string;
+            /**
+             * End
+             * Format: date
+             */
+            end: string;
+            receita: components["schemas"]["DreGroupOut"];
+            custo_direto: components["schemas"]["DreGroupOut"];
+            /** Receita Cents */
+            receita_cents: number;
+            /** Custo Direto Cents */
+            custo_direto_cents: number;
+            /** Margem Contribuicao Cents */
+            margem_contribuicao_cents: number;
+            /** Margem Contribuicao Pct */
+            margem_contribuicao_pct: number | null;
+            /** Outros Resultado Cents */
+            outros_resultado_cents: number;
+            /** Fixed Costs Allocated Cents */
+            fixed_costs_allocated_cents: number;
+            /** Overhead Allocated Cents */
+            overhead_allocated_cents: number;
+            /** Resultado Cents */
+            resultado_cents: number;
+            /** Break Even Cents */
+            break_even_cents: number | null;
+            /** Break Even Reachable */
+            break_even_reachable: boolean;
+            /** Notes */
+            notes: string[];
+        };
         /** ContractOut */
         ContractOut: {
             /** Id */
@@ -2509,6 +3364,8 @@ export interface components {
             status: string;
             /** Public Slug */
             public_slug: string | null;
+            /** Fixed Costs Allocated Cents */
+            fixed_costs_allocated_cents: number | null;
             /** Signer Name */
             signer_name: string;
             /** Signer Document */
@@ -2529,6 +3386,8 @@ export interface components {
             client_id?: string | null;
             /** Clauses */
             clauses?: components["schemas"]["Clause"][] | null;
+            /** Fixed Costs Allocated Cents */
+            fixed_costs_allocated_cents?: number | null;
         };
         /** ContractsSummary */
         ContractsSummary: {
@@ -2538,6 +3397,83 @@ export interface components {
             sent_count: number;
             /** Signed Count */
             signed_count: number;
+        };
+        /**
+         * CostCenterBucketOut
+         * @description Resultado do período agregado por um centro de custo (2ª dimensão). `cost_center_id=None` e
+         *     `name='Não atribuído'` é o bucket sintético dos lançamentos sem centro de custo (AC3).
+         *     `resultado_cents` usa a MESMA fórmula/exclusões da DRE (Story 5.3).
+         */
+        CostCenterBucketOut: {
+            /** Cost Center Id */
+            cost_center_id: string | null;
+            /** Name */
+            name: string;
+            /** Kind */
+            kind: string | null;
+            /** Receita Cents */
+            receita_cents: number;
+            /** Resultado Cents */
+            resultado_cents: number;
+            /** Lancamentos */
+            lancamentos: number;
+        };
+        /** CostCenterCreate */
+        CostCenterCreate: {
+            /** Name */
+            name: string;
+            /**
+             * Kind
+             * @default outro
+             */
+            kind: string;
+        };
+        /** CostCenterOut */
+        CostCenterOut: {
+            /** Id */
+            id: string;
+            /** Name */
+            name: string;
+            /** Kind */
+            kind: string;
+            /** Archived At */
+            archived_at: string | null;
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+        };
+        /**
+         * CostCenterReportOut
+         * @description Comparação lado a lado do resultado por centro de custo no período (Story 5.5, AC2).
+         *
+         *     `buckets` traz um item por centro de custo do tenant (mesmo os sem movimento, para comparar
+         *     sócios/áreas) mais o bucket 'Não atribuído' (quando há lançamentos sem a 2ª dimensão). `notes`
+         *     documenta o regime e as exclusões — não silenciosamente.
+         */
+        CostCenterReportOut: {
+            /**
+             * Start
+             * Format: date
+             */
+            start: string;
+            /**
+             * End
+             * Format: date
+             */
+            end: string;
+            /** Buckets */
+            buckets: components["schemas"]["CostCenterBucketOut"][];
+            /** Notes */
+            notes: string[];
+        };
+        /** CostCenterUpdate */
+        CostCenterUpdate: {
+            /** Name */
+            name?: string | null;
+            /** Kind */
+            kind?: string | null;
         };
         /** CouponCreate */
         CouponCreate: {
@@ -2683,6 +3619,32 @@ export interface components {
              */
             purchases: number;
         };
+        /**
+         * DiagnosticsOut
+         * @description Resposta do diagnóstico (Story 5.8). `signals` é o resultado DETERMINÍSTICO do motor —
+         *     existe e está correto INDEPENDENTEMENTE da IA (AC2/IV3). `narrative` é a leitura em linguagem
+         *     natural: quando a IA está disponível, é gerada por ela (após anonimização — Regra de Ouro nº 2);
+         *     senão, é um fallback por template a partir dos MESMOS sinais. `narrative_source` diz qual foi
+         *     ('ai' | 'template') — a UI deixa claro ao usuário que os números vêm primeiro.
+         */
+        DiagnosticsOut: {
+            /**
+             * Start
+             * Format: date
+             */
+            start: string;
+            /**
+             * End
+             * Format: date
+             */
+            end: string;
+            /** Signals */
+            signals: components["schemas"]["SignalOut"][];
+            /** Narrative */
+            narrative: string;
+            /** Narrative Source */
+            narrative_source: string;
+        };
         /** DocumentCreate */
         DocumentCreate: {
             /** Skill */
@@ -2691,9 +3653,7 @@ export interface components {
              * Answers
              * @default {}
              */
-            answers: {
-                [key: string]: unknown;
-            };
+            answers: Record<string, never>;
             /** Client Id */
             client_id?: string | null;
             /**
@@ -2723,9 +3683,7 @@ export interface components {
             /** Metadata Raw */
             metadata_raw: string;
             /** Answers */
-            answers: {
-                [key: string]: unknown;
-            };
+            answers: Record<string, never>;
             /** Input Tokens */
             input_tokens: number;
             /** Output Tokens */
@@ -2759,6 +3717,51 @@ export interface components {
              * Format: date-time
              */
             created_at: string;
+        };
+        /** DreCategoryOut */
+        DreCategoryOut: {
+            /** Categoria */
+            categoria: string;
+            /** Amount Cents */
+            amount_cents: number;
+            /** Count */
+            count: number;
+        };
+        /** DreGroupOut */
+        DreGroupOut: {
+            /** Grupo Dre */
+            grupo_dre: string;
+            /** Total Cents */
+            total_cents: number;
+            /** Categorias */
+            categorias: components["schemas"]["DreCategoryOut"][];
+        };
+        /**
+         * DreReportOut
+         * @description DRE hierárquica do período (grupo DRE → categoria), em regime de competência.
+         *
+         *     `groups` traz sempre os 6 grupos na ordem canônica (mesmo vazios). `sem_categoria` é o bucket
+         *     dos lançamentos não classificados (fora do `resultado_cents`). `notes` documenta as exclusões
+         *     (INVESTIMENTO / sem categoria) e o regime — não silenciosamente.
+         */
+        DreReportOut: {
+            /**
+             * Start
+             * Format: date
+             */
+            start: string;
+            /**
+             * End
+             * Format: date
+             */
+            end: string;
+            /** Groups */
+            groups: components["schemas"]["DreGroupOut"][];
+            sem_categoria: components["schemas"]["DreGroupOut"];
+            /** Resultado Cents */
+            resultado_cents: number;
+            /** Notes */
+            notes: string[];
         };
         /** DunningResult */
         DunningResult: {
@@ -2888,6 +3891,8 @@ export interface components {
             amount_cents: number | null;
             /** External Ref */
             external_ref: string | null;
+            /** Google Event Id */
+            google_event_id?: string | null;
             /** Client Name */
             client_name?: string | null;
             /** Created By Ai */
@@ -2952,13 +3957,9 @@ export interface components {
             /** Name */
             name: string;
             /** Nodes */
-            nodes?: {
-                [key: string]: unknown;
-            }[];
+            nodes?: Record<string, never>[];
             /** Edges */
-            edges?: {
-                [key: string]: unknown;
-            }[];
+            edges?: Record<string, never>[];
         };
         /** FunnelOut */
         FunnelOut: {
@@ -2969,13 +3970,9 @@ export interface components {
             /** Name */
             name: string;
             /** Nodes */
-            nodes: {
-                [key: string]: unknown;
-            }[];
+            nodes: Record<string, never>[];
             /** Edges */
-            edges: {
-                [key: string]: unknown;
-            }[];
+            edges: Record<string, never>[];
             /**
              * Created At
              * Format: date-time
@@ -3056,13 +4053,9 @@ export interface components {
             /** Name */
             name?: string | null;
             /** Nodes */
-            nodes?: {
-                [key: string]: unknown;
-            }[] | null;
+            nodes?: Record<string, never>[] | null;
             /** Edges */
-            edges?: {
-                [key: string]: unknown;
-            }[] | null;
+            edges?: Record<string, never>[] | null;
         };
         /** GalleryImage */
         GalleryImage: {
@@ -3104,10 +4097,133 @@ export interface components {
              */
             hashtags: string;
         };
+        /**
+         * GoogleConnectOut
+         * @description URL de autorização do Google para o frontend redirecionar o usuário.
+         */
+        GoogleConnectOut: {
+            /** Url */
+            url: string;
+        };
+        /**
+         * GoogleStatusOut
+         * @description Estado da integração para o frontend decidir a UI (botões conectar/desconectar).
+         */
+        GoogleStatusOut: {
+            /** Configured */
+            configured: boolean;
+            /** Connected */
+            connected: boolean;
+            /** Email */
+            email?: string | null;
+        };
         /** HTTPValidationError */
         HTTPValidationError: {
             /** Detail */
             detail?: components["schemas"]["ValidationError"][];
+        };
+        /** IntegrationKeyCreate */
+        IntegrationKeyCreate: {
+            /** Label */
+            label: string;
+        };
+        /**
+         * IntegrationKeyCreated
+         * @description Retorno da criação: única vez em que a chave crua fica visível.
+         */
+        IntegrationKeyCreated: {
+            /** Id */
+            id: string;
+            /** Label */
+            label: string;
+            /** Key Prefix */
+            key_prefix: string;
+            /** Revoked At */
+            revoked_at: string | null;
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /** Raw Key */
+            raw_key: string;
+        };
+        /** IntegrationKeyOut */
+        IntegrationKeyOut: {
+            /** Id */
+            id: string;
+            /** Label */
+            label: string;
+            /** Key Prefix */
+            key_prefix: string;
+            /** Revoked At */
+            revoked_at: string | null;
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+        };
+        /** InvestmentAccountCreate */
+        InvestmentAccountCreate: {
+            /** Name */
+            name: string;
+            /**
+             * Kind
+             * @default
+             */
+            kind: string;
+            /**
+             * Index Rate Label
+             * @default
+             */
+            index_rate_label: string;
+            /**
+             * Principal Cents
+             * @default 0
+             */
+            principal_cents: number;
+            /**
+             * Opened At
+             * Format: date
+             */
+            opened_at: string;
+        };
+        /** InvestmentAccountOut */
+        InvestmentAccountOut: {
+            /** Id */
+            id: string;
+            /** Name */
+            name: string;
+            /** Kind */
+            kind: string;
+            /** Index Rate Label */
+            index_rate_label: string;
+            /** Principal Cents */
+            principal_cents: number;
+            /** Accrued Yield Cents */
+            accrued_yield_cents: number;
+            /**
+             * Opened At
+             * Format: date
+             */
+            opened_at: string;
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+        };
+        /** InvestmentAccountUpdate */
+        InvestmentAccountUpdate: {
+            /** Name */
+            name?: string | null;
+            /** Kind */
+            kind?: string | null;
+            /** Index Rate Label */
+            index_rate_label?: string | null;
+            /** Principal Cents */
+            principal_cents?: number | null;
         };
         /** ItemCreate */
         ItemCreate: {
@@ -3190,6 +4306,21 @@ export interface components {
             /** Active */
             active?: boolean | null;
         };
+        /** LeadCapture */
+        LeadCapture: {
+            /** Name */
+            name: string;
+            /** Email */
+            email?: string | null;
+            /** Phone */
+            phone?: string | null;
+            /** Notes */
+            notes?: string | null;
+            /** Fields */
+            fields?: {
+                [key: string]: string;
+            } | null;
+        };
         /** LeadSubmit */
         LeadSubmit: {
             /** Name */
@@ -3201,6 +4332,10 @@ export interface components {
              * @default
              */
             phone: string;
+            /** Fields */
+            fields?: {
+                [key: string]: string;
+            } | null;
         };
         /** LoginRequest */
         LoginRequest: {
@@ -3286,9 +4421,7 @@ export interface components {
              */
             model: string;
             /** Blocks */
-            blocks?: {
-                [key: string]: unknown;
-            }[] | null;
+            blocks?: Record<string, never>[] | null;
         };
         /** PageOut */
         PageOut: {
@@ -3301,9 +4434,7 @@ export interface components {
             /** Model */
             model: string;
             /** Blocks */
-            blocks: {
-                [key: string]: unknown;
-            }[];
+            blocks: Record<string, never>[];
             /** Status */
             status: string;
             /** Public Slug */
@@ -3349,9 +4480,7 @@ export interface components {
             /** Title */
             title?: string | null;
             /** Blocks */
-            blocks?: {
-                [key: string]: unknown;
-            }[] | null;
+            blocks?: Record<string, never>[] | null;
             /** Primary Color */
             primary_color?: string | null;
             /** Bg Color */
@@ -3389,6 +4518,14 @@ export interface components {
              * Format: date
              */
             due_date: string;
+            /** Competence Date */
+            competence_date?: string | null;
+            /** Chart Account Id */
+            chart_account_id?: string | null;
+            /** Contract Id */
+            contract_id?: string | null;
+            /** Cost Center Id */
+            cost_center_id?: string | null;
             /**
              * Recurrence
              * @default none
@@ -3429,6 +4566,14 @@ export interface components {
              * Format: date
              */
             due_date: string;
+            /** Competence Date */
+            competence_date: string | null;
+            /** Chart Account Id */
+            chart_account_id: string | null;
+            /** Contract Id */
+            contract_id: string | null;
+            /** Cost Center Id */
+            cost_center_id: string | null;
             /** Status */
             status: string;
             /** Is Overdue */
@@ -3463,6 +4608,14 @@ export interface components {
             amount_cents?: number | null;
             /** Due Date */
             due_date?: string | null;
+            /** Competence Date */
+            competence_date?: string | null;
+            /** Chart Account Id */
+            chart_account_id?: string | null;
+            /** Contract Id */
+            contract_id?: string | null;
+            /** Cost Center Id */
+            cost_center_id?: string | null;
             /** Recurrence */
             recurrence?: string | null;
             /** Payment Code */
@@ -3482,6 +4635,43 @@ export interface components {
             month_cents: number;
             /** Paid Month Cents */
             paid_month_cents: number;
+        };
+        /**
+         * PaymentQueueOut
+         * @description Fila agrupada em 4 baldes de PayableOut (reaproveitado) + o resumo por balde.
+         */
+        PaymentQueueOut: {
+            /** Atrasados */
+            atrasados: components["schemas"]["PayableOut"][];
+            /** Hoje */
+            hoje: components["schemas"]["PayableOut"][];
+            /** Proximos 7 Dias */
+            proximos_7_dias: components["schemas"]["PayableOut"][];
+            /** Proximos 30 Dias */
+            proximos_30_dias: components["schemas"]["PayableOut"][];
+            summary: components["schemas"]["PaymentQueueSummary"];
+        };
+        /**
+         * PaymentQueueSummary
+         * @description Contagem e soma (centavos) por balde — mesmo padrão de PayablesSummary, sem os itens.
+         */
+        PaymentQueueSummary: {
+            /** Atrasados Count */
+            atrasados_count: number;
+            /** Atrasados Cents */
+            atrasados_cents: number;
+            /** Hoje Count */
+            hoje_count: number;
+            /** Hoje Cents */
+            hoje_cents: number;
+            /** Proximos 7 Dias Count */
+            proximos_7_dias_count: number;
+            /** Proximos 7 Dias Cents */
+            proximos_7_dias_cents: number;
+            /** Proximos 30 Dias Count */
+            proximos_30_dias_count: number;
+            /** Proximos 30 Dias Cents */
+            proximos_30_dias_cents: number;
         };
         /** PayoutResult */
         PayoutResult: {
@@ -3614,6 +4804,20 @@ export interface components {
             font: string;
             /** Timezone */
             timezone: string;
+            /** Default Entry Funnel Id */
+            default_entry_funnel_id: string | null;
+            /** Whatsapp Configured */
+            whatsapp_configured: boolean;
+            /** Whatsapp Phone Id */
+            whatsapp_phone_id: string;
+            /** Whatsapp Waba Id */
+            whatsapp_waba_id: string;
+            /** Whatsapp Verify Token */
+            whatsapp_verify_token: string;
+            /** Whatsapp Template Bindings */
+            whatsapp_template_bindings: {
+                [key: string]: string;
+            };
         };
         /** ProfileUpdate */
         ProfileUpdate: {
@@ -3647,6 +4851,67 @@ export interface components {
             font?: string | null;
             /** Timezone */
             timezone?: string | null;
+            /** Default Entry Funnel Id */
+            default_entry_funnel_id?: string | null;
+            /** Whatsapp Token */
+            whatsapp_token?: string | null;
+            /** Whatsapp Phone Id */
+            whatsapp_phone_id?: string | null;
+            /** Whatsapp Waba Id */
+            whatsapp_waba_id?: string | null;
+            /** Whatsapp App Secret */
+            whatsapp_app_secret?: string | null;
+            /** Whatsapp Template Bindings */
+            whatsapp_template_bindings?: {
+                [key: string]: string;
+            } | null;
+        };
+        /**
+         * ProjectionOut
+         * @description Projeção de fluxo de caixa 30/60/90 dias + runway (Story 5.7), em regime de CAIXA.
+         *
+         *     OPOSTO da DRE (que usa competência): aqui a data é a de PAGAMENTO PREVISTO (vencimento dos itens
+         *     em aberto), nunca `competence_date`. `saldo_inicial_cents` é o disponível da Carteira (mesmo
+         *     número do Cockpit). `windows` traz uma janela por horizonte pedido (default 30/60/90), com o
+         *     saldo projetado e o sinal `alert`. `notes` documenta o regime e as exclusões — não em silêncio.
+         *
+         *     `overdue_inflow_cents`/`overdue_outflow_cents`: parcela de itens em aberto JÁ VENCIDOS
+         *     (`due_date < hoje`) que a projeção conta como caixa esperado imediato — já embutida em todas as
+         *     `windows`, exposta à parte para o consumidor risk-ajustar (vencidos podem não se concretizar).
+         */
+        ProjectionOut: {
+            /**
+             * Today
+             * Format: date
+             */
+            today: string;
+            /** Saldo Inicial Cents */
+            saldo_inicial_cents: number;
+            /** Overdue Inflow Cents */
+            overdue_inflow_cents: number;
+            /** Overdue Outflow Cents */
+            overdue_outflow_cents: number;
+            /** Windows */
+            windows: components["schemas"]["ProjectionWindowOut"][];
+            runway: components["schemas"]["RunwayOut"];
+            /** Notes */
+            notes: string[];
+        };
+        /**
+         * ProjectionWindowOut
+         * @description Saldo de caixa projetado para uma janela (dias a partir de hoje), em regime de CAIXA.
+         *
+         *     `saldo_projetado_cents` é CUMULATIVO: saldo inicial da Carteira + entradas abertas − saídas
+         *     abertas cujo vencimento cai até o fim da janela. `alert=True` quando o saldo fica NEGATIVO nessa
+         *     janela — sinal explícito que a Story 5.8 consome como indicador 🔴 sem recalcular.
+         */
+        ProjectionWindowOut: {
+            /** Days */
+            days: number;
+            /** Saldo Projetado Cents */
+            saldo_projetado_cents: number;
+            /** Alert */
+            alert: boolean;
         };
         /** PublicAccept */
         PublicAccept: {
@@ -3668,14 +4933,23 @@ export interface components {
             /** Signed At */
             signed_at: string | null;
         };
+        /**
+         * PublicImageOut
+         * @description Retorno do upload de imagem pública. ``url`` é o caminho da rota de leitura no backend
+         *     (``/public-images/{id}``); o frontend prefixa o proxy ``/api`` para obter a URL renderável.
+         */
+        PublicImageOut: {
+            /** Id */
+            id: string;
+            /** Url */
+            url: string;
+        };
         /** PublicPage */
         PublicPage: {
             /** Title */
             title: string;
             /** Blocks */
-            blocks: {
-                [key: string]: unknown;
-            }[];
+            blocks: Record<string, never>[];
             /** Primary Color */
             primary_color: string;
             /** Bg Color */
@@ -3986,6 +5260,44 @@ export interface components {
             /** Password */
             password: string;
         };
+        /**
+         * RegisterYieldRequest
+         * @description Registrar rendimento (juro) de uma aplicação num período (Task 2/3).
+         *
+         *     `amount_cents` > 0 (rendimento positivo). `date` é a data de competência do lançamento (regime
+         *     de competência — entra na DRE nesse período). `chart_account_id` (opcional) DEVE apontar a uma
+         *     conta do grupo `FINANCEIRO` quando informado (422 caso contrário) — ver service.
+         */
+        RegisterYieldRequest: {
+            /** Amount Cents */
+            amount_cents: number;
+            /**
+             * Date
+             * Format: date
+             */
+            date: string;
+            /** Chart Account Id */
+            chart_account_id?: string | null;
+        };
+        /** RentabilityOut */
+        RentabilityOut: {
+            /** Account Id */
+            account_id: string;
+            /** Principal Cents */
+            principal_cents: number;
+            /** Accrued Yield Cents */
+            accrued_yield_cents: number;
+            /** Total Rentability Pct */
+            total_rentability_pct: number | null;
+            /** Period Rentability Pct */
+            period_rentability_pct: number | null;
+            /** Period Yield Cents */
+            period_yield_cents: number;
+            /** Start */
+            start: string | null;
+            /** End */
+            end: string | null;
+        };
         /** ResetPasswordRequest */
         ResetPasswordRequest: {
             /** Token */
@@ -4000,9 +5312,7 @@ export interface components {
             /** Client Id */
             client_id?: string | null;
             /** Params */
-            params?: {
-                [key: string]: unknown;
-            };
+            params?: Record<string, never>;
         };
         /** RunNodeResult */
         RunNodeResult: {
@@ -4046,6 +5356,20 @@ export interface components {
              */
             at: string;
         };
+        /**
+         * RunwayOut
+         * @description Runway: fôlego de caixa no ritmo de queima atual.
+         *
+         *     `days` = dias até o saldo inicial zerar na queima líquida diária (saídas − entradas da maior
+         *     janela / dias), ou `None` quando não há queima (caixa crescendo/estável) — "sem risco", sem
+         *     divisão por zero. `burn_rate_cents_per_day` é a queima diária (0 quando não há queima).
+         */
+        RunwayOut: {
+            /** Days */
+            days: number | null;
+            /** Burn Rate Cents Per Day */
+            burn_rate_cents_per_day: number;
+        };
         /** ScheduleStage */
         ScheduleStage: {
             /** Title */
@@ -4085,6 +5409,21 @@ export interface components {
             /** Coupon Code */
             coupon_code?: string | null;
         };
+        /** SendTemplateRequest */
+        SendTemplateRequest: {
+            /** Template Id */
+            template_id: string;
+            /**
+             * Variables
+             * @default []
+             */
+            variables: string[];
+        };
+        /** SendTextRequest */
+        SendTextRequest: {
+            /** Text */
+            text: string;
+        };
         /**
          * SessionInfo
          * @description Retorno de /auth/me — apenas identidade, SEM reemitir credencial.
@@ -4104,6 +5443,22 @@ export interface components {
              * @default true
              */
             accept: boolean;
+        };
+        /**
+         * SignalOut
+         * @description Um sinal de diagnóstico calculado pelo motor PURO (Story 5.8). `level` é verde/amarelo/
+         *     vermelho; `explanation` SEMPRE traz o número que o justifica; `source` identifica a origem
+         *     (lucratividade 5.4 / projecao 5.7 / investimento 5.6).
+         */
+        SignalOut: {
+            /** Level */
+            level: string;
+            /** Title */
+            title: string;
+            /** Explanation */
+            explanation: string;
+            /** Source */
+            source: string;
         };
         /** SkillSummary */
         SkillSummary: {
@@ -4172,7 +5527,7 @@ export interface components {
         StaffInviteOut: {
             user: components["schemas"]["UserOut"];
             /** Temp Password */
-            temp_password: string;
+            temp_password?: string | null;
             /** Delivery */
             delivery: string;
             /** Delivery Status */
@@ -4197,6 +5552,8 @@ export interface components {
             name: string;
             /** Position */
             position?: number | null;
+            /** After Stage Id */
+            after_stage_id?: string | null;
             /**
              * Is Won
              * @default false
@@ -4241,27 +5598,6 @@ export interface components {
             total_value_cents: number;
             /** Low Stock Count */
             low_stock_count: number;
-        };
-        /** TemplateCreate */
-        TemplateCreate: {
-            /** Name */
-            name: string;
-            /** Clauses */
-            clauses: components["schemas"]["Clause"][];
-        };
-        /** TemplateOut */
-        TemplateOut: {
-            /** Id */
-            id: string;
-            /** Name */
-            name: string;
-            /** Clauses */
-            clauses: components["schemas"]["Clause"][];
-            /**
-             * Created At
-             * Format: date-time
-             */
-            created_at: string;
         };
         /** TemplatePreset */
         TemplatePreset: {
@@ -4336,6 +5672,12 @@ export interface components {
             client_id?: string | null;
             /** External Ref */
             external_ref?: string | null;
+            /** Competence Date */
+            competence_date?: string | null;
+            /** Chart Account Id */
+            chart_account_id?: string | null;
+            /** Cost Center Id */
+            cost_center_id?: string | null;
         };
         /** TransactionOut */
         TransactionOut: {
@@ -4361,6 +5703,12 @@ export interface components {
             client_id: string | null;
             /** External Ref */
             external_ref: string | null;
+            /** Competence Date */
+            competence_date: string | null;
+            /** Chart Account Id */
+            chart_account_id: string | null;
+            /** Cost Center Id */
+            cost_center_id: string | null;
             /**
              * Created At
              * Format: date-time
@@ -4446,26 +5794,6 @@ export interface components {
             /** Fees Total Cents */
             fees_total_cents: number;
         };
-        /**
-         * WebhookPayment
-         * @description Confirmação de pagamento vinda do gateway (Pix/cartão/boleto compensado).
-         */
-        WebhookPayment: {
-            /** Tenant Id */
-            tenant_id: string;
-            /** Charge Id */
-            charge_id: string;
-            /**
-             * Status
-             * @default paid
-             */
-            status: string;
-            /**
-             * Secret
-             * @default
-             */
-            secret: string;
-        };
         /** RescheduleRequest */
         app__modules__agenda__schemas__RescheduleRequest: {
             /**
@@ -4479,6 +5807,27 @@ export interface components {
              */
             ends_at: string;
         };
+        /** TemplateCreate */
+        app__modules__contracts__schemas__TemplateCreate: {
+            /** Name */
+            name: string;
+            /** Clauses */
+            clauses: components["schemas"]["Clause"][];
+        };
+        /** TemplateOut */
+        app__modules__contracts__schemas__TemplateOut: {
+            /** Id */
+            id: string;
+            /** Name */
+            name: string;
+            /** Clauses */
+            clauses: components["schemas"]["Clause"][];
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+        };
         /** RescheduleRequest */
         app__modules__receivables__schemas__RescheduleRequest: {
             /**
@@ -4486,6 +5835,63 @@ export interface components {
              * Format: date
              */
             due_date: string;
+        };
+        /** TemplateCreate */
+        app__modules__whatsapp_templates__schemas__TemplateCreate: {
+            /** Name */
+            name: string;
+            /**
+             * Language
+             * @default pt_BR
+             */
+            language: string;
+            /**
+             * Category
+             * @enum {string}
+             */
+            category: "MARKETING" | "UTILITY" | "AUTHENTICATION";
+            /** Body Text */
+            body_text: string;
+            /**
+             * Variable Examples
+             * @default []
+             */
+            variable_examples: string[];
+        };
+        /** TemplateOut */
+        app__modules__whatsapp_templates__schemas__TemplateOut: {
+            /** Id */
+            id: string;
+            /** Name */
+            name: string;
+            /** Language */
+            language: string;
+            /** Category Requested */
+            category_requested: string;
+            /** Category Approved */
+            category_approved: string | null;
+            /** Status */
+            status: string;
+            /** Rejected Reason */
+            rejected_reason: string | null;
+            /** Meta Template Id */
+            meta_template_id: string | null;
+            /** Body Text */
+            body_text: string;
+            /** Variable Count */
+            variable_count: number;
+            /** Variable Examples */
+            variable_examples: string[];
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /**
+             * Updated At
+             * Format: date-time
+             */
+            updated_at: string;
         };
     };
     responses: never;
@@ -4612,9 +6018,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": {
-                        [key: string]: unknown;
-                    };
+                    "application/json": Record<string, never>;
                 };
             };
             /** @description Validation Error */
@@ -4647,9 +6051,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": {
-                        [key: string]: unknown;
-                    };
+                    "application/json": Record<string, never>;
                 };
             };
             /** @description Validation Error */
@@ -5949,13 +7351,15 @@ export interface operations {
     payment_webhook_receivables_webhook_post: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                "asaas-access-token"?: string | null;
+            };
             path?: never;
             cookie?: never;
         };
         requestBody: {
             content: {
-                "application/json": components["schemas"]["WebhookPayment"];
+                "application/json": Record<string, never>;
             };
         };
         responses: {
@@ -5965,9 +7369,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": {
-                        [key: string]: unknown;
-                    };
+                    "application/json": Record<string, never>;
                 };
             };
             /** @description Validation Error */
@@ -6421,6 +7823,37 @@ export interface operations {
             };
         };
     };
+    payment_queue_payables_queue_get: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PaymentQueueOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     categories_payables_categories_get: {
         parameters: {
             query?: never;
@@ -6643,6 +8076,706 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["PayableOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_accounts_chart_of_accounts_get: {
+        parameters: {
+            query?: {
+                grupo?: string | null;
+                include_archived?: boolean;
+            };
+            header?: {
+                authorization?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ChartAccountOut"][];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    create_account_chart_of_accounts_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ChartAccountCreate"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ChartAccountOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    hierarchy_chart_of_accounts_hierarchy_get: {
+        parameters: {
+            query?: {
+                include_archived?: boolean;
+            };
+            header?: {
+                authorization?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ChartGroupOut"][];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    update_account_chart_of_accounts__account_id__patch: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+            };
+            path: {
+                account_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ChartAccountUpdate"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ChartAccountOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    archive_account_chart_of_accounts__account_id__archive_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+            };
+            path: {
+                account_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ChartAccountOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    seed_chart_of_accounts_seed_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ChartAccountOut"][];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_cost_centers_cost_centers_get: {
+        parameters: {
+            query?: {
+                include_archived?: boolean;
+            };
+            header?: {
+                authorization?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CostCenterOut"][];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    create_cost_center_cost_centers_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CostCenterCreate"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CostCenterOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    update_cost_center_cost_centers__cost_center_id__patch: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+            };
+            path: {
+                cost_center_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CostCenterUpdate"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CostCenterOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    archive_cost_center_cost_centers__cost_center_id__archive_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+            };
+            path: {
+                cost_center_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CostCenterOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    dre_financial_intelligence_dre_get: {
+        parameters: {
+            query: {
+                /** @description Início do período (data de competência), YYYY-MM-DD */
+                start: string;
+                /** @description Fim do período (data de competência), YYYY-MM-DD */
+                end: string;
+                /** @description Story 5.5: filtra a DRE por centro de custo (2ª dimensão). Omitir = tudo. */
+                cost_center_id?: string | null;
+            };
+            header?: {
+                authorization?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DreReportOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    by_cost_center_financial_intelligence_by_cost_center_get: {
+        parameters: {
+            query: {
+                /** @description Início do período (data de competência), YYYY-MM-DD */
+                start: string;
+                /** @description Fim do período (data de competência), YYYY-MM-DD */
+                end: string;
+            };
+            header?: {
+                authorization?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CostCenterReportOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    projection_financial_intelligence_projection_get: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProjectionOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    contract_dre_financial_intelligence_contracts__contract_id__dre_get: {
+        parameters: {
+            query: {
+                /** @description Início do período (data de competência), YYYY-MM-DD */
+                start: string;
+                /** @description Fim do período (data de competência), YYYY-MM-DD */
+                end: string;
+                /** @description Inclui o rateio de overhead do bucket 'Empresa' (só na visão analítica). */
+                include_overhead?: boolean;
+                /** @description Story 5.5: filtra a DRE do contrato por centro de custo (2ª dimensão). */
+                cost_center_id?: string | null;
+            };
+            header?: {
+                authorization?: string | null;
+            };
+            path: {
+                contract_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ContractDreOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    diagnostics_financial_intelligence_diagnostics_get: {
+        parameters: {
+            query: {
+                /** @description Início do período (competência), YYYY-MM-DD */
+                start: string;
+                /** @description Fim do período (competência), YYYY-MM-DD */
+                end: string;
+            };
+            header?: {
+                authorization?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DiagnosticsOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_accounts_investments_get: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["InvestmentAccountOut"][];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    create_account_investments_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["InvestmentAccountCreate"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["InvestmentAccountOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    update_account_investments__account_id__patch: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+            };
+            path: {
+                account_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["InvestmentAccountUpdate"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["InvestmentAccountOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    register_yield_investments__account_id__yield_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+            };
+            path: {
+                account_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["RegisterYieldRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["InvestmentAccountOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    rentability_investments__account_id__rentability_get: {
+        parameters: {
+            query?: {
+                start?: string | null;
+                end?: string | null;
+            };
+            header?: {
+                authorization?: string | null;
+            };
+            path: {
+                account_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RentabilityOut"];
                 };
             };
             /** @description Validation Error */
@@ -7284,9 +9417,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": {
-                        [key: string]: unknown;
-                    };
+                    "application/json": Record<string, never>;
                 };
             };
             /** @description Validation Error */
@@ -7348,7 +9479,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["TemplateOut"][];
+                    "application/json": components["schemas"]["app__modules__contracts__schemas__TemplateOut"][];
                 };
             };
             /** @description Validation Error */
@@ -7373,7 +9504,7 @@ export interface operations {
         };
         requestBody: {
             content: {
-                "application/json": components["schemas"]["TemplateCreate"];
+                "application/json": components["schemas"]["app__modules__contracts__schemas__TemplateCreate"];
             };
         };
         responses: {
@@ -7383,7 +9514,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["TemplateOut"];
+                    "application/json": components["schemas"]["app__modules__contracts__schemas__TemplateOut"];
                 };
             };
             /** @description Validation Error */
@@ -7654,9 +9785,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": {
-                        [key: string]: unknown;
-                    };
+                    "application/json": Record<string, never>;
                 };
             };
             /** @description Validation Error */
@@ -7953,9 +10082,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": {
-                        [key: string]: unknown;
-                    };
+                    "application/json": Record<string, never>;
                 };
             };
             /** @description Validation Error */
@@ -8973,6 +11100,430 @@ export interface operations {
             };
         };
     };
+    list_templates_whatsapp_templates_get: {
+        parameters: {
+            query?: {
+                status?: string | null;
+            };
+            header?: {
+                authorization?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["app__modules__whatsapp_templates__schemas__TemplateOut"][];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    create_template_whatsapp_templates_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["app__modules__whatsapp_templates__schemas__TemplateCreate"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["app__modules__whatsapp_templates__schemas__TemplateOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    sync_template_whatsapp_templates__template_id__sync_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+            };
+            path: {
+                template_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["app__modules__whatsapp_templates__schemas__TemplateOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    delete_template_whatsapp_templates__template_id__delete: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+            };
+            path: {
+                template_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_conversations_whatsapp_conversations_get: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": Record<string, never>[];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_timeline_whatsapp_conversations__client_id__timeline_get: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+            };
+            path: {
+                client_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": Record<string, never>[];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_window_whatsapp_conversations__client_id__window_get: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+            };
+            path: {
+                client_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": Record<string, never>;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    mark_read_whatsapp_conversations__client_id__read_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+            };
+            path: {
+                client_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    send_text_reply_whatsapp_conversations__client_id__messages_text_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+            };
+            path: {
+                client_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SendTextRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": Record<string, never>;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    send_media_reply_whatsapp_conversations__client_id__messages_media_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+            };
+            path: {
+                client_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "multipart/form-data": components["schemas"]["Body_send_media_reply_whatsapp_conversations__client_id__messages_media_post"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": Record<string, never>;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    send_template_reply_whatsapp_conversations__client_id__messages_template_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+            };
+            path: {
+                client_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SendTemplateRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": Record<string, never>;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    verify_webhook_public_whatsapp_webhook_get: {
+        parameters: {
+            query: {
+                "hub.mode": string;
+                "hub.verify_token": string;
+                "hub.challenge": string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    receive_webhook_public_whatsapp_webhook_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": Record<string, never>;
+                };
+            };
+        };
+    };
     list_pages_pages_get: {
         parameters: {
             query?: never;
@@ -9258,9 +11809,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": {
-                        [key: string]: unknown;
-                    };
+                    "application/json": Record<string, never>;
                 };
             };
             /** @description Validation Error */
@@ -9395,6 +11944,331 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content?: never;
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    upload_public_image_attachments_public_images_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "multipart/form-data": components["schemas"]["Body_upload_public_image_attachments_public_images_post"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PublicImageOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    serve_public_image_public_images__image_id__get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                image_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    status_integrations_google_status_get: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["GoogleStatusOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    connect_integrations_google_connect_get: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["GoogleConnectOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    disconnect_integrations_google_disconnect_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": Record<string, never>;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    callback_integrations_google_callback_get: {
+        parameters: {
+            query?: {
+                code?: string | null;
+                state?: string | null;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_keys_integrations_leads_keys_get: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["IntegrationKeyOut"][];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    create_key_integrations_leads_keys_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["IntegrationKeyCreate"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["IntegrationKeyCreated"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    revoke_key_integrations_leads_keys__key_id__revoke_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+            };
+            path: {
+                key_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["IntegrationKeyOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    capture_lead_public_leads__key__post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                key: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["LeadCapture"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": Record<string, never>;
+                };
             };
             /** @description Validation Error */
             422: {

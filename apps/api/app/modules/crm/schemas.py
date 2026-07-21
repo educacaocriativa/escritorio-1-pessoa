@@ -14,8 +14,17 @@ from app.modules.crm.models import GENDER_VALUES, SOURCE_VALUES
 class StageCreate(BaseModel):
     name: str = Field(min_length=1, max_length=64)
     position: int | None = None
+    after_stage_id: str | None = None
     is_won: bool = False
     is_lost: bool = False
+
+    @field_validator("name")
+    @classmethod
+    def _name(cls, v: str) -> str:
+        v = v.strip()
+        if not v:
+            raise ValueError("nome não pode ser vazio")
+        return v
 
     @model_validator(mode="after")
     def _validate(self) -> StageCreate:

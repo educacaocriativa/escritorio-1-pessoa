@@ -161,7 +161,6 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "additionalProperties": true,
                   "type": "object",
                   "title": "Response Forgot Password Auth Forgot Password Post"
                 }
@@ -204,7 +203,6 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "additionalProperties": true,
                   "type": "object",
                   "title": "Response Reset Password Route Auth Reset Password Post"
                 }
@@ -2596,17 +2594,36 @@
           "receivables"
         ],
         "summary": "Payment Webhook",
-        "description": "Webhook do gateway: reconhece o pagamento AUTOMATICAMENTE (sem login). Em produção,\ndefina GATEWAY_WEBHOOK_SECRET para que só o gateway confirme; em dev (segredo vazio) fica\naberto para testes. O dono NUNCA marca pago manualmente — só saca o que entra por aqui.",
+        "description": "Webhook do gateway: reconhece o pagamento AUTOMATICAMENTE (sem login). Aceita o payload\nREAL do provedor (Asaas: {event, payment.externalReference}) OU o payload interno de dev/teste\n({tenant_id, charge_id, status, secret}) — o link 'simular pgto' continua funcionando.\n\nSegurança (fail-closed): com GATEWAY_WEBHOOK_SECRET definido, só o gateway confirma — para o\npayload real valida o token do header (`asaas-access-token`), para o interno valida `secret`\nno corpo. Segredo vazio (dev) = aberto para testes. O dono NUNCA marca pago manualmente.\n\nNota (No Invention): o nome do header de autenticação do Asaas deve ser confirmado contra a\ndocumentação vigente do provedor antes do go-live.",
         "operationId": "payment_webhook_receivables_webhook_post",
+        "parameters": [
+          {
+            "name": "asaas-access-token",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Asaas-Access-Token"
+            }
+          }
+        ],
         "requestBody": {
+          "required": true,
           "content": {
             "application/json": {
               "schema": {
-                "$ref": "#/components/schemas/WebhookPayment"
+                "type": "object",
+                "title": "Body"
               }
             }
-          },
-          "required": true
+          }
         },
         "responses": {
           "200": {
@@ -2614,7 +2631,6 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "additionalProperties": true,
                   "type": "object",
                   "title": "Response Payment Webhook Receivables Webhook Post"
                 }
@@ -3429,6 +3445,56 @@
         }
       }
     },
+    "/payables/queue": {
+      "get": {
+        "tags": [
+          "payables"
+        ],
+        "summary": "Payment Queue",
+        "description": "Story 5.9 — fila de pagamentos: Payables em aberto agrupados por janela de vencimento.\nMesmo módulo/guard (`require_module('payables')`), sem autorização nova.",
+        "operationId": "payment_queue_payables_queue_get",
+        "parameters": [
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PaymentQueueOut"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/payables/categories": {
       "get": {
         "tags": [
@@ -3831,6 +3897,1369 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/PayableOut"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/chart-of-accounts": {
+      "get": {
+        "tags": [
+          "chart_of_accounts"
+        ],
+        "summary": "List Accounts",
+        "operationId": "list_accounts_chart_of_accounts_get",
+        "parameters": [
+          {
+            "name": "grupo",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Grupo"
+            }
+          },
+          {
+            "name": "include_archived",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "boolean",
+              "default": false,
+              "title": "Include Archived"
+            }
+          },
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/ChartAccountOut"
+                  },
+                  "title": "Response List Accounts Chart Of Accounts Get"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "chart_of_accounts"
+        ],
+        "summary": "Create Account",
+        "operationId": "create_account_chart_of_accounts_post",
+        "parameters": [
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ChartAccountCreate"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ChartAccountOut"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/chart-of-accounts/hierarchy": {
+      "get": {
+        "tags": [
+          "chart_of_accounts"
+        ],
+        "summary": "Hierarchy",
+        "operationId": "hierarchy_chart_of_accounts_hierarchy_get",
+        "parameters": [
+          {
+            "name": "include_archived",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "boolean",
+              "default": false,
+              "title": "Include Archived"
+            }
+          },
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/ChartGroupOut"
+                  },
+                  "title": "Response Hierarchy Chart Of Accounts Hierarchy Get"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/chart-of-accounts/{account_id}": {
+      "patch": {
+        "tags": [
+          "chart_of_accounts"
+        ],
+        "summary": "Update Account",
+        "operationId": "update_account_chart_of_accounts__account_id__patch",
+        "parameters": [
+          {
+            "name": "account_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Account Id"
+            }
+          },
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ChartAccountUpdate"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ChartAccountOut"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/chart-of-accounts/{account_id}/archive": {
+      "post": {
+        "tags": [
+          "chart_of_accounts"
+        ],
+        "summary": "Archive Account",
+        "operationId": "archive_account_chart_of_accounts__account_id__archive_post",
+        "parameters": [
+          {
+            "name": "account_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Account Id"
+            }
+          },
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ChartAccountOut"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/chart-of-accounts/seed": {
+      "post": {
+        "tags": [
+          "chart_of_accounts"
+        ],
+        "summary": "Seed",
+        "operationId": "seed_chart_of_accounts_seed_post",
+        "parameters": [
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/ChartAccountOut"
+                  },
+                  "title": "Response Seed Chart Of Accounts Seed Post"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/cost-centers": {
+      "get": {
+        "tags": [
+          "cost_centers"
+        ],
+        "summary": "List Cost Centers",
+        "operationId": "list_cost_centers_cost_centers_get",
+        "parameters": [
+          {
+            "name": "include_archived",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "boolean",
+              "default": false,
+              "title": "Include Archived"
+            }
+          },
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/CostCenterOut"
+                  },
+                  "title": "Response List Cost Centers Cost Centers Get"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "cost_centers"
+        ],
+        "summary": "Create Cost Center",
+        "operationId": "create_cost_center_cost_centers_post",
+        "parameters": [
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CostCenterCreate"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CostCenterOut"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/cost-centers/{cost_center_id}": {
+      "patch": {
+        "tags": [
+          "cost_centers"
+        ],
+        "summary": "Update Cost Center",
+        "operationId": "update_cost_center_cost_centers__cost_center_id__patch",
+        "parameters": [
+          {
+            "name": "cost_center_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Cost Center Id"
+            }
+          },
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CostCenterUpdate"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CostCenterOut"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/cost-centers/{cost_center_id}/archive": {
+      "post": {
+        "tags": [
+          "cost_centers"
+        ],
+        "summary": "Archive Cost Center",
+        "operationId": "archive_cost_center_cost_centers__cost_center_id__archive_post",
+        "parameters": [
+          {
+            "name": "cost_center_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Cost Center Id"
+            }
+          },
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CostCenterOut"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/financial-intelligence/dre": {
+      "get": {
+        "tags": [
+          "financial_intelligence"
+        ],
+        "summary": "Dre",
+        "operationId": "dre_financial_intelligence_dre_get",
+        "parameters": [
+          {
+            "name": "start",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "date",
+              "description": "Início do período (data de competência), YYYY-MM-DD",
+              "title": "Start"
+            },
+            "description": "Início do período (data de competência), YYYY-MM-DD"
+          },
+          {
+            "name": "end",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "date",
+              "description": "Fim do período (data de competência), YYYY-MM-DD",
+              "title": "End"
+            },
+            "description": "Fim do período (data de competência), YYYY-MM-DD"
+          },
+          {
+            "name": "cost_center_id",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Story 5.5: filtra a DRE por centro de custo (2ª dimensão). Omitir = tudo.",
+              "title": "Cost Center Id"
+            },
+            "description": "Story 5.5: filtra a DRE por centro de custo (2ª dimensão). Omitir = tudo."
+          },
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DreReportOut"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/financial-intelligence/by-cost-center": {
+      "get": {
+        "tags": [
+          "financial_intelligence"
+        ],
+        "summary": "By Cost Center",
+        "description": "Cruza o resultado do período por centro de custo (2ª dimensão), incluindo o bucket 'Não\natribuído' — comparação lado a lado de sócios/áreas/unidades (Story 5.5, AC2/AC3).",
+        "operationId": "by_cost_center_financial_intelligence_by_cost_center_get",
+        "parameters": [
+          {
+            "name": "start",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "date",
+              "description": "Início do período (data de competência), YYYY-MM-DD",
+              "title": "Start"
+            },
+            "description": "Início do período (data de competência), YYYY-MM-DD"
+          },
+          {
+            "name": "end",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "date",
+              "description": "Fim do período (data de competência), YYYY-MM-DD",
+              "title": "End"
+            },
+            "description": "Fim do período (data de competência), YYYY-MM-DD"
+          },
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CostCenterReportOut"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/financial-intelligence/projection": {
+      "get": {
+        "tags": [
+          "financial_intelligence"
+        ],
+        "summary": "Projection",
+        "description": "Projeta o saldo de caixa para 30/60/90 dias e o runway (Story 5.7), em regime de CAIXA.\n\nSOMENTE LEITURA: usa a data de pagamento prevista (vencimento dos itens em aberto), nunca a de\ncompetência — não escreve nem cria contas (IV1/IV2).",
+        "operationId": "projection_financial_intelligence_projection_get",
+        "parameters": [
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProjectionOut"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/financial-intelligence/contracts/{contract_id}/dre": {
+      "get": {
+        "tags": [
+          "financial_intelligence"
+        ],
+        "summary": "Contract Dre",
+        "operationId": "contract_dre_financial_intelligence_contracts__contract_id__dre_get",
+        "parameters": [
+          {
+            "name": "contract_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Contract Id"
+            }
+          },
+          {
+            "name": "start",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "date",
+              "description": "Início do período (data de competência), YYYY-MM-DD",
+              "title": "Start"
+            },
+            "description": "Início do período (data de competência), YYYY-MM-DD"
+          },
+          {
+            "name": "end",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "date",
+              "description": "Fim do período (data de competência), YYYY-MM-DD",
+              "title": "End"
+            },
+            "description": "Fim do período (data de competência), YYYY-MM-DD"
+          },
+          {
+            "name": "include_overhead",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "boolean",
+              "description": "Inclui o rateio de overhead do bucket 'Empresa' (só na visão analítica).",
+              "default": false,
+              "title": "Include Overhead"
+            },
+            "description": "Inclui o rateio de overhead do bucket 'Empresa' (só na visão analítica)."
+          },
+          {
+            "name": "cost_center_id",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Story 5.5: filtra a DRE do contrato por centro de custo (2ª dimensão).",
+              "title": "Cost Center Id"
+            },
+            "description": "Story 5.5: filtra a DRE do contrato por centro de custo (2ª dimensão)."
+          },
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ContractDreOut"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/financial-intelligence/diagnostics": {
+      "get": {
+        "tags": [
+          "financial_intelligence"
+        ],
+        "summary": "Diagnostics",
+        "description": "Diagnóstico financeiro (Story 5.8): sinais determinísticos 🟢🟡🔴 (motor PURO) + narrativa.\n\nO motor SEMPRE calcula e retorna os sinais, mesmo sem `ANTHROPIC_API_KEY` (AC2/IV3): a narrativa\nda IA é isolada e cai num fallback por template em qualquer erro/chave ausente — nunca derruba o\nendpoint. Quando a IA narra de fato, o texto passa pelo anonimizador ANTES do Claude (Regra de\nOuro nº 2) e grava rastro \"Ação executada pela IA\" (Regra de Ouro nº 3).",
+        "operationId": "diagnostics_financial_intelligence_diagnostics_get",
+        "parameters": [
+          {
+            "name": "start",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "date",
+              "description": "Início do período (competência), YYYY-MM-DD",
+              "title": "Start"
+            },
+            "description": "Início do período (competência), YYYY-MM-DD"
+          },
+          {
+            "name": "end",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "date",
+              "description": "Fim do período (competência), YYYY-MM-DD",
+              "title": "End"
+            },
+            "description": "Fim do período (competência), YYYY-MM-DD"
+          },
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DiagnosticsOut"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/investments": {
+      "get": {
+        "tags": [
+          "investments"
+        ],
+        "summary": "List Accounts",
+        "operationId": "list_accounts_investments_get",
+        "parameters": [
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/InvestmentAccountOut"
+                  },
+                  "title": "Response List Accounts Investments Get"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "investments"
+        ],
+        "summary": "Create Account",
+        "operationId": "create_account_investments_post",
+        "parameters": [
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/InvestmentAccountCreate"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/InvestmentAccountOut"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/investments/{account_id}": {
+      "patch": {
+        "tags": [
+          "investments"
+        ],
+        "summary": "Update Account",
+        "operationId": "update_account_investments__account_id__patch",
+        "parameters": [
+          {
+            "name": "account_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Account Id"
+            }
+          },
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/InvestmentAccountUpdate"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/InvestmentAccountOut"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/investments/{account_id}/yield": {
+      "post": {
+        "tags": [
+          "investments"
+        ],
+        "summary": "Register Yield",
+        "operationId": "register_yield_investments__account_id__yield_post",
+        "parameters": [
+          {
+            "name": "account_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Account Id"
+            }
+          },
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RegisterYieldRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/InvestmentAccountOut"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/investments/{account_id}/rentability": {
+      "get": {
+        "tags": [
+          "investments"
+        ],
+        "summary": "Rentability",
+        "operationId": "rentability_investments__account_id__rentability_get",
+        "parameters": [
+          {
+            "name": "account_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Account Id"
+            }
+          },
+          {
+            "name": "start",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "format": "date"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Start"
+            }
+          },
+          {
+            "name": "end",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "format": "date"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "End"
+            }
+          },
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RentabilityOut"
                 }
               }
             }
@@ -4957,7 +6386,6 @@
               "application/json": {
                 "schema": {
                   "type": "object",
-                  "additionalProperties": true,
                   "title": "Response Public Accept Public Proposals  Slug  Accept Post"
                 }
               }
@@ -5058,7 +6486,7 @@
                 "schema": {
                   "type": "array",
                   "items": {
-                    "$ref": "#/components/schemas/TemplateOut"
+                    "$ref": "#/components/schemas/app__modules__contracts__schemas__TemplateOut"
                   },
                   "title": "Response List Templates Contracts Templates Get"
                 }
@@ -5106,7 +6534,7 @@
           "content": {
             "application/json": {
               "schema": {
-                "$ref": "#/components/schemas/TemplateCreate"
+                "$ref": "#/components/schemas/app__modules__contracts__schemas__TemplateCreate"
               }
             }
           }
@@ -5117,7 +6545,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/TemplateOut"
+                  "$ref": "#/components/schemas/app__modules__contracts__schemas__TemplateOut"
                 }
               }
             }
@@ -5595,7 +7023,6 @@
               "application/json": {
                 "schema": {
                   "type": "object",
-                  "additionalProperties": true,
                   "title": "Response Public Sign Public Contracts  Slug  Sign Post"
                 }
               }
@@ -6103,7 +7530,6 @@
               "application/json": {
                 "schema": {
                   "type": "object",
-                  "additionalProperties": true,
                   "title": "Response Get Skill Juridico Skills  Skill  Get"
                 }
               }
@@ -7872,6 +9298,753 @@
         }
       }
     },
+    "/whatsapp-templates": {
+      "get": {
+        "tags": [
+          "whatsapp-templates"
+        ],
+        "summary": "List Templates",
+        "operationId": "list_templates_whatsapp_templates_get",
+        "parameters": [
+          {
+            "name": "status",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Status"
+            }
+          },
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/app__modules__whatsapp_templates__schemas__TemplateOut"
+                  },
+                  "title": "Response List Templates Whatsapp Templates Get"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "whatsapp-templates"
+        ],
+        "summary": "Create Template",
+        "operationId": "create_template_whatsapp_templates_post",
+        "parameters": [
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/app__modules__whatsapp_templates__schemas__TemplateCreate"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/app__modules__whatsapp_templates__schemas__TemplateOut"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/whatsapp-templates/{template_id}/sync": {
+      "post": {
+        "tags": [
+          "whatsapp-templates"
+        ],
+        "summary": "Sync Template",
+        "operationId": "sync_template_whatsapp_templates__template_id__sync_post",
+        "parameters": [
+          {
+            "name": "template_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Template Id"
+            }
+          },
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/app__modules__whatsapp_templates__schemas__TemplateOut"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/whatsapp-templates/{template_id}": {
+      "delete": {
+        "tags": [
+          "whatsapp-templates"
+        ],
+        "summary": "Delete Template",
+        "operationId": "delete_template_whatsapp_templates__template_id__delete",
+        "parameters": [
+          {
+            "name": "template_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Template Id"
+            }
+          },
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/whatsapp-conversations": {
+      "get": {
+        "tags": [
+          "whatsapp-inbox"
+        ],
+        "summary": "List Conversations",
+        "operationId": "list_conversations_whatsapp_conversations_get",
+        "parameters": [
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "type": "object"
+                  },
+                  "title": "Response List Conversations Whatsapp Conversations Get"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/whatsapp-conversations/{client_id}/timeline": {
+      "get": {
+        "tags": [
+          "whatsapp-inbox"
+        ],
+        "summary": "Get Timeline",
+        "operationId": "get_timeline_whatsapp_conversations__client_id__timeline_get",
+        "parameters": [
+          {
+            "name": "client_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Client Id"
+            }
+          },
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "type": "object"
+                  },
+                  "title": "Response Get Timeline Whatsapp Conversations  Client Id  Timeline Get"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/whatsapp-conversations/{client_id}/window": {
+      "get": {
+        "tags": [
+          "whatsapp-inbox"
+        ],
+        "summary": "Get Window",
+        "operationId": "get_window_whatsapp_conversations__client_id__window_get",
+        "parameters": [
+          {
+            "name": "client_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Client Id"
+            }
+          },
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "title": "Response Get Window Whatsapp Conversations  Client Id  Window Get"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/whatsapp-conversations/{client_id}/read": {
+      "post": {
+        "tags": [
+          "whatsapp-inbox"
+        ],
+        "summary": "Mark Read",
+        "operationId": "mark_read_whatsapp_conversations__client_id__read_post",
+        "parameters": [
+          {
+            "name": "client_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Client Id"
+            }
+          },
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/whatsapp-conversations/{client_id}/messages/text": {
+      "post": {
+        "tags": [
+          "whatsapp-inbox"
+        ],
+        "summary": "Send Text Reply",
+        "operationId": "send_text_reply_whatsapp_conversations__client_id__messages_text_post",
+        "parameters": [
+          {
+            "name": "client_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Client Id"
+            }
+          },
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SendTextRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "title": "Response Send Text Reply Whatsapp Conversations  Client Id  Messages Text Post"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/whatsapp-conversations/{client_id}/messages/media": {
+      "post": {
+        "tags": [
+          "whatsapp-inbox"
+        ],
+        "summary": "Send Media Reply",
+        "operationId": "send_media_reply_whatsapp_conversations__client_id__messages_media_post",
+        "parameters": [
+          {
+            "name": "client_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Client Id"
+            }
+          },
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "multipart/form-data": {
+              "schema": {
+                "$ref": "#/components/schemas/Body_send_media_reply_whatsapp_conversations__client_id__messages_media_post"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "title": "Response Send Media Reply Whatsapp Conversations  Client Id  Messages Media Post"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/whatsapp-conversations/{client_id}/messages/template": {
+      "post": {
+        "tags": [
+          "whatsapp-inbox"
+        ],
+        "summary": "Send Template Reply",
+        "operationId": "send_template_reply_whatsapp_conversations__client_id__messages_template_post",
+        "parameters": [
+          {
+            "name": "client_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Client Id"
+            }
+          },
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SendTemplateRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "title": "Response Send Template Reply Whatsapp Conversations  Client Id  Messages Template Post"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/public/whatsapp/webhook": {
+      "get": {
+        "tags": [
+          "whatsapp-inbox-public"
+        ],
+        "summary": "Verify Webhook",
+        "description": "Handshake de verificação chamado 1x pela Meta quando o tenant configura o webhook no\npainel dele. Uso LEGÍTIMO de `get_db` (sem tenant): resolve `public_whatsapp_accounts`,\ntabela GLOBAL sem RLS, pelo verify_token — não toca tabela de negócio.",
+        "operationId": "verify_webhook_public_whatsapp_webhook_get",
+        "parameters": [
+          {
+            "name": "hub.mode",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Hub.Mode"
+            }
+          },
+          {
+            "name": "hub.verify_token",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Hub.Verify Token"
+            }
+          },
+          {
+            "name": "hub.challenge",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Hub.Challenge"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "whatsapp-inbox-public"
+        ],
+        "summary": "Receive Webhook",
+        "description": "Recebe o evento da Meta. Descobre o tenant pelo `phone_number_id` do payload ANTES de\nvalidar a assinatura (a assinatura usa o `app_secret` DAQUELE tenant, então precisamos saber\nquem é primeiro). Se a assinatura não bater, rejeita sem processar nada.",
+        "operationId": "receive_webhook_public_whatsapp_webhook_post",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "title": "Response Receive Webhook Public Whatsapp Webhook Post"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/pages": {
       "get": {
         "tags": [
@@ -8349,7 +10522,6 @@
               "application/json": {
                 "schema": {
                   "type": "object",
-                  "additionalProperties": true,
                   "title": "Response Public Submit Public Pages  Slug  Submit Post"
                 }
               }
@@ -8603,6 +10775,541 @@
         }
       }
     },
+    "/attachments/public-images": {
+      "post": {
+        "tags": [
+          "attachments"
+        ],
+        "summary": "Upload Public Image",
+        "description": "Upload autenticado de imagem intencionalmente pública (logo/foto). A leitura depois é\npública (ver `serve_public_image`). Devolve o caminho da rota de leitura no backend; o\nfrontend prefixa o proxy `/api` para obter a URL renderável em `<img src>`.",
+        "operationId": "upload_public_image_attachments_public_images_post",
+        "parameters": [
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "multipart/form-data": {
+              "schema": {
+                "$ref": "#/components/schemas/Body_upload_public_image_attachments_public_images_post"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PublicImageOut"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/public-images/{image_id}": {
+      "get": {
+        "tags": [
+          "attachments-public"
+        ],
+        "summary": "Serve Public Image",
+        "description": "Uso LEGÍTIMO de `get_db` (sem tenant): rota pública lê `public_images`, tabela GLOBAL\nsem RLS. NÃO toca `users` nem tabelas de negócio por tenant — seguro por design. Serve os\nbytes inline (sem `Content-Disposition: attachment`) para renderizar como `<img>`.",
+        "operationId": "serve_public_image_public_images__image_id__get",
+        "parameters": [
+          {
+            "name": "image_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Image Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/integrations/google/status": {
+      "get": {
+        "tags": [
+          "google-calendar"
+        ],
+        "summary": "Status",
+        "operationId": "status_integrations_google_status_get",
+        "parameters": [
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GoogleStatusOut"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/integrations/google/connect": {
+      "get": {
+        "tags": [
+          "google-calendar"
+        ],
+        "summary": "Connect",
+        "operationId": "connect_integrations_google_connect_get",
+        "parameters": [
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GoogleConnectOut"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/integrations/google/disconnect": {
+      "post": {
+        "tags": [
+          "google-calendar"
+        ],
+        "summary": "Disconnect",
+        "operationId": "disconnect_integrations_google_disconnect_post",
+        "parameters": [
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "title": "Response Disconnect Integrations Google Disconnect Post"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/integrations/google/callback": {
+      "get": {
+        "tags": [
+          "google-calendar-public"
+        ],
+        "summary": "Callback",
+        "description": "O Google redireciona para cá após o consent. Valida o `state`, troca o `code` por tokens\ne persiste a credencial no tenant. Sempre redireciona de volta ao frontend.",
+        "operationId": "callback_integrations_google_callback_get",
+        "parameters": [
+          {
+            "name": "code",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Code"
+            }
+          },
+          {
+            "name": "state",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "State"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/integrations/leads/keys": {
+      "get": {
+        "tags": [
+          "integrations-leads"
+        ],
+        "summary": "List Keys",
+        "operationId": "list_keys_integrations_leads_keys_get",
+        "parameters": [
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/IntegrationKeyOut"
+                  },
+                  "title": "Response List Keys Integrations Leads Keys Get"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "integrations-leads"
+        ],
+        "summary": "Create Key",
+        "operationId": "create_key_integrations_leads_keys_post",
+        "parameters": [
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/IntegrationKeyCreate"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/IntegrationKeyCreated"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/integrations/leads/keys/{key_id}/revoke": {
+      "post": {
+        "tags": [
+          "integrations-leads"
+        ],
+        "summary": "Revoke Key",
+        "operationId": "revoke_key_integrations_leads_keys__key_id__revoke_post",
+        "parameters": [
+          {
+            "name": "key_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Key Id"
+            }
+          },
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/IntegrationKeyOut"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/public/leads/{key}": {
+      "post": {
+        "tags": [
+          "integrations-leads-public"
+        ],
+        "summary": "Capture Lead",
+        "description": "Uso LEGÍTIMO de `get_db` (sem tenant): resolve `public_integration_keys`, snapshot\nGLOBAL sem RLS, pelo hash da chave. Nunca toca tabela de negócio por aqui — a escrita\nreal acontece dentro de `session_factory(tenant_id)` (ver service.capture_lead).",
+        "operationId": "capture_lead_public_leads__key__post",
+        "parameters": [
+          {
+            "name": "key",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Key"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/LeadCapture"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "title": "Response Capture Lead Public Leads  Key  Post"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/health": {
       "get": {
         "tags": [
@@ -8640,7 +11347,14 @@
             "$ref": "#/components/schemas/UserOut"
           },
           "temp_password": {
-            "type": "string",
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
             "title": "Temp Password"
           },
           "delivery": {
@@ -8656,7 +11370,6 @@
         "required": [
           "tenant",
           "owner",
-          "temp_password",
           "delivery",
           "delivery_status"
         ],
@@ -8857,6 +11570,25 @@
         ],
         "title": "Body_extract_juridico_extract_post"
       },
+      "Body_send_media_reply_whatsapp_conversations__client_id__messages_media_post": {
+        "properties": {
+          "caption": {
+            "type": "string",
+            "title": "Caption",
+            "default": ""
+          },
+          "file": {
+            "type": "string",
+            "format": "binary",
+            "title": "File"
+          }
+        },
+        "type": "object",
+        "required": [
+          "file"
+        ],
+        "title": "Body_send_media_reply_whatsapp_conversations__client_id__messages_media_post"
+      },
       "Body_upload_attachment_attachments_post": {
         "properties": {
           "owner_type": {
@@ -8885,6 +11617,20 @@
           "file"
         ],
         "title": "Body_upload_attachment_attachments_post"
+      },
+      "Body_upload_public_image_attachments_public_images_post": {
+        "properties": {
+          "file": {
+            "type": "string",
+            "format": "binary",
+            "title": "File"
+          }
+        },
+        "type": "object",
+        "required": [
+          "file"
+        ],
+        "title": "Body_upload_public_image_attachments_public_images_post"
       },
       "CarouselCreate": {
         "properties": {
@@ -9254,6 +12000,51 @@
             "format": "date",
             "title": "Due Date"
           },
+          "competence_date": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Competence Date"
+          },
+          "chart_account_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Chart Account Id"
+          },
+          "contract_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Contract Id"
+          },
+          "cost_center_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Cost Center Id"
+          },
           "recurrence": {
             "type": "string",
             "title": "Recurrence",
@@ -9329,6 +12120,63 @@
             "format": "date",
             "title": "Due Date"
           },
+          "competence_date": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Competence Date"
+          },
+          "paid_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Paid At"
+          },
+          "chart_account_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Chart Account Id"
+          },
+          "contract_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Contract Id"
+          },
+          "cost_center_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Cost Center Id"
+          },
           "status": {
             "type": "string",
             "title": "Status"
@@ -9383,6 +12231,28 @@
             "type": "string",
             "format": "date-time",
             "title": "Created At"
+          },
+          "gateway_provider": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Gateway Provider"
+          },
+          "gateway_status_raw": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Gateway Status Raw"
           }
         },
         "type": "object",
@@ -9396,6 +12266,11 @@
           "method",
           "amount_cents",
           "due_date",
+          "competence_date",
+          "paid_at",
+          "chart_account_id",
+          "contract_id",
+          "cost_center_id",
           "status",
           "is_overdue",
           "protested_at",
@@ -9443,6 +12318,51 @@
               }
             ],
             "title": "Due Date"
+          },
+          "competence_date": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Competence Date"
+          },
+          "chart_account_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Chart Account Id"
+          },
+          "contract_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Contract Id"
+          },
+          "cost_center_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Cost Center Id"
           }
         },
         "type": "object",
@@ -9480,6 +12400,109 @@
           "overdue_count"
         ],
         "title": "ChargesSummary"
+      },
+      "ChartAccountCreate": {
+        "properties": {
+          "grupo_dre": {
+            "type": "string",
+            "title": "Grupo Dre"
+          },
+          "categoria": {
+            "type": "string",
+            "maxLength": 80,
+            "minLength": 1,
+            "title": "Categoria"
+          }
+        },
+        "type": "object",
+        "required": [
+          "grupo_dre",
+          "categoria"
+        ],
+        "title": "ChartAccountCreate"
+      },
+      "ChartAccountOut": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "title": "Id"
+          },
+          "grupo_dre": {
+            "type": "string",
+            "title": "Grupo Dre"
+          },
+          "categoria": {
+            "type": "string",
+            "title": "Categoria"
+          },
+          "archived_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Archived At"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Created At"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "grupo_dre",
+          "categoria",
+          "archived_at",
+          "created_at"
+        ],
+        "title": "ChartAccountOut"
+      },
+      "ChartAccountUpdate": {
+        "properties": {
+          "categoria": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 80,
+                "minLength": 1
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Categoria"
+          }
+        },
+        "type": "object",
+        "title": "ChartAccountUpdate"
+      },
+      "ChartGroupOut": {
+        "properties": {
+          "grupo_dre": {
+            "type": "string",
+            "title": "Grupo Dre"
+          },
+          "categorias": {
+            "items": {
+              "$ref": "#/components/schemas/ChartAccountOut"
+            },
+            "type": "array",
+            "title": "Categorias"
+          }
+        },
+        "type": "object",
+        "required": [
+          "grupo_dre",
+          "categorias"
+        ],
+        "title": "ChartGroupOut",
+        "description": "Um grupo DRE com suas categorias (nó da hierarquia grupo → categorias — AC3)."
       },
       "Clause": {
         "properties": {
@@ -9992,6 +13015,112 @@
         ],
         "title": "ContractCreate"
       },
+      "ContractDreOut": {
+        "properties": {
+          "contract_id": {
+            "type": "string",
+            "title": "Contract Id"
+          },
+          "start": {
+            "type": "string",
+            "format": "date",
+            "title": "Start"
+          },
+          "end": {
+            "type": "string",
+            "format": "date",
+            "title": "End"
+          },
+          "receita": {
+            "$ref": "#/components/schemas/DreGroupOut"
+          },
+          "custo_direto": {
+            "$ref": "#/components/schemas/DreGroupOut"
+          },
+          "receita_cents": {
+            "type": "integer",
+            "title": "Receita Cents"
+          },
+          "custo_direto_cents": {
+            "type": "integer",
+            "title": "Custo Direto Cents"
+          },
+          "margem_contribuicao_cents": {
+            "type": "integer",
+            "title": "Margem Contribuicao Cents"
+          },
+          "margem_contribuicao_pct": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Margem Contribuicao Pct"
+          },
+          "outros_resultado_cents": {
+            "type": "integer",
+            "title": "Outros Resultado Cents"
+          },
+          "fixed_costs_allocated_cents": {
+            "type": "integer",
+            "title": "Fixed Costs Allocated Cents"
+          },
+          "overhead_allocated_cents": {
+            "type": "integer",
+            "title": "Overhead Allocated Cents"
+          },
+          "resultado_cents": {
+            "type": "integer",
+            "title": "Resultado Cents"
+          },
+          "break_even_cents": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Break Even Cents"
+          },
+          "break_even_reachable": {
+            "type": "boolean",
+            "title": "Break Even Reachable"
+          },
+          "notes": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Notes"
+          }
+        },
+        "type": "object",
+        "required": [
+          "contract_id",
+          "start",
+          "end",
+          "receita",
+          "custo_direto",
+          "receita_cents",
+          "custo_direto_cents",
+          "margem_contribuicao_cents",
+          "margem_contribuicao_pct",
+          "outros_resultado_cents",
+          "fixed_costs_allocated_cents",
+          "overhead_allocated_cents",
+          "resultado_cents",
+          "break_even_cents",
+          "break_even_reachable",
+          "notes"
+        ],
+        "title": "ContractDreOut",
+        "description": "DRE de margem de contribuição de UM contrato (Story 5.4), em regime de competência.\n\nSinal canônico (herdado da 5.3): totais já ASSINADOS (Receber=+, Pagar=−). `custo_direto_cents`\nnormalmente é NEGATIVO; a margem é a SOMA `receita_cents + custo_direto_cents` (não subtração).\n`margem_contribuicao_pct` é a RAZÃO MC/Receita (fração, ex.: 0.6 = 60%; multiplique por 100 para\nexibir %), ou None quando não há receita (proteção contra divisão por zero). `break_even_cents`\né a receita necessária para empatar os custos fixos; None + `break_even_reachable=false` quando\na margem não-positiva impede o break-even (estado explícito, nunca erro 500).\n`overhead_allocated_cents` só é != 0 quando o rateio é solicitado (`include_overhead=true`) —\ncalculado na leitura, JAMAIS gravado no lançamento (AC3/IV2).\n\n`outros_resultado_cents` é a soma assinada dos lançamentos do contrato em grupos de resultado\nALÉM da margem (Despesa Fixa/Tributos/Financeiro): NÃO entra na margem de contribuição, mas\nCOMPÕE o resultado (`resultado = margem + outros_resultado − custos fixos − overhead`).\nINVESTIMENTO e lançamentos sem categoria ficam fora do resultado (sinalizados em `notes`)."
+      },
       "ContractOut": {
         "properties": {
           "id": {
@@ -10061,6 +13190,17 @@
             ],
             "title": "Public Slug"
           },
+          "fixed_costs_allocated_cents": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Fixed Costs Allocated Cents"
+          },
           "signer_name": {
             "type": "string",
             "title": "Signer Name"
@@ -10098,6 +13238,7 @@
           "clauses",
           "status",
           "public_slug",
+          "fixed_costs_allocated_cents",
           "signer_name",
           "signer_document",
           "signed_at",
@@ -10144,6 +13285,18 @@
               }
             ],
             "title": "Clauses"
+          },
+          "fixed_costs_allocated_cents": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "minimum": 0.0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Fixed Costs Allocated Cents"
           }
         },
         "type": "object",
@@ -10171,6 +13324,190 @@
           "signed_count"
         ],
         "title": "ContractsSummary"
+      },
+      "CostCenterBucketOut": {
+        "properties": {
+          "cost_center_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Cost Center Id"
+          },
+          "name": {
+            "type": "string",
+            "title": "Name"
+          },
+          "kind": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Kind"
+          },
+          "receita_cents": {
+            "type": "integer",
+            "title": "Receita Cents"
+          },
+          "resultado_cents": {
+            "type": "integer",
+            "title": "Resultado Cents"
+          },
+          "lancamentos": {
+            "type": "integer",
+            "title": "Lancamentos"
+          }
+        },
+        "type": "object",
+        "required": [
+          "cost_center_id",
+          "name",
+          "kind",
+          "receita_cents",
+          "resultado_cents",
+          "lancamentos"
+        ],
+        "title": "CostCenterBucketOut",
+        "description": "Resultado do período agregado por um centro de custo (2ª dimensão). `cost_center_id=None` e\n`name='Não atribuído'` é o bucket sintético dos lançamentos sem centro de custo (AC3).\n`resultado_cents` usa a MESMA fórmula/exclusões da DRE (Story 5.3)."
+      },
+      "CostCenterCreate": {
+        "properties": {
+          "name": {
+            "type": "string",
+            "maxLength": 120,
+            "minLength": 1,
+            "title": "Name"
+          },
+          "kind": {
+            "type": "string",
+            "maxLength": 16,
+            "title": "Kind",
+            "default": "outro"
+          }
+        },
+        "type": "object",
+        "required": [
+          "name"
+        ],
+        "title": "CostCenterCreate"
+      },
+      "CostCenterOut": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "title": "Id"
+          },
+          "name": {
+            "type": "string",
+            "title": "Name"
+          },
+          "kind": {
+            "type": "string",
+            "title": "Kind"
+          },
+          "archived_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Archived At"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Created At"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "name",
+          "kind",
+          "archived_at",
+          "created_at"
+        ],
+        "title": "CostCenterOut"
+      },
+      "CostCenterReportOut": {
+        "properties": {
+          "start": {
+            "type": "string",
+            "format": "date",
+            "title": "Start"
+          },
+          "end": {
+            "type": "string",
+            "format": "date",
+            "title": "End"
+          },
+          "buckets": {
+            "items": {
+              "$ref": "#/components/schemas/CostCenterBucketOut"
+            },
+            "type": "array",
+            "title": "Buckets"
+          },
+          "notes": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Notes"
+          }
+        },
+        "type": "object",
+        "required": [
+          "start",
+          "end",
+          "buckets",
+          "notes"
+        ],
+        "title": "CostCenterReportOut",
+        "description": "Comparação lado a lado do resultado por centro de custo no período (Story 5.5, AC2).\n\n`buckets` traz um item por centro de custo do tenant (mesmo os sem movimento, para comparar\nsócios/áreas) mais o bucket 'Não atribuído' (quando há lançamentos sem a 2ª dimensão). `notes`\ndocumenta o regime e as exclusões — não silenciosamente."
+      },
+      "CostCenterUpdate": {
+        "properties": {
+          "name": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 120,
+                "minLength": 1
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Name"
+          },
+          "kind": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 16
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Kind"
+          }
+        },
+        "type": "object",
+        "title": "CostCenterUpdate"
       },
       "CouponCreate": {
         "properties": {
@@ -10537,6 +13874,45 @@
         "title": "CustomerOut",
         "description": "Cliente comprador (aluno/matrícula) — ainda não é um User de login, vive em Enrollment."
       },
+      "DiagnosticsOut": {
+        "properties": {
+          "start": {
+            "type": "string",
+            "format": "date",
+            "title": "Start"
+          },
+          "end": {
+            "type": "string",
+            "format": "date",
+            "title": "End"
+          },
+          "signals": {
+            "items": {
+              "$ref": "#/components/schemas/SignalOut"
+            },
+            "type": "array",
+            "title": "Signals"
+          },
+          "narrative": {
+            "type": "string",
+            "title": "Narrative"
+          },
+          "narrative_source": {
+            "type": "string",
+            "title": "Narrative Source"
+          }
+        },
+        "type": "object",
+        "required": [
+          "start",
+          "end",
+          "signals",
+          "narrative",
+          "narrative_source"
+        ],
+        "title": "DiagnosticsOut",
+        "description": "Resposta do diagnóstico (Story 5.8). `signals` é o resultado DETERMINÍSTICO do motor —\nexiste e está correto INDEPENDENTEMENTE da IA (AC2/IV3). `narrative` é a leitura em linguagem\nnatural: quando a IA está disponível, é gerada por ela (após anonimização — Regra de Ouro nº 2);\nsenão, é um fallback por template a partir dos MESMOS sinais. `narrative_source` diz qual foi\n('ai' | 'template') — a UI deixa claro ao usuário que os números vêm primeiro."
+      },
       "DocumentCreate": {
         "properties": {
           "skill": {
@@ -10544,7 +13920,6 @@
             "title": "Skill"
           },
           "answers": {
-            "additionalProperties": true,
             "type": "object",
             "title": "Answers",
             "default": {}
@@ -10625,7 +14000,6 @@
             "title": "Metadata Raw"
           },
           "answers": {
-            "additionalProperties": true,
             "type": "object",
             "title": "Answers"
           },
@@ -10726,6 +14100,101 @@
           "created_at"
         ],
         "title": "DocumentSummary"
+      },
+      "DreCategoryOut": {
+        "properties": {
+          "categoria": {
+            "type": "string",
+            "title": "Categoria"
+          },
+          "amount_cents": {
+            "type": "integer",
+            "title": "Amount Cents"
+          },
+          "count": {
+            "type": "integer",
+            "title": "Count"
+          }
+        },
+        "type": "object",
+        "required": [
+          "categoria",
+          "amount_cents",
+          "count"
+        ],
+        "title": "DreCategoryOut"
+      },
+      "DreGroupOut": {
+        "properties": {
+          "grupo_dre": {
+            "type": "string",
+            "title": "Grupo Dre"
+          },
+          "total_cents": {
+            "type": "integer",
+            "title": "Total Cents"
+          },
+          "categorias": {
+            "items": {
+              "$ref": "#/components/schemas/DreCategoryOut"
+            },
+            "type": "array",
+            "title": "Categorias"
+          }
+        },
+        "type": "object",
+        "required": [
+          "grupo_dre",
+          "total_cents",
+          "categorias"
+        ],
+        "title": "DreGroupOut"
+      },
+      "DreReportOut": {
+        "properties": {
+          "start": {
+            "type": "string",
+            "format": "date",
+            "title": "Start"
+          },
+          "end": {
+            "type": "string",
+            "format": "date",
+            "title": "End"
+          },
+          "groups": {
+            "items": {
+              "$ref": "#/components/schemas/DreGroupOut"
+            },
+            "type": "array",
+            "title": "Groups"
+          },
+          "sem_categoria": {
+            "$ref": "#/components/schemas/DreGroupOut"
+          },
+          "resultado_cents": {
+            "type": "integer",
+            "title": "Resultado Cents"
+          },
+          "notes": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Notes"
+          }
+        },
+        "type": "object",
+        "required": [
+          "start",
+          "end",
+          "groups",
+          "sem_categoria",
+          "resultado_cents",
+          "notes"
+        ],
+        "title": "DreReportOut",
+        "description": "DRE hierárquica do período (grupo DRE → categoria), em regime de competência.\n\n`groups` traz sempre os 6 grupos na ordem canônica (mesmo vazios). `sem_categoria` é o bucket\ndos lançamentos não classificados (fora do `resultado_cents`). `notes` documenta as exclusões\n(INVESTIMENTO / sem categoria) e o regime — não silenciosamente."
       },
       "DunningResult": {
         "properties": {
@@ -11033,6 +14502,17 @@
             ],
             "title": "External Ref"
           },
+          "google_event_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Google Event Id"
+          },
           "client_name": {
             "anyOf": [
               {
@@ -11245,7 +14725,6 @@
           },
           "nodes": {
             "items": {
-              "additionalProperties": true,
               "type": "object"
             },
             "type": "array",
@@ -11253,7 +14732,6 @@
           },
           "edges": {
             "items": {
-              "additionalProperties": true,
               "type": "object"
             },
             "type": "array",
@@ -11282,7 +14760,6 @@
           },
           "nodes": {
             "items": {
-              "additionalProperties": true,
               "type": "object"
             },
             "type": "array",
@@ -11290,7 +14767,6 @@
           },
           "edges": {
             "items": {
-              "additionalProperties": true,
               "type": "object"
             },
             "type": "array",
@@ -11532,7 +15008,6 @@
             "anyOf": [
               {
                 "items": {
-                  "additionalProperties": true,
                   "type": "object"
                 },
                 "type": "array"
@@ -11547,7 +15022,6 @@
             "anyOf": [
               {
                 "items": {
-                  "additionalProperties": true,
                   "type": "object"
                 },
                 "type": "array"
@@ -11637,6 +15111,50 @@
         ],
         "title": "GenerateResult"
       },
+      "GoogleConnectOut": {
+        "properties": {
+          "url": {
+            "type": "string",
+            "title": "Url"
+          }
+        },
+        "type": "object",
+        "required": [
+          "url"
+        ],
+        "title": "GoogleConnectOut",
+        "description": "URL de autorização do Google para o frontend redirecionar o usuário."
+      },
+      "GoogleStatusOut": {
+        "properties": {
+          "configured": {
+            "type": "boolean",
+            "title": "Configured"
+          },
+          "connected": {
+            "type": "boolean",
+            "title": "Connected"
+          },
+          "email": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Email"
+          }
+        },
+        "type": "object",
+        "required": [
+          "configured",
+          "connected"
+        ],
+        "title": "GoogleStatusOut",
+        "description": "Estado da integração para o frontend decidir a UI (botões conectar/desconectar)."
+      },
       "HTTPValidationError": {
         "properties": {
           "detail": {
@@ -11649,6 +15167,255 @@
         },
         "type": "object",
         "title": "HTTPValidationError"
+      },
+      "IntegrationKeyCreate": {
+        "properties": {
+          "label": {
+            "type": "string",
+            "maxLength": 255,
+            "minLength": 1,
+            "title": "Label"
+          }
+        },
+        "type": "object",
+        "required": [
+          "label"
+        ],
+        "title": "IntegrationKeyCreate"
+      },
+      "IntegrationKeyCreated": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "title": "Id"
+          },
+          "label": {
+            "type": "string",
+            "title": "Label"
+          },
+          "key_prefix": {
+            "type": "string",
+            "title": "Key Prefix"
+          },
+          "revoked_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Revoked At"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Created At"
+          },
+          "raw_key": {
+            "type": "string",
+            "title": "Raw Key"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "label",
+          "key_prefix",
+          "revoked_at",
+          "created_at",
+          "raw_key"
+        ],
+        "title": "IntegrationKeyCreated",
+        "description": "Retorno da criação: única vez em que a chave crua fica visível."
+      },
+      "IntegrationKeyOut": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "title": "Id"
+          },
+          "label": {
+            "type": "string",
+            "title": "Label"
+          },
+          "key_prefix": {
+            "type": "string",
+            "title": "Key Prefix"
+          },
+          "revoked_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Revoked At"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Created At"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "label",
+          "key_prefix",
+          "revoked_at",
+          "created_at"
+        ],
+        "title": "IntegrationKeyOut"
+      },
+      "InvestmentAccountCreate": {
+        "properties": {
+          "name": {
+            "type": "string",
+            "maxLength": 120,
+            "minLength": 1,
+            "title": "Name"
+          },
+          "kind": {
+            "type": "string",
+            "maxLength": 24,
+            "title": "Kind",
+            "default": ""
+          },
+          "index_rate_label": {
+            "type": "string",
+            "maxLength": 64,
+            "title": "Index Rate Label",
+            "default": ""
+          },
+          "principal_cents": {
+            "type": "integer",
+            "minimum": 0.0,
+            "title": "Principal Cents",
+            "default": 0
+          },
+          "opened_at": {
+            "type": "string",
+            "format": "date",
+            "title": "Opened At"
+          }
+        },
+        "type": "object",
+        "required": [
+          "name",
+          "opened_at"
+        ],
+        "title": "InvestmentAccountCreate"
+      },
+      "InvestmentAccountOut": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "title": "Id"
+          },
+          "name": {
+            "type": "string",
+            "title": "Name"
+          },
+          "kind": {
+            "type": "string",
+            "title": "Kind"
+          },
+          "index_rate_label": {
+            "type": "string",
+            "title": "Index Rate Label"
+          },
+          "principal_cents": {
+            "type": "integer",
+            "title": "Principal Cents"
+          },
+          "accrued_yield_cents": {
+            "type": "integer",
+            "title": "Accrued Yield Cents"
+          },
+          "opened_at": {
+            "type": "string",
+            "format": "date",
+            "title": "Opened At"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Created At"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "name",
+          "kind",
+          "index_rate_label",
+          "principal_cents",
+          "accrued_yield_cents",
+          "opened_at",
+          "created_at"
+        ],
+        "title": "InvestmentAccountOut"
+      },
+      "InvestmentAccountUpdate": {
+        "properties": {
+          "name": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 120,
+                "minLength": 1
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Name"
+          },
+          "kind": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 24
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Kind"
+          },
+          "index_rate_label": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 64
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Index Rate Label"
+          },
+          "principal_cents": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "minimum": 0.0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Principal Cents"
+          }
+        },
+        "type": "object",
+        "title": "InvestmentAccountUpdate"
       },
       "ItemCreate": {
         "properties": {
@@ -11876,6 +15643,71 @@
         "type": "object",
         "title": "ItemUpdate"
       },
+      "LeadCapture": {
+        "properties": {
+          "name": {
+            "type": "string",
+            "maxLength": 255,
+            "minLength": 1,
+            "title": "Name"
+          },
+          "email": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "email"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Email"
+          },
+          "phone": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 32
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Phone"
+          },
+          "notes": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 2000
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Notes"
+          },
+          "fields": {
+            "anyOf": [
+              {
+                "additionalProperties": {
+                  "type": "string"
+                },
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Fields"
+          }
+        },
+        "type": "object",
+        "required": [
+          "name"
+        ],
+        "title": "LeadCapture"
+      },
       "LeadSubmit": {
         "properties": {
           "name": {
@@ -11901,6 +15733,20 @@
             "maxLength": 32,
             "title": "Phone",
             "default": ""
+          },
+          "fields": {
+            "anyOf": [
+              {
+                "additionalProperties": {
+                  "type": "string"
+                },
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Fields"
           }
         },
         "type": "object",
@@ -12097,7 +15943,6 @@
             "anyOf": [
               {
                 "items": {
-                  "additionalProperties": true,
                   "type": "object"
                 },
                 "type": "array"
@@ -12135,7 +15980,6 @@
           },
           "blocks": {
             "items": {
-              "additionalProperties": true,
               "type": "object"
             },
             "type": "array",
@@ -12270,7 +16114,6 @@
             "anyOf": [
               {
                 "items": {
-                  "additionalProperties": true,
                   "type": "object"
                 },
                 "type": "array"
@@ -12384,6 +16227,51 @@
             "format": "date",
             "title": "Due Date"
           },
+          "competence_date": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Competence Date"
+          },
+          "chart_account_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Chart Account Id"
+          },
+          "contract_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Contract Id"
+          },
+          "cost_center_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Cost Center Id"
+          },
           "recurrence": {
             "type": "string",
             "title": "Recurrence",
@@ -12445,6 +16333,51 @@
             "type": "string",
             "format": "date",
             "title": "Due Date"
+          },
+          "competence_date": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Competence Date"
+          },
+          "chart_account_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Chart Account Id"
+          },
+          "contract_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Contract Id"
+          },
+          "cost_center_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Cost Center Id"
           },
           "status": {
             "type": "string",
@@ -12508,6 +16441,10 @@
           "supplier",
           "amount_cents",
           "due_date",
+          "competence_date",
+          "chart_account_id",
+          "contract_id",
+          "cost_center_id",
           "status",
           "is_overdue",
           "paid_at",
@@ -12579,6 +16516,51 @@
             ],
             "title": "Due Date"
           },
+          "competence_date": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Competence Date"
+          },
+          "chart_account_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Chart Account Id"
+          },
+          "contract_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Contract Id"
+          },
+          "cost_center_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Cost Center Id"
+          },
           "recurrence": {
             "anyOf": [
               {
@@ -12649,6 +16631,100 @@
           "paid_month_cents"
         ],
         "title": "PayablesSummary"
+      },
+      "PaymentQueueOut": {
+        "properties": {
+          "atrasados": {
+            "items": {
+              "$ref": "#/components/schemas/PayableOut"
+            },
+            "type": "array",
+            "title": "Atrasados"
+          },
+          "hoje": {
+            "items": {
+              "$ref": "#/components/schemas/PayableOut"
+            },
+            "type": "array",
+            "title": "Hoje"
+          },
+          "proximos_7_dias": {
+            "items": {
+              "$ref": "#/components/schemas/PayableOut"
+            },
+            "type": "array",
+            "title": "Proximos 7 Dias"
+          },
+          "proximos_30_dias": {
+            "items": {
+              "$ref": "#/components/schemas/PayableOut"
+            },
+            "type": "array",
+            "title": "Proximos 30 Dias"
+          },
+          "summary": {
+            "$ref": "#/components/schemas/PaymentQueueSummary"
+          }
+        },
+        "type": "object",
+        "required": [
+          "atrasados",
+          "hoje",
+          "proximos_7_dias",
+          "proximos_30_dias",
+          "summary"
+        ],
+        "title": "PaymentQueueOut",
+        "description": "Fila agrupada em 4 baldes de PayableOut (reaproveitado) + o resumo por balde."
+      },
+      "PaymentQueueSummary": {
+        "properties": {
+          "atrasados_count": {
+            "type": "integer",
+            "title": "Atrasados Count"
+          },
+          "atrasados_cents": {
+            "type": "integer",
+            "title": "Atrasados Cents"
+          },
+          "hoje_count": {
+            "type": "integer",
+            "title": "Hoje Count"
+          },
+          "hoje_cents": {
+            "type": "integer",
+            "title": "Hoje Cents"
+          },
+          "proximos_7_dias_count": {
+            "type": "integer",
+            "title": "Proximos 7 Dias Count"
+          },
+          "proximos_7_dias_cents": {
+            "type": "integer",
+            "title": "Proximos 7 Dias Cents"
+          },
+          "proximos_30_dias_count": {
+            "type": "integer",
+            "title": "Proximos 30 Dias Count"
+          },
+          "proximos_30_dias_cents": {
+            "type": "integer",
+            "title": "Proximos 30 Dias Cents"
+          }
+        },
+        "type": "object",
+        "required": [
+          "atrasados_count",
+          "atrasados_cents",
+          "hoje_count",
+          "hoje_cents",
+          "proximos_7_dias_count",
+          "proximos_7_dias_cents",
+          "proximos_30_dias_count",
+          "proximos_30_dias_cents"
+        ],
+        "title": "PaymentQueueSummary",
+        "description": "Contagem e soma (centavos) por balde — mesmo padrão de PayablesSummary, sem os itens."
       },
       "PayoutResult": {
         "properties": {
@@ -12980,6 +17056,40 @@
           "timezone": {
             "type": "string",
             "title": "Timezone"
+          },
+          "default_entry_funnel_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Default Entry Funnel Id"
+          },
+          "whatsapp_configured": {
+            "type": "boolean",
+            "title": "Whatsapp Configured"
+          },
+          "whatsapp_phone_id": {
+            "type": "string",
+            "title": "Whatsapp Phone Id"
+          },
+          "whatsapp_waba_id": {
+            "type": "string",
+            "title": "Whatsapp Waba Id"
+          },
+          "whatsapp_verify_token": {
+            "type": "string",
+            "title": "Whatsapp Verify Token"
+          },
+          "whatsapp_template_bindings": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "type": "object",
+            "title": "Whatsapp Template Bindings"
           }
         },
         "type": "object",
@@ -12998,7 +17108,13 @@
           "text_color",
           "bg_color",
           "font",
-          "timezone"
+          "timezone",
+          "default_entry_funnel_id",
+          "whatsapp_configured",
+          "whatsapp_phone_id",
+          "whatsapp_waba_id",
+          "whatsapp_verify_token",
+          "whatsapp_template_bindings"
         ],
         "title": "ProfileOut"
       },
@@ -13182,10 +17298,156 @@
               }
             ],
             "title": "Timezone"
+          },
+          "default_entry_funnel_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 36
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Default Entry Funnel Id"
+          },
+          "whatsapp_token": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Whatsapp Token"
+          },
+          "whatsapp_phone_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 64
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Whatsapp Phone Id"
+          },
+          "whatsapp_waba_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 64
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Whatsapp Waba Id"
+          },
+          "whatsapp_app_secret": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Whatsapp App Secret"
+          },
+          "whatsapp_template_bindings": {
+            "anyOf": [
+              {
+                "additionalProperties": {
+                  "type": "string"
+                },
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Whatsapp Template Bindings"
           }
         },
         "type": "object",
         "title": "ProfileUpdate"
+      },
+      "ProjectionOut": {
+        "properties": {
+          "today": {
+            "type": "string",
+            "format": "date",
+            "title": "Today"
+          },
+          "saldo_inicial_cents": {
+            "type": "integer",
+            "title": "Saldo Inicial Cents"
+          },
+          "overdue_inflow_cents": {
+            "type": "integer",
+            "title": "Overdue Inflow Cents"
+          },
+          "overdue_outflow_cents": {
+            "type": "integer",
+            "title": "Overdue Outflow Cents"
+          },
+          "windows": {
+            "items": {
+              "$ref": "#/components/schemas/ProjectionWindowOut"
+            },
+            "type": "array",
+            "title": "Windows"
+          },
+          "runway": {
+            "$ref": "#/components/schemas/RunwayOut"
+          },
+          "notes": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Notes"
+          }
+        },
+        "type": "object",
+        "required": [
+          "today",
+          "saldo_inicial_cents",
+          "overdue_inflow_cents",
+          "overdue_outflow_cents",
+          "windows",
+          "runway",
+          "notes"
+        ],
+        "title": "ProjectionOut",
+        "description": "Projeção de fluxo de caixa 30/60/90 dias + runway (Story 5.7), em regime de CAIXA.\n\nOPOSTO da DRE (que usa competência): aqui a data é a de PAGAMENTO PREVISTO (vencimento dos itens\nem aberto), nunca `competence_date`. `saldo_inicial_cents` é o disponível da Carteira (mesmo\nnúmero do Cockpit). `windows` traz uma janela por horizonte pedido (default 30/60/90), com o\nsaldo projetado e o sinal `alert`. `notes` documenta o regime e as exclusões — não em silêncio.\n\n`overdue_inflow_cents`/`overdue_outflow_cents`: parcela de itens em aberto JÁ VENCIDOS\n(`due_date < hoje`) que a projeção conta como caixa esperado imediato — já embutida em todas as\n`windows`, exposta à parte para o consumidor risk-ajustar (vencidos podem não se concretizar)."
+      },
+      "ProjectionWindowOut": {
+        "properties": {
+          "days": {
+            "type": "integer",
+            "title": "Days"
+          },
+          "saldo_projetado_cents": {
+            "type": "integer",
+            "title": "Saldo Projetado Cents"
+          },
+          "alert": {
+            "type": "boolean",
+            "title": "Alert"
+          }
+        },
+        "type": "object",
+        "required": [
+          "days",
+          "saldo_projetado_cents",
+          "alert"
+        ],
+        "title": "ProjectionWindowOut",
+        "description": "Saldo de caixa projetado para uma janela (dias a partir de hoje), em regime de CAIXA.\n\n`saldo_projetado_cents` é CUMULATIVO: saldo inicial da Carteira + entradas abertas − saídas\nabertas cujo vencimento cai até o fim da janela. `alert=True` quando o saldo fica NEGATIVO nessa\njanela — sinal explícito que a Story 5.8 consome como indicador 🔴 sem recalcular."
       },
       "PublicAccept": {
         "properties": {
@@ -13253,6 +17515,25 @@
         ],
         "title": "PublicContract"
       },
+      "PublicImageOut": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "title": "Id"
+          },
+          "url": {
+            "type": "string",
+            "title": "Url"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "url"
+        ],
+        "title": "PublicImageOut",
+        "description": "Retorno do upload de imagem pública. ``url`` é o caminho da rota de leitura no backend\n(``/public-images/{id}``); o frontend prefixa o proxy ``/api`` para obter a URL renderável."
+      },
       "PublicPage": {
         "properties": {
           "title": {
@@ -13261,7 +17542,6 @@
           },
           "blocks": {
             "items": {
-              "additionalProperties": true,
               "type": "object"
             },
             "type": "array",
@@ -14160,6 +18440,116 @@
         ],
         "title": "RegisterRequest"
       },
+      "RegisterYieldRequest": {
+        "properties": {
+          "amount_cents": {
+            "type": "integer",
+            "exclusiveMinimum": 0.0,
+            "title": "Amount Cents"
+          },
+          "date": {
+            "type": "string",
+            "format": "date",
+            "title": "Date"
+          },
+          "chart_account_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Chart Account Id"
+          }
+        },
+        "type": "object",
+        "required": [
+          "amount_cents",
+          "date"
+        ],
+        "title": "RegisterYieldRequest",
+        "description": "Registrar rendimento (juro) de uma aplicação num período (Task 2/3).\n\n`amount_cents` > 0 (rendimento positivo). `date` é a data de competência do lançamento (regime\nde competência — entra na DRE nesse período). `chart_account_id` (opcional) DEVE apontar a uma\nconta do grupo `FINANCEIRO` quando informado (422 caso contrário) — ver service."
+      },
+      "RentabilityOut": {
+        "properties": {
+          "account_id": {
+            "type": "string",
+            "title": "Account Id"
+          },
+          "principal_cents": {
+            "type": "integer",
+            "title": "Principal Cents"
+          },
+          "accrued_yield_cents": {
+            "type": "integer",
+            "title": "Accrued Yield Cents"
+          },
+          "total_rentability_pct": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Total Rentability Pct"
+          },
+          "period_rentability_pct": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Period Rentability Pct"
+          },
+          "period_yield_cents": {
+            "type": "integer",
+            "title": "Period Yield Cents"
+          },
+          "start": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Start"
+          },
+          "end": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "End"
+          }
+        },
+        "type": "object",
+        "required": [
+          "account_id",
+          "principal_cents",
+          "accrued_yield_cents",
+          "total_rentability_pct",
+          "period_rentability_pct",
+          "period_yield_cents",
+          "start",
+          "end"
+        ],
+        "title": "RentabilityOut"
+      },
       "ResetPasswordRequest": {
         "properties": {
           "token": {
@@ -14200,7 +18590,6 @@
             "title": "Client Id"
           },
           "params": {
-            "additionalProperties": true,
             "type": "object",
             "title": "Params"
           }
@@ -14281,6 +18670,32 @@
         },
         "type": "object",
         "title": "RunStep"
+      },
+      "RunwayOut": {
+        "properties": {
+          "days": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Days"
+          },
+          "burn_rate_cents_per_day": {
+            "type": "integer",
+            "title": "Burn Rate Cents Per Day"
+          }
+        },
+        "type": "object",
+        "required": [
+          "days",
+          "burn_rate_cents_per_day"
+        ],
+        "title": "RunwayOut",
+        "description": "Runway: fôlego de caixa no ritmo de queima atual.\n\n`days` = dias até o saldo inicial zerar na queima líquida diária (saídas − entradas da maior\njanela / dias), ou `None` quando não há queima (caixa crescendo/estável) — \"sem risco\", sem\ndivisão por zero. `burn_rate_cents_per_day` é a queima diária (0 quando não há queima)."
       },
       "ScheduleStage": {
         "properties": {
@@ -14380,6 +18795,40 @@
         ],
         "title": "SellRequest"
       },
+      "SendTemplateRequest": {
+        "properties": {
+          "template_id": {
+            "type": "string",
+            "title": "Template Id"
+          },
+          "variables": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Variables",
+            "default": []
+          }
+        },
+        "type": "object",
+        "required": [
+          "template_id"
+        ],
+        "title": "SendTemplateRequest"
+      },
+      "SendTextRequest": {
+        "properties": {
+          "text": {
+            "type": "string",
+            "title": "Text"
+          }
+        },
+        "type": "object",
+        "required": [
+          "text"
+        ],
+        "title": "SendTextRequest"
+      },
       "SessionInfo": {
         "properties": {
           "user": {
@@ -14423,6 +18872,35 @@
           "document"
         ],
         "title": "SignRequest"
+      },
+      "SignalOut": {
+        "properties": {
+          "level": {
+            "type": "string",
+            "title": "Level"
+          },
+          "title": {
+            "type": "string",
+            "title": "Title"
+          },
+          "explanation": {
+            "type": "string",
+            "title": "Explanation"
+          },
+          "source": {
+            "type": "string",
+            "title": "Source"
+          }
+        },
+        "type": "object",
+        "required": [
+          "level",
+          "title",
+          "explanation",
+          "source"
+        ],
+        "title": "SignalOut",
+        "description": "Um sinal de diagnóstico calculado pelo motor PURO (Story 5.8). `level` é verde/amarelo/\nvermelho; `explanation` SEMPRE traz o número que o justifica; `source` identifica a origem\n(lucratividade 5.4 / projecao 5.7 / investimento 5.6)."
       },
       "SkillSummary": {
         "properties": {
@@ -14538,7 +19016,14 @@
             "$ref": "#/components/schemas/UserOut"
           },
           "temp_password": {
-            "type": "string",
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
             "title": "Temp Password"
           },
           "delivery": {
@@ -14553,7 +19038,6 @@
         "type": "object",
         "required": [
           "user",
-          "temp_password",
           "delivery",
           "delivery_status"
         ],
@@ -14611,6 +19095,17 @@
               }
             ],
             "title": "Position"
+          },
+          "after_stage_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "After Stage Id"
           },
           "is_won": {
             "type": "boolean",
@@ -14719,62 +19214,6 @@
           "low_stock_count"
         ],
         "title": "StockSummary"
-      },
-      "TemplateCreate": {
-        "properties": {
-          "name": {
-            "type": "string",
-            "maxLength": 255,
-            "minLength": 1,
-            "title": "Name"
-          },
-          "clauses": {
-            "items": {
-              "$ref": "#/components/schemas/Clause"
-            },
-            "type": "array",
-            "minItems": 1,
-            "title": "Clauses"
-          }
-        },
-        "type": "object",
-        "required": [
-          "name",
-          "clauses"
-        ],
-        "title": "TemplateCreate"
-      },
-      "TemplateOut": {
-        "properties": {
-          "id": {
-            "type": "string",
-            "title": "Id"
-          },
-          "name": {
-            "type": "string",
-            "title": "Name"
-          },
-          "clauses": {
-            "items": {
-              "$ref": "#/components/schemas/Clause"
-            },
-            "type": "array",
-            "title": "Clauses"
-          },
-          "created_at": {
-            "type": "string",
-            "format": "date-time",
-            "title": "Created At"
-          }
-        },
-        "type": "object",
-        "required": [
-          "id",
-          "name",
-          "clauses",
-          "created_at"
-        ],
-        "title": "TemplateOut"
       },
       "TemplatePreset": {
         "properties": {
@@ -14962,6 +19401,40 @@
               }
             ],
             "title": "External Ref"
+          },
+          "competence_date": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Competence Date"
+          },
+          "chart_account_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Chart Account Id"
+          },
+          "cost_center_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Cost Center Id"
           }
         },
         "type": "object",
@@ -15032,6 +19505,40 @@
             ],
             "title": "External Ref"
           },
+          "competence_date": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Competence Date"
+          },
+          "chart_account_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Chart Account Id"
+          },
+          "cost_center_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Cost Center Id"
+          },
           "created_at": {
             "type": "string",
             "format": "date-time",
@@ -15051,6 +19558,9 @@
           "status",
           "client_id",
           "external_ref",
+          "competence_date",
+          "chart_account_id",
+          "cost_center_id",
           "created_at"
         ],
         "title": "TransactionOut"
@@ -15290,35 +19800,6 @@
         ],
         "title": "WalletSummary"
       },
-      "WebhookPayment": {
-        "properties": {
-          "tenant_id": {
-            "type": "string",
-            "title": "Tenant Id"
-          },
-          "charge_id": {
-            "type": "string",
-            "title": "Charge Id"
-          },
-          "status": {
-            "type": "string",
-            "title": "Status",
-            "default": "paid"
-          },
-          "secret": {
-            "type": "string",
-            "title": "Secret",
-            "default": ""
-          }
-        },
-        "type": "object",
-        "required": [
-          "tenant_id",
-          "charge_id"
-        ],
-        "title": "WebhookPayment",
-        "description": "Confirmação de pagamento vinda do gateway (Pix/cartão/boleto compensado)."
-      },
       "app__modules__agenda__schemas__RescheduleRequest": {
         "properties": {
           "starts_at": {
@@ -15339,6 +19820,62 @@
         ],
         "title": "RescheduleRequest"
       },
+      "app__modules__contracts__schemas__TemplateCreate": {
+        "properties": {
+          "name": {
+            "type": "string",
+            "maxLength": 255,
+            "minLength": 1,
+            "title": "Name"
+          },
+          "clauses": {
+            "items": {
+              "$ref": "#/components/schemas/Clause"
+            },
+            "type": "array",
+            "minItems": 1,
+            "title": "Clauses"
+          }
+        },
+        "type": "object",
+        "required": [
+          "name",
+          "clauses"
+        ],
+        "title": "TemplateCreate"
+      },
+      "app__modules__contracts__schemas__TemplateOut": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "title": "Id"
+          },
+          "name": {
+            "type": "string",
+            "title": "Name"
+          },
+          "clauses": {
+            "items": {
+              "$ref": "#/components/schemas/Clause"
+            },
+            "type": "array",
+            "title": "Clauses"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Created At"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "name",
+          "clauses",
+          "created_at"
+        ],
+        "title": "TemplateOut"
+      },
       "app__modules__receivables__schemas__RescheduleRequest": {
         "properties": {
           "due_date": {
@@ -15352,6 +19889,147 @@
           "due_date"
         ],
         "title": "RescheduleRequest"
+      },
+      "app__modules__whatsapp_templates__schemas__TemplateCreate": {
+        "properties": {
+          "name": {
+            "type": "string",
+            "pattern": "^[a-z0-9_]+$",
+            "title": "Name"
+          },
+          "language": {
+            "type": "string",
+            "title": "Language",
+            "default": "pt_BR"
+          },
+          "category": {
+            "type": "string",
+            "enum": [
+              "MARKETING",
+              "UTILITY",
+              "AUTHENTICATION"
+            ],
+            "title": "Category"
+          },
+          "body_text": {
+            "type": "string",
+            "title": "Body Text"
+          },
+          "variable_examples": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Variable Examples",
+            "default": []
+          }
+        },
+        "type": "object",
+        "required": [
+          "name",
+          "category",
+          "body_text"
+        ],
+        "title": "TemplateCreate"
+      },
+      "app__modules__whatsapp_templates__schemas__TemplateOut": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "title": "Id"
+          },
+          "name": {
+            "type": "string",
+            "title": "Name"
+          },
+          "language": {
+            "type": "string",
+            "title": "Language"
+          },
+          "category_requested": {
+            "type": "string",
+            "title": "Category Requested"
+          },
+          "category_approved": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Category Approved"
+          },
+          "status": {
+            "type": "string",
+            "title": "Status"
+          },
+          "rejected_reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Rejected Reason"
+          },
+          "meta_template_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Meta Template Id"
+          },
+          "body_text": {
+            "type": "string",
+            "title": "Body Text"
+          },
+          "variable_count": {
+            "type": "integer",
+            "title": "Variable Count"
+          },
+          "variable_examples": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Variable Examples"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Created At"
+          },
+          "updated_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Updated At"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "name",
+          "language",
+          "category_requested",
+          "category_approved",
+          "status",
+          "rejected_reason",
+          "meta_template_id",
+          "body_text",
+          "variable_count",
+          "variable_examples",
+          "created_at",
+          "updated_at"
+        ],
+        "title": "TemplateOut"
       }
     }
   }
