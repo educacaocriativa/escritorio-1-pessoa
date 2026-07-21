@@ -191,3 +191,83 @@ def test_invalid_group_by_is_422(client: TestClient, headers):
         headers=headers,
     )
     assert r.status_code == 422
+
+
+def _cost_center(client, headers, *, name, kind="area"):
+    r = client.post("/cost-centers", json={"name": name, "kind": kind}, headers=headers)
+    assert r.status_code == 201, r.text
+    return r.json()["id"]
+
+
+def test_cost_center_grouping_splits_by_center_and_category(client: TestClient, headers):
+    tecnica = _cost_center(client, headers, name="Tecnica")
+    comercial = _cost_center(client, headers, name="Comercial")
+    curso_acc = _account(client, headers, "DESPESA_FIXA", "Curso")
+
+    def _payable_cc(amount, competence, cc_id, account_id):
+        body = {
+            "description": "conta", "amount_cents": amount,
+            "due_date": competence, "competence_date": competence,
+            "chart_account_id": account_id, "cost_center_id": cc_id,
+        }
+        r = client.post("/payables/bills", json=body, headers=headers)
+        assert r.status_code == 201, r.text
+        return r.json()
+
+    _payable_cc(500000, "2026-01-10", tecnica, curso_acc)
+    _payable_cc(200000, "2026-02-05", comercial, curso_acc)
+
+    body = _matrix(client, headers, start="2026-01-01", end="2026-02-28", group_by="cost_center")
+    tecnica_group = _group(body, tecnica)
+    assert tecnica_group["label"] == "Tecnica"
+    curso_row = next(r for r in tecnica_group["rows"] if r["label"] == "Curso")
+    assert curso_row["monthly_cents"] == [-500000, 0]
+    assert curso_row["kind"] == "result"
+
+    comercial_group = _group(body, comercial)
+    assert comercial_group["subtotal_cents"] == [0, -200000]
+
+
+def test_cost_center_grouping_includes_unassigned_bucket(client: TestClient, headers):
+    acc = _account(client, headers, "DESPESA_FIXA", "Aluguel")
+    _payable(client, headers, amount=40000, competence="2026-01-01", account_id=acc)
+
+    body = _matrix(client, headers, start="2026-01-01", end="2026-01-31", group_by="cost_center")
+    unassigned = _group(body, "_unassigned")
+    assert unassigned["label"] == "Não atribuído"
+    assert unassigned["subtotal_cents"] == [-40000]
+
+
+def test_cost_center_grouping_mixes_kinds_within_one_center(client: TestClient, headers):
+    """Um único centro de custo pode ter uma categoria de RECEITA e uma de INVESTIMENTO —
+    o subtotal do grupo soma só a linha kind='result', mesmo com as duas dentro do MESMO grupo
+    (a razão de `kind` ter virado propriedade da LINHA, não do grupo — ver docstring)."""
+    cc = _cost_center(client, headers, name="Sócio A")
+    receita_acc = _account(client, headers, "RECEITA", "Consultoria")
+    inv_acc = _account(client, headers, "INVESTIMENTO", "Equipamentos")
+
+    r = client.post(
+        "/receivables/charges",
+        json={
+            "kind": "service", "method": "pix", "amount_cents": 100000,
+            "due_date": "2026-01-05", "competence_date": "2026-01-05",
+            "chart_account_id": receita_acc, "cost_center_id": cc,
+        },
+        headers=headers,
+    )
+    assert r.status_code == 201, r.text
+    client.post(
+        "/payables/bills",
+        json={
+            "description": "notebook", "amount_cents": 300000,
+            "due_date": "2026-01-06", "competence_date": "2026-01-06",
+            "chart_account_id": inv_acc, "cost_center_id": cc,
+        },
+        headers=headers,
+    )
+
+    body = _matrix(client, headers, start="2026-01-01", end="2026-01-31", group_by="cost_center")
+    group = _group(body, cc)
+    kinds = {r["label"]: r["kind"] for r in group["rows"]}
+    assert kinds == {"Consultoria": "result", "Equipamentos": "informational"}
+    assert group["subtotal_cents"] == [100000]  # só a Consultoria — o investimento é informativo

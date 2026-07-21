@@ -604,7 +604,102 @@ def dre_matrix_report(
     )
 
 
+def _sum_by_cost_center_and_account_monthly(
+    db: Session, model: type[Payable | Charge], *, start: date, end: date, canceled: str, sign: int,
+) -> list[tuple[str, str | None, str | None, int]]:
+    """Como `_sum_by_cost_center_and_account`, com o mês adicionado ao GROUP BY (Story 5.11)."""
+    competence = func.coalesce(model.competence_date, model.due_date)
+    month_key = func.substr(func.cast(competence, String), 1, 7)
+    rows = db.execute(
+        select(
+            month_key,
+            model.cost_center_id,
+            model.chart_account_id,
+            func.coalesce(func.sum(model.amount_cents), 0),
+        )
+        .where(competence >= start, competence <= end, model.status != canceled)
+        .group_by(month_key, model.cost_center_id, model.chart_account_id)
+    ).all()
+    return [(month, cc_id, acc_id, sign * int(total or 0)) for month, cc_id, acc_id, total in rows]
+
+
+def _sum_transactions_by_cost_center_and_account_monthly(
+    db: Session, *, start: date, end: date,
+) -> list[tuple[str, str | None, str | None, int]]:
+    """Como `_sum_transactions_by_cost_center_and_account`, com o mês no GROUP BY (Story 5.11)."""
+    competence = func.coalesce(Transaction.competence_date, func.date(Transaction.created_at))
+    month_key = func.substr(func.cast(competence, String), 1, 7)
+    rows = db.execute(
+        select(
+            month_key,
+            Transaction.cost_center_id,
+            Transaction.chart_account_id,
+            func.coalesce(func.sum(Transaction.gross_cents), 0),
+        )
+        .where(
+            competence >= start,
+            competence <= end,
+            Transaction.status != TX_REFUNDED,
+            Transaction.external_ref.is_(None),
+        )
+        .group_by(month_key, Transaction.cost_center_id, Transaction.chart_account_id)
+    ).all()
+    return [(month, cc_id, acc_id, int(total or 0)) for month, cc_id, acc_id, total in rows]
+
+
 def _dre_matrix_by_cost_center(
     db: Session, *, start: date, end: date, months: list[str], month_index: dict[str, int], n: int,
 ) -> DreMatrixReport:
-    raise NotImplementedError("group_by='cost_center' — implementado na Task 4 deste plano")
+    account_map: dict[str, tuple[str, str]] = {
+        a.id: (a.grupo_dre, a.categoria) for a in db.scalars(select(ChartAccount)).all()
+    }
+    centers = list(db.scalars(select(CostCenter)).all())
+    cc_map: dict[str, CostCenter] = {c.id: c for c in centers}
+
+    aggregated = _sum_by_cost_center_and_account_monthly(
+        db, Charge, start=start, end=end, canceled=CHARGE_CANCELED, sign=1,
+    ) + _sum_by_cost_center_and_account_monthly(
+        db, Payable, start=start, end=end, canceled=PAYABLE_CANCELED, sign=-1,
+    ) + _sum_transactions_by_cost_center_and_account_monthly(db, start=start, end=end)
+
+    # cost_center_id | None -> categoria -> cents_por_mes
+    # cost_center_id | None -> categoria -> kind
+    by_cc: dict[str | None, dict[str, list[int]]] = {}
+    kind_by_cc_cat: dict[str | None, dict[str, str]] = {}
+    for month, cc_id, acc_id, amount in aggregated:
+        idx = month_index[month]
+        resolved = account_map.get(acc_id) if acc_id else None
+        grupo = resolved[0] if resolved else None
+        categoria = resolved[1] if resolved else "Sem categoria"
+        cents = by_cc.setdefault(cc_id, {}).setdefault(categoria, [0] * n)
+        cents[idx] += amount
+        kind_by_cc_cat.setdefault(cc_id, {})[categoria] = _row_kind(grupo)
+
+    groups: list[DreMatrixGroup] = []
+    seen: set[str] = set()
+    for c in sorted((c for c in centers if c.archived_at is None), key=lambda c: c.name.lower()):
+        cats = by_cc.get(c.id, {})
+        kinds = kind_by_cc_cat.get(c.id, {})
+        groups.append(_build_matrix_group(c.id, c.name, cats, lambda cat, k=kinds: k[cat], n))
+        seen.add(c.id)
+    for cc_id, cats in by_cc.items():
+        if cc_id is None or cc_id in seen:
+            continue
+        c = cc_map.get(cc_id)
+        kinds = kind_by_cc_cat.get(cc_id, {})
+        label = c.name if c else "(centro removido)"
+        groups.append(_build_matrix_group(cc_id, label, cats, lambda cat, k=kinds: k[cat], n))
+    if None in by_cc:
+        kinds = kind_by_cc_cat.get(None, {})
+        groups.append(
+            _build_matrix_group(
+                "_unassigned", NAO_ATRIBUIDO, by_cc[None], lambda cat, k=kinds: k[cat], n
+            )
+        )
+
+    grand_total = [sum(g.subtotal_cents[i] for g in groups) for i in range(n)]
+    notes = [_NOTE_COMPETENCIA, _NOTE_INVESTIMENTO, _NOTE_NAO_ATRIBUIDO]
+    return DreMatrixReport(
+        months=months, groups=groups, grand_total_cents=grand_total,
+        grand_total=sum(grand_total), notes=notes,
+    )
