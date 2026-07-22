@@ -191,3 +191,122 @@ def test_contract_dre_cross_tenant_a_nao_ve_b() -> None:
         assert not _contract_visible(app_url, tenant_a, contract_b), (
             "RLS falhou: A enxergou o contrato de B"
         )
+
+
+def _mark_signed(app_url: str, tenant_id: str, contract_id: str) -> None:
+    """`_seed_tenant` cria o contrato em status='draft' (default do modelo); o ranking só lista
+    'signed' (Story 5.12), então promovemos o status direto via ORM para este teste."""
+    from app.modules.contracts.models import STATUS_SIGNED, Contract
+
+    engine = create_engine(app_url, poolclass=NullPool)
+    try:
+        with engine.connect() as conn:
+            conn.execute(
+                text("SELECT set_config('app.current_tenant_id', :tid, false)"), {"tid": tenant_id}
+            )
+            conn.commit()
+            session = Session(bind=conn)
+            contract = session.get(Contract, contract_id)
+            assert contract is not None
+            contract.status = STATUS_SIGNED
+            session.commit()
+            session.close()
+    finally:
+        engine.dispose()
+
+
+def _ranking_titles_and_margins(app_url: str, tenant_id: str) -> dict[str, int]:
+    from app.modules.financial_intelligence.profitability import contracts_dre_report
+
+    engine = create_engine(app_url, poolclass=NullPool)
+    try:
+        with engine.connect() as conn:
+            conn.execute(
+                text("SELECT set_config('app.current_tenant_id', :tid, false)"), {"tid": tenant_id}
+            )
+            conn.commit()
+            session = Session(bind=conn)
+            summaries = contracts_dre_report(session, start=START, end=END)
+            session.close()
+            return {s.title: s.margem_contribuicao_cents for s in summaries}
+    finally:
+        engine.dispose()
+
+
+def _ledger_amounts(app_url: str, tenant_id: str, contract_id: str) -> list[int]:
+    from app.modules.contracts.models import Contract
+    from app.modules.financial_intelligence.profitability import contract_ledger
+
+    engine = create_engine(app_url, poolclass=NullPool)
+    try:
+        with engine.connect() as conn:
+            conn.execute(
+                text("SELECT set_config('app.current_tenant_id', :tid, false)"), {"tid": tenant_id}
+            )
+            conn.commit()
+            session = Session(bind=conn)
+            contract = session.get(Contract, contract_id)
+            assert contract is not None
+            entries = contract_ledger(session, contract=contract, start=START, end=END)
+            session.close()
+            return sorted(e.amount_cents for e in entries)
+    finally:
+        engine.dispose()
+
+
+def test_contracts_dre_report_cross_tenant_a_nao_ve_b() -> None:
+    with PostgresContainer(
+        "postgres:16-alpine",
+        username=_ROOT_USER,
+        password=_ROOT_PASS,
+        dbname=_DB_NAME,
+        driver="psycopg",
+    ) as pg:
+        host = pg.get_container_host_ip()
+        port = pg.get_exposed_port(5432)
+        super_url = f"postgresql+psycopg://{_ROOT_USER}:{_ROOT_PASS}@{host}:{port}/{_DB_NAME}"
+        app_url = f"postgresql+psycopg://e1p_app:{_APP_PASS}@{host}:{port}/{_DB_NAME}"
+
+        _bootstrap_rls_role(super_url)
+        _run_migrations_as_app(app_url)
+
+        tenant_a = str(uuid4())
+        tenant_b = str(uuid4())
+        contract_a = _seed_tenant(app_url, tenant_a, receita=100000, custo=40000)  # margem 60000
+        contract_b = _seed_tenant(app_url, tenant_b, receita=777777, custo=7777)  # margem 770000
+        _mark_signed(app_url, tenant_a, contract_a)
+        _mark_signed(app_url, tenant_b, contract_b)
+
+        ranking_a = _ranking_titles_and_margins(app_url, tenant_a)
+        ranking_b = _ranking_titles_and_margins(app_url, tenant_b)
+
+        assert ranking_a == {"Projeto": 60000}, "RLS falhou: ranking do A viu contrato/valor de B"
+        assert ranking_b == {"Projeto": 770000}, "RLS falhou: ranking do B viu contrato/valor de A"
+
+
+def test_contract_ledger_cross_tenant_isolated() -> None:
+    with PostgresContainer(
+        "postgres:16-alpine",
+        username=_ROOT_USER,
+        password=_ROOT_PASS,
+        dbname=_DB_NAME,
+        driver="psycopg",
+    ) as pg:
+        host = pg.get_container_host_ip()
+        port = pg.get_exposed_port(5432)
+        super_url = f"postgresql+psycopg://{_ROOT_USER}:{_ROOT_PASS}@{host}:{port}/{_DB_NAME}"
+        app_url = f"postgresql+psycopg://e1p_app:{_APP_PASS}@{host}:{port}/{_DB_NAME}"
+
+        _bootstrap_rls_role(super_url)
+        _run_migrations_as_app(app_url)
+
+        tenant_a = str(uuid4())
+        tenant_b = str(uuid4())
+        # A: Charge +100000, Payable −40000. B: Charge +777777, Payable −7777.
+        contract_a = _seed_tenant(app_url, tenant_a, receita=100000, custo=40000)
+        _seed_tenant(app_url, tenant_b, receita=777777, custo=7777)
+
+        amounts = _ledger_amounts(app_url, tenant_a, contract_a)
+        assert amounts == [-40000, 100000], (
+            "RLS falhou: o extrato do contrato de A trouxe lançamentos de B"
+        )
