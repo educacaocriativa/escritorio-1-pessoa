@@ -285,6 +285,15 @@ def test_contracts_dre_report_cross_tenant_a_nao_ve_b() -> None:
 
 
 def test_contract_ledger_cross_tenant_isolated() -> None:
+    """Limitação conhecida (achado de revisão): esta asserção prova que `contract_ledger` filtra
+    corretamente por `contract_id` — mas como `contract_id` já é um UUID único por tenant (nunca
+    colide entre tenants), ela não isola, por si só, se a RLS das tabelas `charges`/`payables`
+    está de fato ativa (uma RLS totalmente desligada passaria por este teste do mesmo jeito). A
+    proteção real de produção acontece na camada ANTERIOR: o router só chama `contract_ledger`
+    depois de resolver o contrato via `contracts_service.get_contract`, que a RLS já bloqueia
+    (404) para um contrato de outro tenant — e essa camada já tem cobertura RLS dedicada em
+    `test_contract_dre_cross_tenant_a_nao_ve_b` (via `_contract_visible`). Decisão registrada:
+    aceitar esta limitação em vez de construir um cenário artificial de bypass."""
     with PostgresContainer(
         "postgres:16-alpine",
         username=_ROOT_USER,
