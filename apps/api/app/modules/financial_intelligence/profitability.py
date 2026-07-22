@@ -481,3 +481,73 @@ def contracts_dre_report(
             )
         )
     return summaries
+
+
+# ── Extrato cronológico de um contrato (Story 5.12) ─────────────────────────────────────────────
+@dataclass
+class LedgerEntry:
+    id: str
+    source: str  # "charge" | "payable"
+    date: date
+    description: str
+    categoria: str
+    status: str
+    amount_cents: int  # já assinado (Charge=+, Payable=−)
+
+
+def contract_ledger(
+    db: Session, *, contract: Contract, start: date, end: date
+) -> list[LedgerEntry]:
+    """Extrato cronológico (linhas INDIVIDUAIS, não agregadas) de um contrato no período de
+    competência (Story 5.12). Charge (+) e Payable (−), cancelados fora, ordenado por data
+    ascendente. NÃO inclui `Transaction` (sem `contract_id` — mesma exclusão de `contract_dre`).
+    SOMENTE LEITURA."""
+    account_map = _account_map(db)
+    entries: list[LedgerEntry] = []
+
+    charge_competence = func.coalesce(Charge.competence_date, Charge.due_date)
+    for c in db.scalars(
+        select(Charge).where(
+            Charge.contract_id == contract.id,
+            charge_competence >= start,
+            charge_competence <= end,
+            Charge.status != CHARGE_CANCELED,
+        )
+    ).all():
+        categoria = (
+            account_map[c.chart_account_id][1]
+            if c.chart_account_id in account_map
+            else "Sem categoria"
+        )
+        entries.append(
+            LedgerEntry(
+                id=c.id, source="charge", date=c.competence_date or c.due_date,
+                description=c.description or "Cobrança", categoria=categoria,
+                status=c.status, amount_cents=c.amount_cents,
+            )
+        )
+
+    payable_competence = func.coalesce(Payable.competence_date, Payable.due_date)
+    for p in db.scalars(
+        select(Payable).where(
+            Payable.contract_id == contract.id,
+            payable_competence >= start,
+            payable_competence <= end,
+            Payable.status != PAYABLE_CANCELED,
+        )
+    ).all():
+        categoria = (
+            account_map[p.chart_account_id][1]
+            if p.chart_account_id in account_map
+            else "Sem categoria"
+        )
+        entries.append(
+            LedgerEntry(
+                id=p.id, source="payable", date=p.competence_date or p.due_date,
+                description=p.description or "Conta a pagar", categoria=categoria,
+                status=p.status, amount_cents=-p.amount_cents,
+            )
+        )
+
+    entries.sort(key=lambda e: e.date)
+    return entries

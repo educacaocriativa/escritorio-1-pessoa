@@ -29,6 +29,7 @@ from app.modules.financial_intelligence.schemas import (
     DreMatrixReportOut,
     DreMatrixRowOut,
     DreReportOut,
+    LedgerEntryOut,
     ProjectionOut,
     ProjectionWindowOut,
     RunwayOut,
@@ -295,6 +296,31 @@ def contracts_dre(
         db, start=start, end=end, include_overhead=include_overhead,
     )
     return [_contract_dre_summary_out(s) for s in summaries]
+
+
+def _ledger_entry_out(e: profitability_service.LedgerEntry) -> LedgerEntryOut:
+    return LedgerEntryOut(
+        id=e.id, source=e.source, date=e.date, description=e.description,
+        categoria=e.categoria, status=e.status, amount_cents=e.amount_cents,
+    )
+
+
+@router.get("/contracts/{contract_id}/ledger", response_model=list[LedgerEntryOut])
+def contract_ledger_route(
+    contract_id: str,
+    start: date = Query(..., description="Início do período (data de competência), YYYY-MM-DD"),
+    end: date = Query(..., description="Fim do período (data de competência), YYYY-MM-DD"),
+    _user: CurrentUser = Depends(_guard),
+    db: Session = Depends(get_tenant_db),
+) -> list[LedgerEntryOut]:
+    if end < start:
+        raise HTTPException(status_code=422, detail="'end' não pode ser anterior a 'start'")
+    try:
+        contract = contracts_service.get_contract(db, contract_id)
+    except contracts_service.ContractError as e:
+        raise HTTPException(status_code=e.status_code, detail=str(e)) from e
+    entries = profitability_service.contract_ledger(db, contract=contract, start=start, end=end)
+    return [_ledger_entry_out(e) for e in entries]
 
 
 @router.get("/diagnostics", response_model=DiagnosticsOut)

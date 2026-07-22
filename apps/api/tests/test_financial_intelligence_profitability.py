@@ -452,3 +452,69 @@ def test_ranking_reflects_margin_and_include_overhead(client: TestClient, header
     # responde ao toggle sem quebrar; a lógica de rateio em si já é coberta pelos testes de
     # contract_dre/allocate_overhead existentes acima neste arquivo.
     assert "overhead_allocated_cents" in row2
+
+
+def _ledger(client, headers, contract_id, *, start=START, end=END):
+    r = client.get(
+        f"/financial-intelligence/contracts/{contract_id}/ledger",
+        params={"start": start, "end": end},
+        headers=headers,
+    )
+    assert r.status_code == 200, r.text
+    return r.json()
+
+
+def test_ledger_lists_individual_entries_signed_and_sorted(client: TestClient, headers):
+    acc_receita = _account(client, headers, "RECEITA", "Consultoria")
+    acc_custo = _account(client, headers, "CUSTO_DIRETO", "Insumos")
+    contract = _contract(client, headers, title="Projeto Ledger")
+    _charge(
+        client, headers, amount=100000, competence="2026-07-20",
+        account_id=acc_receita, contract_id=contract["id"],
+    )
+    _payable(
+        client, headers, amount=30000, competence="2026-07-05",
+        account_id=acc_custo, contract_id=contract["id"],
+    )
+
+    entries = _ledger(client, headers, contract["id"])
+    assert [e["date"] for e in entries] == ["2026-07-05", "2026-07-20"]  # ascendente
+    payable_entry = entries[0]
+    assert payable_entry["source"] == "payable"
+    assert payable_entry["amount_cents"] == -30000  # sinal aplicado
+    assert payable_entry["categoria"] == "Insumos"
+    charge_entry = entries[1]
+    assert charge_entry["source"] == "charge"
+    assert charge_entry["amount_cents"] == 100000
+
+
+def test_ledger_excludes_other_contracts_and_canceled(client: TestClient, headers):
+    acc = _account(client, headers, "RECEITA", "Consultoria")
+    contract_a = _contract(client, headers, title="A")
+    contract_b = _contract(client, headers, title="B")
+    _charge(
+        client, headers, amount=50000, competence="2026-07-10",
+        account_id=acc, contract_id=contract_a["id"],
+    )
+    _charge(
+        client, headers, amount=999999, competence="2026-07-11",
+        account_id=acc, contract_id=contract_b["id"],
+    )
+    canceled = _charge(
+        client, headers, amount=1234, competence="2026-07-12",
+        account_id=acc, contract_id=contract_a["id"],
+    )
+    client.post(f"/receivables/charges/{canceled['id']}/cancel", headers=headers)
+
+    entries = _ledger(client, headers, contract_a["id"])
+    assert len(entries) == 1
+    assert entries[0]["amount_cents"] == 50000
+
+
+def test_ledger_unknown_contract_is_404(client: TestClient, headers):
+    r = client.get(
+        "/financial-intelligence/contracts/nao-existe/ledger",
+        params={"start": START, "end": END},
+        headers=headers,
+    )
+    assert r.status_code == 404

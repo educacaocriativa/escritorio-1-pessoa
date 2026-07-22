@@ -86,6 +86,16 @@ class ContractDreSummaryOut(BaseModel):
     resultado_cents: int
 
 
+class LedgerEntryOut(BaseModel):
+    id: str
+    source: str  # "charge" | "payable"
+    date: date
+    description: str
+    categoria: str
+    status: str
+    amount_cents: int
+
+
 # ── Projeção de fluxo de caixa 30/60/90 + runway (Story 5.7) ────────────────
 class ProjectionWindowOut(BaseModel):
     """Saldo de caixa projetado para uma janela (dias a partir de hoje), em regime de CAIXA.
