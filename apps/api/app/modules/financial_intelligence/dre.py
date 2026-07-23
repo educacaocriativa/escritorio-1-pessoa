@@ -34,10 +34,11 @@ Isolamento: nenhuma query filtra `tenant_id` manualmente — a RLS já fixou o t
 """
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import date
 
-from sqlalchemy import func, select
+from sqlalchemy import String, func, select
 from sqlalchemy.orm import Session
 
 from app.modules.chart_of_accounts.models import GROUP_ORDER, GRUPO_RECEITA, ChartAccount
@@ -394,4 +395,313 @@ def by_cost_center_report(db: Session, *, start: date, end: date) -> CostCenterR
         end=end,
         buckets=buckets,
         notes=[_NOTE_COMPETENCIA, _NOTE_CC_RESULTADO, _NOTE_NAO_ATRIBUIDO],
+    )
+
+
+# ── Matriz mensal (Story 5.11: meses x categorias) ──────────────────────────────────────────────
+def _month_keys(start: date, end: date) -> list[str]:
+    """Lista contígua de meses "YYYY-MM" entre `start` e `end` (inclusive) — mesas mesmo quando
+    não há nenhum lançamento no mês (a matriz não pode "pular" coluna)."""
+    months: list[str] = []
+    y, m = start.year, start.month
+    while (y, m) <= (end.year, end.month):
+        months.append(f"{y:04d}-{m:02d}")
+        m += 1
+        if m == 13:
+            m = 1
+            y += 1
+    return months
+
+
+def _sum_by_account_monthly(
+    db: Session,
+    model: type[Payable | Charge],
+    *,
+    start: date,
+    end: date,
+    canceled: str,
+    sign: int,
+    cost_center_id: str | None = None,
+) -> list[tuple[str, str | None, int]]:
+    """Como `_sum_by_account`, mas agrupando TAMBÉM por mês de competência (Story 5.11). O mês é
+    extraído com CAST para texto + SUBSTR (funciona igual em SQLite e Postgres, sem
+    `date_trunc`/`to_char` — os dois dialetos guardam/serializam a data em ISO 'YYYY-MM-DD').
+    Retorna (mês 'YYYY-MM', chart_account_id | None, soma_com_sinal) — sem contagem (a matriz não
+    usa `count`, ao contrário de `_sum_by_account`)."""
+    competence = func.coalesce(model.competence_date, model.due_date)
+    month_key = func.substr(func.cast(competence, String), 1, 7)
+    stmt = select(
+        month_key,
+        model.chart_account_id,
+        func.coalesce(func.sum(model.amount_cents), 0),
+    ).where(competence >= start, competence <= end, model.status != canceled)
+    if cost_center_id is not None:
+        stmt = stmt.where(model.cost_center_id == cost_center_id)
+    stmt = stmt.group_by(month_key, model.chart_account_id)
+    rows = db.execute(stmt).all()
+    return [(month, acc_id, sign * int(total or 0)) for month, acc_id, total in rows]
+
+
+def _sum_transactions_by_account_monthly(
+    db: Session, *, start: date, end: date, cost_center_id: str | None = None,
+) -> list[tuple[str, str | None, int]]:
+    """Como `_sum_transactions_by_account`, com o mês adicionado ao GROUP BY (Story 5.11)."""
+    competence = func.coalesce(Transaction.competence_date, func.date(Transaction.created_at))
+    month_key = func.substr(func.cast(competence, String), 1, 7)
+    stmt = select(
+        month_key,
+        Transaction.chart_account_id,
+        func.coalesce(func.sum(Transaction.gross_cents), 0),
+    ).where(
+        competence >= start,
+        competence <= end,
+        Transaction.status != TX_REFUNDED,
+        Transaction.external_ref.is_(None),
+    )
+    if cost_center_id is not None:
+        stmt = stmt.where(Transaction.cost_center_id == cost_center_id)
+    stmt = stmt.group_by(month_key, Transaction.chart_account_id)
+    rows = db.execute(stmt).all()
+    return [(month, acc_id, int(total or 0)) for month, acc_id, total in rows]
+
+
+@dataclass
+class DreMatrixRow:
+    label: str
+    kind: str  # "result" | "informational" | "uncategorized"
+    monthly_cents: list[int]
+    total_cents: int
+
+
+@dataclass
+class DreMatrixGroup:
+    key: str
+    # Nome do centro de custo (group_by="cost_center", "Não atribuído" incluso) — None quando
+    # group_by="dre" (o frontend já resolve o rótulo do grupo DRE a partir de `key`, código estável
+    # tipo "RECEITA"; não duplicamos essa tabela de tradução no backend).
+    label: str | None
+    rows: list[DreMatrixRow]
+    subtotal_cents: list[int]  # soma SÓ das linhas kind="result" (mesma exclusão do resultado)
+    subtotal_total: int
+
+
+@dataclass
+class DreMatrixReport:
+    months: list[str]
+    groups: list[DreMatrixGroup]
+    grand_total_cents: list[int]
+    grand_total: int
+    notes: list[str]
+
+
+def _row_kind(grupo: str | None) -> str:
+    if grupo is None:
+        return "uncategorized"
+    if grupo == "INVESTIMENTO":
+        return "informational"
+    return "result"
+
+
+def _build_matrix_group(
+    key: str,
+    label: str | None,
+    cats: dict[tuple[str | None, str], list[int]],
+    kind_of: Callable[[tuple[str | None, str]], str],
+    n: int,
+) -> DreMatrixGroup:
+    """`cats` é chaveado por (grupo_dre_de_origem | None, categoria) — NÃO só por categoria —
+    porque `categoria` é única apenas DENTRO de um grupo_dre (constraint do plano de contas),
+    nunca por tenant inteiro. Em group_by="cost_center" um único centro de custo pode ter duas
+    contas com o MESMO nome de categoria em grupos DIFERENTES (ex.: "Equipamentos" em
+    INVESTIMENTO e em CUSTO_DIRETO); sem essa chave composta, as duas se fundiriam numa linha só
+    e o `kind` (result/informational) de uma sobrescreveria o da outra silenciosamente."""
+    rows = []
+    for cat_key in sorted(cats, key=lambda k: k[1]):
+        cents = cats[cat_key]
+        rows.append(
+            DreMatrixRow(
+                label=cat_key[1], kind=kind_of(cat_key), monthly_cents=cents,
+                total_cents=sum(cents),
+            )
+        )
+    subtotal = [sum(r.monthly_cents[i] for r in rows if r.kind == "result") for i in range(n)]
+    return DreMatrixGroup(
+        key=key, label=label, rows=rows, subtotal_cents=subtotal, subtotal_total=sum(subtotal),
+    )
+
+
+def dre_matrix_report(
+    db: Session,
+    *,
+    start: date,
+    end: date,
+    group_by: str = "dre",
+    cost_center_id: str | None = None,
+) -> DreMatrixReport:
+    """DRE em matriz (mês x categoria), regime de competência (Story 5.11). SOMENTE LEITURA.
+
+    `group_by="dre"`: mesma hierarquia grupo->categoria de `dre_report`, com o eixo de mês
+    adicionado. Aceita `cost_center_id` opcional (mesma semântica de `dre_report`).
+    `group_by="cost_center"`: agrupa por centro de custo em vez de grupo DRE — implementado na
+    Story 5.11 Task 4 (ver `_dre_matrix_by_cost_center`).
+
+    Em AMBOS os modos, cada LINHA (não o grupo) carrega seu próprio `kind` — necessário porque em
+    `group_by="cost_center"` um único centro de custo pode conter categorias de mais de um grupo
+    DRE (ex.: uma categoria de INVESTIMENTO e uma de RECEITA sob o mesmo centro de custo). O
+    subtotal de cada grupo e o `grand_total` somam SÓ linhas `kind="result"` — mesma exclusão de
+    INVESTIMENTO/sem-categoria que a DRE por categoria já aplica hoje."""
+    if group_by not in ("dre", "cost_center"):
+        raise ValueError(f"group_by inválido: {group_by}")
+    months = _month_keys(start, end)
+    n = len(months)
+    month_index = {mo: i for i, mo in enumerate(months)}
+
+    if group_by == "cost_center":
+        return _dre_matrix_by_cost_center(
+            db, start=start, end=end, months=months, month_index=month_index, n=n,
+        )
+
+    account_map: dict[str, tuple[str, str]] = {
+        a.id: (a.grupo_dre, a.categoria) for a in db.scalars(select(ChartAccount)).all()
+    }
+
+    aggregated = _sum_by_account_monthly(
+        db, Charge, start=start, end=end, canceled=CHARGE_CANCELED, sign=1,
+        cost_center_id=cost_center_id,
+    ) + _sum_by_account_monthly(
+        db, Payable, start=start, end=end, canceled=PAYABLE_CANCELED, sign=-1,
+        cost_center_id=cost_center_id,
+    ) + _sum_transactions_by_account_monthly(
+        db, start=start, end=end, cost_center_id=cost_center_id,
+    )
+
+    by_group: dict[str, dict[tuple[str | None, str], list[int]]] = {g: {} for g in GROUP_ORDER}
+    sem_by_month = [0] * n
+
+    for month, acc_id, amount in aggregated:
+        idx = month_index[month]
+        resolved = account_map.get(acc_id) if acc_id else None
+        if resolved is None:
+            sem_by_month[idx] += amount
+            continue
+        grupo, categoria = resolved
+        cents = by_group.setdefault(grupo, {}).setdefault((grupo, categoria), [0] * n)
+        cents[idx] += amount
+
+    groups = [
+        _build_matrix_group(grupo, None, by_group[grupo], lambda k: _row_kind(k[0]), n)
+        for grupo in GROUP_ORDER
+    ]
+    has_sem_categoria = any(c != 0 for c in sem_by_month)
+    if has_sem_categoria:
+        groups.append(
+            _build_matrix_group(
+                "SEM_CATEGORIA", None, {(None, "Sem categoria"): sem_by_month},
+                lambda k: _row_kind(k[0]), n,
+            )
+        )
+
+    grand_total = [sum(g.subtotal_cents[i] for g in groups) for i in range(n)]
+    notes = [_NOTE_COMPETENCIA, _NOTE_INVESTIMENTO]
+    if has_sem_categoria:
+        notes.append(_NOTE_SEM_CATEGORIA)
+
+    return DreMatrixReport(
+        months=months, groups=groups, grand_total_cents=grand_total,
+        grand_total=sum(grand_total), notes=notes,
+    )
+
+
+def _sum_by_cost_center_and_account_monthly(
+    db: Session, model: type[Payable | Charge], *, start: date, end: date, canceled: str, sign: int,
+) -> list[tuple[str, str | None, str | None, int]]:
+    """Como `_sum_by_cost_center_and_account`, com o mês adicionado ao GROUP BY (Story 5.11)."""
+    competence = func.coalesce(model.competence_date, model.due_date)
+    month_key = func.substr(func.cast(competence, String), 1, 7)
+    rows = db.execute(
+        select(
+            month_key,
+            model.cost_center_id,
+            model.chart_account_id,
+            func.coalesce(func.sum(model.amount_cents), 0),
+        )
+        .where(competence >= start, competence <= end, model.status != canceled)
+        .group_by(month_key, model.cost_center_id, model.chart_account_id)
+    ).all()
+    return [(month, cc_id, acc_id, sign * int(total or 0)) for month, cc_id, acc_id, total in rows]
+
+
+def _sum_transactions_by_cost_center_and_account_monthly(
+    db: Session, *, start: date, end: date,
+) -> list[tuple[str, str | None, str | None, int]]:
+    """Como `_sum_transactions_by_cost_center_and_account`, com o mês no GROUP BY (Story 5.11)."""
+    competence = func.coalesce(Transaction.competence_date, func.date(Transaction.created_at))
+    month_key = func.substr(func.cast(competence, String), 1, 7)
+    rows = db.execute(
+        select(
+            month_key,
+            Transaction.cost_center_id,
+            Transaction.chart_account_id,
+            func.coalesce(func.sum(Transaction.gross_cents), 0),
+        )
+        .where(
+            competence >= start,
+            competence <= end,
+            Transaction.status != TX_REFUNDED,
+            Transaction.external_ref.is_(None),
+        )
+        .group_by(month_key, Transaction.cost_center_id, Transaction.chart_account_id)
+    ).all()
+    return [(month, cc_id, acc_id, int(total or 0)) for month, cc_id, acc_id, total in rows]
+
+
+def _dre_matrix_by_cost_center(
+    db: Session, *, start: date, end: date, months: list[str], month_index: dict[str, int], n: int,
+) -> DreMatrixReport:
+    account_map: dict[str, tuple[str, str]] = {
+        a.id: (a.grupo_dre, a.categoria) for a in db.scalars(select(ChartAccount)).all()
+    }
+    centers = list(db.scalars(select(CostCenter)).all())
+    cc_map: dict[str, CostCenter] = {c.id: c for c in centers}
+
+    aggregated = _sum_by_cost_center_and_account_monthly(
+        db, Charge, start=start, end=end, canceled=CHARGE_CANCELED, sign=1,
+    ) + _sum_by_cost_center_and_account_monthly(
+        db, Payable, start=start, end=end, canceled=PAYABLE_CANCELED, sign=-1,
+    ) + _sum_transactions_by_cost_center_and_account_monthly(db, start=start, end=end)
+
+    # cost_center_id | None -> (grupo_dre | None, categoria) -> cents_por_mes
+    by_cc: dict[str | None, dict[tuple[str | None, str], list[int]]] = {}
+    for month, cc_id, acc_id, amount in aggregated:
+        idx = month_index[month]
+        resolved = account_map.get(acc_id) if acc_id else None
+        grupo = resolved[0] if resolved else None
+        categoria = resolved[1] if resolved else "Sem categoria"
+        cents = by_cc.setdefault(cc_id, {}).setdefault((grupo, categoria), [0] * n)
+        cents[idx] += amount
+
+    groups: list[DreMatrixGroup] = []
+    seen: set[str] = set()
+    for c in sorted((c for c in centers if c.archived_at is None), key=lambda c: c.name.lower()):
+        cats = by_cc.get(c.id, {})
+        groups.append(_build_matrix_group(c.id, c.name, cats, lambda k: _row_kind(k[0]), n))
+        seen.add(c.id)
+    for cc_id, cats in by_cc.items():
+        if cc_id is None or cc_id in seen:
+            continue
+        c = cc_map.get(cc_id)
+        label = c.name if c else "(centro removido)"
+        groups.append(_build_matrix_group(cc_id, label, cats, lambda k: _row_kind(k[0]), n))
+    if None in by_cc:
+        groups.append(
+            _build_matrix_group(
+                "_unassigned", NAO_ATRIBUIDO, by_cc[None], lambda k: _row_kind(k[0]), n,
+            )
+        )
+
+    grand_total = [sum(g.subtotal_cents[i] for g in groups) for i in range(n)]
+    notes = [_NOTE_COMPETENCIA, _NOTE_INVESTIMENTO, _NOTE_NAO_ATRIBUIDO]
+    return DreMatrixReport(
+        months=months, groups=groups, grand_total_cents=grand_total,
+        grand_total=sum(grand_total), notes=notes,
     )

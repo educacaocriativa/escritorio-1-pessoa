@@ -1,71 +1,41 @@
-import { ChevronDown, ChevronLeft, ChevronRight } from "lucide-react";
-import { useCallback, useEffect, useMemo, useState } from "react";
+// apps/web/src/features/financeiro/DrePage.tsx
+import { useCallback, useEffect, useState } from "react";
 import { api, apiErrorMessage } from "../../lib/api";
-import type { CostCenter } from "./costCenters";
-import { buildDreView, type DreReport, type DreRow, formatBRL } from "./dre";
+import { formatBRL } from "./dre";
+import { matrixGroupLabel, type DreMatrixGroup, type DreMatrixReport, type GroupBy } from "./dreMatrix";
+import PeriodPicker from "./PeriodPicker";
+import { resolvePeriod, type PeriodRange } from "./periodRange";
 
 /**
- * DRE por categoria (Story 5.3) — relatório hierárquico (grupo DRE → categoria) por período, em
- * regime de COMPETÊNCIA. Read-only: só lê a agregação do backend, não altera nada. Design "Portal".
+ * DRE em matriz mensal (Story 5.11) — meses nas colunas, categorias nas linhas, agrupável por
+ * grupo DRE ou por centro de custo. Substitui a DRE de período único (Story 5.3). Read-only: só
+ * lê a agregação do backend, não altera nada. Design "Portal".
  */
-
-/** Primeiro/último dia do mês "YYYY-MM" (bordas de data de calendário, sem depender de fuso). */
-function monthRange(month: string): { start: string; end: string } {
-  const [y, m] = month.split("-").map(Number);
-  const lastDay = new Date(Date.UTC(y, m, 0)).getUTCDate();
-  return { start: `${month}-01`, end: `${month}-${String(lastDay).padStart(2, "0")}` };
-}
-
-function currentMonth(): string {
-  const now = new Date();
-  return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}`;
-}
-
-function shiftMonth(month: string, delta: number): string {
-  const [y, m] = month.split("-").map(Number);
-  const d = new Date(Date.UTC(y, m - 1 + delta, 1));
-  return `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, "0")}`;
-}
-
 export default function DrePage() {
-  const [month, setMonth] = useState(currentMonth);
-  const [costCenterId, setCostCenterId] = useState(""); // "" = todos os centros de custo
-  const [costCenters, setCostCenters] = useState<CostCenter[]>([]);
-  const [report, setReport] = useState<DreReport | null>(null);
+  const [period, setPeriod] = useState<PeriodRange>(() => resolvePeriod("this_year"));
+  const [groupBy, setGroupBy] = useState<GroupBy>("dre");
+  const [report, setReport] = useState<DreMatrixReport | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
-
-  // Centros de custo do tenant (2ª dimensão, Story 5.5) para o filtro opcional.
-  useEffect(() => {
-    api
-      .get<CostCenter[]>("/cost-centers")
-      .then((r) => setCostCenters(r.data))
-      .catch(() => setCostCenters([]));
-  }, []);
 
   const load = useCallback(async () => {
     setError(null);
     setLoading(true);
-    const { start, end } = monthRange(month);
     try {
-      // cost_center_id só entra quando um centro específico é escolhido — "Todos" (vazio) mantém a
-      // visão padrão IDÊNTICA à da Story 5.3 (não quebra quem não usa a 2ª dimensão).
-      const params: Record<string, string> = { start, end };
-      if (costCenterId) params.cost_center_id = costCenterId;
-      const { data } = await api.get<DreReport>("/financial-intelligence/dre", { params });
+      const { data } = await api.get<DreMatrixReport>("/financial-intelligence/dre/matrix", {
+        params: { start: period.start, end: period.end, group_by: groupBy },
+      });
       setReport(data);
     } catch (err) {
       setError(apiErrorMessage(err));
     } finally {
       setLoading(false);
     }
-  }, [month, costCenterId]);
+  }, [period, groupBy]);
 
   useEffect(() => {
     load();
   }, [load]);
-
-  const view = useMemo(() => (report ? buildDreView(report) : null), [report]);
 
   return (
     <div className="space-y-6">
@@ -74,63 +44,60 @@ export default function DrePage() {
           <p className="text-sm text-neutral-500">Página / Financeiro / DRE</p>
           <h1 className="text-2xl font-bold text-neutral-800">DRE por categoria</h1>
           <p className="mt-1 max-w-2xl text-sm text-neutral-500">
-            Demonstrativo de resultado por grupo (Receita, Custos, Despesas, Tributos, Financeiro)
-            em regime de competência. Clique num grupo para ver as categorias.
+            Demonstrativo de resultado mês a mês, em regime de competência. Agrupe por grupo DRE
+            ou por centro de custo e escolha o período.
           </p>
         </div>
         <div className="flex flex-wrap items-center gap-2">
-          {costCenters.length > 0 && (
-            <select
-              value={costCenterId}
-              onChange={(e) => setCostCenterId(e.target.value)}
-              aria-label="Filtrar por centro de custo"
-              className="rounded-lg border border-neutral-200 px-3 py-2 text-sm outline-none focus:border-primary-400"
-            >
-              <option value="">Todos os centros de custo</option>
-              {costCenters.map((c) => (
-                <option key={c.id} value={c.id}>
-                  {c.name}
-                </option>
-              ))}
-            </select>
-          )}
-          <button
-            onClick={() => setMonth((mo) => shiftMonth(mo, -1))}
-            aria-label="Mês anterior"
-            className="rounded-lg border border-neutral-200 p-2 text-neutral-500 hover:bg-neutral-50"
-          >
-            <ChevronLeft size={16} />
-          </button>
-          <input
-            type="month"
-            value={month}
-            onChange={(e) => setMonth(e.target.value || currentMonth())}
+          <select
+            value={groupBy}
+            onChange={(e) => setGroupBy(e.target.value as GroupBy)}
+            aria-label="Agrupar por"
             className="rounded-lg border border-neutral-200 px-3 py-2 text-sm outline-none focus:border-primary-400"
-          />
-          <button
-            onClick={() => setMonth((mo) => shiftMonth(mo, 1))}
-            aria-label="Próximo mês"
-            className="rounded-lg border border-neutral-200 p-2 text-neutral-500 hover:bg-neutral-50"
           >
-            <ChevronRight size={16} />
-          </button>
+            <option value="dre">Por grupo DRE</option>
+            <option value="cost_center">Por centro de custo</option>
+          </select>
+          <PeriodPicker value={period} onChange={setPeriod} />
         </div>
       </div>
 
       {error && <p className="rounded-lg bg-red-50 p-2 text-sm text-danger">{error}</p>}
 
-      {view && (
-        <ResultCard
-          resultadoCents={view.resultado_cents}
-          loading={loading}
-        />
+      {report && (
+        <div className="rounded-2xl bg-white p-5 shadow-sm">
+          <p className="text-sm text-neutral-500">Resultado do período</p>
+          <p className={`mt-1 text-3xl font-bold ${report.grand_total >= 0 ? "text-emerald-600" : "text-danger"}`}>
+            {loading ? "…" : formatBRL(report.grand_total)}
+          </p>
+        </div>
       )}
 
-      <div className="space-y-3">
-        {view?.rows.map((row) => (
-          <GroupRow key={row.grupo_dre} row={row} />
-        ))}
-      </div>
+      {report && (
+        <div className="overflow-x-auto rounded-2xl bg-white shadow-sm">
+          <table className="w-full text-sm">
+            <thead>
+              <tr className="border-b border-neutral-100 text-left text-xs uppercase text-neutral-400">
+                <th className="sticky left-0 bg-white px-4 py-3">Categoria</th>
+                {report.months.map((m) => (
+                  <th key={m} className="px-4 py-3 text-right">{m}</th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {report.groups.map((g) => (
+                <MatrixGroupRows key={g.key} group={g} groupBy={groupBy} />
+              ))}
+              <tr className="border-t-2 border-neutral-200 font-bold">
+                <td className="sticky left-0 bg-white px-4 py-3">TOTAL GERAL</td>
+                {report.grand_total_cents.map((c, i) => (
+                  <td key={i} className="px-4 py-3 text-right">{formatBRL(c)}</td>
+                ))}
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      )}
 
       {report && report.notes.length > 0 && (
         <ul className="space-y-1 text-xs text-neutral-400">
@@ -143,93 +110,35 @@ export default function DrePage() {
   );
 }
 
-function ResultCard({ resultadoCents, loading }: { resultadoCents: number; loading: boolean }) {
-  const positive = resultadoCents >= 0;
+function MatrixGroupRows({ group, groupBy }: { group: DreMatrixGroup; groupBy: GroupBy }) {
+  const monthsCount = group.subtotal_cents.length;
+  const isUncategorized = group.rows.length > 0 && group.rows.every((r) => r.kind === "uncategorized");
   return (
-    <div className="rounded-2xl bg-white p-5 shadow-sm">
-      <p className="text-sm text-neutral-500">Resultado do período</p>
-      <p
-        className={`mt-1 text-3xl font-bold ${positive ? "text-emerald-600" : "text-danger"}`}
-      >
-        {loading ? "…" : formatBRL(resultadoCents)}
-      </p>
-      <p className="mt-1 text-xs text-neutral-400">
-        Receita − Custos − Despesas − Tributos ± Financeiro (Investimento e lançamentos sem
-        categoria ficam de fora).
-      </p>
-    </div>
-  );
-}
-
-function GroupRow({ row }: { row: DreRow }) {
-  const [expanded, setExpanded] = useState(false);
-  const negative = row.total_cents < 0;
-  const isUncategorized = row.kind === "uncategorized";
-  const isInformational = row.kind === "informational";
-  const totalCount = row.categorias.reduce((s, c) => s + c.count, 0);
-
-  return (
-    <div
-      className={`overflow-hidden rounded-2xl shadow-sm ${
-        isUncategorized ? "bg-amber-50 ring-1 ring-amber-200" : "bg-white"
-      }`}
-    >
-      <button
-        onClick={() => setExpanded((v) => !v)}
-        className="flex w-full items-center justify-between px-5 py-3 text-left hover:bg-neutral-50/60"
-      >
-        <span className="flex items-center gap-2">
-          <ChevronDown
-            size={18}
-            className={`text-neutral-400 transition-transform ${expanded ? "" : "-rotate-90"}`}
-          />
-          <span className="font-semibold text-neutral-800">{row.label}</span>
-          {totalCount > 0 && (
-            <span className="rounded-pill bg-neutral-100 px-2 py-0.5 text-xs text-neutral-500">
-              {totalCount}
-            </span>
-          )}
-          {isInformational && (
-            <span className="rounded-pill bg-neutral-100 px-2 py-0.5 text-xs text-neutral-500">
-              fora do resultado
-            </span>
-          )}
-          {isUncategorized && (
-            <span className="rounded-pill bg-amber-100 px-2 py-0.5 text-xs text-amber-700">
-              classifique no plano de contas
-            </span>
-          )}
-        </span>
-        <span className={`font-semibold ${negative ? "text-danger" : "text-neutral-800"}`}>
-          {formatBRL(row.total_cents)}
-        </span>
-      </button>
-      {expanded && (
-        <div className="border-t border-neutral-100">
-          {row.categorias.length === 0 ? (
-            <p className="px-5 py-3 text-sm text-neutral-400">Sem lançamentos neste período.</p>
-          ) : (
-            <ul className="divide-y divide-neutral-50">
-              {row.categorias.map((c) => (
-                <li
-                  key={c.categoria}
-                  className="flex items-center justify-between px-5 py-2.5 text-sm"
-                >
-                  <span className="text-neutral-700">
-                    {c.categoria}
-                    <span className="ml-2 text-xs text-neutral-400">
-                      {c.count} {c.count === 1 ? "lançamento" : "lançamentos"}
-                    </span>
-                  </span>
-                  <span className={c.amount_cents < 0 ? "text-danger" : "text-neutral-700"}>
-                    {formatBRL(c.amount_cents)}
-                  </span>
-                </li>
-              ))}
-            </ul>
-          )}
-        </div>
-      )}
-    </div>
+    <>
+      <tr className={isUncategorized ? "bg-amber-50" : "bg-neutral-50/60"}>
+        <td
+          className="sticky left-0 bg-inherit px-4 py-2 font-semibold text-neutral-800"
+          colSpan={1 + monthsCount}
+        >
+          {matrixGroupLabel(group, groupBy)}
+        </td>
+      </tr>
+      {group.rows.map((r) => (
+        <tr key={r.label} className={r.kind === "informational" ? "text-neutral-400" : ""}>
+          <td className="sticky left-0 bg-white px-4 py-2 pl-8">{r.label}</td>
+          {r.monthly_cents.map((c, i) => (
+            <td key={i} className={`px-4 py-2 text-right ${c < 0 ? "text-danger" : ""}`}>
+              {formatBRL(c)}
+            </td>
+          ))}
+        </tr>
+      ))}
+      <tr className="font-semibold">
+        <td className="sticky left-0 bg-white px-4 py-2 pl-8">Subtotal</td>
+        {group.subtotal_cents.map((c, i) => (
+          <td key={i} className="px-4 py-2 text-right">{formatBRL(c)}</td>
+        ))}
+      </tr>
+    </>
   );
 }

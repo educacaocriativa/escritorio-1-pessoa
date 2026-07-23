@@ -374,3 +374,147 @@ def test_link_to_missing_contract_is_404(client: TestClient, headers):
         headers=headers,
     )
     assert r.status_code == 404
+
+
+def _ranking(client, headers, *, start=START, end=END, include_overhead=False):
+    r = client.get(
+        "/financial-intelligence/contracts-dre",
+        params={"start": start, "end": end, "include_overhead": include_overhead},
+        headers=headers,
+    )
+    assert r.status_code == 200, r.text
+    return r.json()
+
+
+def _sign_contract_via_link(client, headers, contract_id: str) -> None:
+    """Assina o contrato pelo link público (é o único caminho de negócio até status='signed')."""
+    slug = None
+    # o slug não é devolvido pelo POST /contracts padrão do fixture `_contract`; buscamos direto.
+    # NOTA: GET /contracts/{id} exige auth (Depends(_guard)) — headers precisa ser repassado aqui,
+    # senão a chamada devolve 401 antes mesmo de chegar ao endpoint de ranking sob teste.
+    r = client.get(f"/contracts/{contract_id}", headers=headers)
+    slug = r.json()["public_slug"]
+    r2 = client.post(
+        f"/public/contracts/{slug}/sign",
+        json={"name": "Cliente Teste", "document": "52998224725"},
+    )
+    assert r2.status_code == 200, r2.text
+
+
+def test_ranking_only_lists_signed_contracts(client: TestClient, headers):
+    draft = _contract(client, headers, title="Rascunho")
+    signed = _contract(client, headers, title="Assinado")
+    _sign_contract_via_link(client, headers, signed["id"])
+
+    body = _ranking(client, headers)
+    titles = {row["title"] for row in body}
+    assert titles == {"Assinado"}
+    assert draft["title"] not in titles
+
+
+def test_ranking_includes_signed_contract_with_zero_movement(client: TestClient, headers):
+    signed = _contract(client, headers, title="Parado")
+    _sign_contract_via_link(client, headers, signed["id"])
+
+    body = _ranking(client, headers)
+    row = next(r for r in body if r["title"] == "Parado")
+    assert row["receita_cents"] == 0
+    assert row["custo_direto_cents"] == 0
+    assert row["margem_contribuicao_cents"] == 0
+    assert row["margem_contribuicao_pct"] is None
+    assert row["resultado_cents"] == 0
+
+
+def test_ranking_reflects_margin_and_include_overhead(client: TestClient, headers):
+    acc_receita = _account(client, headers, "RECEITA", "Consultoria")
+    acc_custo = _account(client, headers, "CUSTO_DIRETO", "Insumos")
+    contract = _contract(client, headers, title="Projeto A")
+    _sign_contract_via_link(client, headers, contract["id"])
+    _charge(
+        client, headers, amount=100000, competence="2026-07-10",
+        account_id=acc_receita, contract_id=contract["id"],
+    )
+    _payable(
+        client, headers, amount=20000, competence="2026-07-08",
+        account_id=acc_custo, contract_id=contract["id"],
+    )
+
+    body = _ranking(client, headers)
+    row = next(r for r in body if r["title"] == "Projeto A")
+    assert row["receita_cents"] == 100000
+    assert row["custo_direto_cents"] == -20000
+    assert row["margem_contribuicao_cents"] == 80000
+    assert row["overhead_allocated_cents"] == 0  # include_overhead=False por padrão
+
+    body_with_overhead = _ranking(client, headers, include_overhead=True)
+    row2 = next(r for r in body_with_overhead if r["title"] == "Projeto A")
+    # overhead pode ser 0 (sem despesa fixa "Empresa" no cenário) — o que importa é que o campo
+    # responde ao toggle sem quebrar; a lógica de rateio em si já é coberta pelos testes de
+    # contract_dre/allocate_overhead existentes acima neste arquivo.
+    assert "overhead_allocated_cents" in row2
+
+
+def _ledger(client, headers, contract_id, *, start=START, end=END):
+    r = client.get(
+        f"/financial-intelligence/contracts/{contract_id}/ledger",
+        params={"start": start, "end": end},
+        headers=headers,
+    )
+    assert r.status_code == 200, r.text
+    return r.json()
+
+
+def test_ledger_lists_individual_entries_signed_and_sorted(client: TestClient, headers):
+    acc_receita = _account(client, headers, "RECEITA", "Consultoria")
+    acc_custo = _account(client, headers, "CUSTO_DIRETO", "Insumos")
+    contract = _contract(client, headers, title="Projeto Ledger")
+    _charge(
+        client, headers, amount=100000, competence="2026-07-20",
+        account_id=acc_receita, contract_id=contract["id"],
+    )
+    _payable(
+        client, headers, amount=30000, competence="2026-07-05",
+        account_id=acc_custo, contract_id=contract["id"],
+    )
+
+    entries = _ledger(client, headers, contract["id"])
+    assert [e["date"] for e in entries] == ["2026-07-05", "2026-07-20"]  # ascendente
+    payable_entry = entries[0]
+    assert payable_entry["source"] == "payable"
+    assert payable_entry["amount_cents"] == -30000  # sinal aplicado
+    assert payable_entry["categoria"] == "Insumos"
+    charge_entry = entries[1]
+    assert charge_entry["source"] == "charge"
+    assert charge_entry["amount_cents"] == 100000
+
+
+def test_ledger_excludes_other_contracts_and_canceled(client: TestClient, headers):
+    acc = _account(client, headers, "RECEITA", "Consultoria")
+    contract_a = _contract(client, headers, title="A")
+    contract_b = _contract(client, headers, title="B")
+    _charge(
+        client, headers, amount=50000, competence="2026-07-10",
+        account_id=acc, contract_id=contract_a["id"],
+    )
+    _charge(
+        client, headers, amount=999999, competence="2026-07-11",
+        account_id=acc, contract_id=contract_b["id"],
+    )
+    canceled = _charge(
+        client, headers, amount=1234, competence="2026-07-12",
+        account_id=acc, contract_id=contract_a["id"],
+    )
+    client.post(f"/receivables/charges/{canceled['id']}/cancel", headers=headers)
+
+    entries = _ledger(client, headers, contract_a["id"])
+    assert len(entries) == 1
+    assert entries[0]["amount_cents"] == 50000
+
+
+def test_ledger_unknown_contract_is_404(client: TestClient, headers):
+    r = client.get(
+        "/financial-intelligence/contracts/nao-existe/ledger",
+        params={"start": START, "end": END},
+        headers=headers,
+    )
+    assert r.status_code == 404

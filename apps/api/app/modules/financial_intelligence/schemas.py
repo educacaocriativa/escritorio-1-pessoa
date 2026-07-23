@@ -71,6 +71,31 @@ class ContractDreOut(BaseModel):
     notes: list[str]
 
 
+class ContractDreSummaryOut(BaseModel):
+    """Uma linha do ranking de lucratividade (Story 5.12) — mesmos campos-chave do `ContractDreOut`
+    de um contrato só, sem o detalhe de categorias (a lista completa é obtida via `/ledger`)."""
+
+    contract_id: str
+    title: str
+    client_name: str | None
+    receita_cents: int
+    custo_direto_cents: int
+    margem_contribuicao_cents: int
+    margem_contribuicao_pct: float | None
+    overhead_allocated_cents: int
+    resultado_cents: int
+
+
+class LedgerEntryOut(BaseModel):
+    id: str
+    source: str  # "charge" | "payable"
+    date: date
+    description: str
+    categoria: str
+    status: str
+    amount_cents: int
+
+
 # ── Projeção de fluxo de caixa 30/60/90 + runway (Story 5.7) ────────────────
 class ProjectionWindowOut(BaseModel):
     """Saldo de caixa projetado para uma janela (dias a partir de hoje), em regime de CAIXA.
@@ -169,3 +194,31 @@ class DiagnosticsOut(BaseModel):
     signals: list[SignalOut]
     narrative: str
     narrative_source: str  # "ai" | "template"
+
+
+# ── DRE em matriz mensal (Story 5.11) ───────────────────────────────────────
+class DreMatrixRowOut(BaseModel):
+    label: str
+    kind: str  # "result" | "informational" | "uncategorized"
+    monthly_cents: list[int]
+    total_cents: int
+
+
+class DreMatrixGroupOut(BaseModel):
+    key: str
+    label: str | None
+    rows: list[DreMatrixRowOut]
+    subtotal_cents: list[int]
+    subtotal_total: int
+
+
+class DreMatrixReportOut(BaseModel):
+    """Matriz mês x categoria (Story 5.11). `groups` é a hierarquia grupo/centro-de-custo ->
+    categoria; cada linha carrega seu próprio `kind` (ver docstring de `dre_matrix_report`).
+    `grand_total_cents` soma só as linhas `kind="result"` de todos os grupos, mês a mês."""
+
+    months: list[str]
+    groups: list[DreMatrixGroupOut]
+    grand_total_cents: list[int]
+    grand_total: int
+    notes: list[str]

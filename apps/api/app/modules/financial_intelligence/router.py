@@ -19,12 +19,17 @@ from app.modules.financial_intelligence.profitability import ContractDre, Contra
 from app.modules.financial_intelligence.projection import CashProjection
 from app.modules.financial_intelligence.schemas import (
     ContractDreOut,
+    ContractDreSummaryOut,
     CostCenterBucketOut,
     CostCenterReportOut,
     DiagnosticsOut,
     DreCategoryOut,
     DreGroupOut,
+    DreMatrixGroupOut,
+    DreMatrixReportOut,
+    DreMatrixRowOut,
     DreReportOut,
+    LedgerEntryOut,
     ProjectionOut,
     ProjectionWindowOut,
     RunwayOut,
@@ -85,6 +90,52 @@ def dre(
     _require_cost_center(db, cost_center_id)
     report = dre_service.dre_report(db, start=start, end=end, cost_center_id=cost_center_id)
     return _report_out(report)
+
+
+def _matrix_row_out(r: dre_service.DreMatrixRow) -> DreMatrixRowOut:
+    return DreMatrixRowOut(
+        label=r.label, kind=r.kind, monthly_cents=r.monthly_cents, total_cents=r.total_cents,
+    )
+
+
+def _matrix_group_out(g: dre_service.DreMatrixGroup) -> DreMatrixGroupOut:
+    return DreMatrixGroupOut(
+        key=g.key, label=g.label, rows=[_matrix_row_out(r) for r in g.rows],
+        subtotal_cents=g.subtotal_cents, subtotal_total=g.subtotal_total,
+    )
+
+
+def _matrix_report_out(r: dre_service.DreMatrixReport) -> DreMatrixReportOut:
+    return DreMatrixReportOut(
+        months=r.months, groups=[_matrix_group_out(g) for g in r.groups],
+        grand_total_cents=r.grand_total_cents, grand_total=r.grand_total, notes=r.notes,
+    )
+
+
+@router.get("/dre/matrix", response_model=DreMatrixReportOut)
+def dre_matrix(
+    start: date = Query(..., description="Início do período (data de competência), YYYY-MM-DD"),
+    end: date = Query(..., description="Fim do período (data de competência), YYYY-MM-DD"),
+    group_by: str = Query(
+        default="dre",
+        pattern="^(dre|cost_center)$",
+        description="Story 5.11: 'dre' (grupo DRE, padrão) ou 'cost_center' (centro de custo).",
+    ),
+    cost_center_id: str | None = Query(
+        default=None,
+        description="Filtra por centro de custo — só se aplica quando group_by='dre'.",
+    ),
+    _user: CurrentUser = Depends(_guard),
+    db: Session = Depends(get_tenant_db),
+) -> DreMatrixReportOut:
+    if end < start:
+        raise HTTPException(status_code=422, detail="'end' não pode ser anterior a 'start'")
+    cost_center_id = cost_center_id or None
+    _require_cost_center(db, cost_center_id)
+    report = dre_service.dre_matrix_report(
+        db, start=start, end=end, group_by=group_by, cost_center_id=cost_center_id,
+    )
+    return _matrix_report_out(report)
 
 
 def _cost_center_bucket_out(b: dre_service.CostCenterBucket) -> CostCenterBucketOut:
@@ -217,6 +268,59 @@ def contract_dre(
         cost_center_id=cost_center_id,
     )
     return _contract_dre_out(report)
+
+
+def _contract_dre_summary_out(s: profitability_service.ContractDreSummary) -> ContractDreSummaryOut:
+    return ContractDreSummaryOut(
+        contract_id=s.contract_id, title=s.title, client_name=s.client_name,
+        receita_cents=s.receita_cents, custo_direto_cents=s.custo_direto_cents,
+        margem_contribuicao_cents=s.margem_contribuicao_cents,
+        margem_contribuicao_pct=s.margem_contribuicao_pct,
+        overhead_allocated_cents=s.overhead_allocated_cents, resultado_cents=s.resultado_cents,
+    )
+
+
+@router.get("/contracts-dre", response_model=list[ContractDreSummaryOut])
+def contracts_dre(
+    start: date = Query(..., description="Início do período (data de competência), YYYY-MM-DD"),
+    end: date = Query(..., description="Fim do período (data de competência), YYYY-MM-DD"),
+    include_overhead: bool = Query(
+        default=False, description="Inclui o rateio de overhead em todas as linhas do ranking.",
+    ),
+    _user: CurrentUser = Depends(_guard),
+    db: Session = Depends(get_tenant_db),
+) -> list[ContractDreSummaryOut]:
+    if end < start:
+        raise HTTPException(status_code=422, detail="'end' não pode ser anterior a 'start'")
+    summaries = profitability_service.contracts_dre_report(
+        db, start=start, end=end, include_overhead=include_overhead,
+    )
+    return [_contract_dre_summary_out(s) for s in summaries]
+
+
+def _ledger_entry_out(e: profitability_service.LedgerEntry) -> LedgerEntryOut:
+    return LedgerEntryOut(
+        id=e.id, source=e.source, date=e.date, description=e.description,
+        categoria=e.categoria, status=e.status, amount_cents=e.amount_cents,
+    )
+
+
+@router.get("/contracts/{contract_id}/ledger", response_model=list[LedgerEntryOut])
+def contract_ledger_route(
+    contract_id: str,
+    start: date = Query(..., description="Início do período (data de competência), YYYY-MM-DD"),
+    end: date = Query(..., description="Fim do período (data de competência), YYYY-MM-DD"),
+    _user: CurrentUser = Depends(_guard),
+    db: Session = Depends(get_tenant_db),
+) -> list[LedgerEntryOut]:
+    if end < start:
+        raise HTTPException(status_code=422, detail="'end' não pode ser anterior a 'start'")
+    try:
+        contract = contracts_service.get_contract(db, contract_id)
+    except contracts_service.ContractError as e:
+        raise HTTPException(status_code=e.status_code, detail=str(e)) from e
+    entries = profitability_service.contract_ledger(db, contract=contract, start=start, end=end)
+    return [_ledger_entry_out(e) for e in entries]
 
 
 @router.get("/diagnostics", response_model=DiagnosticsOut)

@@ -184,3 +184,52 @@ def test_dre_cross_tenant_a_nao_ve_b() -> None:
         assert _resultado(app_url, None) == 0, (
             "RLS não é fail-closed: sem tenant setado a DRE deveria somar zero"
         )
+
+
+def _matrix_grand_total(app_url: str, tenant_id: str | None) -> list[int]:
+    from app.modules.financial_intelligence.dre import dre_matrix_report
+
+    engine = create_engine(app_url, poolclass=NullPool)
+    try:
+        with engine.connect() as conn:
+            if tenant_id is not None:
+                conn.execute(
+                    text("SELECT set_config('app.current_tenant_id', :tid, false)"),
+                    {"tid": tenant_id},
+                )
+            session = Session(bind=conn)
+            report = dre_matrix_report(session, start=START, end=END)
+            session.close()
+            return report.grand_total_cents
+    finally:
+        engine.dispose()
+
+
+def test_dre_matrix_cross_tenant_a_nao_ve_b() -> None:
+    with PostgresContainer(
+        "postgres:16-alpine",
+        username=_ROOT_USER,
+        password=_ROOT_PASS,
+        dbname=_DB_NAME,
+        driver="psycopg",
+    ) as pg:
+        host = pg.get_container_host_ip()
+        port = pg.get_exposed_port(5432)
+        super_url = f"postgresql+psycopg://{_ROOT_USER}:{_ROOT_PASS}@{host}:{port}/{_DB_NAME}"
+        app_url = f"postgresql+psycopg://e1p_app:{_APP_PASS}@{host}:{port}/{_DB_NAME}"
+
+        _bootstrap_rls_role(super_url)
+        _run_migrations_as_app(app_url)
+
+        tenant_a = str(uuid4())
+        tenant_b = str(uuid4())
+        _seed_tenant(app_url, tenant_a, receita=100000, despesa=40000)
+        _seed_tenant(app_url, tenant_b, receita=777777, despesa=7777)
+
+        assert _matrix_grand_total(app_url, tenant_a) == [60000], (
+            "RLS falhou: matriz do A somou dados do B"
+        )
+        assert _matrix_grand_total(app_url, tenant_b) == [770000], (
+            "RLS falhou: matriz do B somou dados do A"
+        )
+        assert _matrix_grand_total(app_url, None) == [0], "RLS não é fail-closed na matriz"
