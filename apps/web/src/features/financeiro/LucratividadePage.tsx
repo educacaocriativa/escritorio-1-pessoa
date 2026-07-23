@@ -1,5 +1,5 @@
 // apps/web/src/features/financeiro/LucratividadePage.tsx
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import Drawer from "../../components/Drawer";
 import { api, apiErrorMessage } from "../../lib/api";
 import { formatBRL } from "./dre";
@@ -22,19 +22,24 @@ export default function LucratividadePage() {
   const [detailContract, setDetailContract] = useState<ContractDreSummary | null>(null);
   const [ledger, setLedger] = useState<LedgerEntry[]>([]);
   const [ledgerLoading, setLedgerLoading] = useState(false);
+  const loadSeq = useRef(0);
+  const ledgerSeq = useRef(0);
 
   const load = useCallback(async () => {
+    const seq = ++loadSeq.current;
     setError(null);
     setLoading(true);
     try {
       const { data } = await api.get<ContractDreSummary[]>("/financial-intelligence/contracts-dre", {
         params: { start: period.start, end: period.end, include_overhead: includeOverhead },
       });
+      if (seq !== loadSeq.current) return; // resposta obsoleta — uma requisição mais nova já chegou
       setRows(sortByMargin(data));
     } catch (err) {
+      if (seq !== loadSeq.current) return;
       setError(apiErrorMessage(err));
     } finally {
-      setLoading(false);
+      if (seq === loadSeq.current) setLoading(false);
     }
   }, [period, includeOverhead]);
 
@@ -44,6 +49,7 @@ export default function LucratividadePage() {
 
   const openDetails = useCallback(
     async (row: ContractDreSummary) => {
+      const seq = ++ledgerSeq.current;
       setDetailContract(row);
       setLedgerLoading(true);
       try {
@@ -51,11 +57,13 @@ export default function LucratividadePage() {
           `/financial-intelligence/contracts/${row.contract_id}/ledger`,
           { params: { start: period.start, end: period.end } },
         );
+        if (seq !== ledgerSeq.current) return; // resposta obsoleta — o usuário já abriu outro contrato
         setLedger(sortDescending(data));
       } catch (err) {
+        if (seq !== ledgerSeq.current) return;
         setError(apiErrorMessage(err));
       } finally {
-        setLedgerLoading(false);
+        if (seq === ledgerSeq.current) setLedgerLoading(false);
       }
     },
     [period],
