@@ -20,6 +20,7 @@ import DrePage from "../features/financeiro/DrePage";
 import FilaPagamentosPage from "../features/financeiro/FilaPagamentosPage";
 import FinanceiroPage from "../features/financeiro/FinanceiroPage";
 import InvestimentosPage from "../features/financeiro/InvestimentosPage";
+import LucratividadePage from "../features/financeiro/LucratividadePage";
 import PlanoContasPage from "../features/financeiro/PlanoContasPage";
 import ProjecaoCaixaPage from "../features/financeiro/ProjecaoCaixaPage";
 import FunisPage from "../features/funis/FunisPage";
@@ -62,6 +63,7 @@ export default function App() {
           <Route path="/financeiro/centros-custo" element={<CentrosCustoPage />} />
           <Route path="/financeiro/investimentos" element={<InvestimentosPage />} />
           <Route path="/financeiro/dre" element={<DrePage />} />
+          <Route path="/financeiro/lucratividade" element={<LucratividadePage />} />
           <Route path="/financeiro/projecao-caixa" element={<ProjecaoCaixaPage />} />
           <Route path="/financeiro/fila-pagamentos" element={<FilaPagamentosPage />} />
           <Route path="/financeiro/diagnostico" element={<DiagnosticoPage />} />
