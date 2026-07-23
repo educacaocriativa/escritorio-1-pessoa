@@ -20,6 +20,7 @@ import {
   Settings,
   ShoppingBag,
   TrendingUp,
+  Trophy,
   Users,
   Wallet,
   Workflow,
@@ -75,6 +76,7 @@ export const navSections: NavSection[] = [
     title: "Análise & Configuração Financeira",
     items: [
       { label: "DRE", to: "/financeiro/dre", icon: PieChart, ready: true },
+      { label: "Lucratividade", to: "/financeiro/lucratividade", icon: Trophy, ready: true },
       { label: "Projeção de caixa", to: "/financeiro/projecao-caixa", icon: LineChart, ready: true },
       { label: "Diagnóstico", to: "/financeiro/diagnostico", icon: Activity, ready: true },
       { label: "Investimentos", to: "/financeiro/investimentos", icon: TrendingUp, ready: true },
