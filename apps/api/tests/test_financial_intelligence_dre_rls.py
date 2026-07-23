@@ -226,6 +226,10 @@ def test_dre_matrix_cross_tenant_a_nao_ve_b() -> None:
         _seed_tenant(app_url, tenant_a, receita=100000, despesa=40000)
         _seed_tenant(app_url, tenant_b, receita=777777, despesa=7777)
 
-        assert _matrix_grand_total(app_url, tenant_a) == [60000], "RLS falhou: matriz do A somou dados do B"
-        assert _matrix_grand_total(app_url, tenant_b) == [770000], "RLS falhou: matriz do B somou dados do A"
+        assert _matrix_grand_total(app_url, tenant_a) == [60000], (
+            "RLS falhou: matriz do A somou dados do B"
+        )
+        assert _matrix_grand_total(app_url, tenant_b) == [770000], (
+            "RLS falhou: matriz do B somou dados do A"
+        )
         assert _matrix_grand_total(app_url, None) == [0], "RLS não é fail-closed na matriz"
