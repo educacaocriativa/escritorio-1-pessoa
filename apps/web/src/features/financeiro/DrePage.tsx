@@ -82,6 +82,7 @@ export default function DrePage() {
                 {report.months.map((m) => (
                   <th key={m} className="px-4 py-3 text-right">{m}</th>
                 ))}
+                <th className="px-4 py-3 text-right">Total</th>
               </tr>
             </thead>
             <tbody>
@@ -93,6 +94,7 @@ export default function DrePage() {
                 {report.grand_total_cents.map((c, i) => (
                   <td key={i} className="px-4 py-3 text-right">{formatBRL(c)}</td>
                 ))}
+                <td className="px-4 py-3 text-right">{formatBRL(report.grand_total)}</td>
               </tr>
             </tbody>
           </table>
@@ -118,7 +120,7 @@ function MatrixGroupRows({ group, groupBy }: { group: DreMatrixGroup; groupBy: G
       <tr className={isUncategorized ? "bg-amber-50" : "bg-neutral-50/60"}>
         <td
           className="sticky left-0 bg-inherit px-4 py-2 font-semibold text-neutral-800"
-          colSpan={1 + monthsCount}
+          colSpan={2 + monthsCount}
         >
           {matrixGroupLabel(group, groupBy)}
         </td>
@@ -131,6 +133,9 @@ function MatrixGroupRows({ group, groupBy }: { group: DreMatrixGroup; groupBy: G
               {formatBRL(c)}
             </td>
           ))}
+          <td className={`px-4 py-2 text-right font-medium ${r.total_cents < 0 ? "text-danger" : ""}`}>
+            {formatBRL(r.total_cents)}
+          </td>
         </tr>
       ))}
       <tr className="font-semibold">
@@ -138,6 +143,7 @@ function MatrixGroupRows({ group, groupBy }: { group: DreMatrixGroup; groupBy: G
         {group.subtotal_cents.map((c, i) => (
           <td key={i} className="px-4 py-2 text-right">{formatBRL(c)}</td>
         ))}
+        <td className="px-4 py-2 text-right">{formatBRL(group.subtotal_total)}</td>
       </tr>
     </>
   );
