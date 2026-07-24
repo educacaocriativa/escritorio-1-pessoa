@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { resolvePeriod } from "./periodRange";
+import { monthKeyToRange, resolvePeriod } from "./periodRange";
 
 const TODAY = new Date(Date.UTC(2026, 6, 21)); // 21/07/2026 (mês = 6 = julho, 0-indexed)
 
@@ -36,5 +36,15 @@ describe("resolvePeriod", () => {
 
   it("custom sem range lança erro", () => {
     expect(() => resolvePeriod("custom", TODAY)).toThrow();
+  });
+});
+
+describe("monthKeyToRange", () => {
+  it("converte uma chave 'YYYY-MM' no intervalo do mês inteiro", () => {
+    expect(monthKeyToRange("2026-02")).toEqual({ start: "2026-02-01", end: "2026-02-28" });
+  });
+
+  it("respeita ano bissexto (fevereiro com 29 dias)", () => {
+    expect(monthKeyToRange("2028-02")).toEqual({ start: "2028-02-01", end: "2028-02-29" });
   });
 });

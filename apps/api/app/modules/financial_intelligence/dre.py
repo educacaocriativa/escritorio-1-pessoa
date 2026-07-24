@@ -469,6 +469,12 @@ def _sum_transactions_by_account_monthly(
 class DreMatrixRow:
     label: str
     kind: str  # "result" | "informational" | "uncategorized"
+    # Grupo DRE de ORIGEM do lançamento (não confundir com o grupo de EXIBIÇÃO em
+    # group_by="cost_center", onde a linha aparece sob um centro de custo). `None` para a linha
+    # sintética "Sem categoria". Usado pelo drill-down (`matrix_cell_entries`, Story 5.13) para
+    # localizar sem ambiguidade os lançamentos por trás da célula, mesmo quando duas categorias
+    # do MESMO nome existem em grupos DRE diferentes sob o mesmo centro de custo.
+    grupo_dre: str | None
     monthly_cents: list[int]
     total_cents: int
 
@@ -520,8 +526,8 @@ def _build_matrix_group(
         cents = cats[cat_key]
         rows.append(
             DreMatrixRow(
-                label=cat_key[1], kind=kind_of(cat_key), monthly_cents=cents,
-                total_cents=sum(cents),
+                label=cat_key[1], kind=kind_of(cat_key), grupo_dre=cat_key[0],
+                monthly_cents=cents, total_cents=sum(cents),
             )
         )
     subtotal = [sum(r.monthly_cents[i] for r in rows if r.kind == "result") for i in range(n)]
@@ -705,3 +711,110 @@ def _dre_matrix_by_cost_center(
         months=months, groups=groups, grand_total_cents=grand_total,
         grand_total=sum(grand_total), notes=notes,
     )
+
+
+# ── Drill-down analítico de uma célula da matriz (Story 5.13) ───────────────────────────────────
+@dataclass
+class DreMatrixEntry:
+    id: str
+    source: str  # "charge" | "payable" | "transaction"
+    date: date
+    description: str
+    status: str
+    amount_cents: int  # já assinado (Charge/Transaction=+, Payable=−)
+
+
+def matrix_cell_entries(
+    db: Session,
+    *,
+    start: date,
+    end: date,
+    categoria: str,
+    grupo_dre: str | None,
+    cost_center_id: str | None = None,
+) -> list[DreMatrixEntry]:
+    """Lançamentos INDIVIDUAIS por trás de UMA célula da matriz (categoria x mês) — o "ver
+    analítico" ao clicar num valor (Story 5.13). SOMENTE LEITURA, mesmo período de competência da
+    matriz. `grupo_dre=None` busca a linha sintética "Sem categoria" (`chart_account_id IS NULL`);
+    caso contrário resolve TODAS as contas do plano com esse (grupo_dre, categoria) — a chave
+    composta usada por `DreMatrixRow.grupo_dre` evita pegar uma categoria homônima de outro grupo.
+    `cost_center_id`: omitir (`None`) = sem filtro (modo group_by="dre"); `"_unassigned"` = só
+    lançamentos SEM centro de custo (mesmo sentinel de `_dre_matrix_by_cost_center`); id real = só
+    daquele centro. Inclui `Transaction` (Carteira) — mesma 3ª origem somada pela matriz."""
+    if grupo_dre is None:
+        account_ids: list[str] | None = None  # sentinel: filtra por chart_account_id IS NULL
+    else:
+        account_ids = [
+            a.id
+            for a in db.scalars(
+                select(ChartAccount).where(
+                    ChartAccount.grupo_dre == grupo_dre, ChartAccount.categoria == categoria,
+                )
+            ).all()
+        ]
+        if not account_ids:
+            return []
+
+    def _cc_filter(stmt, column):
+        if cost_center_id == "_unassigned":
+            return stmt.where(column.is_(None))
+        if cost_center_id is not None:
+            return stmt.where(column == cost_center_id)
+        return stmt
+
+    def _account_filter(stmt, column):
+        if account_ids is None:
+            return stmt.where(column.is_(None))
+        return stmt.where(column.in_(account_ids))
+
+    entries: list[DreMatrixEntry] = []
+
+    charge_competence = func.coalesce(Charge.competence_date, Charge.due_date)
+    stmt = select(Charge).where(
+        charge_competence >= start, charge_competence <= end, Charge.status != CHARGE_CANCELED,
+    )
+    stmt = _account_filter(stmt, Charge.chart_account_id)
+    stmt = _cc_filter(stmt, Charge.cost_center_id)
+    for c in db.scalars(stmt).all():
+        entries.append(
+            DreMatrixEntry(
+                id=c.id, source="charge", date=c.competence_date or c.due_date,
+                description=c.description or "Cobrança", status=c.status,
+                amount_cents=c.amount_cents,
+            )
+        )
+
+    payable_competence = func.coalesce(Payable.competence_date, Payable.due_date)
+    stmt = select(Payable).where(
+        payable_competence >= start, payable_competence <= end, Payable.status != PAYABLE_CANCELED,
+    )
+    stmt = _account_filter(stmt, Payable.chart_account_id)
+    stmt = _cc_filter(stmt, Payable.cost_center_id)
+    for p in db.scalars(stmt).all():
+        entries.append(
+            DreMatrixEntry(
+                id=p.id, source="payable", date=p.competence_date or p.due_date,
+                description=p.description or "Conta a pagar", status=p.status,
+                amount_cents=-p.amount_cents,
+            )
+        )
+
+    tx_competence = func.coalesce(Transaction.competence_date, func.date(Transaction.created_at))
+    stmt = select(Transaction).where(
+        tx_competence >= start, tx_competence <= end,
+        Transaction.status != TX_REFUNDED, Transaction.external_ref.is_(None),
+    )
+    stmt = _account_filter(stmt, Transaction.chart_account_id)
+    stmt = _cc_filter(stmt, Transaction.cost_center_id)
+    for t in db.scalars(stmt).all():
+        entries.append(
+            DreMatrixEntry(
+                id=t.id, source="transaction",
+                date=t.competence_date or t.created_at.date(),
+                description=t.description or "Venda avulsa", status=t.status,
+                amount_cents=t.gross_cents,
+            )
+        )
+
+    entries.sort(key=lambda e: e.date)
+    return entries
