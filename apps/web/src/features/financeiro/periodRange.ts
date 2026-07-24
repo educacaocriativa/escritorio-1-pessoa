@@ -43,6 +43,13 @@ function monthBounds(year: number, month: number): PeriodRange {
   };
 }
 
+/** Converte uma chave de mês "YYYY-MM" (coluna da matriz da DRE) no intervalo do mês inteiro —
+ * usado pelo drill-down analítico da célula (Story 5.13). */
+export function monthKeyToRange(monthKey: string): PeriodRange {
+  const [year, month] = monthKey.split("-").map(Number);
+  return monthBounds(year, month);
+}
+
 /**
  * Resolve um atalho para {start,end}. "all" usa 2000-01-01 como início — cobre qualquer
  * histórico plausível do tenant sem exigir uma query "sem limite inferior" separada no backend.

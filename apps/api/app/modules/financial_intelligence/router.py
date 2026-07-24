@@ -25,6 +25,7 @@ from app.modules.financial_intelligence.schemas import (
     DiagnosticsOut,
     DreCategoryOut,
     DreGroupOut,
+    DreMatrixEntryOut,
     DreMatrixGroupOut,
     DreMatrixReportOut,
     DreMatrixRowOut,
@@ -94,7 +95,8 @@ def dre(
 
 def _matrix_row_out(r: dre_service.DreMatrixRow) -> DreMatrixRowOut:
     return DreMatrixRowOut(
-        label=r.label, kind=r.kind, monthly_cents=r.monthly_cents, total_cents=r.total_cents,
+        label=r.label, kind=r.kind, grupo_dre=r.grupo_dre,
+        monthly_cents=r.monthly_cents, total_cents=r.total_cents,
     )
 
 
@@ -136,6 +138,47 @@ def dre_matrix(
         db, start=start, end=end, group_by=group_by, cost_center_id=cost_center_id,
     )
     return _matrix_report_out(report)
+
+
+def _matrix_entry_out(e: dre_service.DreMatrixEntry) -> DreMatrixEntryOut:
+    return DreMatrixEntryOut(
+        id=e.id, source=e.source, date=e.date, description=e.description,
+        status=e.status, amount_cents=e.amount_cents,
+    )
+
+
+@router.get("/dre/matrix/entries", response_model=list[DreMatrixEntryOut])
+def dre_matrix_entries(
+    start: date = Query(..., description="Início do período (data de competência), YYYY-MM-DD"),
+    end: date = Query(..., description="Fim do período (data de competência), YYYY-MM-DD"),
+    categoria: str = Query(..., description="Rótulo da categoria (DreMatrixRow.label) clicada."),
+    grupo_dre: str | None = Query(
+        default=None,
+        description=(
+            "DreMatrixRow.grupo_dre da linha clicada. Omitir busca a linha 'Sem categoria'."
+        ),
+    ),
+    cost_center_id: str | None = Query(
+        default=None,
+        description=(
+            "DreMatrixGroup.key quando group_by='cost_center' ('_unassigned' inclusive). "
+            "Omitir em group_by='dre' (sem filtro de centro de custo)."
+        ),
+    ),
+    _user: CurrentUser = Depends(_guard),
+    db: Session = Depends(get_tenant_db),
+) -> list[DreMatrixEntryOut]:
+    """Story 5.13: drill-down analítico de UMA célula da matriz (categoria x mês) — os lançamentos
+    individuais por trás do valor agregado exibido."""
+    if end < start:
+        raise HTTPException(status_code=422, detail="'end' não pode ser anterior a 'start'")
+    if cost_center_id not in (None, "_unassigned"):
+        _require_cost_center(db, cost_center_id)
+    entries = dre_service.matrix_cell_entries(
+        db, start=start, end=end, categoria=categoria, grupo_dre=grupo_dre,
+        cost_center_id=cost_center_id,
+    )
+    return [_matrix_entry_out(e) for e in entries]
 
 
 def _cost_center_bucket_out(b: dre_service.CostCenterBucket) -> CostCenterBucketOut:

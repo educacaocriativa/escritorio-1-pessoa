@@ -315,3 +315,176 @@ def test_cost_center_grouping_keeps_same_categoria_name_across_different_groups_
     assert amounts == [-300000, -5000]
     # subtotal soma só a linha kind=result (CUSTO_DIRETO), não a informational (INVESTIMENTO)
     assert group["subtotal_cents"] == [-5000]
+
+
+# ── Drill-down analítico de uma célula (Story 5.13) ─────────────────────────────────────────────
+def _entries(
+    client: TestClient, headers, *, start, end, categoria, grupo_dre=None, cost_center_id=None,
+):
+    params = {"start": start, "end": end, "categoria": categoria}
+    if grupo_dre is not None:
+        params["grupo_dre"] = grupo_dre
+    if cost_center_id is not None:
+        params["cost_center_id"] = cost_center_id
+    r = client.get("/financial-intelligence/dre/matrix/entries", params=params, headers=headers)
+    assert r.status_code == 200, r.text
+    return r.json()
+
+
+def test_entries_requires_auth(client: TestClient):
+    r = client.get(
+        "/financial-intelligence/dre/matrix/entries",
+        params={"start": "2026-01-01", "end": "2026-01-31", "categoria": "Consultoria"},
+    )
+    assert r.status_code == 401
+
+
+def test_entries_returns_individual_charges_and_payables_signed(client: TestClient, headers):
+    acc = _account(client, headers, "RECEITA", "Consultoria")
+    custo = _account(client, headers, "CUSTO_DIRETO", "Insumos")
+    c1 = _charge(client, headers, amount=100000, competence="2026-01-10", account_id=acc)
+    c2 = _charge(client, headers, amount=50000, competence="2026-01-20", account_id=acc)
+    _payable(client, headers, amount=20000, competence="2026-01-08", account_id=custo)
+
+    entries = _entries(
+        client, headers, start="2026-01-01", end="2026-01-31",
+        categoria="Consultoria", grupo_dre="RECEITA",
+    )
+    assert {e["id"] for e in entries} == {c1["id"], c2["id"]}
+    assert all(e["source"] == "charge" for e in entries)
+    assert all(e["amount_cents"] > 0 for e in entries)
+    # ordenado por data ascendente
+    assert [e["date"] for e in entries] == ["2026-01-10", "2026-01-20"]
+
+
+def test_entries_payable_amount_is_negative(client: TestClient, headers):
+    custo = _account(client, headers, "CUSTO_DIRETO", "Insumos")
+    p = _payable(client, headers, amount=20000, competence="2026-01-08", account_id=custo)
+
+    entries = _entries(
+        client, headers, start="2026-01-01", end="2026-01-31",
+        categoria="Insumos", grupo_dre="CUSTO_DIRETO",
+    )
+    assert len(entries) == 1
+    assert entries[0]["id"] == p["id"]
+    assert entries[0]["source"] == "payable"
+    assert entries[0]["amount_cents"] == -20000
+
+
+def test_entries_out_of_month_range_is_excluded(client: TestClient, headers):
+    acc = _account(client, headers, "RECEITA", "Consultoria")
+    _charge(client, headers, amount=100000, competence="2026-02-10", account_id=acc)
+
+    entries = _entries(
+        client, headers, start="2026-01-01", end="2026-01-31",
+        categoria="Consultoria", grupo_dre="RECEITA",
+    )
+    assert entries == []
+
+
+def test_entries_sem_categoria_omits_grupo_dre(client: TestClient, headers):
+    """Lançamento sem `chart_account_id` — clicar na linha 'Sem categoria' omite `grupo_dre`."""
+    body = {
+        "kind": "service", "method": "pix", "amount_cents": 42000,
+        "due_date": "2026-01-15", "competence_date": "2026-01-15",
+    }
+    r = client.post("/receivables/charges", json=body, headers=headers)
+    assert r.status_code == 201, r.text
+
+    entries = _entries(
+        client, headers, start="2026-01-01", end="2026-01-31", categoria="Sem categoria",
+    )
+    assert len(entries) == 1
+    assert entries[0]["amount_cents"] == 42000
+
+
+def test_entries_unknown_categoria_returns_empty_not_error(client: TestClient, headers):
+    entries = _entries(
+        client, headers, start="2026-01-01", end="2026-01-31",
+        categoria="Categoria que não existe", grupo_dre="RECEITA",
+    )
+    assert entries == []
+
+
+def test_entries_same_categoria_name_in_different_grupo_does_not_leak(client: TestClient, headers):
+    """Mesma regressão de `test_cost_center_grouping_keeps_same_categoria_name_across_different_
+    groups_separate`, mas no drill-down: 'Equipamentos' existe em INVESTIMENTO e CUSTO_DIRETO —
+    o clique numa linha não pode trazer o lançamento da OUTRA."""
+    inv_acc = _account(client, headers, "INVESTIMENTO", "Equipamentos")
+    custo_acc = _account(client, headers, "CUSTO_DIRETO", "Equipamentos")
+    _payable(client, headers, amount=300000, competence="2026-01-06", account_id=inv_acc)
+    p_custo = _payable(client, headers, amount=5000, competence="2026-01-07", account_id=custo_acc)
+
+    entries = _entries(
+        client, headers, start="2026-01-01", end="2026-01-31",
+        categoria="Equipamentos", grupo_dre="CUSTO_DIRETO",
+    )
+    assert len(entries) == 1
+    assert entries[0]["id"] == p_custo["id"]
+    assert entries[0]["amount_cents"] == -5000
+
+
+def test_entries_filters_by_cost_center(client: TestClient, headers):
+    cc_a = _cost_center(client, headers, name="Sócio A")
+    cc_b = _cost_center(client, headers, name="Sócio B")
+    acc = _account(client, headers, "RECEITA", "Consultoria")
+    r1 = client.post(
+        "/receivables/charges",
+        json={
+            "kind": "service", "method": "pix", "amount_cents": 10000,
+            "due_date": "2026-01-05", "competence_date": "2026-01-05",
+            "chart_account_id": acc, "cost_center_id": cc_a,
+        },
+        headers=headers,
+    )
+    assert r1.status_code == 201, r1.text
+    r2 = client.post(
+        "/receivables/charges",
+        json={
+            "kind": "service", "method": "pix", "amount_cents": 20000,
+            "due_date": "2026-01-06", "competence_date": "2026-01-06",
+            "chart_account_id": acc, "cost_center_id": cc_b,
+        },
+        headers=headers,
+    )
+    assert r2.status_code == 201, r2.text
+
+    entries_a = _entries(
+        client, headers, start="2026-01-01", end="2026-01-31",
+        categoria="Consultoria", grupo_dre="RECEITA", cost_center_id=cc_a,
+    )
+    assert [e["id"] for e in entries_a] == [r1.json()["id"]]
+
+
+def test_entries_filters_unassigned_cost_center(client: TestClient, headers):
+    cc = _cost_center(client, headers, name="Sócio A")
+    acc = _account(client, headers, "RECEITA", "Consultoria")
+    r1 = client.post(
+        "/receivables/charges",
+        json={
+            "kind": "service", "method": "pix", "amount_cents": 10000,
+            "due_date": "2026-01-05", "competence_date": "2026-01-05",
+            "chart_account_id": acc, "cost_center_id": cc,
+        },
+        headers=headers,
+    )
+    assert r1.status_code == 201, r1.text
+    r2 = _charge(client, headers, amount=20000, competence="2026-01-06", account_id=acc)
+
+    entries = _entries(
+        client, headers, start="2026-01-01", end="2026-01-31",
+        categoria="Consultoria", grupo_dre="RECEITA", cost_center_id="_unassigned",
+    )
+    assert [e["id"] for e in entries] == [r2["id"]]
+
+
+def test_entries_end_before_start_is_422(client: TestClient, headers):
+    r = client.get(
+        "/financial-intelligence/dre/matrix/entries",
+        params={
+            "start": "2026-02-01", "end": "2026-01-01", "categoria": "Consultoria",
+            "grupo_dre": "RECEITA",
+        },
+        headers=headers,
+    )
+    assert r.status_code == 422

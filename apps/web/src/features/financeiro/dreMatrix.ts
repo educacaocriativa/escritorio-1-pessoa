@@ -8,6 +8,9 @@ import { groupLabel } from "./dre";
 export interface DreMatrixRow {
   label: string;
   kind: "result" | "informational" | "uncategorized";
+  /** Grupo DRE de origem do lançamento (null = linha "Sem categoria") — usado no drill-down
+   * analítico da célula (ver `dreMatrixEntries.ts`). */
+  grupo_dre: string | null;
   monthly_cents: number[];
   total_cents: number;
 }

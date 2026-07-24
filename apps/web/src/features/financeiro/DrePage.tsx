@@ -1,10 +1,25 @@
 // apps/web/src/features/financeiro/DrePage.tsx
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
+import Drawer from "../../components/Drawer";
 import { api, apiErrorMessage } from "../../lib/api";
 import { formatBRL } from "./dre";
-import { matrixGroupLabel, type DreMatrixGroup, type DreMatrixReport, type GroupBy } from "./dreMatrix";
+import {
+  matrixGroupLabel,
+  type DreMatrixGroup,
+  type DreMatrixReport,
+  type DreMatrixRow,
+  type GroupBy,
+} from "./dreMatrix";
+import { sortDescending, type DreMatrixEntry } from "./dreMatrixEntries";
+import { statusLabel } from "./ledger";
 import PeriodPicker from "./PeriodPicker";
-import { resolvePeriod, type PeriodRange } from "./periodRange";
+import { monthKeyToRange, resolvePeriod, type PeriodRange } from "./periodRange";
+
+interface CellSelection {
+  row: DreMatrixRow;
+  group: DreMatrixGroup;
+  month: string;
+}
 
 /**
  * DRE em matriz mensal (Story 5.11) — meses nas colunas, categorias nas linhas, agrupável por
@@ -17,6 +32,11 @@ export default function DrePage() {
   const [report, setReport] = useState<DreMatrixReport | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
+  const [cell, setCell] = useState<CellSelection | null>(null);
+  const [entries, setEntries] = useState<DreMatrixEntry[]>([]);
+  const [entriesLoading, setEntriesLoading] = useState(false);
+  const [entriesError, setEntriesError] = useState<string | null>(null);
+  const entriesSeq = useRef(0);
 
   const load = useCallback(async () => {
     setError(null);
@@ -36,6 +56,38 @@ export default function DrePage() {
   useEffect(() => {
     load();
   }, [load]);
+
+  const openCell = useCallback(
+    async (selection: CellSelection) => {
+      const seq = ++entriesSeq.current;
+      setCell(selection);
+      setEntriesError(null);
+      setEntriesLoading(true);
+      try {
+        const { start, end } = monthKeyToRange(selection.month);
+        const { data } = await api.get<DreMatrixEntry[]>(
+          "/financial-intelligence/dre/matrix/entries",
+          {
+            params: {
+              start,
+              end,
+              categoria: selection.row.label,
+              grupo_dre: selection.row.grupo_dre ?? undefined,
+              cost_center_id: groupBy === "cost_center" ? selection.group.key : undefined,
+            },
+          },
+        );
+        if (seq !== entriesSeq.current) return; // resposta obsoleta — outra célula já foi aberta
+        setEntries(sortDescending(data));
+      } catch (err) {
+        if (seq !== entriesSeq.current) return;
+        setEntriesError(apiErrorMessage(err));
+      } finally {
+        if (seq === entriesSeq.current) setEntriesLoading(false);
+      }
+    },
+    [groupBy],
+  );
 
   return (
     <div className="space-y-6">
@@ -87,7 +139,7 @@ export default function DrePage() {
             </thead>
             <tbody>
               {report.groups.map((g) => (
-                <MatrixGroupRows key={g.key} group={g} groupBy={groupBy} />
+                <MatrixGroupRows key={g.key} group={g} groupBy={groupBy} months={report.months} onCellClick={openCell} />
               ))}
               <tr className="border-t-2 border-neutral-200 font-bold">
                 <td className="sticky left-0 bg-white px-4 py-3">TOTAL GERAL</td>
@@ -108,11 +160,52 @@ export default function DrePage() {
           ))}
         </ul>
       )}
+
+      <Drawer
+        title={cell ? cell.row.label : ""}
+        subtitle={cell ? `${matrixGroupLabel(cell.group, groupBy)} · ${cell.month}` : undefined}
+        open={cell !== null}
+        onClose={() => setCell(null)}
+      >
+        {entriesError && <p className="rounded-lg bg-red-50 p-2 text-sm text-danger">{entriesError}</p>}
+        {entriesLoading ? (
+          <p className="text-sm text-neutral-400">Carregando…</p>
+        ) : entries.length === 0 ? (
+          <p className="text-sm text-neutral-400">Sem lançamentos neste período.</p>
+        ) : (
+          <ul className="divide-y divide-neutral-50">
+            {entries.map((e) => (
+              <li key={e.id} className="py-3">
+                <div className="flex items-center justify-between">
+                  <span className={`font-semibold ${e.amount_cents < 0 ? "text-danger" : "text-emerald-600"}`}>
+                    {formatBRL(e.amount_cents)}
+                  </span>
+                  <span className="rounded-pill bg-neutral-100 px-2 py-0.5 text-xs text-neutral-500">
+                    {statusLabel(e.status)}
+                  </span>
+                </div>
+                <p className="mt-1 text-sm text-neutral-700">{e.description}</p>
+                <p className="text-xs text-neutral-400">{e.date}</p>
+              </li>
+            ))}
+          </ul>
+        )}
+      </Drawer>
     </div>
   );
 }
 
-function MatrixGroupRows({ group, groupBy }: { group: DreMatrixGroup; groupBy: GroupBy }) {
+function MatrixGroupRows({
+  group,
+  groupBy,
+  months,
+  onCellClick,
+}: {
+  group: DreMatrixGroup;
+  groupBy: GroupBy;
+  months: string[];
+  onCellClick: (selection: CellSelection) => void;
+}) {
   const monthsCount = group.subtotal_cents.length;
   const isUncategorized = group.rows.length > 0 && group.rows.every((r) => r.kind === "uncategorized");
   return (
@@ -129,8 +222,14 @@ function MatrixGroupRows({ group, groupBy }: { group: DreMatrixGroup; groupBy: G
         <tr key={r.label} className={r.kind === "informational" ? "text-neutral-400" : ""}>
           <td className="sticky left-0 bg-white px-4 py-2 pl-8">{r.label}</td>
           {r.monthly_cents.map((c, i) => (
-            <td key={i} className={`px-4 py-2 text-right ${c < 0 ? "text-danger" : ""}`}>
-              {formatBRL(c)}
+            <td key={i} className="px-4 py-2 text-right">
+              <button
+                type="button"
+                onClick={() => onCellClick({ row: r, group, month: months[i] })}
+                className={`w-full text-right hover:underline ${c < 0 ? "text-danger" : ""}`}
+              >
+                {formatBRL(c)}
+              </button>
             </td>
           ))}
           <td className={`px-4 py-2 text-right font-medium ${r.total_cents < 0 ? "text-danger" : ""}`}>

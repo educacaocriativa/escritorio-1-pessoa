@@ -200,6 +200,7 @@ class DiagnosticsOut(BaseModel):
 class DreMatrixRowOut(BaseModel):
     label: str
     kind: str  # "result" | "informational" | "uncategorized"
+    grupo_dre: str | None
     monthly_cents: list[int]
     total_cents: int
 
@@ -222,3 +223,14 @@ class DreMatrixReportOut(BaseModel):
     grand_total_cents: list[int]
     grand_total: int
     notes: list[str]
+
+
+class DreMatrixEntryOut(BaseModel):
+    """Um lançamento individual do drill-down de uma célula da matriz (Story 5.13)."""
+
+    id: str
+    source: str  # "charge" | "payable" | "transaction"
+    date: date
+    description: str
+    status: str
+    amount_cents: int
