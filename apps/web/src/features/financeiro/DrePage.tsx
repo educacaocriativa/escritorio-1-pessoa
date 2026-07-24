@@ -4,7 +4,9 @@ import Drawer from "../../components/Drawer";
 import { api, apiErrorMessage } from "../../lib/api";
 import { formatBRL } from "./dre";
 import {
+  investmentTotals,
   matrixGroupLabel,
+  splitGroupsAroundInvestment,
   type DreMatrixGroup,
   type DreMatrixReport,
   type DreMatrixRow,
@@ -138,16 +140,36 @@ export default function DrePage() {
               </tr>
             </thead>
             <tbody>
-              {report.groups.map((g) => (
-                <MatrixGroupRows key={g.key} group={g} groupBy={groupBy} months={report.months} onCellClick={openCell} />
-              ))}
-              <tr className="border-t-2 border-neutral-200 font-bold">
-                <td className="sticky left-0 bg-white px-4 py-3">TOTAL GERAL</td>
-                {report.grand_total_cents.map((c, i) => (
-                  <td key={i} className="px-4 py-3 text-right">{formatBRL(c)}</td>
-                ))}
-                <td className="px-4 py-3 text-right">{formatBRL(report.grand_total)}</td>
-              </tr>
+              {(() => {
+                const { before, after } = splitGroupsAroundInvestment(report.groups, groupBy);
+                const investment = investmentTotals(report);
+                const combinedMonthly = report.grand_total_cents.map((c, i) => c + investment.monthly[i]);
+                const combinedTotal = report.grand_total + investment.total;
+                return (
+                  <>
+                    {before.map((g) => (
+                      <MatrixGroupRows key={g.key} group={g} groupBy={groupBy} months={report.months} onCellClick={openCell} />
+                    ))}
+                    <tr className="border-t-2 border-neutral-200 font-bold">
+                      <td className="sticky left-0 bg-white px-4 py-3">TOTAL GERAL</td>
+                      {report.grand_total_cents.map((c, i) => (
+                        <td key={i} className="px-4 py-3 text-right">{formatBRL(c)}</td>
+                      ))}
+                      <td className="px-4 py-3 text-right">{formatBRL(report.grand_total)}</td>
+                    </tr>
+                    {after.map((g) => (
+                      <MatrixGroupRows key={g.key} group={g} groupBy={groupBy} months={report.months} onCellClick={openCell} />
+                    ))}
+                    <tr className="border-t-2 border-neutral-800 bg-neutral-50 font-bold">
+                      <td className="sticky left-0 bg-neutral-50 px-4 py-3">TOTAL GERAL + INVESTIMENTO</td>
+                      {combinedMonthly.map((c, i) => (
+                        <td key={i} className="px-4 py-3 text-right">{formatBRL(c)}</td>
+                      ))}
+                      <td className="px-4 py-3 text-right">{formatBRL(combinedTotal)}</td>
+                    </tr>
+                  </>
+                );
+              })()}
             </tbody>
           </table>
         </div>

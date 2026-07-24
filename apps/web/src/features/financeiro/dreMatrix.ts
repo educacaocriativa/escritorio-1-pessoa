@@ -41,3 +41,39 @@ export function matrixGroupLabel(group: DreMatrixGroup, groupBy: GroupBy): strin
   if (groupBy === "cost_center") return group.label ?? group.key;
   return groupLabel(group.key);
 }
+
+/** Soma, mês a mês e no total do período, só as linhas `kind="informational"` (Investimento) de
+ * TODOS os grupos — funciona nos dois modos: em `group_by="dre"` é exatamente o grupo
+ * "INVESTIMENTO"; em `group_by="cost_center"` as linhas de investimento ficam espalhadas por
+ * vários centros, então soma-se por `kind`, não por grupo. Usado pra compor "TOTAL GERAL +
+ * INVESTIMENTO" (o gasto total do período, incluindo o que o resultado operacional exclui). */
+export function investmentTotals(report: DreMatrixReport): { monthly: number[]; total: number } {
+  const monthly = report.months.map(() => 0);
+  let total = 0;
+  for (const group of report.groups) {
+    for (const row of group.rows) {
+      if (row.kind !== "informational") continue;
+      row.monthly_cents.forEach((c, i) => {
+        monthly[i] += c;
+      });
+      total += row.total_cents;
+    }
+  }
+  return { monthly, total };
+}
+
+/** Em `group_by="dre"`, separa o grupo Investimento (e o bucket sintético Sem Categoria, que já
+ * vem depois dele) do resto — pra renderizar TOTAL GERAL logo após Financeiro/antes de
+ * Investimento, e só então o Investimento + o total combinado. Em `group_by="cost_center"` não há
+ * uma seção de investimento separada (fica misturada em cada centro de custo), então `after` fica
+ * vazio e nada é reordenado. */
+export function splitGroupsAroundInvestment(
+  groups: DreMatrixGroup[],
+  groupBy: GroupBy,
+): { before: DreMatrixGroup[]; after: DreMatrixGroup[] } {
+  if (groupBy !== "dre") return { before: groups, after: [] };
+  return {
+    before: groups.filter((g) => g.key !== "INVESTIMENTO" && g.key !== "SEM_CATEGORIA"),
+    after: groups.filter((g) => g.key === "INVESTIMENTO" || g.key === "SEM_CATEGORIA"),
+  };
+}
