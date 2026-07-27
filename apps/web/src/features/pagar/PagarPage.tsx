@@ -115,6 +115,11 @@ export default function PagarPage() {
     await api.post(`/payables/bills/${id}/cancel`);
     load();
   }
+  async function reverse(id: string) {
+    if (!confirm('Estornar esta conta? Ela volta para "A pagar" e pode ser editada de novo.')) return;
+    await api.post(`/payables/bills/${id}/reverse`);
+    load();
+  }
 
   return (
     <div className="space-y-6">
@@ -196,6 +201,11 @@ export default function PagarPage() {
                               Cancelar
                             </button>
                           </>
+                        )}
+                        {p.status === "paid" && (
+                          <button onClick={() => reverse(p.id)} className="text-xs font-medium text-neutral-400 hover:text-danger">
+                            Estornar
+                          </button>
                         )}
                       </div>
                     </td>
