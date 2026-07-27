@@ -710,3 +710,52 @@ def test_unset_charge_chart_account(client: TestClient, headers):
     )
     assert resp.status_code == 200, resp.text
     assert resp.json()["chart_account_id"] is None
+
+
+def test_reverse_paid_charge_refunds_wallet(client: TestClient, headers):
+    charge = client.post(
+        "/receivables/charges", json=_charge(amount_cents=10000), headers=headers
+    ).json()
+    client.post(f"/receivables/charges/{charge['id']}/pay", headers=headers)
+    assert client.get("/wallet/summary", headers=headers).json()["available_cents"] == 7000
+
+    resp = client.post(f"/receivables/charges/{charge['id']}/reverse", headers=headers)
+    assert resp.status_code == 200, resp.text
+    out = resp.json()
+    assert out["status"] == "open"
+    assert out["paid_at"] is None
+
+    # a transação estornada sai do saldo disponível
+    assert client.get("/wallet/summary", headers=headers).json()["available_cents"] == 0
+
+    # evento na Agenda volta a aparecer como pendente
+    ev = [e for e in client.get("/agenda/events?limit=500", headers=headers).json()
+          if e["kind"] == "cobranca_receber"][0]
+    assert ev["status"] == "scheduled"
+
+    # reaberta, volta a poder editar dados
+    edit = client.patch(
+        f"/receivables/charges/{charge['id']}", json={"amount_cents": 55500}, headers=headers
+    )
+    assert edit.status_code == 200
+    assert edit.json()["amount_cents"] == 55500
+
+
+def test_reverse_open_charge_rejected(client: TestClient, headers):
+    charge = client.post("/receivables/charges", json=_charge(), headers=headers).json()
+    resp = client.post(f"/receivables/charges/{charge['id']}/reverse", headers=headers)
+    assert resp.status_code == 409
+
+
+def test_reverse_blocked_after_payout(client: TestClient, headers):
+    charge = client.post(
+        "/receivables/charges", json=_charge(amount_cents=10000), headers=headers
+    ).json()
+    client.post(f"/receivables/charges/{charge['id']}/pay", headers=headers)
+    # saca o saldo disponível — o valor sai fisicamente da carteira
+    client.post("/wallet/payout", headers=headers)
+
+    resp = client.post(f"/receivables/charges/{charge['id']}/reverse", headers=headers)
+    assert resp.status_code == 409, resp.text
+    # a cobrança continua paga (nada foi revertido)
+    assert client.get(f"/receivables/charges/{charge['id']}", headers=headers).json()["status"] == "paid"
