@@ -504,13 +504,21 @@ def reverse_charge(db: Session, *, charge_id: str, tenant_id: str, actor: str) -
     sacado (STATUS_WITHDRAWN) — nesse caso o dinheiro já saiu fisicamente da carteira e não há
     como desfazer só editando o registro. Não toca `platform_earnings` (ledger histórico
     imutável do Master — ver design doc)."""
-    charge = db.scalar(select(Charge).where(Charge.id == charge_id).with_for_update())
+    charge = db.scalar(
+        select(Charge)
+        .where(Charge.id == charge_id, _not_investment_yield())
+        .with_for_update()
+    )
     if charge is None:
         raise ReceivableError("Cobrança não encontrada", 404)
     if charge.status != STATUS_PAID:
         raise ReceivableError("Só cobranças pagas podem ser estornadas", 409)
 
-    tx = db.get(Transaction, charge.transaction_id) if charge.transaction_id else None
+    tx = None
+    if charge.transaction_id:
+        tx = db.scalar(
+            select(Transaction).where(Transaction.id == charge.transaction_id).with_for_update()
+        )
     if tx is not None:
         if tx.status == STATUS_WITHDRAWN:
             raise ReceivableError(

@@ -1,6 +1,7 @@
 """Testes de Contas a Receber — incluindo a baixa que alimenta a Carteira com split."""
 import pytest
 from fastapi.testclient import TestClient
+from sqlalchemy.orm import Session
 
 REGISTER = {
     "legal_name": "Cobra Co",
@@ -759,3 +760,44 @@ def test_reverse_blocked_after_payout(client: TestClient, headers):
     assert resp.status_code == 409, resp.text
     # a cobrança continua paga (nada foi revertido)
     assert client.get(f"/receivables/charges/{charge['id']}", headers=headers).json()["status"] == "paid"
+
+
+def test_reverse_investment_yield_charge_rejected(client: TestClient, headers, db: Session):
+    """Finding 2: Investment-yield synthetic charges (external_ref='investment:*') should not
+    be reversible — they never enter the normal charge lifecycle. Treat as not-found (404)."""
+    from app.modules.receivables.models import Charge, STATUS_PAID
+    from datetime import datetime, UTC, date
+
+    # Create a regular charge first to get the tenant_id
+    regular = client.post(
+        "/receivables/charges", json=_charge(), headers=headers
+    ).json()
+    tenant_id = regular["tenant_id"]
+
+    # Create a synthetic investment-yield charge directly (simulates what register_yield does)
+    inv_charge = Charge(
+        tenant_id=tenant_id,
+        description="Rendimento de investimento",
+        kind="recurring",
+        method="pix",
+        amount_cents=5000,
+        due_date=date(2026, 8, 15),
+        competence_date=date(2026, 8, 15),
+        status=STATUS_PAID,
+        paid_at=datetime.now(UTC),
+        external_ref="investment:some-investment-id",  # synthetic marker
+        client_id=None,
+        transaction_id=None,  # never linked to wallet
+        agenda_event_id=None,  # no agenda event
+    )
+    db.add(inv_charge)
+    db.commit()
+    db.refresh(inv_charge)
+
+    # Try to reverse it — should get 404 (treated as not-found by the _not_investment_yield predicate)
+    resp = client.post(f"/receivables/charges/{inv_charge.id}/reverse", headers=headers)
+    assert resp.status_code == 404, f"Expected 404 for investment-yield charge, got {resp.status_code}: {resp.text}"
+
+    # Investment-yield charge remains unchanged
+    refreshed = db.get(Charge, inv_charge.id)
+    assert refreshed.status == STATUS_PAID
