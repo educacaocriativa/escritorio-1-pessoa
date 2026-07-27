@@ -112,6 +112,15 @@ export default function CobrancasPage() {
       notify(apiErrorMessage(err), "err");
     }
   }
+  async function reverse(id: string) {
+    if (!confirm('Estornar esta cobrança? Ela volta para "A vencer" e pode ser editada de novo.')) return;
+    try {
+      await api.post(`/receivables/charges/${id}/reverse`);
+      load();
+    } catch (err) {
+      notify(apiErrorMessage(err), "err");
+    }
+  }
 
   return (
     <div className="space-y-6">
@@ -200,6 +209,11 @@ export default function CobrancasPage() {
                               Cancelar
                             </button>
                           </>
+                        )}
+                        {c.status === "paid" && (
+                          <button onClick={() => reverse(c.id)} className="text-xs font-medium text-neutral-400 hover:text-danger">
+                            Estornar
+                          </button>
                         )}
                       </div>
                     </td>
