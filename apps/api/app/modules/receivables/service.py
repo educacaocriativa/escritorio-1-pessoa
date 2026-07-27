@@ -35,7 +35,6 @@ from app.modules.receivables.models import (
 )
 from app.modules.receivables.schemas import ChargeCreate
 from app.modules.wallet import service as wallet_service
-from app.modules.wallet.models import STATUS_REFUNDED, STATUS_WITHDRAWN, Transaction
 
 logger = logging.getLogger("e1p.receivables")
 
@@ -493,48 +492,6 @@ def cancel_charge(db: Session, *, charge_id: str, tenant_id: str, actor: str) ->
         raise ReceivableError("Cobrança paga não pode ser cancelada", 409)
     charge.status = STATUS_CANCELED
     audit.record(db, tenant_id=tenant_id, actor=actor, action="receivable.cancel", target=charge.id)
-    db.commit()
-    db.refresh(charge)
-    return charge
-
-
-def reverse_charge(db: Session, *, charge_id: str, tenant_id: str, actor: str) -> Charge:
-    """Estorna uma cobrança paga: devolve a transação vinculada na Carteira para 'refunded'
-    (sai do saldo disponível/a receber) e a cobrança para 'open'. Bloqueia se o valor já foi
-    sacado (STATUS_WITHDRAWN) — nesse caso o dinheiro já saiu fisicamente da carteira e não há
-    como desfazer só editando o registro. Não toca `platform_earnings` (ledger histórico
-    imutável do Master — ver design doc)."""
-    charge = db.scalar(
-        select(Charge)
-        .where(Charge.id == charge_id, _not_investment_yield())
-        .with_for_update()
-    )
-    if charge is None:
-        raise ReceivableError("Cobrança não encontrada", 404)
-    if charge.status != STATUS_PAID:
-        raise ReceivableError("Só cobranças pagas podem ser estornadas", 409)
-
-    tx = None
-    if charge.transaction_id:
-        tx = db.scalar(
-            select(Transaction).where(Transaction.id == charge.transaction_id).with_for_update()
-        )
-    if tx is not None:
-        if tx.status == STATUS_WITHDRAWN:
-            raise ReceivableError(
-                "Não é possível estornar: o valor já foi sacado da carteira", 409
-            )
-        tx.status = STATUS_REFUNDED
-
-    charge.status = STATUS_OPEN
-    charge.paid_at = None
-    if charge.agenda_event_id:
-        ev = db.get(AgendaEvent, charge.agenda_event_id)
-        if ev is not None:
-            ev.status = STATUS_SCHEDULED
-    audit.record(
-        db, tenant_id=tenant_id, actor=actor, action="receivable.reverse", target=charge.id
-    )
     db.commit()
     db.refresh(charge)
     return charge

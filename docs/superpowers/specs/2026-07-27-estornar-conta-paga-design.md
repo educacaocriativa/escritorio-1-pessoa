@@ -1,8 +1,32 @@
 # Estornar conta paga (reabrir Contas a Pagar/Receber para edição)
 
 **Data:** 2026-07-27
-**Status:** Aprovado para planejamento
-**Módulo:** `payables` + `receivables` (backend) / `features/pagar` + `features/cobrancas` (frontend)
+**Status:** Implementado (só Contas a Pagar — Contas a Receber descartada, ver Adendo)
+**Módulo:** `payables` (backend) / `features/pagar` (frontend)
+
+## Adendo (2026-07-27) — Contas a Receber descartada antes do merge
+
+O estorno de Contas a Receber (`reverse_charge`, spec original abaixo) foi **implementado,
+revisado em 2 rodadas (task review + revisão final de branch) e depois removido** antes do merge.
+
+A revisão final de branch encontrou um problema real no fluxo principal do recurso — reverter uma
+cobrança paga e pagá-la de novo (exatamente o motivo de existir o estorno: corrigir o dado errado e
+fechar de novo) grava um **segundo** registro em `platform_earnings` (ledger global de GMV/taxas do
+Master) para a mesma venda, porque essa tabela não guarda referência de volta à `Transaction`/
+`Charge` de origem (`wallet/models.py` — `PlatformEarning` só tem `tenant_id`/`kind`/`gross_cents`/
+`fee_cents`). Reverter e repagar uma cobrança de R$100 três vezes reportaria R$400 de GMV ao Master,
+mesmo a Carteira do tenant mostrando corretamente uma única transação líquida.
+
+Opções levantadas: (a) aceitar e documentar o efeito colateral; (b) vincular `platform_earnings` à
+transação de origem (migration nova) para pular/substituir o ganho já contabilizado; (c) lançamento
+compensatório negativo no estorno. O usuário optou por **não introduzir o efeito colateral agora** —
+o código de `reverse_charge`, o endpoint `POST /receivables/charges/{id}/reverse` e o botão
+"Estornar" em Cobranças foram revertidos do branch antes do merge. Contas a Pagar não tem esse
+problema (nunca move dinheiro pela Carteira) e permaneceu no escopo entregue.
+
+Se o estorno de Contas a Receber for retomado no futuro, resolver o vínculo `platform_earnings` ↔
+transação é pré-requisito — o design abaixo (seção "Backend — Contas a Receber") continua válido
+como ponto de partida técnico, só falta essa peça.
 
 ## Contexto
 

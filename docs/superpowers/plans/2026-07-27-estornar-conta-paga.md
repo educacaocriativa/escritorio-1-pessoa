@@ -2,6 +2,8 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
+> **Post-implementation note (2026-07-27):** Tasks 1 and 3 (Contas a Pagar) shipped as planned. Tasks 2 and 4 (Contas a Receber) were implemented, reviewed, and then reverted before merge — the final whole-branch review found that the reverse→re-pay flow would duplicate `platform_earnings` (the Master's global GMV ledger) with no way to reconcile it. See the "Adendo" in `docs/superpowers/specs/2026-07-27-estornar-conta-paga-design.md` for the full writeup. Tasks 2/4 below are left as-is for historical/technical reference if this is revisited.
+
 **Goal:** Add an "Estornar" action to paid bills (Contas a Pagar) and paid charges (Contas a Receber) that reverses the payment, reopening the record for full editing (including new attachments).
 
 **Architecture:** Two new backend endpoints (`POST /payables/bills/{id}/reverse`, `POST /receivables/charges/{id}/reverse`) that flip status back to `open`/`paid_at=None` and revert the linked Agenda event to `scheduled`. The receivables version additionally flips the linked wallet `Transaction` to `refunded` (removing it from balance sums) and hard-blocks with 409 if that transaction was already `withdrawn`. Two matching frontend buttons, one per page, following each page's existing action-button conventions exactly (they differ slightly — see Task 3/4).

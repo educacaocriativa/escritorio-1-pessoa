@@ -217,21 +217,6 @@ def cancel_charge(
     return _out(charge, db)
 
 
-@router.post("/charges/{charge_id}/reverse", response_model=ChargeOut)
-def reverse_charge(
-    charge_id: str,
-    user: CurrentUser = Depends(_guard),
-    db: Session = Depends(get_tenant_db),
-) -> ChargeOut:
-    try:
-        charge = service.reverse_charge(
-            db, charge_id=charge_id, tenant_id=user.tenant_id, actor=user.user_id
-        )
-    except service.ReceivableError as e:
-        raise _err(e) from e
-    return _out(charge, db)
-
-
 @router.post("/charges/{charge_id}/reschedule", response_model=ChargeOut)
 def reschedule_charge(
     charge_id: str,
