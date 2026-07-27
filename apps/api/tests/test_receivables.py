@@ -759,14 +759,20 @@ def test_reverse_blocked_after_payout(client: TestClient, headers):
     resp = client.post(f"/receivables/charges/{charge['id']}/reverse", headers=headers)
     assert resp.status_code == 409, resp.text
     # a cobrança continua paga (nada foi revertido)
-    assert client.get(f"/receivables/charges/{charge['id']}", headers=headers).json()["status"] == "paid"
+    charge_status = (
+        client.get(
+            f"/receivables/charges/{charge['id']}", headers=headers
+        ).json()["status"]
+    )
+    assert charge_status == "paid"
 
 
 def test_reverse_investment_yield_charge_rejected(client: TestClient, headers, db: Session):
     """Finding 2: Investment-yield synthetic charges (external_ref='investment:*') should not
     be reversible — they never enter the normal charge lifecycle. Treat as not-found (404)."""
-    from app.modules.receivables.models import Charge, STATUS_PAID
-    from datetime import datetime, UTC, date
+    from datetime import UTC, date, datetime
+
+    from app.modules.receivables.models import STATUS_PAID, Charge
 
     # Create a regular charge first to get the tenant_id
     regular = client.post(
@@ -794,9 +800,12 @@ def test_reverse_investment_yield_charge_rejected(client: TestClient, headers, d
     db.commit()
     db.refresh(inv_charge)
 
-    # Try to reverse it — should get 404 (treated as not-found by the _not_investment_yield predicate)
+    # Try to reverse; should get 404 (not-found by _not_investment_yield)
     resp = client.post(f"/receivables/charges/{inv_charge.id}/reverse", headers=headers)
-    assert resp.status_code == 404, f"Expected 404 for investment-yield charge, got {resp.status_code}: {resp.text}"
+    assert resp.status_code == 404, (
+        f"Expected 404 for investment-yield charge, "
+        f"got {resp.status_code}: {resp.text}"
+    )
 
     # Investment-yield charge remains unchanged
     refreshed = db.get(Charge, inv_charge.id)
