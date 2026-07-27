@@ -133,3 +133,18 @@ def cancel_bill(
     except service.PayableError as e:
         raise _err(e) from e
     return _out(p)
+
+
+@router.post("/bills/{payable_id}/reverse", response_model=PayableOut)
+def reverse_bill(
+    payable_id: str,
+    user: CurrentUser = Depends(_guard),
+    db: Session = Depends(get_tenant_db),
+) -> PayableOut:
+    try:
+        p = service.reverse_payable(
+            db, payable_id=payable_id, tenant_id=user.tenant_id, actor=user.user_id
+        )
+    except service.PayableError as e:
+        raise _err(e) from e
+    return _out(p)

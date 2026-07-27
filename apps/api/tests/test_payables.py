@@ -242,3 +242,39 @@ def test_unset_payable_chart_account(client: TestClient, headers):
     )
     assert resp.status_code == 200, resp.text
     assert resp.json()["chart_account_id"] is None
+
+
+def test_reverse_paid_payable(client: TestClient, headers):
+    b = client.post("/payables/bills", json=_bill(due_date="2026-08-05"), headers=headers).json()
+    client.post(f"/payables/bills/{b['id']}/pay", headers=headers)
+
+    resp = client.post(f"/payables/bills/{b['id']}/reverse", headers=headers)
+    assert resp.status_code == 200, resp.text
+    out = resp.json()
+    assert out["status"] == "open"
+    assert out["paid_at"] is None
+
+    # evento na Agenda volta a aparecer como pendente (não mais "concluído")
+    ev = [e for e in client.get("/agenda/events?limit=500", headers=headers).json()
+          if e["kind"] == "cobranca_pagar"][0]
+    assert ev["status"] == "scheduled"
+
+    # reaberta, volta a poder editar dados
+    edit = client.patch(
+        f"/payables/bills/{b['id']}", json={"amount_cents": 12345}, headers=headers
+    )
+    assert edit.status_code == 200
+    assert edit.json()["amount_cents"] == 12345
+
+
+def test_reverse_open_payable_rejected(client: TestClient, headers):
+    b = client.post("/payables/bills", json=_bill(), headers=headers).json()
+    resp = client.post(f"/payables/bills/{b['id']}/reverse", headers=headers)
+    assert resp.status_code == 409
+
+
+def test_reverse_canceled_payable_rejected(client: TestClient, headers):
+    b = client.post("/payables/bills", json=_bill(), headers=headers).json()
+    client.post(f"/payables/bills/{b['id']}/cancel", headers=headers)
+    resp = client.post(f"/payables/bills/{b['id']}/reverse", headers=headers)
+    assert resp.status_code == 409
