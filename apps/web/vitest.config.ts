@@ -16,5 +16,9 @@ export default defineConfig({
     // Fuso fixo para que testes sensíveis a data (ex.: ComprovantePage) sejam determinísticos em
     // qualquer máquina/CI, não só em fusos "atrás" de UTC como o do Brasil.
     env: { TZ: "America/Sao_Paulo" },
+    // O default de 5000ms causava flakes (PlatformUsers.test.tsx, ContractBuilderPage.test.tsx)
+    // só sob a suíte completa em paralelo — isolados, ambos passam dentro do default. Suíte
+    // cresceu o bastante para que a contenção de CPU entre workers estoure o timeout curto.
+    testTimeout: 15000,
   },
 });
