@@ -10,11 +10,14 @@ só precisa gravar um Attachment com esse owner_type.
 """
 from __future__ import annotations
 
+from datetime import UTC, datetime, timedelta
+
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.modules.attachments import service as attachments_service
 from app.modules.attachments.models import Attachment
+from app.modules.payables.models import STATUS_CANCELED, STATUS_OPEN, STATUS_PAID, Payable
 
 # owner_type do anexo enquanto ele está em staging (ainda sem conta definida).
 OWNER_INBOX = "receipt_inbox"
@@ -109,3 +112,43 @@ def discard(db: Session, *, attachment_id: str, user_id: str, tenant_id: str, ac
     attachments_service.delete_attachment(
         db, attachment_id=attachment_id, tenant_id=tenant_id, actor=actor
     )
+
+
+def list_candidates(db: Session, *, q: str = "", paid_window_days: int = 30) -> list[Payable]:
+    """Lista curta para escolher no celular: abertas primeiro (por vencimento, então as
+    vencidas caem naturalmente no topo), depois as pagas recentes — o caso de quem já deu
+    baixa e só faltava o comprovante. Canceladas nunca aparecem.
+
+    A ordenação é feita em duas queries, não num ORDER BY composto, porque os dois grupos
+    ordenam por colunas diferentes (due_date crescente vs paid_at decrescente).
+    """
+    term = q.strip().lower()
+
+    def _match(stmt):
+        if not term:
+            return stmt
+        like = f"%{term}%"
+        return stmt.where(
+            func.lower(Payable.description).like(like) | func.lower(Payable.supplier).like(like)
+        )
+
+    abertas = list(
+        db.scalars(
+            _match(select(Payable).where(Payable.status == STATUS_OPEN))
+            .order_by(Payable.due_date)
+            .limit(100)
+        ).all()
+    )
+    cutoff = datetime.now(UTC) - timedelta(days=paid_window_days)
+    pagas = list(
+        db.scalars(
+            _match(
+                select(Payable).where(Payable.status == STATUS_PAID, Payable.paid_at >= cutoff)
+            )
+            .order_by(Payable.paid_at.desc())
+            .limit(100)
+        ).all()
+    )
+    # STATUS_CANCELED nunca entra: nenhum dos dois filtros o inclui (por isso não há
+    # `.where(status != canceled)` — seria redundante).
+    return (abertas + pagas)[:100]

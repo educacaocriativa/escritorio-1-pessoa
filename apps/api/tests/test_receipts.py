@@ -92,3 +92,48 @@ def test_descartar_anexado_a_conta_da_409(client: TestClient, headers):
     resp = client.delete(f"/payables/receipts/{att_id}", headers=headers)
     assert resp.status_code == 409
     assert "anexado" in resp.json()["detail"].lower()
+
+
+def _bill(client: TestClient, headers, **over):
+    base = {
+        "description": "Energia",
+        "category": "Estrutura",
+        "supplier": "Copel",
+        "amount_cents": 30000,
+        "due_date": "2099-01-10",
+    }
+    return client.post("/payables/bills", json={**base, **over}, headers=headers).json()
+
+
+def test_candidates_lista_abertas_por_vencimento(client: TestClient, headers):
+    _bill(client, headers, description="Depois", due_date="2099-03-01")
+    _bill(client, headers, description="Antes", due_date="2099-01-01")
+    itens = client.get("/payables/receipts/candidates", headers=headers).json()
+    assert [i["description"] for i in itens] == ["Antes", "Depois"]
+
+
+def test_candidates_inclui_pagas_recentes_depois_das_abertas(client: TestClient, headers):
+    aberta = _bill(client, headers, description="Aberta", due_date="2099-02-02")
+    paga = _bill(client, headers, description="Paga", due_date="2099-02-03")
+    client.post(f"/payables/bills/{paga['id']}/pay", headers=headers)
+    itens = client.get("/payables/receipts/candidates", headers=headers).json()
+    assert [i["description"] for i in itens] == ["Aberta", "Paga"]
+    assert itens[0]["id"] == aberta["id"]
+
+
+def test_candidates_nao_lista_canceladas(client: TestClient, headers):
+    b = _bill(client, headers, description="Cancelada")
+    client.post(f"/payables/bills/{b['id']}/cancel", headers=headers)
+    itens = client.get("/payables/receipts/candidates", headers=headers).json()
+    assert [i["description"] for i in itens] == []
+
+
+def test_candidates_busca_por_descricao_e_fornecedor(client: TestClient, headers):
+    _bill(client, headers, description="Aluguel sala", supplier="Imobiliária X")
+    _bill(client, headers, description="Energia", supplier="Copel")
+
+    por_descricao = client.get("/payables/receipts/candidates?q=aluguel", headers=headers).json()
+    assert [i["description"] for i in por_descricao] == ["Aluguel sala"]
+
+    por_fornecedor = client.get("/payables/receipts/candidates?q=copel", headers=headers).json()
+    assert [i["description"] for i in por_fornecedor] == ["Energia"]

@@ -6,13 +6,14 @@ difícil de ler.
 """
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends, File, HTTPException, Response, UploadFile
+from fastapi import APIRouter, Depends, File, HTTPException, Query, Response, UploadFile
 from sqlalchemy.orm import Session
 
 from app.core.tenancy import CurrentUser, get_tenant_db, require_module
 from app.modules.attachments.models import Attachment
-from app.modules.payables import receipts
+from app.modules.payables import receipts, service as payables_service
 from app.modules.payables.receipts_schemas import ReceiptOut
+from app.modules.payables.schemas import PayableOut
 
 router = APIRouter(prefix="/payables/receipts", tags=["payables-receipts"])
 
@@ -61,6 +62,17 @@ def list_receipts(
     db: Session = Depends(get_tenant_db),
 ) -> list[ReceiptOut]:
     return [_out(a) for a in receipts.list_inbox(db, user_id=user.user_id)]
+
+
+@router.get("/candidates", response_model=list[PayableOut])
+def list_candidates(
+    q: str = Query(default=""),
+    _user: CurrentUser = Depends(_guard),
+    db: Session = Depends(get_tenant_db),
+) -> list[PayableOut]:
+    """Contas que podem receber o comprovante. Reusa PayableOut para o front não precisar de
+    um tipo novo (o cartão mostra descrição, fornecedor, valor, vencimento e is_overdue)."""
+    return [payables_service.payable_out(p) for p in receipts.list_candidates(db, q=q)]
 
 
 @router.delete("/{attachment_id}", status_code=204)
