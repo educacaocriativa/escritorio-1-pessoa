@@ -123,6 +123,41 @@ Ao criar/alterar qualquer funcionalidade:
 - [x] **Storage S3-compatível dos Anexos** — os bytes podem sair do Postgres para um object storage S3 (`app/core/storage.py`, wrapper fino sobre `boto3` com `endpoint_url` configurável: AWS S3 real OU MinIO/B2/Wasabi barato, sem trocar código). **Dual-write/dual-read com fallback gracioso:** se `S3_BUCKET` está vazio (dev/CI/staging sem bucket), tudo continua no Postgres exatamente como antes (mesmo padrão fail-safe de WhatsApp/SMTP). Se configurado, anexo novo sobe pro bucket (`storage_key` setado, `data=None`); a leitura resolve a origem por linha, então anexo legado (pré-migração) continua baixando. Isolamento de tenant também no path da chave (`tenants/{tenant_id}/attachments/{id}/{filename}` via `build_key`), em complemento à RLS do metadado. Contrato HTTP dos 4 endpoints de `/attachments` e o componente `Attachments.tsx` **inalterados** (só persistência mudou). Migration 0039 (só estrutural: `storage_key` + `data` nullable — não toca em rede no boot). Backfill idempotente `python -m app.scripts.migrate_attachments_to_s3` (documentado em `docs/HOSTINGER-DEPLOY.md`, roda numa janela após configurar as envs). Faseável/não-bloqueante para o deploy.
   - **Dívida:** remover a coluna `data` (limpeza só depois do backfill 100% em produção); validação real contra um bucket S3/MinIO de verdade é manual (sem testcontainers p/ S3 no CI, mesma lacuna do RLS/Postgres).
 
+## Anexos: comprovante pelo share sheet do celular
+- [x] **Compartilhar comprovante do app do banco → Contas a Pagar** — o comprovante entra pelo
+  compartilhamento nativo do celular, sem salvar arquivo antes. **Bandeja de staging** sem tabela
+  nova: `Attachment` com `owner_type="receipt_inbox"`, `owner_id=<user_id>`; vincular é só trocar
+  `owner_type`/`owner_id` para `payable` (os bytes não se movem — a `storage.build_key` não
+  carrega o dono). Rotas em `/payables/receipts` (upload, bandeja, `candidates`, `link`,
+  `new-bill`, descarte). `link` anexa e dá baixa **num commit só**, o que exigiu extrair
+  `apply_paid` e `build_payable` (versões sem commit) de `mark_paid`/`create_payable` — mesmo
+  padrão do `receivables.build_charge`; a suíte `tests/test_payables.py` ficou verde sem precisar
+  editar. **Android:** PWA instalável com `share_target` no `manifest.webmanifest`; o
+  `public/sw.js` é um service worker que **não faz cache de nada** (só intercepta o POST do share
+  target) — de propósito, para não introduzir a classe de bug "deploy novo, app velho em cache".
+  ⚠️ `nginx.conf` ganhou `location = /sw.js` com `no-cache`: o regex de estáticos daria
+  `immutable` 30d ao service worker. **iOS:** app Atalhos + `device_tokens` (migration 0057,
+  tabela GLOBAL sem RLS — mesma situação de `users` — validada só offline via `alembic upgrade
+  0056:0057 --sql`, sem Postgres real na máquina), com escopo travado em
+  `POST /payables/receipts` — um token vazado só consegue depositar arquivo na bandeja do dono,
+  nunca ler. Isolamento vem de filtro explícito por `user_id` do JWT (allowlist documentada em
+  `apps/api/tests/test_tenancy_guard.py`; não é o padrão de tenant-por-token de `whatsapp_inbox`).
+  Slot `comprovante` adicionado ao modal (antes o comprovante ia no campo "Contrato").
+  - **Dívida:** Contas a Receber e anexos genéricos fora de escopo; WhatsApp como porta de entrada
+    fica desenhado mas não construído (o `whatsapp_inbox` já cria `Attachment` — falta apontar o
+    `owner_type` para a bandeja) e depende das credenciais da Meta; sem OCR/sugestão automática da
+    conta; publicação do atalho do iOS é manual, uma vez só (limitação da plataforma, não dá para
+    gerar por código); ícones do PWA (192/512) são placeholder — quadrado na cor da marca com
+    "e1p" em fonte padrão do PIL, maskable-safe mas para trocar por um logo real. **Falta o
+    companheiro `test_receipts_rls.py`** (`pytest.mark.rls_e2e`, testcontainers, job
+    `cross-tenant-rls` do CI) que outros módulos já têm (`test_chart_of_accounts_rls.py`,
+    `test_cost_centers_rls.py` etc.) — isolamento cross-tenant do `link` NÃO é impossível de
+    automatizar aqui, só ainda não foi escrito.
+  - **Validação manual obrigatória:** `docs/CHECKLIST-COMPROVANTE-MOBILE.md` — share sheet do
+    Android e Atalho do iOS (genuinamente manuais, exigem aparelho real) e isolamento cross-tenant
+    do `link` (manual só até o `test_receipts_rls.py` acima ser escrito) não são cobertos pelos
+    testes automatizados hoje.
+
 ## Financeiro: boleto gera arquivo + pagamento automático (sem marcar à mão)
 - [x] **Boleto gera o arquivo (PDF) e anexa** — criar cobrança com `method=boleto` (escolhido no próprio formulário de Nova cobrança) gera um **PDF de boleto** (`core/boleto.py`, fpdf2) com beneficiário/pagador/valor/**vencimento**/linha digitável, e o anexa à cobrança (`Attachment` label=boleto). Aparece na Agenda no dia do vencimento e nos anexos do evento. Cada ocorrência recorrente gera seu próprio boleto.
 - [x] **Pagamento reconhecido AUTOMATICAMENTE (sem botão "marcar pago")** — removidos os botões "Marcar paga" de Cobranças e Ficha 360°. Pagamento entra por `POST /receivables/webhook` (gateway: Pix/cartão/boleto compensado), público, protegido por `GATEWAY_WEBHOOK_SECRET` (vazio em dev = aberto p/ teste; definido em prod = só o gateway confirma). A baixa credita a Carteira (split) e libera p/ **saque** no Financeiro. O dono só saca o que o sistema reconhece como pago.
