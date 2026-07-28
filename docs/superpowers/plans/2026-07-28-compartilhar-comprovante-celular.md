@@ -1916,12 +1916,27 @@ E, na seção de includes:
 api_router.include_router(device_tokens_router)
 ```
 
-- [ ] **Step 6: Rodar os testes**
+- [ ] **Step 6: Liberar o módulo no guard de tenancy**
 
-Run: `cd apps/api && source .venv/bin/activate && pytest tests/test_device_tokens.py -v`
-Expected: PASS (11 testes).
+`apps/api/tests/test_tenancy_guard.py` é uma guarda estática que varre `app/modules/*/router.py` e falha se um módulo fora da allowlist mencionar `get_db`. Ela existe para impedir que alguém contorne a RLS. `device_tokens` usa `get_db` legitimamente (tabela global, tenant resolvido a partir do token), então entra na allowlist — **com justificativa escrita**, no mesmo padrão de `auth`/`whatsapp_inbox`:
 
-- [ ] **Step 7: Commit**
+```python
+ALLOWLIST = {
+    "auth", "platform", "contracts", "pages", "quotes", "wallet", "attachments", "integrations",
+    "whatsapp_inbox", "device_tokens",
+}
+```
+
+E a entrada correspondente no docstring do módulo, explicando que a tabela é GLOBAL sem RLS porque o tenant é resolvido A PARTIR do token antes de qualquer `tenant_session` existir, que as rotas filtram explicitamente por `user_id` vindo do JWT, e que a tabela guarda só hash de credencial e metadado — nenhum dado de negócio.
+
+Não enfraqueça a guarda de nenhuma outra forma: não altere o glob, não relaxe a checagem `"get_db" in source`, não adicione skip.
+
+- [ ] **Step 7: Rodar os testes**
+
+Run: `cd apps/api && source .venv/Scripts/activate && pytest tests/test_device_tokens.py -v` e depois a suíte inteira `pytest -q`.
+Expected: PASS (11 testes no arquivo; suíte inteira sem falhas). A suíte inteira é o gate real aqui — um subconjunto NÃO pega a guarda de tenancy.
+
+- [ ] **Step 8: Commit**
 
 ```bash
 git add apps/api/app/modules/device_tokens/router.py \
