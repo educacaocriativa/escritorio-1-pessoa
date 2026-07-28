@@ -10,6 +10,7 @@ import {
   getGoogleStatus,
 } from "../../lib/api";
 import { applyBrandTheme } from "../../lib/theme";
+import CelularSection from "./CelularSection";
 import IntegrationsSection from "./IntegrationsSection";
 import WhatsappSection from "./WhatsappSection";
 
@@ -110,6 +111,7 @@ export default function ConfiguracoesPage() {
       {tab === "integracoes" && (
         <div className="space-y-6">
           <WhatsappSection />
+          <CelularSection />
           <IntegrationsSection />
         </div>
       )}

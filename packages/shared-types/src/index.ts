@@ -767,6 +767,14 @@ export interface WhatsappMessageOut {
   created_at: string;
 }
 
+/** Credencial do Atalho do iOS. O token cru só existe na resposta da criação. */
+export interface DeviceToken {
+  id: string;
+  name: string;
+  created_at: string;
+  last_used_at: string | null;
+}
+
 // ── Integrações (captura de lead de sites externos) ────
 export interface IntegrationKey {
   id: UUID;
