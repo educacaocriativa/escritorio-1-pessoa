@@ -1,5 +1,6 @@
 """Testes do token de dispositivo (credencial do Atalho do iOS)."""
 import pytest
+from fastapi.testclient import TestClient
 from sqlalchemy.orm import Session
 
 from app.db.registry import Base  # noqa: F401 — garante o registro do modelo novo
@@ -67,3 +68,44 @@ def test_list_omite_revogados(db: Session, seeded):
     token, _ = service.create_token(db, name="iPhone", **seeded)
     service.revoke(db, token_id=token.id, user_id="u-1")
     assert service.list_tokens(db, user_id="u-1") == []
+
+
+REGISTER = {
+    "legal_name": "Token Co",
+    "document": "11444777000161",
+    "slug": "tokenco",
+    "email": "token@example.com",
+    "name": "Token",
+    "password": "senha-bem-comprida",
+}
+
+
+@pytest.fixture()
+def headers(client: TestClient) -> dict[str, str]:
+    token = client.post("/auth/register", json=REGISTER).json()["access_token"]
+    return {"Authorization": f"Bearer {token}"}
+
+
+def test_criar_token_mostra_o_cru_uma_vez(client: TestClient, headers):
+    resp = client.post("/settings/device-tokens", json={"name": "iPhone"}, headers=headers)
+    assert resp.status_code == 201, resp.text
+    body = resp.json()
+    assert body["name"] == "iPhone"
+    assert len(body["token"]) > 20
+
+    # a listagem NUNCA devolve o token cru
+    listagem = client.get("/settings/device-tokens", headers=headers).json()
+    assert [t["name"] for t in listagem] == ["iPhone"]
+    assert "token" not in listagem[0]
+
+
+def test_revogar_some_da_listagem(client: TestClient, headers):
+    tid = client.post(
+        "/settings/device-tokens", json={"name": "iPhone"}, headers=headers
+    ).json()["id"]
+    assert client.delete(f"/settings/device-tokens/{tid}", headers=headers).status_code == 204
+    assert client.get("/settings/device-tokens", headers=headers).json() == []
+
+
+def test_rotas_exigem_login(client: TestClient):
+    assert client.get("/settings/device-tokens").status_code == 401
