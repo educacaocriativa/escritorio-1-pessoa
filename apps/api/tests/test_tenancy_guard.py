@@ -25,6 +25,11 @@ Allowlist (usos legítimos, documentados com guarda explícita no próprio códi
                   o tenant via `public_whatsapp_accounts` (snapshot GLOBAL sem RLS) pelo
                   `phone_number_id`/`verify_token` antes de abrir a tenant_session real — mesmo
                   padrão de pages/quotes/contracts/integrations.
+  - device_tokens  → tabela GLOBAL sem RLS; o tenant é resolvido A PARTIR DO token antes de
+                  qualquer tenant_session existir (mesmo padrão de auth/whatsapp_inbox). As rotas
+                  filtram explicitamente por `user_id` vindo do JWT. A tabela contém apenas hash
+                  do token e metadata — nenhum dado de negócio. Garante que o iOS Shortcut possa
+                  autenticar sem tenant context prévio.
 """
 from __future__ import annotations
 
@@ -35,7 +40,7 @@ MODULES_DIR = pathlib.Path(__file__).resolve().parents[1] / "app" / "modules"
 # Módulos onde `get_db` (sessão global) é um uso legítimo e já auditado (ver docstring acima).
 ALLOWLIST = {
     "auth", "platform", "contracts", "pages", "quotes", "wallet", "attachments", "integrations",
-    "whatsapp_inbox",
+    "whatsapp_inbox", "device_tokens",
 }
 
 
