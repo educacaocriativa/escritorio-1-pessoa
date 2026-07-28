@@ -88,8 +88,12 @@ export default function ComprovantePage() {
   // nova". Sem isso, escolher uma candidata enquanto o formulário de conta nova está aberto
   // faz os dois guards (`!chosen` e `!showNew`) ficarem falsos ao mesmo tempo — nenhum dos dois
   // caminhos de envio renderiza e o usuário fica sem nenhuma forma de arquivar o comprovante.
+  //
+  // Tocar de novo na candidata JÁ selecionada desmarca (toggle) em vez de travar a seleção —
+  // sem isso, a única forma de sair de "candidata escolhida" era filtrar a lista até ela sumir,
+  // e "Criar conta nova" ficava inalcançável enquanto qualquer candidata estivesse marcada.
   function selectCandidate(candidateId: string) {
-    setSelected(candidateId);
+    setSelected((prev) => (prev === candidateId ? "" : candidateId));
     setShowNew(false);
   }
 

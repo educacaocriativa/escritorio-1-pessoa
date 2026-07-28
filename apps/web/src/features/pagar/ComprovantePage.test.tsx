@@ -220,6 +220,25 @@ describe("ComprovantePage", () => {
     expect(screen.queryByRole("button", { name: /^anexar$/i })).toBeNull();
   });
 
+  // Revisão final de branch (Finding 6): antes, uma vez escolhida uma candidata não havia como
+  // desmarcá-la — "Criar conta nova" ficava travado atrás de `!chosen`, e a única saída era
+  // filtrar a lista até a candidata sumir. Tocar de novo na mesma candidata precisa desmarcar
+  // (toggle), devolvendo "Anexar" ao estado desabilitado e "Criar conta nova" ao alcance.
+  it("tocar de novo na candidata ja selecionada desmarca (toggle-off), sem beco sem saida", async () => {
+    mockApi();
+    renderPage();
+    await waitFor(() => screen.getByText("Energia"));
+
+    await userEvent.click(screen.getByText("Energia"));
+    expect(screen.getByRole("button", { name: /^anexar$/i })).not.toBeDisabled();
+    expect(screen.queryByRole("button", { name: /criar conta nova/i })).toBeNull();
+
+    await userEvent.click(screen.getByText("Energia"));
+
+    expect(screen.getByRole("button", { name: /^anexar$/i })).toBeDisabled();
+    expect(screen.getByRole("button", { name: /criar conta nova/i })).toBeTruthy();
+  });
+
   // Achado 1 (rodada 2 de revisão): a correção anterior só fechava a exclusão mútua numa
   // direção. Nada resetava `showNew` ao selecionar uma candidata — abrir a conta nova e DEPOIS
   // selecionar uma candidata deixava os dois guards (`!chosen` e `!showNew`) falsos ao mesmo
