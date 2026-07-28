@@ -2877,7 +2877,16 @@ function NewBillForm({
   const [supplier, setSupplier] = useState("");
   const [category, setCategory] = useState("Geral");
   const [amount, setAmount] = useState("");
-  const [dueDate, setDueDate] = useState(() => new Date().toISOString().slice(0, 10));
+  // ⚠️ NÃO use `new Date().toISOString().slice(0, 10)` aqui: `toISOString` formata em UTC, então
+  // no Brasil (UTC-3) qualquer horário a partir das ~21h já cai no dia seguinte e o campo nasce
+  // com a data errada — a MESMA classe de bug que esta spec manda evitar ao renderizar `due_date`,
+  // só que na direção oposta. Derive a data de calendário LOCAL.
+  const [dueDate, setDueDate] = useState(() => {
+    const d = new Date();
+    const mm = String(d.getMonth() + 1).padStart(2, "0");
+    const dd = String(d.getDate()).padStart(2, "0");
+    return `${d.getFullYear()}-${mm}-${dd}`;
+  });
   const [busy, setBusy] = useState(false);
 
   async function submit() {
