@@ -778,6 +778,40 @@ Expected: PASS — todos os testes existentes continuam verdes.
 Acrescentar em `apps/api/app/modules/payables/receipts.py`:
 
 ```python
+def _attach_and_commit(
+    db: Session,
+    att: Attachment,
+    p: Payable,
+    *,
+    tenant_id: str,
+    actor: str,
+    mark_paid: bool,
+) -> Payable:
+    """Move o anexo da bandeja para a conta e fecha a transação (com baixa, se pedido).
+
+    Extraído porque `link_receipt` (conta existente) e `new_bill_from_receipt` (conta nova)
+    terminam exatamente igual — só a origem da conta difere.
+    """
+    from app.core import audit
+    from app.modules.payables import service as payables_service
+
+    att.owner_type = OWNER_PAYABLE
+    att.owner_id = p.id
+    att.label = LABEL_COMPROVANTE
+
+    # Conta já paga não é re-datada; `apply_paid` não commita, então a baixa e o vínculo
+    # caem na MESMA transação.
+    if mark_paid and p.status == STATUS_OPEN:
+        payables_service.apply_paid(db, payable_id=p.id, tenant_id=tenant_id, actor=actor)
+
+    audit.record(
+        db, tenant_id=tenant_id, actor=actor, action="payable.receipt_linked", target=p.id
+    )
+    db.commit()
+    db.refresh(p)
+    return p
+
+
 def link_receipt(
     db: Session,
     *,
@@ -788,13 +822,10 @@ def link_receipt(
     bill_id: str,
     mark_paid: bool,
 ) -> Payable:
-    """Vincula o comprovante à conta e, se pedido, dá a baixa — tudo num commit só.
+    """Vincula o comprovante a uma conta existente e, se pedido, dá a baixa.
 
     Vincular é trocar owner_type/owner_id do Attachment: os bytes ficam onde estão.
     """
-    from app.core import audit
-    from app.modules.payables import service as payables_service
-
     att = get_staged(db, attachment_id=attachment_id, user_id=user_id)
 
     p = db.get(Payable, bill_id)
@@ -803,20 +834,9 @@ def link_receipt(
     if p.status == STATUS_CANCELED:
         raise ReceiptError("Conta cancelada não recebe comprovante", 409)
 
-    att.owner_type = OWNER_PAYABLE
-    att.owner_id = p.id
-    att.label = LABEL_COMPROVANTE
-
-    if mark_paid and p.status == STATUS_OPEN:
-        # apply_paid não commita — por isso a baixa e o vínculo caem na mesma transação.
-        payables_service.apply_paid(db, payable_id=p.id, tenant_id=tenant_id, actor=actor)
-
-    audit.record(
-        db, tenant_id=tenant_id, actor=actor, action="payable.receipt_linked", target=p.id
+    return _attach_and_commit(
+        db, att, p, tenant_id=tenant_id, actor=actor, mark_paid=mark_paid
     )
-    db.commit()
-    db.refresh(p)
-    return p
 ```
 
 - [ ] **Step 6: Adicionar o schema de entrada**
@@ -1073,27 +1093,20 @@ def new_bill_from_receipt(
 
     Para o caso de ter pago algo que ainda não estava cadastrado no sistema.
     """
-    from app.core import audit
     from app.modules.payables import service as payables_service
 
     att = get_staged(db, attachment_id=attachment_id, user_id=user_id)
 
+    # build_payable não commita: a conta, o evento na Agenda, o vínculo do anexo e a baixa
+    # entram todos na mesma transação.
     p = payables_service.build_payable(db, tenant_id=tenant_id, actor=actor, data=data)
 
-    att.owner_type = OWNER_PAYABLE
-    att.owner_id = p.id
-    att.label = LABEL_COMPROVANTE
-
-    if mark_paid:
-        payables_service.apply_paid(db, payable_id=p.id, tenant_id=tenant_id, actor=actor)
-
-    audit.record(
-        db, tenant_id=tenant_id, actor=actor, action="payable.receipt_linked", target=p.id
+    return _attach_and_commit(
+        db, att, p, tenant_id=tenant_id, actor=actor, mark_paid=mark_paid
     )
-    db.commit()
-    db.refresh(p)
-    return p
 ```
+
+A conta recém-criada nasce `STATUS_OPEN`, então a guarda `p.status == STATUS_OPEN` dentro de `_attach_and_commit` deixa a baixa passar normalmente.
 
 - [ ] **Step 6: Adicionar o schema de entrada**
 
