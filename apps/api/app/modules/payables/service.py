@@ -262,6 +262,26 @@ def cancel_payable(db: Session, *, payable_id: str, tenant_id: str, actor: str) 
     return p
 
 
+def reverse_payable(db: Session, *, payable_id: str, tenant_id: str, actor: str) -> Payable:
+    """Estorna uma conta paga: volta para 'open', limpa paid_at, reabre a edição completa e
+    devolve o evento vinculado na Agenda para pendente (desfaz o STATUS_DONE de mark_paid)."""
+    p = db.scalar(select(Payable).where(Payable.id == payable_id).with_for_update())
+    if p is None:
+        raise PayableError("Conta não encontrada", 404)
+    if p.status != STATUS_PAID:
+        raise PayableError("Só contas pagas podem ser estornadas", 409)
+    p.status = STATUS_OPEN
+    p.paid_at = None
+    if p.agenda_event_id:
+        ev = db.get(AgendaEvent, p.agenda_event_id)
+        if ev is not None:
+            ev.status = STATUS_SCHEDULED
+    audit.record(db, tenant_id=tenant_id, actor=actor, action="payable.reverse", target=p.id)
+    db.commit()
+    db.refresh(p)
+    return p
+
+
 def list_categories(db: Session) -> list[str]:
     rows = db.scalars(select(Payable.category).distinct().order_by(Payable.category)).all()
     return list(rows)
