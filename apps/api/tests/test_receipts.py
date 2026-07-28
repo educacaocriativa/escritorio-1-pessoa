@@ -328,3 +328,83 @@ def test_create_bill_continua_funcionando_apos_refactor(client: TestClient, head
     b = _bill(client, headers, due_date="2099-06-01", recurrence="monthly", recurrence_count=3)
     todas = client.get("/payables/bills", headers=headers).json()
     assert len([x for x in todas if x["recurrence_group"] == b["recurrence_group"]]) == 3
+
+
+def _device_token(db: Session, headers) -> tuple[str, str, str]:
+    """Cria um token de dispositivo direto pelo serviço (a rota HTTP só vem na Task 7).
+
+    Usa a fixture `db` — a MESMA sessão SQLite que a fixture `client` usa — em vez de abrir
+    outra: o token precisa estar visível para a requisição que virá logo em seguida.
+
+    Devolve (token_cru, user_id, tenant_id).
+    """
+    from app.modules.auth.models import User
+    from app.modules.device_tokens import service as dt_service
+
+    user = db.query(User).filter(User.email == REGISTER["email"]).one()
+    _, raw = dt_service.create_token(
+        db, tenant_id=user.tenant_id, user_id=user.id, name="iPhone de teste"
+    )
+    return raw, user.id, user.tenant_id
+
+
+def test_upload_aceita_token_de_dispositivo(client: TestClient, db: Session, headers):
+    raw, _, _ = _device_token(db, headers)
+    resp = client.post(
+        "/payables/receipts",
+        files={"file": ("comp.png", PNG, "image/png")},
+        headers={"X-E1P-Device-Token": raw},
+    )
+    assert resp.status_code == 201, resp.text
+    # o arquivo caiu na bandeja do MESMO usuário, visível pela sessão web
+    assert [i["id"] for i in client.get("/payables/receipts", headers=headers).json()] == [
+        resp.json()["id"]
+    ]
+
+
+def test_upload_recusa_token_de_dispositivo_invalido(client: TestClient):
+    resp = client.post(
+        "/payables/receipts",
+        files={"file": ("comp.png", PNG, "image/png")},
+        headers={"X-E1P-Device-Token": "token-que-nao-existe"},
+    )
+    assert resp.status_code == 401
+
+
+def test_upload_sem_credencial_nenhuma_da_401(client: TestClient):
+    resp = client.post("/payables/receipts", files={"file": ("comp.png", PNG, "image/png")})
+    assert resp.status_code == 401
+
+
+def test_token_de_dispositivo_escreve_sempre_no_tenant_do_proprio_token(
+    client: TestClient, db: Session, headers
+):
+    """O tenant_id do anexo vem do TOKEN, nunca do corpo da requisição — por isso um token de
+    A não consegue escrever em B, mesmo forjando parâmetros. (O outro lado do isolamento — a
+    LEITURA cross-tenant no `link` — depende de RLS e só é validável no Postgres: ver
+    docs/CHECKLIST-COMPROVANTE-MOBILE.md.)"""
+    from app.modules.attachments.models import Attachment
+
+    raw, user_id, tenant_id = _device_token(db, headers)
+    rid = client.post(
+        "/payables/receipts",
+        files={"file": ("comp.png", PNG, "image/png")},
+        headers={"X-E1P-Device-Token": raw},
+    ).json()["id"]
+
+    att = db.get(Attachment, rid)
+    assert att.tenant_id == tenant_id
+    assert att.owner_id == user_id
+
+
+def test_link_continua_exigindo_sessao_web(client: TestClient, db: Session, headers):
+    """O token de dispositivo NÃO autoriza vincular — escopo travado no upload."""
+    b = _bill(client, headers)
+    raw, _, _ = _device_token(db, headers)
+    rid = _upload(client, headers).json()["id"]
+    resp = client.post(
+        f"/payables/receipts/{rid}/link",
+        json={"bill_id": b["id"], "mark_paid": True},
+        headers={"X-E1P-Device-Token": raw},
+    )
+    assert resp.status_code == 401  # link exige Bearer, não conhece o header do dispositivo

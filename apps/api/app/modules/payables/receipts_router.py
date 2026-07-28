@@ -9,6 +9,7 @@ from __future__ import annotations
 from fastapi import APIRouter, Depends, File, HTTPException, Query, Response, UploadFile
 from sqlalchemy.orm import Session
 
+from app.core.receipt_auth import get_receipt_db, receipt_uploader
 from app.core.tenancy import CurrentUser, get_tenant_db, require_module
 from app.modules.attachments.models import Attachment
 from app.modules.payables import receipts
@@ -35,8 +36,8 @@ def _err(e: Exception, status_code: int) -> HTTPException:
 @router.post("", response_model=ReceiptOut, status_code=201)
 async def upload_receipt(
     file: UploadFile = File(...),
-    user: CurrentUser = Depends(_guard),
-    db: Session = Depends(get_tenant_db),
+    user: CurrentUser = Depends(receipt_uploader),
+    db: Session = Depends(get_receipt_db),
 ) -> ReceiptOut:
     """Recebe o comprovante e guarda na bandeja. É a única rota que as portas de entrada
     (Share Target do Android, Atalho do iOS) conhecem."""
