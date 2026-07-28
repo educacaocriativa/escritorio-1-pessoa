@@ -1615,9 +1615,12 @@ from sqlalchemy.orm import Session
 from app.core.security import decode_access_token
 from app.core.tenancy import CurrentUser
 from app.db.session import get_db, tenant_session
-from app.modules.device_tokens import service as device_tokens_service
-from app.modules.device_tokens.models import SCOPE_RECEIPT_UPLOAD
-from app.modules.device_tokens.service import DeviceTokenError
+
+# ⚠️ Os três símbolos de `device_tokens` NÃO podem ser importados aqui no topo: importar
+# `app.modules.device_tokens` executa `app/modules/__init__.py`, que importa
+# `receipts_router`, que importa ESTE módulo ainda meio inicializado → ImportError circular.
+# Eles são importados dentro do ramo do token de dispositivo (mesmo padrão do
+# `AttachmentError` diferido que já existe em `receipts_router.py`).
 
 
 def receipt_uploader(
