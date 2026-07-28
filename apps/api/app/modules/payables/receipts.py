@@ -17,7 +17,7 @@ from sqlalchemy.orm import Session
 
 from app.modules.attachments import service as attachments_service
 from app.modules.attachments.models import Attachment
-from app.modules.payables.models import STATUS_OPEN, STATUS_PAID, Payable
+from app.modules.payables.models import STATUS_CANCELED, STATUS_OPEN, STATUS_PAID, Payable
 
 # owner_type do anexo enquanto ele está em staging (ainda sem conta definida).
 OWNER_INBOX = "receipt_inbox"
@@ -152,3 +152,64 @@ def list_candidates(db: Session, *, q: str = "", paid_window_days: int = 30) -> 
     # Contas canceladas nunca entram: nenhum dos dois filtros (status aberta ou status paga)
     # as inclui, portanto não precisamos de um `.where(status != cancelada)` explícito.
     return (abertas + pagas)[:100]
+
+
+def _attach_and_commit(
+    db: Session,
+    att: Attachment,
+    p: Payable,
+    *,
+    tenant_id: str,
+    actor: str,
+    mark_paid: bool,
+) -> Payable:
+    """Move o anexo da bandeja para a conta e fecha a transação (com baixa, se pedido).
+
+    Extraído porque `link_receipt` (conta existente) e `new_bill_from_receipt` (conta nova)
+    terminam exatamente igual — só a origem da conta difere.
+    """
+    from app.core import audit
+    from app.modules.payables import service as payables_service
+
+    att.owner_type = OWNER_PAYABLE
+    att.owner_id = p.id
+    att.label = LABEL_COMPROVANTE
+
+    # Conta já paga não é re-datada; `apply_paid` não commita, então a baixa e o vínculo
+    # caem na MESMA transação.
+    if mark_paid and p.status == STATUS_OPEN:
+        payables_service.apply_paid(db, payable_id=p.id, tenant_id=tenant_id, actor=actor)
+
+    audit.record(
+        db, tenant_id=tenant_id, actor=actor, action="payable.receipt_linked", target=p.id
+    )
+    db.commit()
+    db.refresh(p)
+    return p
+
+
+def link_receipt(
+    db: Session,
+    *,
+    attachment_id: str,
+    user_id: str,
+    tenant_id: str,
+    actor: str,
+    bill_id: str,
+    mark_paid: bool,
+) -> Payable:
+    """Vincula o comprovante a uma conta existente e, se pedido, dá a baixa.
+
+    Vincular é trocar owner_type/owner_id do Attachment: os bytes ficam onde estão.
+    """
+    att = get_staged(db, attachment_id=attachment_id, user_id=user_id)
+
+    p = db.get(Payable, bill_id)
+    if p is None:
+        raise ReceiptError("Conta não encontrada", 404)
+    if p.status == STATUS_CANCELED:
+        raise ReceiptError("Conta cancelada não recebe comprovante", 409)
+
+    return _attach_and_commit(
+        db, att, p, tenant_id=tenant_id, actor=actor, mark_paid=mark_paid
+    )

@@ -13,7 +13,7 @@ from app.core.tenancy import CurrentUser, get_tenant_db, require_module
 from app.modules.attachments.models import Attachment
 from app.modules.payables import receipts
 from app.modules.payables import service as payables_service
-from app.modules.payables.receipts_schemas import ReceiptOut
+from app.modules.payables.receipts_schemas import ReceiptLinkIn, ReceiptOut
 from app.modules.payables.schemas import PayableOut
 
 router = APIRouter(prefix="/payables/receipts", tags=["payables-receipts"])
@@ -78,6 +78,25 @@ def list_candidates(
     """Contas que podem receber o comprovante. Reusa PayableOut para o front não precisar de
     um tipo novo (o cartão mostra descrição, fornecedor, valor, vencimento e is_overdue)."""
     return [payables_service.payable_out(p) for p in receipts.list_candidates(db, q=q)]
+
+
+@router.post("/{attachment_id}/link", response_model=PayableOut)
+def link_receipt(
+    attachment_id: str,
+    data: ReceiptLinkIn,
+    user: CurrentUser = Depends(_guard),
+    db: Session = Depends(get_tenant_db),
+) -> PayableOut:
+    try:
+        p = receipts.link_receipt(
+            db, attachment_id=attachment_id, user_id=user.user_id, tenant_id=user.tenant_id,
+            actor=user.user_id, bill_id=data.bill_id, mark_paid=data.mark_paid,
+        )
+    except receipts.ReceiptError as e:
+        raise _err(e, e.status_code) from e
+    except payables_service.PayableError as e:
+        raise _err(e, e.status_code) from e
+    return payables_service.payable_out(p)
 
 
 @router.delete("/{attachment_id}", status_code=204)

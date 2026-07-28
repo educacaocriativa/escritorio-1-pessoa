@@ -14,3 +14,9 @@ class ReceiptOut(BaseModel):
     content_type: str
     size: int
     created_at: datetime
+
+
+class ReceiptLinkIn(BaseModel):
+    bill_id: str
+    # Marcado por padrão: quem compartilha o comprovante acabou de pagar. A tela deixa desmarcar.
+    mark_paid: bool = True

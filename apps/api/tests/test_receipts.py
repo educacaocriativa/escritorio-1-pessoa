@@ -180,3 +180,82 @@ def test_candidates_limita_a_100_itens(client: TestClient, headers):
     # Verificar que apenas 100 são retornadas
     itens = client.get("/payables/receipts/candidates", headers=headers).json()
     assert len(itens) == 100
+
+
+def _link(client: TestClient, headers, rid: str, bill_id: str, mark_paid: bool = True):
+    return client.post(
+        f"/payables/receipts/{rid}/link",
+        json={"bill_id": bill_id, "mark_paid": mark_paid},
+        headers=headers,
+    )
+
+
+def test_link_anexa_e_da_baixa(client: TestClient, headers):
+    b = _bill(client, headers)
+    rid = _upload(client, headers).json()["id"]
+
+    resp = _link(client, headers, rid, b["id"])
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["status"] == "paid"
+    assert resp.json()["paid_at"] is not None
+
+    # saiu da bandeja e virou anexo da conta, com o label certo
+    assert client.get("/payables/receipts", headers=headers).json() == []
+    anexos = client.get(
+        f"/attachments?owner_type=payable&owner_id={b['id']}", headers=headers
+    ).json()
+    assert [a["label"] for a in anexos] == ["comprovante"]
+
+
+def test_link_sem_mark_paid_nao_muda_status(client: TestClient, headers):
+    b = _bill(client, headers)
+    rid = _upload(client, headers).json()["id"]
+    resp = _link(client, headers, rid, b["id"], mark_paid=False)
+    assert resp.status_code == 200
+    assert resp.json()["status"] == "open"
+    assert resp.json()["paid_at"] is None
+
+
+def test_link_em_conta_ja_paga_nao_altera_paid_at(client: TestClient, headers):
+    b = _bill(client, headers)
+    paga = client.post(f"/payables/bills/{b['id']}/pay", headers=headers).json()
+    rid = _upload(client, headers).json()["id"]
+
+    resp = _link(client, headers, rid, b["id"], mark_paid=True)
+    assert resp.status_code == 200
+    assert resp.json()["paid_at"] == paga["paid_at"]  # baixa preservada, não re-datada
+
+
+def test_link_em_conta_cancelada_falha_e_mantem_na_bandeja(client: TestClient, headers):
+    b = _bill(client, headers)
+    client.post(f"/payables/bills/{b['id']}/cancel", headers=headers)
+    rid = _upload(client, headers).json()["id"]
+
+    resp = _link(client, headers, rid, b["id"])
+    assert resp.status_code == 409
+    # nada foi gravado: o comprovante continua na bandeja
+    assert [i["id"] for i in client.get("/payables/receipts", headers=headers).json()] == [rid]
+
+
+def test_link_duas_vezes_da_409(client: TestClient, headers):
+    b = _bill(client, headers)
+    rid = _upload(client, headers).json()["id"]
+    assert _link(client, headers, rid, b["id"]).status_code == 200
+    assert _link(client, headers, rid, b["id"]).status_code == 409
+
+
+def test_link_em_conta_inexistente_da_404(client: TestClient, headers):
+    rid = _upload(client, headers).json()["id"]
+    assert _link(client, headers, rid, "nao-existe").status_code == 404
+
+
+def test_mark_paid_continua_funcionando_apos_refactor(client: TestClient, headers):
+    """Guarda de regressão do refactor apply_paid/mark_paid: a rota antiga não muda."""
+    b = _bill(client, headers)
+    paga = client.post(f"/payables/bills/{b['id']}/pay", headers=headers).json()
+    assert paga["status"] == "paid" and paga["paid_at"] is not None
+    eventos = [
+        e for e in client.get("/agenda/events?limit=500", headers=headers).json()
+        if e["external_ref"] == b["id"]
+    ]
+    assert [e["status"] for e in eventos] == ["done"]
