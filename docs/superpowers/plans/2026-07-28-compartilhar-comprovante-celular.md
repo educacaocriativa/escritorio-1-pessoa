@@ -2967,7 +2967,7 @@ Esta é a correção do problema original — hoje o comprovante vai parar no ca
 
 **Files:**
 - Modify: `apps/web/src/features/pagar/PagarPage.tsx:361` (slots) e o topo da página (aviso)
-- Create: `apps/web/src/features/pagar/PagarPage.test.tsx`
+- Modify: `apps/web/src/features/pagar/PagarPage.test.tsx` — ⚠️ este arquivo **já existe** com testes da Story 7.5. **Acrescente** um `describe` novo e adapte o helper de render existente (ele precisa de `MemoryRouter` assim que a página passar a renderizar `<Link>`). Não sobrescreva o arquivo.
 
 **Interfaces:**
 - Consumes: `components/Attachments` (prop `slots`), `lib/api.api`
