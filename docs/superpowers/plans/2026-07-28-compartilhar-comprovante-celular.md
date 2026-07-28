@@ -2381,6 +2381,24 @@ Expected: FAIL — `Failed to resolve import "./CompartilharPage"`.
 
 - [ ] **Step 3: Implementar a tela**
 
+> **Correção pós-revisão.** O código abaixo, como estava escrito originalmente, falhava o próprio
+> requisito desta task ("nunca uma tela em branco"). Quatro ajustes são obrigatórios:
+>
+> 1. **`takeSharedFile` pode lançar**, não só resolver `null`: o `get` do IndexedDB rejeita em
+>    `onerror` e o bloco em `shareInbox.ts` tem `finally` sem `catch`. A chamada precisa estar
+>    **dentro** do try/catch — envolva o bloco assíncrono inteiro, não só o `api.post`. Sem isso,
+>    um erro de IndexedDB vira rejeição não tratada e o usuário fica no spinner para sempre.
+> 2. **A guarda de StrictMode deve ser por chave**, não um booleano permanente: o efeito depende de
+>    `[key, swError, navigate]` e é feito para re-disparar quando a chave muda. Guarde a chave
+>    iniciada (`startedFor.current === key`), mantendo a atribuição síncrona antes do primeiro
+>    `await`.
+> 3. **Guarda de desmontagem:** um flag `cancelled` no efeito, com cleanup, checado antes de
+>    `setError` e antes de `navigate` — senão um upload em voo arrasta o usuário para
+>    `/comprovante/{id}` depois de ele já ter saído da tela.
+> 4. O teste de sucesso precisa **provar o `replace`** (via `createMemoryRouter` +
+>    `router.state.historyAction === "REPLACE"`), senão o requisito "Voltar não pode reentrar numa
+>    chave já consumida" fica sem proteção de regressão.
+
 Criar `apps/web/src/features/pagar/CompartilharPage.tsx`:
 
 ```tsx
