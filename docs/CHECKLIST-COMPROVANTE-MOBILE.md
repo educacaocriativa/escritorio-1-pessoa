@@ -1,7 +1,9 @@
 # Checklist manual — comprovante pelo celular
 
-Rodar uma vez antes de considerar a entrega concluída. Nada aqui é automatizável: share sheets
-de sistema operacional e RLS do Postgres não são exercitáveis por vitest/pytest.
+Rodar uma vez antes de considerar a entrega concluída. Os share sheets do Android e do iOS
+(§2 e §4) exigem aparelho real e não são exercitáveis por automação. Já o isolamento de RLS (§1)
+TEM um padrão pronto no repositório (`pytest.mark.rls_e2e` + testcontainers) — só falta escrever o
+`test_receipts_rls.py` deste módulo; até lá, o passo abaixo é o substituto manual.
 
 ## 1. Isolamento cross-tenant (Postgres real)
 
