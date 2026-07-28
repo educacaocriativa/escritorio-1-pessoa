@@ -13,8 +13,8 @@ from app.core.tenancy import CurrentUser, get_tenant_db, require_module
 from app.modules.attachments.models import Attachment
 from app.modules.payables import receipts
 from app.modules.payables import service as payables_service
-from app.modules.payables.receipts_schemas import ReceiptLinkIn, ReceiptOut
-from app.modules.payables.schemas import PayableOut
+from app.modules.payables.receipts_schemas import ReceiptLinkIn, ReceiptNewBillIn, ReceiptOut
+from app.modules.payables.schemas import PayableCreate, PayableOut
 
 router = APIRouter(prefix="/payables/receipts", tags=["payables-receipts"])
 
@@ -91,6 +91,29 @@ def link_receipt(
         p = receipts.link_receipt(
             db, attachment_id=attachment_id, user_id=user.user_id, tenant_id=user.tenant_id,
             actor=user.user_id, bill_id=data.bill_id, mark_paid=data.mark_paid,
+        )
+    except receipts.ReceiptError as e:
+        raise _err(e, e.status_code) from e
+    except payables_service.PayableError as e:
+        raise _err(e, e.status_code) from e
+    return payables_service.payable_out(p)
+
+
+@router.post("/{attachment_id}/new-bill", response_model=PayableOut, status_code=201)
+def new_bill_from_receipt(
+    attachment_id: str,
+    data: ReceiptNewBillIn,
+    user: CurrentUser = Depends(_guard),
+    db: Session = Depends(get_tenant_db),
+) -> PayableOut:
+    create = PayableCreate(
+        description=data.description, category=data.category, supplier=data.supplier,
+        amount_cents=data.amount_cents, due_date=data.due_date,
+    )
+    try:
+        p = receipts.new_bill_from_receipt(
+            db, attachment_id=attachment_id, user_id=user.user_id, tenant_id=user.tenant_id,
+            actor=user.user_id, data=create, mark_paid=data.mark_paid,
         )
     except receipts.ReceiptError as e:
         raise _err(e, e.status_code) from e

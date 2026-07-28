@@ -259,3 +259,72 @@ def test_mark_paid_continua_funcionando_apos_refactor(client: TestClient, header
         if e["external_ref"] == b["id"]
     ]
     assert [e["status"] for e in eventos] == ["done"]
+
+
+def _new_bill_payload(**over):
+    base = {
+        "description": "Estacionamento",
+        "category": "Geral",
+        "supplier": "Shopping",
+        "amount_cents": 4500,
+        "due_date": "2099-05-05",
+        "mark_paid": True,
+    }
+    return {**base, **over}
+
+
+def test_new_bill_cria_conta_paga_com_o_anexo(client: TestClient, headers):
+    rid = _upload(client, headers).json()["id"]
+    resp = client.post(
+        f"/payables/receipts/{rid}/new-bill", json=_new_bill_payload(), headers=headers
+    )
+    assert resp.status_code == 201, resp.text
+    b = resp.json()
+    assert b["description"] == "Estacionamento"
+    assert b["status"] == "paid"
+
+    assert client.get("/payables/receipts", headers=headers).json() == []
+    anexos = client.get(
+        f"/attachments?owner_type=payable&owner_id={b['id']}", headers=headers
+    ).json()
+    assert [a["label"] for a in anexos] == ["comprovante"]
+
+
+def test_new_bill_sem_mark_paid_nasce_aberta(client: TestClient, headers):
+    rid = _upload(client, headers).json()["id"]
+    b = client.post(
+        f"/payables/receipts/{rid}/new-bill",
+        json=_new_bill_payload(mark_paid=False),
+        headers=headers,
+    ).json()
+    assert b["status"] == "open"
+
+
+def test_new_bill_injeta_evento_na_agenda(client: TestClient, headers):
+    rid = _upload(client, headers).json()["id"]
+    b = client.post(
+        f"/payables/receipts/{rid}/new-bill", json=_new_bill_payload(), headers=headers
+    ).json()
+    eventos = [
+        e for e in client.get("/agenda/events?limit=500", headers=headers).json()
+        if e["external_ref"] == b["id"]
+    ]
+    assert len(eventos) == 1
+    assert eventos[0]["kind"] == "cobranca_pagar"
+
+
+def test_new_bill_recusa_valor_zero(client: TestClient, headers):
+    rid = _upload(client, headers).json()["id"]
+    resp = client.post(
+        f"/payables/receipts/{rid}/new-bill",
+        json=_new_bill_payload(amount_cents=0),
+        headers=headers,
+    )
+    assert resp.status_code == 422  # PayableCreate exige amount_cents > 0
+
+
+def test_create_bill_continua_funcionando_apos_refactor(client: TestClient, headers):
+    """Guarda de regressão do refactor build_payable/create_payable."""
+    b = _bill(client, headers, due_date="2099-06-01", recurrence="monthly", recurrence_count=3)
+    todas = client.get("/payables/bills", headers=headers).json()
+    assert len([x for x in todas if x["recurrence_group"] == b["recurrence_group"]]) == 3

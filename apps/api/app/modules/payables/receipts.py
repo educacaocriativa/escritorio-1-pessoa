@@ -213,3 +213,30 @@ def link_receipt(
     return _attach_and_commit(
         db, att, p, tenant_id=tenant_id, actor=actor, mark_paid=mark_paid
     )
+
+
+def new_bill_from_receipt(
+    db: Session,
+    *,
+    attachment_id: str,
+    user_id: str,
+    tenant_id: str,
+    actor: str,
+    data,  # PayableCreate
+    mark_paid: bool,
+) -> Payable:
+    """Cria a conta a partir do comprovante e já vincula o anexo — num commit só.
+
+    Para o caso de ter pago algo que ainda não estava cadastrado no sistema.
+    """
+    from app.modules.payables import service as payables_service
+
+    att = get_staged(db, attachment_id=attachment_id, user_id=user_id)
+
+    # build_payable não commita: a conta, o evento na Agenda, o vínculo do anexo e a baixa
+    # entram todos na mesma transação.
+    p = payables_service.build_payable(db, tenant_id=tenant_id, actor=actor, data=data)
+
+    return _attach_and_commit(
+        db, att, p, tenant_id=tenant_id, actor=actor, mark_paid=mark_paid
+    )

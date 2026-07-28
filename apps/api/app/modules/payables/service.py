@@ -71,9 +71,11 @@ def payable_out(p: Payable, today: date | None = None) -> PayableOut:
     )
 
 
-def create_payable(db: Session, *, tenant_id: str, actor: str, data: PayableCreate) -> Payable:
-    """Cria a conta. Se recorrente, gera N ocorrências — cada uma com seu vencimento e seu
-    evento na Agenda (assim cada repetição pode receber seu próprio boleto)."""
+def build_payable(db: Session, *, tenant_id: str, actor: str, data: PayableCreate) -> Payable:
+    """Cria a conta SEM commitar — reutilizável dentro de outra transação (mesmo padrão de
+    `receivables.build_charge`). Se recorrente, gera N ocorrências — cada uma com seu
+    vencimento e seu evento na Agenda (assim cada repetição pode receber seu próprio boleto).
+    """
     # Story 5.2: valida o vínculo opcional ao plano de contas (404 se apontar p/ conta
     # inexistente/de outro tenant — a RLS já esconde a linha cross-tenant).
     if data.chart_account_id and not chart_service.exists(db, data.chart_account_id):
@@ -134,9 +136,14 @@ def create_payable(db: Session, *, tenant_id: str, actor: str, data: PayableCrea
             first = payable
 
     audit.record(db, tenant_id=tenant_id, actor=actor, action="payable.create", target=first.id)
-    db.commit()
-    db.refresh(first)
     return first
+
+
+def create_payable(db: Session, *, tenant_id: str, actor: str, data: PayableCreate) -> Payable:
+    p = build_payable(db, tenant_id=tenant_id, actor=actor, data=data)
+    db.commit()
+    db.refresh(p)
+    return p
 
 
 def get_payable(db: Session, payable_id: str) -> Payable:
