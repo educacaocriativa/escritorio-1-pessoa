@@ -39,8 +39,13 @@ export default function CelularSection() {
   }
 
   async function revoke(id: string) {
-    await api.delete(`/settings/device-tokens/${id}`);
-    await load();
+    setError(null);
+    try {
+      await api.delete(`/settings/device-tokens/${id}`);
+      await load();
+    } catch (err) {
+      setError(apiErrorMessage(err));
+    }
   }
 
   const origin = typeof window === "undefined" ? "" : window.location.origin;

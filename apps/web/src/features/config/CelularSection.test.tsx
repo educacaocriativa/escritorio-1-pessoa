@@ -48,4 +48,21 @@ describe("CelularSection", () => {
     await userEvent.click(screen.getByRole("button", { name: /revogar/i }));
     await waitFor(() => expect(api.delete).toHaveBeenCalledWith("/settings/device-tokens/t-1"));
   });
+
+  it("mostra erro quando a revogacao falha, sem travar a tela", async () => {
+    // Nome de aparelho deliberadamente distinto de "iPhone" (o texto fixo do bloco de
+    // instrucoes) para nao colidir na busca por texto.
+    vi.mocked(api.get).mockResolvedValue({
+      data: [{ id: "t-1", name: "iPhone da Revogacao", created_at: "2026-07-01T10:00:00Z", last_used_at: null }],
+    } as never);
+    vi.mocked(api.delete).mockRejectedValue(new Error("Falha ao revogar"));
+
+    render(<CelularSection />);
+    await waitFor(() => screen.getByText("iPhone da Revogacao"));
+    await userEvent.click(screen.getByRole("button", { name: /revogar/i }));
+
+    await waitFor(() => screen.getByText(/falha ao revogar/i));
+    // A lista continua visível — a tela não trava/some após a falha.
+    expect(screen.getByText("iPhone da Revogacao")).toBeTruthy();
+  });
 });
