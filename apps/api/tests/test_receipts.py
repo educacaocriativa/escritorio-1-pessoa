@@ -1,4 +1,6 @@
 """Testes da bandeja de comprovantes (Contas a Pagar)."""
+import io
+
 import pytest
 from fastapi.testclient import TestClient
 
@@ -71,3 +73,22 @@ def test_descartar_remove_da_bandeja(client: TestClient, headers):
 
 def test_descartar_id_inexistente_da_404(client: TestClient, headers):
     assert client.delete("/payables/receipts/nao-existe", headers=headers).status_code == 404
+
+
+def test_descartar_anexado_a_conta_da_409(client: TestClient, headers):
+    """Um comprovante já linked a uma conta (owner_type != receipt_inbox) não pode ser descartado
+    da bandeja — deve retornar 409."""
+    # Upload um attachment via /attachments com owner_type="payable"
+    resp = client.post(
+        "/attachments",
+        data={"owner_type": "payable", "owner_id": "bill-123", "label": "comprovante"},
+        files={"file": ("comprovante.png", io.BytesIO(PNG), "image/png")},
+        headers=headers,
+    )
+    assert resp.status_code == 201
+    att_id = resp.json()["id"]
+
+    # Tenta descartar via /payables/receipts (que espera owner_type=receipt_inbox)
+    resp = client.delete(f"/payables/receipts/{att_id}", headers=headers)
+    assert resp.status_code == 409
+    assert "anexado" in resp.json()["detail"].lower()
