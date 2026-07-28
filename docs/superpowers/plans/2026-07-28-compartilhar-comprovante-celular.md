@@ -1927,7 +1927,9 @@ ALLOWLIST = {
 }
 ```
 
-E a entrada correspondente no docstring do módulo, explicando que a tabela é GLOBAL sem RLS porque o tenant é resolvido A PARTIR do token antes de qualquer `tenant_session` existir, que as rotas filtram explicitamente por `user_id` vindo do JWT, e que a tabela guarda só hash de credencial e metadado — nenhum dado de negócio.
+E a entrada correspondente no docstring do módulo. **Escreva a justificativa precisa** — estas três rotas CRUD são autenticadas por JWT como qualquer outra (`get_current_user`), então o tenant JÁ é conhecido; elas não fazem bootstrap a partir do token. O motivo real de usarem `get_db` é que `device_tokens` é uma tabela GLOBAL **sem RLS** (ver `device_tokens/models.py`), então `get_tenant_db` não ofereceria proteção nenhuma sobre ela; o isolamento aqui é o filtro explícito por `user_id` vindo do JWT, e a tabela guarda só hash de credencial e metadado — nenhum dado de negócio. (O padrão "resolver o tenant A PARTIR do token" existe, mas mora em `app/core/receipt_auth.py`, que esta guarda nem varre — ela olha só `app/modules/*/router.py`.)
+
+Não copie a narrativa de `auth`/`whatsapp_inbox`: aquelas resolvem tenant antes de haver sessão, e estas não. Justificativa imprecisa numa guarda de segurança é pior que nenhuma, porque um auditor futuro decide com base nela.
 
 Não enfraqueça a guarda de nenhuma outra forma: não altere o glob, não relaxe a checagem `"get_db" in source`, não adicione skip.
 
