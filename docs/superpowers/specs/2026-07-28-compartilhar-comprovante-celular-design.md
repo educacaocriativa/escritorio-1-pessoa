@@ -78,7 +78,9 @@ porque a conta de destino já é conhecida.
 Um comprovante recém-chegado é um `Attachment` com:
 
 - `owner_type = "receipt_inbox"`
-- `owner_id = <user_id>` (a bandeja é por usuário, não por tenant)
+- `owner_id = <user_id>` (a bandeja é por usuário **por convenção nas rotas de `receipts`**, e
+  isolada por tenant via RLS — não uma garantia forçada em toda a superfície do sistema; ver
+  caveat abaixo)
 - `label = "comprovante"`
 
 Vincular à conta é um `UPDATE` de duas colunas: `owner_type = "payable"` e
@@ -86,6 +88,16 @@ Vincular à conta é um `UPDATE` de duas colunas: `owner_type = "payable"` e
 chave do storage é `tenants/{tenant_id}/attachments/{id}/{filename}` (`storage.build_key`)
 e não carrega o dono do anexo. Nenhuma migration é necessária para a bandeja, e o
 comprovante já nasce protegido pela RLS de `attachments` como qualquer outro arquivo.
+
+**Caveat sobre "por usuário":** `receipts.get_staged` (usado por `link`/`new-bill`/descarte)
+exige `owner_id == user_id` — só ali a bandeja é de fato por usuário. As rotas GENÉRICAS do
+módulo `attachments` (`GET /attachments?owner_type=receipt_inbox&owner_id=<id>`,
+`GET /attachments/{id}/download`, `DELETE /attachments/{id}`) não conhecem essa convenção; elas
+só isolam por tenant (via RLS), então qualquer outro usuário do MESMO tenant consegue listar,
+baixar ou apagar o comprovante em staging de um colega por ali. Isso é comportamento
+PRÉ-EXISTENTE de todo o módulo `attachments` (nenhum owner_type tem checagem de dono nas rotas
+genéricas), não uma regressão introduzida aqui, e o módulo compartilhado está fora do escopo
+desta mudança — registrado como dívida deliberada abaixo.
 
 Os campos `owner_type` e `label` são `String(24)`; `"receipt_inbox"` (13) e
 `"comprovante"` (11) cabem sem alteração de schema.
@@ -329,9 +341,15 @@ considerar a entrega concluída.
 | Tabela `device_tokens` sem RLS | Global por necessidade (resolve o tenant), guarda só hash e metadado; mesma regra já aplicada a `users` |
 | Comprovante anexado na conta errada | Lista curta e ordenada, chip de status visível, e a baixa é confirmável (checkbox), não automática |
 | Bandeja acumulando pendências esquecidas | Aviso permanente em Contas a Pagar enquanto houver itens em staging |
+| Tenant-mate lê/apaga comprovante em staging de outro usuário via `/attachments` genérico | Nenhuma ainda — pré-existente do módulo `attachments` (fora de escopo desta mudança); ver dívida abaixo |
 
 ## Dívida deliberada
 
+- **Isolamento por usuário da bandeja depende de `/attachments` ser endurecido.** `receipts.get_staged`
+  garante `owner_id == user_id`, mas as rotas genéricas de `attachments` (list/download/delete)
+  só isolam por tenant — outro usuário do mesmo tenant alcança o comprovante em staging de um
+  colega por elas. Quem endurecer `/attachments` (checagem de dono, não só de tenant) precisa
+  saber que a receipts inbox depende disso para a garantia "por usuário" valer de ponta a ponta.
 - Contas a Receber e anexos genéricos ficam fora; a bandeja é `owner_type`-agnóstica o
   bastante para receber outros destinos depois.
 - WhatsApp como porta de entrada fica desenhado, não construído — depende das credenciais

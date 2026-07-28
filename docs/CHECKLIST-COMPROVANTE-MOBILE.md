@@ -1,27 +1,26 @@
 # Checklist manual — comprovante pelo celular
 
 Rodar uma vez antes de considerar a entrega concluída. Os share sheets do Android e do iOS
-(§2 e §4) exigem aparelho real e não são exercitáveis por automação. Já o isolamento de RLS (§1)
-TEM um padrão pronto no repositório (`pytest.mark.rls_e2e` + testcontainers) — só falta escrever o
-`test_receipts_rls.py` deste módulo; até lá, o passo abaixo é o substituto manual.
+(§2 e §4) exigem aparelho real e não são exercitáveis por automação — esses continuam manuais.
+O isolamento cross-tenant (§1) **já está automatizado** e não faz mais parte deste checklist.
 
-## 1. Isolamento cross-tenant (Postgres real)
+## 1. Isolamento cross-tenant (Postgres real) — AUTOMATIZADO
 
-Este passo é manual **só porque o módulo `receipts` ainda não tem seu teste automatizado de RLS**
-— não porque seja impossível de automatizar. O repositório já tem o padrão pronto: testes
-marcados `pytest.mark.rls_e2e` (testcontainers, Postgres real), excluídos do `pytest -q` normal e
-rodados pelo job dedicado `cross-tenant-rls` no CI (`.github/workflows/ci.yml`). Vários módulos já
-têm o companheiro `_rls.py` (ex.: `apps/api/tests/test_chart_of_accounts_rls.py`,
-`test_cost_centers_rls.py`, `test_financial_intelligence_diagnostics_rls.py`) — falta escrever
-`test_receipts_rls.py` seguindo o mesmo modelo. Até isso ser feito, rode manualmente:
+Não é mais um passo manual: `apps/api/tests/test_receipts_rls.py` (`pytest.mark.rls_e2e`,
+testcontainers, Postgres real) cobre exatamente o cenário abaixo — token/sessão do tenant B não
+vincula uma conta do tenant A, `get_staged` não resolve anexo em staging de outro tenant, e
+`list_candidates` só devolve contas do tenant da sessão corrente. Roda `alembic upgrade head`
+como o papel não-superusuário `e1p_app` contra um Postgres real, exercitando de fato a migration
+0057. Excluído do `pytest -q` normal; rodado pelo job dedicado `cross-tenant-rls` no CI
+(`.github/workflows/ci.yml`) ou manualmente com:
 
-- [ ] Subir a stack: `docker compose --env-file .env -f infra/docker-compose.yml up -d --build`
-- [ ] Criar dois tenants (A e B) via `/auth/register`.
-- [ ] Em A, criar uma conta a pagar e anotar o `bill_id`.
-- [ ] Em B, subir um comprovante (`POST /payables/receipts`) e anotar o `receipt_id`.
-- [ ] Com o token de B, chamar `POST /payables/receipts/{receipt_id}/link` com o `bill_id` de A.
-- [ ] **Esperado:** `404` — a RLS esconde a conta de A da sessão de B. Se vier `200`, a RLS não
-      está ativa (checar se a app conecta como `e1p_app`, não superusuário).
+```bash
+cd apps/api && pytest -m rls_e2e -k receipts
+```
+
+Se precisar validar à mão de qualquer forma (ex.: investigando uma regressão), o roteiro
+equivalente por HTTP é: dois tenants via `/auth/register`, conta a pagar em A, comprovante em B,
+`POST /payables/receipts/{id}/link` com token de B e `bill_id` de A → esperado `404`.
 
 ## 2. Android — share sheet
 

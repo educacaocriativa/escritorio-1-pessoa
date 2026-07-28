@@ -27,8 +27,9 @@ Allowlist (usos legítimos, documentados com guarda explícita no próprio códi
                   padrão de pages/quotes/contracts/integrations.
   - device_tokens  → tabela GLOBAL sem RLS (nenhuma proteção por tenant). Isolamento vem do
                   filtro explícito por `user_id` do JWT nas rotas (`get_current_user` fornece o
-                  `user_id` dos claims). Tabela contém apenas hash de token criptografado e metadata
-                  — nenhum dado de negócio.
+                  `user_id` dos claims). Tabela contém apenas o hash sha256 do token (não o token
+                  em si — sha256 é hash, não criptografia; não é reversível) e metadata —
+                  nenhum dado de negócio.
 """
 from __future__ import annotations
 
