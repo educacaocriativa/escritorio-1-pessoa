@@ -26,6 +26,7 @@ from app.modules.marketing.router import router as marketing_router
 from app.modules.notifications.router import router as notifications_router
 from app.modules.pages.router import public_router as pages_public_router
 from app.modules.pages.router import router as pages_router
+from app.modules.payables.receipts_router import router as payables_receipts_router
 from app.modules.payables.router import router as payables_router
 from app.modules.platform.router import router as platform_router
 from app.modules.products.router import router as products_router
@@ -49,6 +50,7 @@ ALL_ROUTERS: list[APIRouter] = [
     wallet_router,
     receivables_router,
     payables_router,
+    payables_receipts_router,
     chart_of_accounts_router,
     cost_centers_router,
     financial_intelligence_router,
