@@ -31,6 +31,7 @@ import JuridicoWizardPage from "../features/juridico/JuridicoWizardPage";
 import CarrosselBuilderPage from "../features/marketing/CarrosselBuilderPage";
 import MarketingPage from "../features/marketing/MarketingPage";
 import CompartilharPage from "../features/pagar/CompartilharPage";
+import ComprovantePage from "../features/pagar/ComprovantePage";
 import PagarPage from "../features/pagar/PagarPage";
 import OrcamentosPage from "../features/orcamentos/OrcamentosPage";
 import PublicProposalPage from "../features/orcamentos/PublicProposalPage";
@@ -72,6 +73,7 @@ export default function App() {
           <Route path="/cobrancas" element={<CobrancasPage />} />
           <Route path="/pagar" element={<PagarPage />} />
           <Route path="/compartilhar" element={<CompartilharPage />} />
+          <Route path="/comprovante/:id" element={<ComprovantePage />} />
           <Route path="/produtos" element={<ProdutosPage />} />
           <Route path="/estoque" element={<EstoquePage />} />
           <Route path="/config" element={<ConfiguracoesPage />} />
