@@ -536,8 +536,10 @@ Acrescentar em `apps/api/app/modules/payables/receipts.py` (imports no topo do a
 ```python
 from datetime import UTC, datetime, timedelta
 
-from app.modules.payables.models import STATUS_CANCELED, STATUS_OPEN, STATUS_PAID, Payable
+from app.modules.payables.models import STATUS_OPEN, STATUS_PAID, Payable
 ```
+
+Importe **apenas** o que esta task usa. `STATUS_CANCELED` só é usado por `link_receipt`, na Task 3 — importá-lo aqui deixa um símbolo sem uso e o `ruff` quebra com `F401` (o `select` em `apps/api/pyproject.toml` inclui `F`, e o `per-file-ignores` só isenta `tests/*`).
 
 E a função ao fim do arquivo:
 
@@ -577,12 +579,10 @@ def list_candidates(db: Session, *, q: str = "", paid_window_days: int = 30) -> 
             .limit(100)
         ).all()
     )
-    # STATUS_CANCELED nunca entra: nenhum dos dois filtros o inclui (por isso não há
+    # Conta cancelada nunca entra: nenhum dos dois filtros a inclui (por isso não há
     # `.where(status != canceled)` — seria redundante).
     return (abertas + pagas)[:100]
 ```
-
-`STATUS_CANCELED` fica importado mesmo sem uso direto aqui: ele é usado por `link_receipt` na Task 3.
 
 - [ ] **Step 4: Adicionar a rota**
 
@@ -775,7 +775,13 @@ Expected: PASS — todos os testes existentes continuam verdes.
 
 - [ ] **Step 5: Implementar `link_receipt`**
 
-Acrescentar em `apps/api/app/modules/payables/receipts.py`:
+Primeiro, acrescentar `STATUS_CANCELED` ao import de models no topo de `apps/api/app/modules/payables/receipts.py` (a Task 2 importou só `STATUS_OPEN`/`STATUS_PAID`/`Payable`, porque `STATUS_CANCELED` ainda não tinha uso e o `ruff` reprova import morto):
+
+```python
+from app.modules.payables.models import STATUS_CANCELED, STATUS_OPEN, STATUS_PAID, Payable
+```
+
+Depois, acrescentar ao fim do arquivo:
 
 ```python
 def _attach_and_commit(
