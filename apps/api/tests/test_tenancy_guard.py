@@ -25,11 +25,10 @@ Allowlist (usos legítimos, documentados com guarda explícita no próprio códi
                   o tenant via `public_whatsapp_accounts` (snapshot GLOBAL sem RLS) pelo
                   `phone_number_id`/`verify_token` antes de abrir a tenant_session real — mesmo
                   padrão de pages/quotes/contracts/integrations.
-  - device_tokens  → tabela GLOBAL sem RLS; o tenant é resolvido A PARTIR DO token antes de
-                  qualquer tenant_session existir (mesmo padrão de auth/whatsapp_inbox). As rotas
-                  filtram explicitamente por `user_id` vindo do JWT. A tabela contém apenas hash
-                  do token e metadata — nenhum dado de negócio. Garante que o iOS Shortcut possa
-                  autenticar sem tenant context prévio.
+  - device_tokens  → tabela GLOBAL sem RLS (nenhuma proteção por tenant). Isolamento vem do
+                  filtro explícito por `user_id` do JWT nas rotas (`get_current_user` fornece o
+                  `user_id` dos claims). Tabela contém apenas hash de token criptografado e metadata
+                  — nenhum dado de negócio.
 """
 from __future__ import annotations
 
