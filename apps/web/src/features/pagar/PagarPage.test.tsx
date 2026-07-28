@@ -1,5 +1,6 @@
 import { render, screen, fireEvent, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import { MemoryRouter } from "react-router-dom";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { api } from "../../lib/api";
 import { PageActionsProvider, usePageActions } from "../../store/pageActions";
@@ -39,10 +40,12 @@ function Topbar() {
 
 function renderPage() {
   return render(
-    <PageActionsProvider>
-      <PagarPage />
-      <Topbar />
-    </PageActionsProvider>,
+    <MemoryRouter>
+      <PageActionsProvider>
+        <PagarPage />
+        <Topbar />
+      </PageActionsProvider>
+    </MemoryRouter>,
   );
 }
 
@@ -94,5 +97,48 @@ describe("PagarPage — Nova conta a pagar (Story 7.5, Task 1)", () => {
     expect(await screen.findByText("Valor acima do teto permitido.")).toBeInTheDocument();
     expect(screen.getByText("Nova conta a pagar")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Adicionar conta" })).toBeEnabled();
+  });
+});
+
+// Task 11 — a correção do problema original: sem slot próprio, o comprovante era arquivado em
+// "Contrato". O aviso avisa quando há comprovantes da bandeja (recebidos pelo celular) ainda sem
+// vínculo com nenhuma conta, para o usuário não esquecer de resolvê-los depois.
+describe("PagarPage — bandeja de comprovantes (Task 11)", () => {
+  it("mostra o aviso quando há comprovantes aguardando", async () => {
+    vi.mocked(api.get).mockImplementation((url: string) => {
+      if (url === "/payables/summary") return Promise.resolve({ data: emptySummary } as never);
+      if (url === "/payables/bills") return Promise.resolve({ data: [] } as never);
+      if (url === "/payables/receipts")
+        return Promise.resolve({
+          data: [
+            {
+              id: "r-1",
+              filename: "a.pdf",
+              content_type: "application/pdf",
+              size: 1,
+              created_at: "2026-07-28T10:00:00Z",
+            },
+            {
+              id: "r-2",
+              filename: "b.pdf",
+              content_type: "application/pdf",
+              size: 1,
+              created_at: "2026-07-28T11:00:00Z",
+            },
+          ],
+        } as never);
+      return Promise.resolve({ data: [] } as never);
+    });
+    renderPage();
+
+    await waitFor(() => screen.getByText(/2 comprovantes aguardando/i));
+  });
+
+  it("não mostra o aviso com a bandeja vazia", async () => {
+    // beforeEach já mocka /payables/receipts (via fallback) devolvendo [].
+    renderPage();
+
+    await waitFor(() => expect(api.get).toHaveBeenCalled());
+    expect(screen.queryByText(/aguardando/i)).toBeNull();
   });
 });
