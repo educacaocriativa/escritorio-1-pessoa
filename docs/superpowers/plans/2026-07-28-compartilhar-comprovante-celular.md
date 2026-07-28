@@ -1396,7 +1396,7 @@ def revoke(db: Session, *, token_id: str, user_id: str) -> None:
 
 - [ ] **Step 5: Registrar o modelo**
 
-Em `apps/api/app/db/registry.py`, adicionar (em ordem alfabética, entre `cost_centers` e `crm`):
+Em `apps/api/app/db/registry.py`, adicionar em ordem alfabética — logo **depois** de `crm` e antes de `funnels`:
 
 ```python
 from app.modules.device_tokens.models import DeviceToken  # noqa: F401
