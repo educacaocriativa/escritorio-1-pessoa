@@ -17,7 +17,7 @@ from sqlalchemy.orm import Session
 
 from app.modules.attachments import service as attachments_service
 from app.modules.attachments.models import Attachment
-from app.modules.payables.models import STATUS_CANCELED, STATUS_OPEN, STATUS_PAID, Payable
+from app.modules.payables.models import STATUS_OPEN, STATUS_PAID, Payable
 
 # owner_type do anexo enquanto ele está em staging (ainda sem conta definida).
 OWNER_INBOX = "receipt_inbox"
@@ -149,6 +149,6 @@ def list_candidates(db: Session, *, q: str = "", paid_window_days: int = 30) -> 
             .limit(100)
         ).all()
     )
-    # STATUS_CANCELED nunca entra: nenhum dos dois filtros o inclui (por isso não há
-    # `.where(status != canceled)` — seria redundante).
+    # Contas canceladas nunca entram: nenhum dos dois filtros (status aberta ou status paga)
+    # as inclui, portanto não precisamos de um `.where(status != cancelada)` explícito.
     return (abertas + pagas)[:100]

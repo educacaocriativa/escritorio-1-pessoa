@@ -11,7 +11,8 @@ from sqlalchemy.orm import Session
 
 from app.core.tenancy import CurrentUser, get_tenant_db, require_module
 from app.modules.attachments.models import Attachment
-from app.modules.payables import receipts, service as payables_service
+from app.modules.payables import receipts
+from app.modules.payables import service as payables_service
 from app.modules.payables.receipts_schemas import ReceiptOut
 from app.modules.payables.schemas import PayableOut
 
@@ -64,6 +65,10 @@ def list_receipts(
     return [_out(a) for a in receipts.list_inbox(db, user_id=user.user_id)]
 
 
+# IMPORTANT: Literal path "/candidates" must stay declared before parameterized "/{attachment_id}"
+# to ensure GET /candidates resolves correctly. Although today no GET /{attachment_id} exists
+# (only DELETE), if one were added in the future, it would silently swallow this route.
+# Keep this ordering defensive.
 @router.get("/candidates", response_model=list[PayableOut])
 def list_candidates(
     q: str = Query(default=""),

@@ -1,8 +1,10 @@
 """Testes da bandeja de comprovantes (Contas a Pagar)."""
 import io
+from datetime import UTC, datetime, timedelta
 
 import pytest
 from fastapi.testclient import TestClient
+from sqlalchemy.orm import Session
 
 REGISTER = {
     "legal_name": "Recibo Co",
@@ -137,3 +139,44 @@ def test_candidates_busca_por_descricao_e_fornecedor(client: TestClient, headers
 
     por_fornecedor = client.get("/payables/receipts/candidates?q=copel", headers=headers).json()
     assert [i["description"] for i in por_fornecedor] == ["Energia"]
+
+
+def test_candidates_respeita_janela_de_30_dias(client: TestClient, headers, db: Session):
+    """Verifica que contas pagas há mais de 30 dias são excluídas,
+    e contas pagas dentro de 30 dias são incluídas."""
+    from app.modules.payables.models import Payable
+
+    # Criar e pagar uma conta
+    paga_antiga = _bill(client, headers, description="Paga há 40 dias", due_date="2099-01-01")
+    client.post(f"/payables/bills/{paga_antiga['id']}/pay", headers=headers)
+
+    # Criar e pagar outra conta
+    paga_recente = _bill(client, headers, description="Paga há 29 dias", due_date="2099-01-02")
+    client.post(f"/payables/bills/{paga_recente['id']}/pay", headers=headers)
+
+    # Manipular diretamente os paid_at via db para ter controle preciso
+    cutoff = datetime.now(UTC) - timedelta(days=30)
+    db_antiga = db.get(Payable, paga_antiga["id"])
+    db_recente = db.get(Payable, paga_recente["id"])
+
+    if db_antiga:
+        db_antiga.paid_at = cutoff - timedelta(days=10)  # 40 dias atrás
+    if db_recente:
+        db_recente.paid_at = cutoff + timedelta(days=1)  # 29 dias atrás
+
+    db.commit()
+
+    # Verificar que apenas a recente aparece
+    itens = client.get("/payables/receipts/candidates", headers=headers).json()
+    assert [i["description"] for i in itens] == ["Paga há 29 dias"]
+
+
+def test_candidates_limita_a_100_itens(client: TestClient, headers):
+    """Verifica que mesmo com mais de 100 contas abertas, apenas 100 são retornadas."""
+    # Criar 101 contas abertas
+    for i in range(101):
+        _bill(client, headers, description=f"Bill {i:03d}", due_date="2099-12-31")
+
+    # Verificar que apenas 100 são retornadas
+    itens = client.get("/payables/receipts/candidates", headers=headers).json()
+    assert len(itens) == 100
