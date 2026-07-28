@@ -7,6 +7,19 @@ import { api, apiErrorMessage } from "../../lib/api";
 const brl = (c: number) => (c / 100).toLocaleString("pt-BR", { style: "currency", currency: "BRL" });
 const dia = (iso: string) => new Date(`${iso}T00:00:00Z`).toLocaleDateString("pt-BR", { timeZone: "UTC" });
 
+/**
+ * Data de HOJE no fuso LOCAL, no formato YYYY-MM-DD. `toISOString()` formataria o instante em
+ * UTC — à noite no Brasil (UTC-3) o instante UTC já é o dia seguinte, então o campo de
+ * vencimento pré-preenchido viraria "amanhã" silenciosamente. Não "simplificar" isso de volta
+ * para `new Date().toISOString().slice(0, 10)`.
+ */
+function localToday(): string {
+  const d = new Date();
+  const mm = String(d.getMonth() + 1).padStart(2, "0");
+  const dd = String(d.getDate()).padStart(2, "0");
+  return `${d.getFullYear()}-${mm}-${dd}`;
+}
+
 /** Converte "45,00" / "45.00" / "4500" em centavos. Vazio ou inválido → 0. */
 function toCents(raw: string): number {
   const clean = raw.replace(/\s/g, "").replace(/\./g, "").replace(",", ".");
@@ -176,26 +189,34 @@ export default function ComprovantePage() {
         </label>
       )}
 
-      {showNew ? (
-        <NewBillForm receiptId={id} onError={setError} />
-      ) : (
-        <button
-          onClick={() => setShowNew(true)}
-          className="w-full text-center text-sm font-semibold text-primary-600"
-        >
-          Criar conta nova com este comprovante
-        </button>
+      {/* Vincular a uma conta existente e criar uma conta nova são caminhos de mutação
+          concorrentes para o mesmo comprovante — mantidos mutuamente exclusivos: selecionar
+          uma candidata esconde o atalho de conta nova, e abrir o formulário de conta nova
+          esconde o "Anexar" (não apenas desabilita). */}
+      {!chosen && (
+        showNew ? (
+          <NewBillForm receiptId={id} onError={setError} />
+        ) : (
+          <button
+            onClick={() => setShowNew(true)}
+            className="w-full text-center text-sm font-semibold text-primary-600"
+          >
+            Criar conta nova com este comprovante
+          </button>
+        )
       )}
 
-      <div className="fixed inset-x-0 bottom-0 border-t border-neutral-100 bg-white p-4">
-        <button
-          onClick={link}
-          disabled={!chosen || busy}
-          className="mx-auto block w-full max-w-lg rounded-pill bg-accent-400 py-3 font-semibold text-white hover:bg-accent-500 disabled:opacity-50"
-        >
-          {busy ? "Anexando..." : "Anexar"}
-        </button>
-      </div>
+      {!showNew && (
+        <div className="fixed inset-x-0 bottom-0 border-t border-neutral-100 bg-white p-4">
+          <button
+            onClick={link}
+            disabled={!chosen || busy}
+            className="mx-auto block w-full max-w-lg rounded-pill bg-accent-400 py-3 font-semibold text-white hover:bg-accent-500 disabled:opacity-50"
+          >
+            {busy ? "Anexando..." : "Anexar"}
+          </button>
+        </div>
+      )}
     </div>
   );
 }
@@ -213,7 +234,7 @@ function NewBillForm({
   const [supplier, setSupplier] = useState("");
   const [category, setCategory] = useState("Geral");
   const [amount, setAmount] = useState("");
-  const [dueDate, setDueDate] = useState(() => new Date().toISOString().slice(0, 10));
+  const [dueDate, setDueDate] = useState(localToday);
   const [busy, setBusy] = useState(false);
 
   async function submit() {
@@ -247,7 +268,13 @@ function NewBillForm({
       <input value={supplier} onChange={(e) => setSupplier(e.target.value)} placeholder="Fornecedor" className={input} />
       <input value={category} onChange={(e) => setCategory(e.target.value)} placeholder="Categoria" className={input} />
       <input value={amount} onChange={(e) => setAmount(e.target.value)} placeholder="Valor (ex.: 45,00)" inputMode="decimal" className={input} />
-      <input type="date" value={dueDate} onChange={(e) => setDueDate(e.target.value)} className={input} />
+      <input
+        type="date"
+        aria-label="Data de vencimento"
+        value={dueDate}
+        onChange={(e) => setDueDate(e.target.value)}
+        className={input}
+      />
       <button
         onClick={submit}
         disabled={busy}

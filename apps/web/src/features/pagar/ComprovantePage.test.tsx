@@ -1,7 +1,7 @@
 import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter, Route, Routes } from "react-router-dom";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { api } from "../../lib/api";
 import ComprovantePage from "./ComprovantePage";
 
@@ -47,6 +47,7 @@ function renderPage() {
 
 describe("ComprovantePage", () => {
   beforeEach(() => vi.clearAllMocks());
+  afterEach(() => vi.useRealTimers());
 
   it("lista as contas candidatas com nome, valor e status", async () => {
     mockApi();
@@ -183,5 +184,39 @@ describe("ComprovantePage", () => {
 
     expect(screen.queryByText("Energia")).toBeNull();
     expect(screen.getByText("Internet")).toBeTruthy();
+  });
+
+  // Achado 1 da revisão: toISOString() formata o instante em UTC. À noite no Brasil (UTC-3),
+  // o instante UTC já é o dia seguinte — então a data de vencimento pré-preenchida do
+  // formulário de conta nova viraria "amanhã" silenciosamente. Fixamos o relógio num instante
+  // em que UTC e horário local discordam de dia (23:30 local = já é o dia seguinte em UTC) e
+  // exigimos que o campo mostre o dia LOCAL.
+  it("preenche a data de vencimento padrao com o dia LOCAL, nao UTC, mesmo a noite", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    vi.setSystemTime(new Date("2026-03-10T23:30:00-03:00")); // já é 2026-03-11 em UTC
+
+    mockApi();
+    renderPage();
+    await waitFor(() => screen.getByText("Energia"));
+
+    await userEvent.click(screen.getByRole("button", { name: /criar conta nova/i }));
+    const dateInput = screen.getByLabelText(/data de vencimento/i) as HTMLInputElement;
+    expect(dateInput.value).toBe("2026-03-10");
+  });
+
+  // Achado 2 da revisão: nada impedia selecionar uma conta candidata (habilitando o "Anexar"
+  // fixo no rodapé) enquanto o formulário de conta nova também estava aberto e submissível —
+  // dois caminhos de mutação alcançáveis ao mesmo tempo para o mesmo comprovante. Abrir o
+  // formulário de conta nova precisa remover o "Anexar" do documento, não só desabilitá-lo.
+  it("abrir o formulario de conta nova esconde o botao Anexar (fluxos mutuamente exclusivos)", async () => {
+    mockApi();
+    renderPage();
+    await waitFor(() => screen.getByText("Energia"));
+
+    expect(screen.getByRole("button", { name: /^anexar$/i })).toBeTruthy();
+
+    await userEvent.click(screen.getByRole("button", { name: /criar conta nova/i }));
+
+    expect(screen.queryByRole("button", { name: /^anexar$/i })).toBeNull();
   });
 });
