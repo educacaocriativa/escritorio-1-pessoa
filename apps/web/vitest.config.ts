@@ -13,5 +13,8 @@ export default defineConfig({
     globals: false, // testes importam { describe, it, expect, vi } de "vitest" (padrão do projeto)
     setupFiles: ["./src/test-setup.ts"],
     include: ["src/**/*.{test,spec}.{ts,tsx}"],
+    // Fuso fixo para que testes sensíveis a data (ex.: ComprovantePage) sejam determinísticos em
+    // qualquer máquina/CI, não só em fusos "atrás" de UTC como o do Brasil.
+    env: { TZ: "America/Sao_Paulo" },
   },
 });

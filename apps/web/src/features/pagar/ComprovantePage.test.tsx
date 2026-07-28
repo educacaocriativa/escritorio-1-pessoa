@@ -219,4 +219,23 @@ describe("ComprovantePage", () => {
 
     expect(screen.queryByRole("button", { name: /^anexar$/i })).toBeNull();
   });
+
+  // Achado 1 (rodada 2 de revisão): a correção anterior só fechava a exclusão mútua numa
+  // direção. Nada resetava `showNew` ao selecionar uma candidata — abrir a conta nova e DEPOIS
+  // selecionar uma candidata deixava os dois guards (`!chosen` e `!showNew`) falsos ao mesmo
+  // tempo, escondendo tanto o formulário quanto o "Anexar". Usuário ficava sem nenhuma forma de
+  // arquivar o comprovante (só Descartar). Selecionar uma candidata precisa fechar a conta nova.
+  it("selecionar uma candidata com o formulario de conta nova aberto restaura o Anexar (sem beco sem saida)", async () => {
+    mockApi();
+    renderPage();
+    await waitFor(() => screen.getByText("Energia"));
+
+    await userEvent.click(screen.getByRole("button", { name: /criar conta nova/i }));
+    expect(screen.queryByRole("button", { name: /^anexar$/i })).toBeNull();
+
+    await userEvent.click(screen.getByText("Energia"));
+
+    expect(screen.getByRole("button", { name: /^anexar$/i })).toBeTruthy();
+    expect(screen.queryByPlaceholderText(/descrição/i)).toBeNull();
+  });
 });

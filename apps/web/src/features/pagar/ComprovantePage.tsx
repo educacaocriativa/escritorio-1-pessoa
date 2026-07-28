@@ -82,6 +82,23 @@ export default function ComprovantePage() {
     [candidates, selected],
   );
 
+  // Vincular a uma conta existente e criar uma conta nova são caminhos de mutação concorrentes
+  // para o mesmo comprovante e precisam ser mutuamente exclusivos NAS DUAS direções — não só
+  // "abrir a conta nova esconde o Anexar", mas também "selecionar uma candidata fecha a conta
+  // nova". Sem isso, escolher uma candidata enquanto o formulário de conta nova está aberto
+  // faz os dois guards (`!chosen` e `!showNew`) ficarem falsos ao mesmo tempo — nenhum dos dois
+  // caminhos de envio renderiza e o usuário fica sem nenhuma forma de arquivar o comprovante.
+  function selectCandidate(candidateId: string) {
+    setSelected(candidateId);
+    setShowNew(false);
+  }
+
+  function openNewBillForm() {
+    setSelected("");
+    setMarkPaid(true); // reinicia o padrão para a próxima seleção, já que esta troca de fluxo o abandona
+    setShowNew(true);
+  }
+
   async function link() {
     if (!chosen) return;
     setBusy(true);
@@ -144,7 +161,7 @@ export default function ComprovantePage() {
           return (
             <li key={c.id}>
               <button
-                onClick={() => setSelected(c.id)}
+                onClick={() => selectCandidate(c.id)}
                 className={`w-full rounded-2xl border p-4 text-left transition ${
                   active ? "border-primary-400 bg-primary-50" : "border-neutral-200 bg-white"
                 }`}
@@ -190,15 +207,16 @@ export default function ComprovantePage() {
       )}
 
       {/* Vincular a uma conta existente e criar uma conta nova são caminhos de mutação
-          concorrentes para o mesmo comprovante — mantidos mutuamente exclusivos: selecionar
-          uma candidata esconde o atalho de conta nova, e abrir o formulário de conta nova
-          esconde o "Anexar" (não apenas desabilita). */}
+          concorrentes para o mesmo comprovante — mantidos mutuamente exclusivos NAS DUAS
+          direções por `selectCandidate`/`openNewBillForm` (acima), que resetam o outro fluxo
+          ao entrar num deles. Sem esse reset cruzado, os guards abaixo (`!chosen` / `!showNew`)
+          podem ficar false ao mesmo tempo e nenhum caminho de envio renderiza. */}
       {!chosen && (
         showNew ? (
           <NewBillForm receiptId={id} onError={setError} />
         ) : (
           <button
-            onClick={() => setShowNew(true)}
+            onClick={openNewBillForm}
             className="w-full text-center text-sm font-semibold text-primary-600"
           >
             Criar conta nova com este comprovante
