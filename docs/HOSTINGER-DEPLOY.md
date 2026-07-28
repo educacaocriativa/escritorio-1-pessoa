@@ -84,6 +84,15 @@ pro IP da VPS (`dig +short app.seudominio.com`) e se a porta 80 está mesmo aces
 ## 4. Validar
 - `https://app.seudominio.com` → tela de login.
 - `https://app.seudominio.com/api/health` (ou endpoint equivalente) → 200.
+- **Content-Type do estático (`apps/web/nginx.conf`):** um `types {}` no nível `server`
+  SUBSTITUI (não estende) o `mime.types` herdado do bloco `http` — se isso voltar a acontecer,
+  todo estático cai em `application/octet-stream` (browser baixa `index.html` em vez de
+  renderizar, módulo JS é recusado, service worker não registra). Confirme:
+  ```bash
+  curl -sI https://app.seudominio.com/ | grep -i '^content-type'                 # text/html
+  curl -sI https://app.seudominio.com/manifest.webmanifest | grep -i '^content-type'  # application/manifest+json
+  curl -sI https://app.seudominio.com/sw.js | grep -i -E '^content-type|^cache-control' # text/javascript..., no-cache
+  ```
 - Login com `SUPER_ADMIN_EMAIL` / `SUPER_ADMIN_PASSWORD` do `.env.prod`.
 - **Segurança de credenciais (Story 1.4):**
   - Guard de segredos fracos: o boot **recusa** subir em produção com `JWT_SECRET`
