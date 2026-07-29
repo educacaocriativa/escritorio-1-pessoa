@@ -1,5 +1,5 @@
 import type { Payable, PaymentQueue } from "@e1p/shared-types";
-import { AlertTriangle, CalendarClock, CalendarDays, CalendarRange, Check } from "lucide-react";
+import { AlertTriangle, CalendarClock, CalendarDays, CalendarRange, Check, Copy } from "lucide-react";
 import { type ReactNode, useCallback, useEffect, useState } from "react";
 import { api, apiErrorMessage } from "../../lib/api";
 
@@ -191,6 +191,15 @@ function Bucket({
             <span className="shrink-0 font-medium tabular-nums text-neutral-800">
               {brl(p.amount_cents)}
             </span>
+            {p.payment_code && (
+              <button
+                title="Copiar código do boleto/Pix"
+                onClick={() => navigator.clipboard?.writeText(p.payment_code)}
+                className="shrink-0 text-neutral-400 hover:text-primary-600"
+              >
+                <Copy size={14} />
+              </button>
+            )}
             <button
               onClick={() => onPay(p.id)}
               disabled={paying === p.id}
