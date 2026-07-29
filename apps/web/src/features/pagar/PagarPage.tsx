@@ -155,7 +155,10 @@ export default function PagarPage() {
         <Stat label="Pago no mês" value={brl(summary.paid_month_cents)} tone="text-accent-700" />
       </div>
 
-      <div className="overflow-hidden rounded-2xl bg-white shadow-sm">
+      {/* overflow-x-auto (não overflow-hidden): achado de campo — em tela estreita a tabela tem
+          7 colunas e ficava CORTADA em vez de rolável, escondendo Status e as ações (Editar/
+          Marcar paga/Estornar). Mesmo padrão de DrePage/LucratividadePage. */}
+      <div className="overflow-x-auto rounded-2xl bg-white shadow-sm">
         {bills.length === 0 ? (
           <p className="p-8 text-center text-sm text-neutral-400">
             Nenhuma conta. Clique em "Nova conta".

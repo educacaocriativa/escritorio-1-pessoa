@@ -1,4 +1,4 @@
-import { render, screen, waitFor } from "@testing-library/react";
+import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter, Route, Routes } from "react-router-dom";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -91,6 +91,29 @@ describe("ComprovantePage", () => {
 
     await userEvent.click(screen.getByText("Internet"));
     expect(screen.queryByRole("checkbox", { name: /marcar como paga/i })).toBeNull();
+  });
+
+  // Achado de campo (produção): o checkbox vivia num bloco separado, mais acima na página. Quem
+  // selecionava uma conta e tocava direto em "Anexar" sem rolar NUNCA via o checkbox — a baixa
+  // saía com o padrão (marcado) sem confirmação visível. Este teste prova a correção
+  // estruturalmente: o checkbox e o botão "Anexar" precisam estar no MESMO contêiner (a barra
+  // fixa do rodapé), não apenas ambos presentes em algum lugar da página — dois nós no mesmo pai
+  // não podem ficar em posições de rolagem diferentes.
+  it("o checkbox de baixa fica DENTRO da mesma barra fixa do botão Anexar, não numa seção à parte", async () => {
+    mockApi();
+    renderPage();
+    await waitFor(() => screen.getByText("Energia"));
+
+    await userEvent.click(screen.getByText("Energia"));
+    const check = screen.getByRole("checkbox", { name: /marcar como paga/i });
+    const anexar = screen.getByRole("button", { name: /^anexar$/i });
+    const footer = anexar.parentElement as HTMLElement;
+    expect(check.closest("div")?.parentElement).toBe(footer);
+
+    // O resumo, dentro da MESMA barra, também identifica QUAL conta será afetada — não só
+    // que "alguma" será. O valor também aparece no cartão da lista (por isso a busca é
+    // escopada ao rodapé, não à página inteira).
+    expect(within(footer).getByText("R$ 300,00")).toBeTruthy();
   });
 
   it("vincula chamando link com o payload correto", async () => {
@@ -252,11 +275,15 @@ describe("ComprovantePage", () => {
     renderPage();
     await waitFor(() => screen.getByText("Energia"));
 
-    await userEvent.click(screen.getByText("Energia"));
+    // O resumo da conta escolhida (rodapé fixo) também mostra "Energia" depois da 1ª seleção —
+    // por isso o cartão sempre é a PRIMEIRA ocorrência (ele vem antes no DOM).
+    const card = () => screen.getAllByText("Energia")[0];
+
+    await userEvent.click(card());
     expect(screen.getByRole("button", { name: /^anexar$/i })).not.toBeDisabled();
     expect(screen.queryByRole("button", { name: /criar conta nova/i })).toBeNull();
 
-    await userEvent.click(screen.getByText("Energia"));
+    await userEvent.click(card());
 
     expect(screen.getByRole("button", { name: /^anexar$/i })).toBeDisabled();
     expect(screen.getByRole("button", { name: /criar conta nova/i })).toBeTruthy();
