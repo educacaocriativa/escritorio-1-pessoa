@@ -12,18 +12,32 @@ export { formatBRL } from "./dre";
 
 export interface ProjectionWindow {
   days: number;
+  // O NÚMERO — continua exibido mesmo quando o veredito é calado (Story 8.1, AC4b).
   saldo_projetado_cents: number;
   alert: boolean;
+  // Story 8.1: o "caixa fica negativo" foi CALADO porque o saldo inicial é de origem `plataforma`
+  // (o disponível da Carteira e1p, não a conta bancária do usuário). Invariante do backend:
+  // `alert_suprimido === true` ⇒ `alert === false`.
+  alert_suprimido: boolean;
 }
 
 export interface Runway {
   days: number | null;
+  // Story 8.1: `days === null` tem DOIS significados que a tela não pode confundir —
+  // `days_suprimido === false` é "sem risco" (o caixa não está sendo queimado) e
+  // `days_suprimido === true` é "não sei" (havia queima, mas o saldo de partida não tem lastro).
+  // Invariante do backend: `days_suprimido === true` ⇒ `days === null`.
+  days_suprimido: boolean;
+  // NÃO é suprimido: vem das contas em aberto, não do saldo inicial — continua válido e exibido.
   burn_rate_cents_per_day: number;
 }
 
 export interface Projection {
   today: string;
   saldo_inicial_cents: number;
+  // Story 8.1 (AC1) — Regra dos Planos: nenhum saldo trafega sem procedência. Chave de
+  // `ORIGEM_LABEL`. Na Onda 0 é sempre "plataforma"; a Story 8.8 passa a devolver "misto".
+  saldo_inicial_origem: string;
   // Parcela de itens em aberto JÁ VENCIDOS (atraso/inadimplência) contada como caixa esperado
   // imediato — já embutida em todas as janelas; exposta à parte para sinalizar a incerteza
   // (recebíveis vencidos podem não chegar).
@@ -82,10 +96,39 @@ export function toPolylinePoints(
 }
 
 /**
- * Rótulo do runway em "meses e dias" (AC2). `null` = caixa não está sendo queimado ("sem risco").
- * Meses de 30 dias (aproximação de exibição; o valor canônico numérico é `runway.days`).
+ * Rótulo humano da procedência do saldo (Story 8.1, AC1/AC5 — eixo A da Regra dos Planos). O
+ * vocabulário canônico é `app/core/money_planes.py` no backend; aqui só traduzimos para o usuário.
+ * ⚠️ Este mapa é do eixo A (`*_origem`). O eixo B (`*_fonte`: manual/ofx) é outra coisa e, quando
+ * existir na tela (Story 8.7), ganha um mapa SEPARADO — nunca misture os dois.
  */
-export function runwayLabel(days: number | null): string {
+export const ORIGEM_LABEL: Record<string, string> = {
+  plataforma: "disponível na Carteira e1p",
+  banco: "saldo da sua conta bancária",
+  misto: "conta bancária + Carteira e1p",
+  indisponivel: "origem não disponível",
+};
+
+/** Rótulo da origem, tolerante a um valor novo vindo do backend (mostra o valor cru em vez de sumir). */
+export function origemLabel(origem: string): string {
+  return ORIGEM_LABEL[origem] ?? origem;
+}
+
+/**
+ * Rótulo do runway em "meses e dias" (5.7 AC2). Meses de 30 dias (aproximação de exibição; o valor
+ * canônico numérico é `runway.days`).
+ *
+ * **Story 8.1 (AC5) — três saídas que NUNCA podem colapsar em duas.** A assinatura mudou de
+ * `(days: number | null)` para `(runway: Runway)` exatamente para tornar impossível renderizar o
+ * caso suprimido sem saber que ele existe:
+ *   1. `days_suprimido` → "Indisponível" + o motivo (o saldo de partida não é o do banco);
+ *   2. `days === null` e não suprimido → "Sem risco no horizonte projetado" (5.7, intacto);
+ *   3. número → "X meses e Y dias" (5.7, intacto).
+ * Trocar (1) por (2) é o erro mais caro desta story: substitui um número falso por uma
+ * tranquilidade falsa — o primeiro erra, o segundo dá permissão para gastar.
+ */
+export function runwayLabel(runway: Runway): string {
+  if (runway.days_suprimido) return "Indisponível — saldo inicial não confirmado";
+  const days = runway.days;
   if (days === null) return "Sem risco no horizonte projetado";
   if (days <= 0) return "Caixa no limite (0 dias)";
   const months = Math.floor(days / 30);

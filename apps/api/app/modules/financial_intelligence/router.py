@@ -220,16 +220,22 @@ def _projection_out(r: CashProjection) -> ProjectionOut:
     return ProjectionOut(
         today=r.today,
         saldo_inicial_cents=r.saldo_inicial_cents,
+        saldo_inicial_origem=r.saldo_inicial_origem,
         overdue_inflow_cents=r.overdue_inflow_cents,
         overdue_outflow_cents=r.overdue_outflow_cents,
         windows=[
             ProjectionWindowOut(
-                days=w.days, saldo_projetado_cents=w.saldo_projetado_cents, alert=w.alert
+                days=w.days,
+                saldo_projetado_cents=w.saldo_projetado_cents,
+                alert=w.alert,
+                alert_suprimido=w.alert_suprimido,
             )
             for w in r.windows
         ],
         runway=RunwayOut(
-            days=r.runway.days, burn_rate_cents_per_day=r.runway.burn_rate_cents_per_day
+            days=r.runway.days,
+            days_suprimido=r.runway.days_suprimido,
+            burn_rate_cents_per_day=r.runway.burn_rate_cents_per_day,
         ),
         notes=r.notes,
     )
@@ -243,7 +249,11 @@ def projection(
     """Projeta o saldo de caixa para 30/60/90 dias e o runway (Story 5.7), em regime de CAIXA.
 
     SOMENTE LEITURA: usa a data de pagamento prevista (vencimento dos itens em aberto), nunca a de
-    competência — não escreve nem cria contas (IV1/IV2)."""
+    competência — não escreve nem cria contas (IV1/IV2).
+
+    Story 8.1: a resposta declara a procedência do saldo inicial (`saldo_inicial_origem`) e
+    sinaliza as inferências caladas por falta de lastro (`runway.days_suprimido` e
+    `windows[].alert_suprimido`) — a supressão vem pronta do serviço, esta rota só repassa."""
     report = projection_service.cash_projection(db)
     return _projection_out(report)
 

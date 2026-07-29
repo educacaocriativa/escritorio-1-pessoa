@@ -3,6 +3,7 @@ import { useEffect, useMemo, useState } from "react";
 import { api, apiErrorMessage } from "../../lib/api";
 import {
   formatBRL,
+  origemLabel,
   type Projection,
   runwayLabel,
   toPolylinePoints,
@@ -13,6 +14,13 @@ import {
  * Projeção de fluxo de caixa 30/60/90 dias + runway (Story 5.7) — regime de CAIXA. Read-only: só lê
  * a projeção do backend (não escreve nada). Design "Portal": três cartões (janelas) + runway em
  * destaque + gráfico simples da trajetória do saldo.
+ *
+ * **Story 8.1 (AC5) — a tela declara a procedência e não afirma o que o backend calou.** O saldo
+ * inicial vem com `saldo_inicial_origem` e o rótulo aparece colado ao número; quando a origem é
+ * `plataforma`, o backend já devolve `runway.days = null` + `days_suprimido` e `alert = false` +
+ * `alert_suprimido` por janela. Aqui NÃO existe nenhuma regra de supressão duplicada: a tela só
+ * respeita os flags. Se um dia esta tela voltar a mostrar dias/vermelho, é porque a origem mudou
+ * (Story 8.8) — não porque alguém "consertou" o frontend.
  */
 export default function ProjecaoCaixaPage() {
   const [projection, setProjection] = useState<Projection | null>(null);
@@ -48,7 +56,14 @@ export default function ProjecaoCaixaPage() {
 
           <div className="grid gap-4 sm:grid-cols-3">
             {projection.windows.map((w) => (
-              <WindowCard key={w.days} days={w.days} cents={w.saldo_projetado_cents} alert={w.alert} />
+              <WindowCard
+                key={w.days}
+                days={w.days}
+                cents={w.saldo_projetado_cents}
+                alert={w.alert}
+                alertSuprimido={w.alert_suprimido}
+                origem={projection.saldo_inicial_origem}
+              />
             ))}
           </div>
 
@@ -80,36 +95,65 @@ export default function ProjecaoCaixaPage() {
 }
 
 function RunwayCard({ projection }: { projection: Projection }) {
-  const { runway, saldo_inicial_cents } = projection;
-  const noRisk = runway.days === null;
+  const { runway, saldo_inicial_cents, saldo_inicial_origem } = projection;
+  // Três estados, nunca dois (Story 8.1, AC4/AC5): suprimido ≠ sem risco ≠ número de dias.
+  const suprimido = runway.days_suprimido;
+  const semRisco = !suprimido && runway.days === null;
   return (
     <div className="rounded-2xl bg-white p-5 shadow-sm">
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div>
           <p className="text-sm text-neutral-500">Runway (fôlego de caixa)</p>
           <p
-            className={`mt-1 text-3xl font-bold ${noRisk ? "text-emerald-600" : "text-neutral-800"}`}
+            className={`mt-1 text-3xl font-bold ${
+              semRisco ? "text-emerald-600" : suprimido ? "text-neutral-500" : "text-neutral-800"
+            }`}
           >
-            {runwayLabel(runway.days)}
+            {runwayLabel(runway)}
           </p>
           <p className="mt-1 text-xs text-neutral-400">
-            {noRisk
+            {semRisco
               ? "O caixa não está sendo queimado no horizonte projetado."
               : `Queima de ${formatBRL(runway.burn_rate_cents_per_day)} por dia no ritmo atual.`}
           </p>
+          {suprimido && (
+            // A queima diária (acima) continua visível e válida — ela vem das contas em aberto.
+            // O que não temos é o saldo de partida certo, e por isso não dizemos quantos dias faltam.
+            <p className="mt-2 max-w-md text-xs text-amber-700">
+              O saldo inicial é o {origemLabel(saldo_inicial_origem)}, não o da sua conta bancária —
+              por isso o e1p não diz quantos dias de fôlego você tem. Cadastre sua conta para que
+              essa leitura volte a ter lastro.
+            </p>
+          )}
         </div>
         <div className="text-right">
-          <p className="text-sm text-neutral-500">Disponível hoje (Carteira)</p>
+          <p className="text-sm text-neutral-500">Saldo inicial de hoje</p>
           <p className="mt-1 text-xl font-semibold text-neutral-800">
             {formatBRL(saldo_inicial_cents)}
           </p>
+          {/* AC1/AC5: a procedência viaja colada ao número, nunca em outra parte da tela. */}
+          <p className="mt-0.5 text-xs text-neutral-400">{origemLabel(saldo_inicial_origem)}</p>
         </div>
       </div>
     </div>
   );
 }
 
-function WindowCard({ days, cents, alert }: { days: number; cents: number; alert: boolean }) {
+function WindowCard({
+  days,
+  cents,
+  alert,
+  alertSuprimido,
+  origem,
+}: {
+  days: number;
+  cents: number;
+  alert: boolean;
+  alertSuprimido: boolean;
+  origem: string;
+}) {
+  // Story 8.1 (AC4b): quando o veredito é suprimido, o cartão para de gritar vermelho — mas o
+  // NÚMERO continua exibido, com o rótulo de origem. Suprima a afirmação, nunca o número.
   return (
     <div
       className={`rounded-2xl p-5 shadow-sm ${
@@ -130,7 +174,11 @@ function WindowCard({ days, cents, alert }: { days: number; cents: number; alert
         {formatBRL(cents)}
       </p>
       <p className="mt-1 text-xs text-neutral-400">
-        {alert ? "Caixa fica negativo nesta janela" : "Saldo projetado"}
+        {alert
+          ? "Caixa fica negativo nesta janela"
+          : alertSuprimido
+            ? `Saldo projetado a partir do ${origemLabel(origem)}`
+            : "Saldo projetado"}
       </p>
     </div>
   );
@@ -150,6 +198,11 @@ function TrajectoryChart({ projection }: { projection: Projection }) {
     () => (poly ? poly.split(" ").map((p) => p.split(",").map(Number)) : []),
     [poly],
   );
+  // Story 8.1 (AC4b): `anyAlert` passa a ignorar janelas suprimidas DE GRAÇA — o backend já devolve
+  // `alert = false` nelas. Nenhuma condicional nova aqui é proposital: uma segunda regra de
+  // supressão no frontend seria justamente a duplicação que a supressão-na-origem existe para
+  // evitar. A trajetória continua desenhando os saldos reais (o número não é suprimido), só não é
+  // traçada em vermelho — a cor é uma afirmação, a linha é o dado.
   const anyAlert = projection.windows.some((w) => w.alert);
   const stroke = anyAlert ? "#dc2626" : "#5D44F8"; // vermelho se alguma janela zera; senão cor Portal
 
