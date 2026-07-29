@@ -9,12 +9,25 @@ import { useAuth } from "../store/auth";
 import { usePageActions } from "../store/pageActions";
 import { navSections } from "./navigation";
 
+/** Largura a partir da qual a sidebar cabe ao lado do conteúdo (= breakpoint `md` do Tailwind). */
+const DESKTOP_MIN_WIDTH = 768;
+
+/** `true` quando há largura para a sidebar conviver com o conteúdo. Fora do browser, assume desktop. */
+function isDesktopWidth(): boolean {
+  return typeof window === "undefined" || window.innerWidth >= DESKTOP_MIN_WIDTH;
+}
+
 /**
  * Shell visual do e1p — sidebar violeta (#5D44F8) + topbar, conforme o design Figma "Portal".
- * Sidebar colapsável pelo botão X. Item ativo é um pill branco que "vaza" para a direita.
+ * Item ativo é um pill branco que "vaza" para a direita.
+ *
+ * **Responsivo:** a sidebar tem 256px FIXOS (`w-64 shrink-0`). Num aparelho de 360px isso deixava
+ * ~100px de conteúdo — títulos viravam "Desp", cartões espremidos. Por isso, abaixo de
+ * `DESKTOP_MIN_WIDTH` ela nasce fechada e abre SOBREPOSTA (`fixed`, fora do fluxo), com fundo
+ * escurecido; no desktop segue no fluxo (`md:sticky`) como sempre foi.
  */
 export default function AppShell({ children }: { children: ReactNode }) {
-  const [open, setOpen] = useState(true);
+  const [open, setOpen] = useState(isDesktopWidth);
 
   // Aplica o Brand Kit do tenant como tema do app (sidebar/botões) uma vez por sessão — as
   // classes Tailwind já apontam pra CSS vars com fallback estático, então sem tema custom nada
@@ -30,7 +43,19 @@ export default function AppShell({ children }: { children: ReactNode }) {
 
   return (
     <div className="flex min-h-screen bg-neutral-50">
-      {open && <Sidebar onClose={() => setOpen(false)} />}
+      {open && (
+        <>
+          {/* Fundo escurecido: só existe no celular, onde a sidebar cobre o conteúdo. Tocar
+              fora fecha — sem isso a gaveta engoliria a tela sem saída óbvia no polegar. */}
+          <button
+            type="button"
+            aria-label="Fechar menu"
+            onClick={() => setOpen(false)}
+            className="fixed inset-0 z-30 bg-black/40 md:hidden"
+          />
+          <Sidebar onClose={() => setOpen(false)} />
+        </>
+      )}
       {/* min-w-0 impede o flex-child de estourar e empurrar a sidebar quando o Kanban
           rola na horizontal — o scroll fica contido no conteúdo. */}
       <div className="flex min-w-0 flex-1 flex-col">
@@ -43,8 +68,15 @@ export default function AppShell({ children }: { children: ReactNode }) {
 
 function Sidebar({ onClose }: { onClose: () => void }) {
   const { logout, user } = useAuth();
+  // No celular a gaveta cobre a tela: navegar sem fechá-la deixaria o usuário olhando para o
+  // menu em vez da página que acabou de escolher. No desktop ela é parte do layout, então fica.
+  const closeIfMobile = () => {
+    if (!isDesktopWidth()) onClose();
+  };
   return (
-    <aside className="sticky top-0 flex h-screen w-64 shrink-0 flex-col self-start bg-primary-500 py-6 pl-4 text-white">
+    <aside
+      className="fixed inset-y-0 left-0 z-40 flex h-screen w-64 shrink-0 flex-col overflow-y-auto bg-primary-500 py-6 pl-4 text-white md:sticky md:top-0 md:z-auto md:self-start"
+    >
       {/* Botão de fechar/colapsar (como no anexo) */}
       <button
         onClick={onClose}
@@ -69,6 +101,7 @@ function Sidebar({ onClose }: { onClose: () => void }) {
                   <NavLink
                     to={item.to}
                     end={item.to === "/" || item.exact === true}
+                    onClick={closeIfMobile}
                     className={({ isActive }) =>
                       clsx(
                         "flex min-w-0 items-center gap-3 py-3 pl-4 text-[15px] font-medium transition",
@@ -99,6 +132,7 @@ function Sidebar({ onClose }: { onClose: () => void }) {
             <div className="mb-5 mr-4 border-t border-dashed border-white/35" />
             <NavLink
               to="/admin"
+              onClick={closeIfMobile}
               className={({ isActive }) =>
                 clsx(
                   "flex items-center gap-3 py-3 pl-4 text-[15px] font-medium transition",
