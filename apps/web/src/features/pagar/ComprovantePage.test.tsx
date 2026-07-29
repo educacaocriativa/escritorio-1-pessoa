@@ -57,6 +57,29 @@ describe("ComprovantePage", () => {
     expect(screen.getByText("Pago")).toBeTruthy();
   });
 
+  // Achado da revisão final (item deferido, agora corrigido): o cabeçalho mostrava o texto
+  // estático "Comprovante recebido" sem identificar QUAL arquivo — com a bandeja tendo vários,
+  // o usuário não sabia o que estava prestes a anexar. `GET /payables/receipts` (já usado pela
+  // bandeja/PagarPage) é filtrado pelo `id` da rota, sem endpoint novo.
+  it("mostra o nome do arquivo do comprovante no cabeçalho, não um texto genérico", async () => {
+    mockApi();
+    renderPage();
+    await waitFor(() => screen.getByText("comp.pdf"));
+    expect(screen.getByText(/1 KB/i)).toBeTruthy();
+  });
+
+  it("o botão Cancelar volta para Contas a Pagar sem descartar o comprovante", async () => {
+    mockApi();
+    const user = userEvent.setup();
+    renderPage();
+    await waitFor(() => screen.getByText("Energia"));
+
+    await user.click(screen.getByRole("button", { name: /^cancelar$/i }));
+
+    await waitFor(() => screen.getByText("contas a pagar"));
+    expect(api.delete).not.toHaveBeenCalled();
+  });
+
   it("mostra o checkbox de baixa apenas para conta em aberto", async () => {
     mockApi();
     renderPage();

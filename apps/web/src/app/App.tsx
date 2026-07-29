@@ -1,3 +1,4 @@
+import type { ReactElement } from "react";
 import { Navigate, Outlet, Route, Routes, useLocation } from "react-router-dom";
 import AdminDashboard from "../features/admin/AdminDashboard";
 import AgendaPage from "../features/agenda/AgendaPage";
@@ -72,8 +73,6 @@ export default function App() {
           <Route path="/financeiro/contratos/:id/dre" element={<ContratoDrePage />} />
           <Route path="/cobrancas" element={<CobrancasPage />} />
           <Route path="/pagar" element={<PagarPage />} />
-          <Route path="/compartilhar" element={<CompartilharPage />} />
-          <Route path="/comprovante/:id" element={<ComprovantePage />} />
           <Route path="/produtos" element={<ProdutosPage />} />
           <Route path="/estoque" element={<EstoquePage />} />
           <Route path="/config" element={<ConfiguracoesPage />} />
@@ -96,6 +95,11 @@ export default function App() {
           <Route path="/funis/:id" element={<FunnelBuilderPage />} />
           <Route path="/admin" element={<AdminOnly />} />
           <Route path="*" element={<ComingSoon />} />
+        </Route>
+        {/* Telas de tarefa única vindas do share sheet do celular: mesma proteção, sem shell. */}
+        <Route element={<ProtectedBareLayout />}>
+          <Route path="/compartilhar" element={<CompartilharPage />} />
+          <Route path="/comprovante/:id" element={<ComprovantePage />} />
         </Route>
       </Routes>
     </AuthProvider>
@@ -123,11 +127,16 @@ export function LoginRoute() {
   return isAuthenticated ? <Navigate to={loginReturnTo(location.state)} replace /> : <LoginPage />;
 }
 
-export function ProtectedLayout() {
+/**
+ * Portão de autenticação, sem nenhuma decisão visual: devolve `null` quando pode seguir, ou o
+ * elemento que deve ser renderizado no lugar do conteúdo (redirect para login / troca de senha).
+ *
+ * Extraído para que `ProtectedLayout` (com shell) e `ProtectedBareLayout` (tela cheia) apliquem
+ * exatamente a MESMA regra de acesso — duplicar isso seria criar duas portas para o mesmo prédio.
+ */
+function useAuthGate(): ReactElement | null {
   const { isAuthenticated, user } = useAuth();
   const location = useLocation();
-  // Idle timeout LGPD (Story 1.3): hook sempre chamado (regra dos hooks); no-op quando deslogado.
-  const { showWarning, stayConnected } = useIdleTimeout();
   if (!isAuthenticated) {
     // Guarda a rota de origem para o LoginRoute retomar após autenticar — genérico para
     // qualquer rota protegida, não só `/compartilhar`/`/comprovante/:id`.
@@ -135,6 +144,14 @@ export function ProtectedLayout() {
   }
   // 1º acesso: bloqueia o app até o usuário trocar a senha temporária.
   if (user?.must_reset_password) return <FirstAccessPage />;
+  return null;
+}
+
+export function ProtectedLayout() {
+  // Idle timeout LGPD (Story 1.3): hook sempre chamado (regra dos hooks); no-op quando deslogado.
+  const { showWarning, stayConnected } = useIdleTimeout();
+  const blocked = useAuthGate();
+  if (blocked) return blocked;
   return (
     <PageActionsProvider>
       <AppShell>
@@ -142,6 +159,27 @@ export function ProtectedLayout() {
       </AppShell>
       <IdleWarningModal open={showWarning} onStay={stayConnected} />
     </PageActionsProvider>
+  );
+}
+
+/**
+ * Mesma proteção do `ProtectedLayout`, SEM sidebar e SEM topbar.
+ *
+ * Para telas de tarefa única que chegam pelo compartilhamento do celular: ali o menu não é
+ * navegação, é ruído competindo por uma largura que o polegar já disputa. A saída fica na
+ * própria tela (o "Cancelar" do cabeçalho), não no shell.
+ */
+export function ProtectedBareLayout() {
+  const { showWarning, stayConnected } = useIdleTimeout();
+  const blocked = useAuthGate();
+  if (blocked) return blocked;
+  return (
+    <>
+      <div className="min-h-screen bg-neutral-50 p-4">
+        <Outlet />
+      </div>
+      <IdleWarningModal open={showWarning} onStay={stayConnected} />
+    </>
   );
 }
 

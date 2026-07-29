@@ -21,7 +21,7 @@ vi.mock("../store/useIdleTimeout", () => ({
   useIdleTimeout: () => ({ showWarning: false, stayConnected: vi.fn() }),
 }));
 
-import { LoginRoute, ProtectedLayout } from "./App";
+import { LoginRoute, ProtectedBareLayout, ProtectedLayout } from "./App";
 
 /** Sonda que expõe a rota atual e o `state` carregado pelo history, para asserções sem UI real. */
 function LocationProbe({ label }: { label: string }) {
@@ -100,5 +100,53 @@ describe("Retorno pós-login para a rota de origem (Finding 2 — revisão final
     );
 
     await waitFor(() => screen.getByText("cockpit"));
+  });
+});
+
+// Achado do usuário testando em campo: no celular a sidebar (256px fixos) e a topbar do
+// AppShell espremiam /compartilhar e /comprovante/:id a ponto de o checkbox "marcar como paga"
+// ficar fora da área visível — o usuário tocava Anexar sem conseguir ver/desmarcar o que estava
+// confirmando. `ProtectedBareLayout` aplica a MESMA proteção de `ProtectedLayout` (mesmo
+// `useAuthGate`) sem montar `AppShell` — o teste prova as duas metades: acesso bloqueado
+// deslogado, e nenhum vestígio do shell quando autenticado.
+describe("ProtectedBareLayout — mesma proteção do ProtectedLayout, sem sidebar/topbar", () => {
+  beforeEach(() => {
+    auth.isAuthenticated = false;
+  });
+
+  it("deslogado, redireciona para /login guardando a origem — igual ao ProtectedLayout", async () => {
+    render(
+      <MemoryRouter initialEntries={["/comprovante/r-1"]}>
+        <Routes>
+          <Route path="/login" element={<LoginRoute />} />
+          <Route element={<ProtectedBareLayout />}>
+            <Route path="/comprovante/:id" element={<p>tela do comprovante</p>} />
+          </Route>
+        </Routes>
+      </MemoryRouter>,
+    );
+
+    // Chegar em <LoginPage> de verdade (não um probe) já prova o redirecionamento; a preservação
+    // da origem via state é coberta, campo a campo, pelos testes de ProtectedLayout acima —
+    // ambos os layouts chamam o MESMO useAuthGate, não duas implementações a manter em sincronia.
+    await waitFor(() => screen.getByRole("button", { name: /^entrar$/i }));
+  });
+
+  it("autenticado, renderiza o conteúdo SEM sidebar nem topbar do AppShell", async () => {
+    auth.isAuthenticated = true;
+
+    render(
+      <MemoryRouter initialEntries={["/comprovante/r-1"]}>
+        <Routes>
+          <Route element={<ProtectedBareLayout />}>
+            <Route path="/comprovante/:id" element={<p>tela do comprovante</p>} />
+          </Route>
+        </Routes>
+      </MemoryRouter>,
+    );
+
+    await waitFor(() => screen.getByText("tela do comprovante"));
+    // "Sair" só existe na Sidebar do AppShell — sua ausência prova que o shell não montou.
+    expect(screen.queryByText("Sair")).toBeNull();
   });
 });

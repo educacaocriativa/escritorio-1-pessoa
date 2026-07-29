@@ -1,10 +1,19 @@
 import type { Payable } from "@e1p/shared-types";
-import { FileText, Trash2 } from "lucide-react";
+import { ChevronLeft, FileText, Trash2 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
 import { api, apiErrorMessage } from "../../lib/api";
 
+/** O que a bandeja devolve por comprovante (`GET /payables/receipts`). */
+interface ReceiptInfo {
+  id: string;
+  filename: string;
+  size: number;
+}
+
 const brl = (c: number) => (c / 100).toLocaleString("pt-BR", { style: "currency", currency: "BRL" });
+const kb = (n: number) =>
+  n < 1024 * 1024 ? `${Math.round(n / 1024)} KB` : `${(n / 1024 / 1024).toFixed(1)} MB`;
 const dia = (iso: string) => new Date(`${iso}T00:00:00Z`).toLocaleDateString("pt-BR", { timeZone: "UTC" });
 
 /**
@@ -47,6 +56,25 @@ export default function ComprovantePage() {
   const [showNew, setShowNew] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [receipt, setReceipt] = useState<ReceiptInfo | null>(null);
+
+  // Identifica QUAL comprovante está na tela. Não existe `GET /payables/receipts/{id}`, mas a
+  // bandeja é curta por construção (teto de 30), então filtrar a lista basta e evita rota nova.
+  useEffect(() => {
+    let cancelled = false;
+    api
+      .get<ReceiptInfo[]>("/payables/receipts")
+      .then(({ data }) => {
+        if (cancelled) return;
+        setReceipt(data.find((r) => r.id === id) ?? null);
+      })
+      .catch(() => {
+        /* o nome do arquivo é contexto, não função — sem ele a tela opera igual */
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [id]);
 
   const load = useCallback(async () => {
     const { data } = await api.get<Payable[]>(
@@ -134,19 +162,37 @@ export default function ComprovantePage() {
 
   return (
     <div className="mx-auto max-w-lg space-y-4 pb-28">
-      <header className="flex items-center gap-3 rounded-2xl bg-white p-4 shadow-sm">
-        <FileText size={22} className="shrink-0 text-neutral-400" />
-        <div className="min-w-0 flex-1">
-          <p className="truncate text-sm font-semibold text-neutral-700">Comprovante recebido</p>
-          <p className="text-xs text-neutral-500">Escolha a conta a que ele pertence</p>
+      <header className="space-y-3 rounded-2xl bg-white p-4 shadow-sm">
+        {/* Esta tela roda FORA do shell (sem sidebar/topbar), então a saída mora aqui. "Cancelar"
+            só sai — o comprovante continua na bandeja e o aviso em Contas a Pagar aponta pra ele.
+            Quem quer se livrar do arquivo usa "Descartar", que é destrutivo e fica separado. */}
+        <div className="flex items-center justify-between gap-3">
+          <button
+            onClick={() => navigate("/pagar")}
+            className="flex shrink-0 items-center gap-1 text-sm font-medium text-neutral-500 hover:text-neutral-800"
+          >
+            <ChevronLeft size={16} /> Cancelar
+          </button>
+          <button
+            onClick={discard}
+            disabled={busy}
+            className="flex shrink-0 items-center gap-1 text-xs text-neutral-400 hover:text-danger disabled:opacity-50"
+          >
+            <Trash2 size={14} /> Descartar
+          </button>
         </div>
-        <button
-          onClick={discard}
-          disabled={busy}
-          className="flex shrink-0 items-center gap-1 text-xs text-neutral-400 hover:text-danger"
-        >
-          <Trash2 size={14} /> Descartar
-        </button>
+        <div className="flex items-center gap-3 border-t border-neutral-100 pt-3">
+          <FileText size={22} className="shrink-0 text-neutral-400" />
+          <div className="min-w-0 flex-1">
+            {/* Mostrar QUAL arquivo está sendo arquivado importa quando a bandeja tem vários. */}
+            <p className="truncate text-sm font-semibold text-neutral-700">
+              {receipt?.filename ?? "Comprovante recebido"}
+            </p>
+            <p className="text-xs text-neutral-500">
+              {receipt ? `${kb(receipt.size)} — escolha a conta` : "Escolha a conta a que ele pertence"}
+            </p>
+          </div>
+        </div>
       </header>
 
       <input
