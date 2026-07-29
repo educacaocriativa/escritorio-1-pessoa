@@ -244,18 +244,6 @@ export default function ComprovantePage() {
         )}
       </ul>
 
-      {chosen?.status === "open" && (
-        <label className="flex items-center gap-2 rounded-2xl bg-white p-4 text-sm text-neutral-700 shadow-sm">
-          <input
-            type="checkbox"
-            checked={markPaid}
-            onChange={(e) => setMarkPaid(e.target.checked)}
-            className="h-4 w-4"
-          />
-          Marcar como paga
-        </label>
-      )}
-
       {/* Vincular a uma conta existente e criar uma conta nova são caminhos de mutação
           concorrentes para o mesmo comprovante — mantidos mutuamente exclusivos NAS DUAS
           direções por `selectCandidate`/`openNewBillForm` (acima), que resetam o outro fluxo
@@ -275,7 +263,33 @@ export default function ComprovantePage() {
       )}
 
       {!showNew && (
-        <div className="fixed inset-x-0 bottom-0 border-t border-neutral-100 bg-white p-4">
+        <div className="fixed inset-x-0 bottom-0 space-y-3 border-t border-neutral-100 bg-white p-4">
+          {/* Achado de campo: com a conta escolhida e o checkbox num bloco separado, mais acima
+              na página, quem tocava numa conta e ia direto no Anexar (sem rolar) NUNCA via o
+              checkbox — a baixa acontecia com o padrão (marcado) sem confirmação visível. Fica
+              aqui dentro, colado no botão que comete a ação: fisicamente não dá pra tocar em
+              Anexar sem ver o que está sendo confirmado. */}
+          {chosen && (
+            <div className="mx-auto flex max-w-lg items-center justify-between gap-3">
+              <div className="min-w-0">
+                <p className="truncate text-sm font-medium text-neutral-700">
+                  {chosen.description || chosen.supplier || "Conta"}
+                </p>
+                <p className="text-xs text-neutral-500">{brl(chosen.amount_cents)}</p>
+              </div>
+              {chosen.status === "open" && (
+                <label className="flex shrink-0 items-center gap-2 text-xs font-medium text-neutral-600">
+                  <input
+                    type="checkbox"
+                    checked={markPaid}
+                    onChange={(e) => setMarkPaid(e.target.checked)}
+                    className="h-4 w-4"
+                  />
+                  Marcar como paga
+                </label>
+              )}
+            </div>
+          )}
           <button
             onClick={link}
             disabled={!chosen || busy}

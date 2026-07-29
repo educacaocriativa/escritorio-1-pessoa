@@ -134,6 +134,33 @@ describe("PagarPage — bandeja de comprovantes (Task 11)", () => {
     await waitFor(() => screen.getByText(/2 comprovantes aguardando/i));
   });
 
+  // Achado de campo (produção): o contêiner da tabela usava `overflow-hidden`, que CORTA em vez
+  // de rolar — em tela estreita a coluna Status e os botões de ação (Editar/Marcar paga/
+  // Estornar) ficavam invisíveis, sem nenhum jeito de alcançá-los. `overflow-x-auto` (mesmo
+  // padrão de DrePage/LucratividadePage) torna a tabela rolável em vez de clipada.
+  it("a tabela de contas é rolável horizontalmente, não cortada (overflow-x-auto)", async () => {
+    vi.mocked(api.get).mockImplementation((url: string) => {
+      if (url === "/payables/summary") return Promise.resolve({ data: emptySummary } as never);
+      if (url === "/payables/bills")
+        return Promise.resolve({
+          data: [{
+            id: "b-1", description: "Aluguel", category: "Estrutura", supplier: "Imobiliária",
+            amount_cents: 250000, due_date: "2099-08-05", status: "open", is_overdue: false,
+            paid_at: null, recurrence: "none", recurrence_count: 1, recurrence_group: null,
+            payment_code: "", attachment_url: "", created_at: "2026-01-01T00:00:00Z",
+            tenant_id: "t-1", competence_date: null, chart_account_id: null, contract_id: null,
+            cost_center_id: null,
+          }],
+        } as never);
+      return Promise.resolve({ data: [] } as never);
+    });
+    renderPage();
+
+    const table = await screen.findByRole("table");
+    expect(table.parentElement?.className).toContain("overflow-x-auto");
+    expect(table.parentElement?.className).not.toContain("overflow-hidden");
+  });
+
   it("não mostra o aviso com a bandeja vazia", async () => {
     // beforeEach já mocka /payables/receipts (via fallback) devolvendo [].
     renderPage();
