@@ -71,9 +71,11 @@ def payable_out(p: Payable, today: date | None = None) -> PayableOut:
     )
 
 
-def create_payable(db: Session, *, tenant_id: str, actor: str, data: PayableCreate) -> Payable:
-    """Cria a conta. Se recorrente, gera N ocorrências — cada uma com seu vencimento e seu
-    evento na Agenda (assim cada repetição pode receber seu próprio boleto)."""
+def build_payable(db: Session, *, tenant_id: str, actor: str, data: PayableCreate) -> Payable:
+    """Cria a conta SEM commitar — reutilizável dentro de outra transação (mesmo padrão de
+    `receivables.build_charge`). Se recorrente, gera N ocorrências — cada uma com seu
+    vencimento e seu evento na Agenda (assim cada repetição pode receber seu próprio boleto).
+    """
     # Story 5.2: valida o vínculo opcional ao plano de contas (404 se apontar p/ conta
     # inexistente/de outro tenant — a RLS já esconde a linha cross-tenant).
     if data.chart_account_id and not chart_service.exists(db, data.chart_account_id):
@@ -134,9 +136,14 @@ def create_payable(db: Session, *, tenant_id: str, actor: str, data: PayableCrea
             first = payable
 
     audit.record(db, tenant_id=tenant_id, actor=actor, action="payable.create", target=first.id)
-    db.commit()
-    db.refresh(first)
     return first
+
+
+def create_payable(db: Session, *, tenant_id: str, actor: str, data: PayableCreate) -> Payable:
+    p = build_payable(db, tenant_id=tenant_id, actor=actor, data=data)
+    db.commit()
+    db.refresh(p)
+    return p
 
 
 def get_payable(db: Session, payable_id: str) -> Payable:
@@ -231,7 +238,15 @@ def list_payables(
     return list(db.scalars(stmt.limit(limit).offset(max(0, offset))).all())
 
 
-def mark_paid(db: Session, *, payable_id: str, tenant_id: str, actor: str) -> Payable:
+def apply_paid(db: Session, *, payable_id: str, tenant_id: str, actor: str) -> Payable:
+    """Dá baixa na conta SEM commitar — reutilizável dentro de outra transação.
+
+    Mesmo padrão de `receivables.build_charge`: a versão sem commit é a real, e a versão
+    pública (`mark_paid`) é um wrapper que commita. Assim anexar o comprovante e dar a baixa
+    acontecem numa transação só (ver payables/receipts.py::link_receipt).
+
+    Idempotente: conta já paga volta inalterada (não re-data o paid_at).
+    """
     p = db.scalar(select(Payable).where(Payable.id == payable_id).with_for_update())
     if p is None:
         raise PayableError("Conta não encontrada", 404)
@@ -246,6 +261,11 @@ def mark_paid(db: Session, *, payable_id: str, tenant_id: str, actor: str) -> Pa
         if ev is not None:
             ev.status = STATUS_DONE  # não fica "atrasado" na agenda
     audit.record(db, tenant_id=tenant_id, actor=actor, action="payable.paid", target=p.id)
+    return p
+
+
+def mark_paid(db: Session, *, payable_id: str, tenant_id: str, actor: str) -> Payable:
+    p = apply_paid(db, payable_id=payable_id, tenant_id=tenant_id, actor=actor)
     db.commit()
     db.refresh(p)
     return p

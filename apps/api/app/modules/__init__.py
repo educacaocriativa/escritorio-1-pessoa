@@ -14,6 +14,7 @@ from app.modules.contracts.router import public_router as contracts_public_route
 from app.modules.contracts.router import router as contracts_router
 from app.modules.cost_centers.router import router as cost_centers_router
 from app.modules.crm.router import router as crm_router
+from app.modules.device_tokens.router import router as device_tokens_router
 from app.modules.financial_intelligence.router import router as financial_intelligence_router
 from app.modules.funnels.router import router as funnels_router
 from app.modules.google_calendar.router import public_router as google_calendar_public_router
@@ -26,6 +27,7 @@ from app.modules.marketing.router import router as marketing_router
 from app.modules.notifications.router import router as notifications_router
 from app.modules.pages.router import public_router as pages_public_router
 from app.modules.pages.router import router as pages_router
+from app.modules.payables.receipts_router import router as payables_receipts_router
 from app.modules.payables.router import router as payables_router
 from app.modules.platform.router import router as platform_router
 from app.modules.products.router import router as products_router
@@ -43,12 +45,14 @@ ALL_ROUTERS: list[APIRouter] = [
     auth_router,
     agenda_router,
     crm_router,
+    device_tokens_router,
     cockpit_router,
     platform_router,
     notifications_router,
     wallet_router,
     receivables_router,
     payables_router,
+    payables_receipts_router,
     chart_of_accounts_router,
     cost_centers_router,
     financial_intelligence_router,

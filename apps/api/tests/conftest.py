@@ -12,6 +12,7 @@ from sqlalchemy import create_engine
 from sqlalchemy.orm import Session, sessionmaker
 from sqlalchemy.pool import StaticPool
 
+from app.core.receipt_auth import get_receipt_db
 from app.core.tenancy import get_tenant_db
 from app.db.registry import Base
 from app.db.session import get_db, get_tenant_session_factory
@@ -67,6 +68,10 @@ def client(db: Session) -> Iterator[TestClient]:
 
     app.dependency_overrides[get_db] = _override_get_db
     app.dependency_overrides[get_tenant_db] = _override_get_db
+    # get_receipt_db também abre tenant_session (Postgres) — em teste, aponta para o SQLite
+    # compartilhado, igual get_tenant_db. A resolução da CREDENCIAL (receipt_uploader) NÃO é
+    # sobrescrita: é justamente o que os testes de token de dispositivo exercitam.
+    app.dependency_overrides[get_receipt_db] = _override_get_db
     app.dependency_overrides[get_tenant_session_factory] = _override_factory
     with TestClient(app) as c:
         yield c

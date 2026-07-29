@@ -25,6 +25,11 @@ Allowlist (usos legítimos, documentados com guarda explícita no próprio códi
                   o tenant via `public_whatsapp_accounts` (snapshot GLOBAL sem RLS) pelo
                   `phone_number_id`/`verify_token` antes de abrir a tenant_session real — mesmo
                   padrão de pages/quotes/contracts/integrations.
+  - device_tokens  → tabela GLOBAL sem RLS (nenhuma proteção por tenant). Isolamento vem do
+                  filtro explícito por `user_id` do JWT nas rotas (`get_current_user` fornece o
+                  `user_id` dos claims). Tabela contém apenas o hash sha256 do token (não o token
+                  em si — sha256 é hash, não criptografia; não é reversível) e metadata —
+                  nenhum dado de negócio.
 """
 from __future__ import annotations
 
@@ -35,7 +40,7 @@ MODULES_DIR = pathlib.Path(__file__).resolve().parents[1] / "app" / "modules"
 # Módulos onde `get_db` (sessão global) é um uso legítimo e já auditado (ver docstring acima).
 ALLOWLIST = {
     "auth", "platform", "contracts", "pages", "quotes", "wallet", "attachments", "integrations",
-    "whatsapp_inbox",
+    "whatsapp_inbox", "device_tokens",
 }
 
 

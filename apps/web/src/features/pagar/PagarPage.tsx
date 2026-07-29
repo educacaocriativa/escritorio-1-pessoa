@@ -1,6 +1,7 @@
 import type { Contract, Payable, PayablesSummary } from "@e1p/shared-types";
 import { Copy, Paperclip } from "lucide-react";
 import { useCallback, useEffect, useMemo, useState } from "react";
+import { Link } from "react-router-dom";
 import Attachments from "../../components/Attachments";
 import Modal, { Field } from "../../components/Modal";
 import { api, apiErrorMessage } from "../../lib/api";
@@ -72,6 +73,8 @@ export default function PagarPage() {
   const [open, setOpen] = useState(false);
   const [attach, setAttach] = useState<Payable | null>(null);
   const [edit, setEdit] = useState<Payable | null>(null);
+  // Comprovantes que chegaram pelo celular e ainda não foram vinculados a nenhuma conta.
+  const [inbox, setInbox] = useState<{ id: string }[]>([]);
 
   const load = useCallback(async () => {
     const [s, b] = await Promise.all([
@@ -88,6 +91,11 @@ export default function PagarPage() {
     ]);
     setChartAccounts(ca.data);
     setCostCenters(cc.data);
+    // .catch: a bandeja é um extra da tela; se falhar, Contas a Pagar continua funcionando.
+    const pend = await api
+      .get<{ id: string }[]>("/payables/receipts")
+      .catch(() => ({ data: [] as { id: string }[] }));
+    setInbox(pend.data);
   }, []);
 
   useEffect(() => {
@@ -127,6 +135,18 @@ export default function PagarPage() {
         <p className="text-sm text-neutral-500">Página / Contas a Pagar</p>
         <h1 className="text-2xl font-bold text-neutral-800">Despesas</h1>
       </div>
+
+      {inbox.length > 0 && (
+        <Link
+          to={`/comprovante/${inbox[0].id}`}
+          className="block rounded-2xl border border-amber-200 bg-amber-50 p-4 text-sm font-medium text-amber-800 hover:bg-amber-100"
+        >
+          {inbox.length === 1
+            ? "1 comprovante aguardando"
+            : `${inbox.length} comprovantes aguardando`}{" "}
+          — toque para escolher a conta.
+        </Link>
+      )}
 
       <div className="grid grid-cols-2 gap-4 lg:grid-cols-4">
         <Stat label="A pagar" value={brl(summary.open_cents)} tone="text-amber-700" />
@@ -358,7 +378,11 @@ function AttachModal({
           <Attachments
             ownerType="payable"
             ownerId={bill.id}
-            slots={[{ key: "boleto", label: "Boleto" }, { key: "contrato", label: "Contrato" }]}
+            slots={[
+              { key: "boleto", label: "Boleto" },
+              { key: "contrato", label: "Contrato" },
+              { key: "comprovante", label: "Comprovante" },
+            ]}
           />
         </div>
 
