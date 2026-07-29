@@ -121,11 +121,28 @@ pro IP da VPS (`dig +short app.seudominio.com`) e se a porta 80 está mesmo aces
 > venv↔produção) e valida o isolamento RLS num Postgres real (Story 3.2). O deploy em si
 > continua manual (não há CD automático), mas por processo só suba versões com CI passando.
 
+> **Qual compose file?** Depende de qual proxy a VPS usa (ver nota no topo deste guia) —
+> **não assuma**, confirme antes: `docker inspect infra-api-1 --format
+> '{{index .Config.Labels "com.docker.compose.project.config_files"}}'` na própria VPS mostra
+> o arquivo com que a stack em pé foi criada.
+>
+> - **Caddy próprio** → `docker-compose.prod.yml`.
+> - **Traefik compartilhado** (VPS real, `e1p.doroeventos.com.br`) → `docker-compose.traefik.yml`,
+>   e **precisa de `--env-file .env.prod`** — sem ele o Compose não acha `POSTGRES_ROOT_PASSWORD`
+>   e falha ("required variable ... is missing a value"). O `docker-compose.prod.yml` já resolve
+>   isso via `env_file:` dentro do próprio arquivo, por isso só o `.traefik.yml` exige a flag.
+
 ```bash
 cd /opt/e1p && git pull
-cd infra && docker compose -f docker-compose.prod.yml up -d --build
+cd infra
+# Caddy próprio:
+docker compose -f docker-compose.prod.yml up -d --build
+# Traefik compartilhado (VPS real):
+docker compose --env-file .env.prod -f docker-compose.traefik.yml up -d --build
 ```
 Migrations rodam automaticamente no start do container `api` (mesmo comando do dev).
+Não passe `--remove-orphans` sem checar antes: o mesmo project name do Compose pode ser
+compartilhado com `docker-compose.monitoring.yml` (Uptime Kuma) — a flag mataria o monitoramento.
 
 ## 6. Backup do Postgres (automatizado + offsite + restore testado)
 Sem RDS aqui — backups são responsabilidade sua, mas agora são **automatizados, copiados
