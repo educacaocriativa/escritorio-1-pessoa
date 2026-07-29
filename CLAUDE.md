@@ -171,6 +171,31 @@ Ao criar/alterar qualquer funcionalidade:
     (`pytest.mark.rls_e2e`, testcontainers, roda `alembic upgrade head` como o papel não-superusuário
     `e1p_app` contra um Postgres real — o mesmo teste exercita de fato a migration 0057) e no job
     `cross-tenant-rls` do CI.
+  - **[CORRIGIDO pós-deploy, achado testando em Android real] `AppShell` nunca teve breakpoint
+    responsivo nenhum** — sidebar de 256px fixos (`w-64 shrink-0`, sem `md:`/`sm:`) espremia
+    QUALQUER tela do app num aparelho de ~360px; nesta feature isso deixou o checkbox "marcar
+    como paga" fora da área visível e uma conta real foi marcada paga sem o usuário conseguir
+    ver/desmarcar. Fix: abaixo de `md` a sidebar nasce fechada e abre sobreposta (`fixed` +
+    backdrop, fecha ao navegar); `/compartilhar` e `/comprovante/:id` passaram a rodar em
+    `ProtectedBareLayout` (mesma proteção via `useAuthGate` compartilhado, sem sidebar/topbar).
+    **Só o shell + as 2 telas do comprovante foram auditados — nenhuma outra tela do app foi
+    verificada quanto ao mesmo padrão.** (PR #56)
+  - **[CORRIGIDO pós-deploy, 2ª rodada de teste em campo]** Mesmo com o shell responsivo, o
+    checkbox "marcar como paga" vivia num bloco SEPARADO do botão Anexar — quem selecionava a
+    conta e tocava Anexar sem rolar nunca via o checkbox, e a baixa saía com o padrão (marcado)
+    sem confirmação visível. Fix: checkbox + resumo da conta escolhida (nome, valor) movidos pra
+    DENTRO da mesma barra fixa do Anexar — fisicamente inseparáveis da ação que os torna
+    efetivos. Achado no mesmo incidente: a tabela de `PagarPage` usava `overflow-hidden` (corta)
+    em vez de `overflow-x-auto` (rola, mesmo padrão de `DrePage`/`LucratividadePage`) — em tela
+    estreita a coluna Status e os botões de ação (Editar/Marcar paga/**Estornar**) ficavam
+    invisíveis, sem jeito de conferir ou desfazer uma baixa incorreta. (PR #58)
+  - **[CORRIGIDO] `docs/HOSTINGER-DEPLOY.md` §5 estava errado** — mandava `docker-compose.prod.yml`
+    sem `--env-file`, mas a VPS real (`e1p.doroeventos.com.br`) roda `docker-compose.traefik.yml`
+    e EXIGE `--env-file .env.prod`, senão falha por `POSTGRES_ROOT_PASSWORD` ausente. Custou
+    confusão em 2 deploys seguidos até a forma certa ser encontrada em
+    `docs/RUNBOOK-BACKUP-RESTORE.md`. Corrigido e já verificado na prática (PR #57 + deploys
+    seguintes rodaram §5 sem ajuste). **`main` ganhou proteção de branch nesta janela** (4 checks
+    obrigatórios) — push direto agora é REJEITADO (`GH006`), toda mudança precisa de PR.
 
 ## Financeiro: boleto gera arquivo + pagamento automático (sem marcar à mão)
 - [x] **Boleto gera o arquivo (PDF) e anexa** — criar cobrança com `method=boleto` (escolhido no próprio formulário de Nova cobrança) gera um **PDF de boleto** (`core/boleto.py`, fpdf2) com beneficiário/pagador/valor/**vencimento**/linha digitável, e o anexa à cobrança (`Attachment` label=boleto). Aparece na Agenda no dia do vencimento e nos anexos do evento. Cada ocorrência recorrente gera seu próprio boleto.
