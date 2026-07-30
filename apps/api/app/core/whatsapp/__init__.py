@@ -45,7 +45,7 @@ __all__ = [
 ]
 
 
-def _resolve(profile: "TenantProfile | None"):
+def _resolve(profile: TenantProfile | None):
     """Escolhe o provider pelo transporte do tenant.
 
     PONTO DE EXTENSÃO (Onda 2): quando `TenantProfile.whatsapp_provider` existir, este função
@@ -58,7 +58,7 @@ def send_text(
     *,
     to: str,
     text: str,
-    profile: "TenantProfile | None" = None,
+    profile: TenantProfile | None = None,
     token: str | None = None,
     phone_id: str | None = None,
 ) -> str:
@@ -75,7 +75,7 @@ def send_template(
     template_name: str,
     language: str,
     variables: list[str],
-    profile: "TenantProfile | None" = None,
+    profile: TenantProfile | None = None,
     token: str | None = None,
     phone_id: str | None = None,
 ) -> str:
@@ -99,7 +99,7 @@ def send_media(
     kind: str,
     media_id: str,
     caption: str = "",
-    profile: "TenantProfile | None" = None,
+    profile: TenantProfile | None = None,
     token: str | None = None,
     phone_id: str | None = None,
 ) -> str:
@@ -122,7 +122,7 @@ def upload_media(
     file_bytes: bytes,
     filename: str,
     mime_type: str,
-    profile: "TenantProfile | None" = None,
+    profile: TenantProfile | None = None,
     token: str | None = None,
     phone_id: str | None = None,
 ) -> str:
@@ -142,7 +142,7 @@ def upload_media(
 def fetch_media_url(
     *,
     media_id: str,
-    profile: "TenantProfile | None" = None,
+    profile: TenantProfile | None = None,
     token: str | None = None,
 ) -> str:
     provider = _resolve(profile)
@@ -154,7 +154,7 @@ def fetch_media_url(
 def download_media(
     *,
     url: str,
-    profile: "TenantProfile | None" = None,
+    profile: TenantProfile | None = None,
     token: str | None = None,
 ) -> bytes:
     provider = _resolve(profile)
