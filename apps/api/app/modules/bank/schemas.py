@@ -348,3 +348,84 @@ class CheckpointOut(BaseModel):
     origin: str
     created_by: str | None
     created_at: datetime
+
+
+# ── Conferência, bloco 1 (Story 8.5) ─────────────────────────────────────────────────────────
+#
+# Espelho 1:1 das dataclasses de `bank/reconciliation.py`. A conversão acontece no router (mesmo
+# padrão de `_projection_out` em `financial_intelligence/router.py`): o serviço devolve dataclasses
+# puras, testáveis sem HTTP, e o Pydantic fica na borda.
+#
+# ⚠️ **Nenhum destes schemas existe isolado.** Não há (e não pode passar a haver) um
+# `ConferenciaTotalOut` com o consolidado sozinho: `ConferenciaReportOut` carrega SEMPRE `contas` e
+# `contas_fora_da_banda` (epic §3.2 / decisão do fundador F3). Três contas divergindo +R$ 1.200,
+# −R$ 900 e +R$ 40 somam +R$ 340, que parece saudável e esconde dois problemas.
+
+
+class ConferenciaContaOut(BaseModel):
+    """A conferência de UMA conta.
+
+    **`None` significa "não sei", jamais zero.** Quando não houve saldo informado dentro do período,
+    `saldo_banco_cents`, `saldo_sistema_cents`, `divergencia_cents` e `dentro_da_tolerancia` vêm
+    `None`, `saldo_banco_origem` vem `indisponivel` e `notes` explica. Um `0` em `divergencia_cents`
+    afirmaria "conferi e está batendo" — coisa que o e1p não tem lastro para dizer.
+
+    Os dois eixos de procedência (§1.3.1) aparecem lado a lado: `saldo_banco_origem` e
+    `saldo_sistema_origem` são o **eixo A** (plano de dinheiro) e valem `banco` no caminho avaliável
+    — é por serem o MESMO plano que os dois números são comparáveis; `saldo_banco_fonte` é
+    o **eixo B** (porta de entrada do saldo externo: `manual`|`ofx`), copiado **cru** do checkpoint.
+    """
+
+    bank_account_id: str
+    bank_account_name: str
+    bank_account_kind: str
+    # O que o banco atesta (checkpoint). `None` = nenhum saldo informado no período.
+    saldo_banco_cents: int | None
+    # Eixo A: `banco` quando há checkpoint na janela, `indisponivel` quando não há.
+    saldo_banco_origem: str
+    # Eixo B: `manual`|`ofx`, cru. `None` quando não houve porta de entrada.
+    saldo_banco_fonte: str | None
+    # A data em que os DOIS saldos foram apurados (o `reference_date` do checkpoint).
+    saldo_banco_data: date | None
+    # O que o e1p calculou, na MESMA data acima — nunca em `end`, nunca "hoje".
+    saldo_sistema_cents: int | None
+    # Eixo A do saldo derivado: SEMPRE `banco`, inclusive quando o valor é `None`.
+    saldo_sistema_origem: str = ORIGEM_BANCO
+    # banco − sistema: `> 0` = o banco tem dinheiro que o sistema não conhece (entrada não lançada);
+    # `< 0` = o banco está abaixo (saída não lançada — o achado de maior valor, REQ-14).
+    divergencia_cents: int | None
+    dentro_da_tolerancia: bool | None
+    # A banda aplicada (`max(R$ 50; 0,5%)`). `0` no caminho não avaliável — não leia este campo
+    # quando `divergencia_cents` é `None`.
+    tolerancia_cents: int
+    # `None` = esta conta NUNCA teve saldo informado (diferente de `0` = informado hoje).
+    dias_desde_ultima_conferencia: int | None
+    movimentos_ignorados: int
+    notes: list[str]
+
+
+class ContaForaDaBandaOut(BaseModel):
+    """Uma conta cuja divergência estourou a banda — com nome, para a tela poder apontar QUAL."""
+
+    bank_account_id: str
+    bank_account_name: str
+    divergencia_cents: int
+    tolerancia_cents: int
+
+
+class ConferenciaReportOut(BaseModel):
+    """Resposta de `GET /bank/reconciliation-report`. SOMENTE LEITURA.
+
+    `total_divergencia_cents` soma **apenas** as contas avaliáveis e é `None` quando nenhuma é.
+    `contas_avaliadas`/`contas_sem_checkpoint` existem para que o consumidor saiba **o que o total
+    cobre** sem precisar recontar a lista, e `notes` avisa em texto quando ele é parcial.
+    """
+
+    start: date
+    end: date
+    contas: list[ConferenciaContaOut]
+    total_divergencia_cents: int | None
+    contas_avaliadas: int
+    contas_sem_checkpoint: int
+    contas_fora_da_banda: list[ContaForaDaBandaOut]
+    notes: list[str]

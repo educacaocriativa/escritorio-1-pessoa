@@ -1,5 +1,5 @@
-"""Isolamento cross-tenant de `bank_accounts` (8.2), `bank_transactions` (8.3) e
-`bank_balance_checkpoints` (8.4) no Postgres REAL.
+"""Isolamento cross-tenant de `bank_accounts` (8.2), `bank_transactions` (8.3),
+`bank_balance_checkpoints` (8.4) e da **conferência** que compara os três (8.5) no Postgres REAL.
 
 Valida, sob RLS real (papel NÃO-superusuário `e1p_app` — superusuário faz bypass **mesmo com
 FORCE**, `CLAUDE.md` Regra de Ouro nº 1):
@@ -20,8 +20,15 @@ outro dialeto.
 
 ⚠️ **Este arquivo é o ponto de extensão do módulo `bank`**: acrescente casos AQUI em vez de criar
 mais um arquivo de testcontainer — cada boot de Postgres custa minutos de CI, e as três tabelas
-compartilham o mesmo bootstrap. A 8.3 e a 8.4 seguiram essa instrução (funções novas neste arquivo,
-mesmo container de escopo de módulo).
+compartilham o mesmo bootstrap. A 8.3, a 8.4 e a 8.5 seguiram essa instrução (funções novas neste
+arquivo, mesmo container de escopo de módulo).
+
+> **[@dev 8.5] Desvio documentado das File Locations da Story 8.5.** A story previa um arquivo novo,
+> `tests/test_bank_reconciliation_report_rls.py`. Ele exigiria um **segundo** `PostgresContainer`
+> (a fixture `app_url` tem escopo de MÓDULO) e, com ele, um segundo `alembic upgrade head` — minutos
+> de CI para exercitar exatamente as mesmas três tabelas já preparadas aqui. A instrução escrita
+> neste arquivo pela 8.3 é a mais recente e a mais informada; seguimos o padrão real do repositório
+> e registramos a divergência em Completion Notes.
 
 Módulo marcado `rls_e2e`: NÃO roda no `pytest -q`/`scripts/check.sh` (suíte SQLite), só no job
 dedicado do CI (`cross-tenant-rls`) ou manualmente com Docker (`pytest -m rls_e2e`).
@@ -626,3 +633,86 @@ def test_redeclaracao_e_origin_convivem_no_postgres_real(app_url: str) -> None:
         # E o desempate do mesmo dia é pela REGRA (`ofx` na frente), não pela ordem de inserção.
         vencedor = bank_service.latest_checkpoint(s, bank_account_id=acc, on_or_before=dia)
         assert vencedor.origin == "ofx"
+
+
+# ── Story 8.5 — a CONFERÊNCIA (IV4) ──────────────────────────────────────────────────────────
+
+
+def test_conferencia_isolamento_cross_tenant(app_url: str) -> None:
+    """O relatório de conferência de A nunca enxerga conta, movimento ou checkpoint de B.
+
+    **É o teste de vazamento mais grave do módulo**, e o motivo é o modo de falha, não a tabela: um
+    vazamento aqui não apareceria como "vi uma linha que não é minha". Apareceria como a **verdade
+    externa do vizinho** (ou os movimentos dele) entrando na conta deste tenant — ou seja, como uma
+    **divergência inventada**, plausível e silenciosa, no único número que este produto vende como
+    confiável. Pior ainda: esse número é o gate de decisão do epic §3.1 sobre as Ondas 3 e 4.
+
+    Os dois tenants são montados para que qualquer mistura produza divergência: A fecha **exato**
+    (divergência 0, dentro da banda, nada fora) e B tem um furo enorme. Se o checkpoint de B vazar
+    para A, o relatório de A deixa de fechar em zero; se o de A vazar para B, o furo de B some.
+    """
+    from app.modules.bank import reconciliation
+    from app.modules.bank import service as bank_service
+
+    tenant_a = str(uuid4())
+    tenant_b = str(uuid4())
+    start, end, hoje = date(2026, 7, 1), date(2026, 7, 25), date(2026, 7, 28)
+    dia = date(2026, 7, 20)
+
+    acc_a = _seed_account(app_url, tenant_a, name="Conf A", opening=100_000, number="4444-1")
+    acc_b = _seed_account(app_url, tenant_b, name="Conf B", opening=100_000, number="4444-2")
+
+    # A: +R$ 500 lançado; o banco confirma exatamente o que o e1p calculou → divergência ZERO.
+    _lancar(app_url, tenant_a, acc_a, amount_cents=50_000, posted_at=date(2026, 7, 10))
+    _declarar(app_url, tenant_a, acc_a, balance_cents=150_000, reference_date=dia)
+    # B: −R$ 800 lançado e um saldo declarado gigante → furo enorme, impossível de confundir.
+    _lancar(app_url, tenant_b, acc_b, amount_cents=-80_000, posted_at=date(2026, 7, 10))
+    _declarar(app_url, tenant_b, acc_b, balance_cents=9_999_999, reference_date=dia)
+
+    with _session_for(app_url, tenant_a) as sa:
+        report = reconciliation.reconciliation_report(sa, start=start, end=end, today=hoje)
+        assert [c.bank_account_id for c in report.contas] == [acc_a], (
+            f"RLS falhou: a conferência de A enxergou contas alheias — {report.contas}"
+        )
+        conta = report.contas[0]
+        assert conta.saldo_banco_cents == 150_000, "o saldo declarado de B vazou para o de A"
+        assert conta.saldo_sistema_cents == 150_000, "um movimento de B entrou no saldo de A"
+        assert conta.divergencia_cents == 0, (
+            "a conferência de A deixou de fechar em zero — é EXATAMENTE assim que um vazamento de "
+            "RLS apareceria aqui: como uma divergência inventada, não como uma linha estranha"
+        )
+        assert conta.dentro_da_tolerancia is True
+        assert report.total_divergencia_cents == 0
+        assert report.contas_fora_da_banda == []
+        assert report.contas_avaliadas == 1 and report.contas_sem_checkpoint == 0
+
+        # Pedir a conta de B é 404 fail-closed (a linha não existe para A), nunca um relatório.
+        with pytest.raises(bank_service.BankError) as exc:
+            reconciliation.reconciliation_report(
+                sa, start=start, end=end, bank_account_id=acc_b, today=hoje
+            )
+        assert exc.value.status_code == 404
+
+    with _session_for(app_url, tenant_b) as sb:
+        report_b = reconciliation.reconciliation_report(sb, start=start, end=end, today=hoje)
+        assert [c.bank_account_id for c in report_b.contas] == [acc_b]
+        conta_b = report_b.contas[0]
+        assert conta_b.saldo_sistema_cents == 20_000
+        assert conta_b.divergencia_cents == 9_999_999 - 20_000, (
+            "o furo de B mudou de tamanho — dado de A entrou no cálculo de B"
+        )
+        assert conta_b.dentro_da_tolerancia is False
+        assert [f.bank_account_id for f in report_b.contas_fora_da_banda] == [acc_b]
+
+    # ── Sem GUC: fail-closed. Zero contas, e NUNCA um total fabricado ────────────────────────
+    with _session_for(app_url, None) as sn:
+        vazio = reconciliation.reconciliation_report(sn, start=start, end=end, today=hoje)
+        assert vazio.contas == [], (
+            "FAIL-CLOSED falhou: sem `app.current_tenant_id` a conferência devolveu contas. O "
+            "estado seguro é não ver nada."
+        )
+        assert vazio.total_divergencia_cents is None, (
+            "sem tenant, o total precisa ser `None` (não sei) — um `0` afirmaria que está tudo "
+            "batendo"
+        )
+        assert vazio.contas_avaliadas == 0 and vazio.contas_fora_da_banda == []

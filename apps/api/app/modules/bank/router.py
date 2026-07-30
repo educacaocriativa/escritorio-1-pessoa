@@ -22,7 +22,7 @@ from sqlalchemy.orm import Session
 
 from app.core.money_planes import ORIGEM_BANCO
 from app.core.tenancy import CurrentUser, get_tenant_db, require_module
-from app.modules.bank import service
+from app.modules.bank import reconciliation, service
 from app.modules.bank.models import BankAccount, BankBalanceCheckpoint, BankTransaction
 from app.modules.bank.schemas import (
     BankAccountCreate,
@@ -34,6 +34,9 @@ from app.modules.bank.schemas import (
     BankTransactionUpdate,
     CheckpointCreate,
     CheckpointOut,
+    ConferenciaContaOut,
+    ConferenciaReportOut,
+    ContaForaDaBandaOut,
     IgnoreRequest,
 )
 
@@ -424,3 +427,99 @@ def delete_checkpoint(
     except service.BankError as e:
         raise _err(e) from e
     return Response(status_code=204)
+
+
+# ── Conferência, bloco 1 (Story 8.5) ─────────────────────────────────────────────────────────
+
+
+def _conferencia_conta_out(c: reconciliation.ConferenciaConta) -> ConferenciaContaOut:
+    return ConferenciaContaOut(
+        bank_account_id=c.bank_account_id,
+        bank_account_name=c.bank_account_name,
+        bank_account_kind=c.bank_account_kind,
+        saldo_banco_cents=c.saldo_banco_cents,
+        saldo_banco_origem=c.saldo_banco_origem,
+        saldo_banco_fonte=c.saldo_banco_fonte,
+        saldo_banco_data=c.saldo_banco_data,
+        saldo_sistema_cents=c.saldo_sistema_cents,
+        saldo_sistema_origem=c.saldo_sistema_origem,
+        divergencia_cents=c.divergencia_cents,
+        dentro_da_tolerancia=c.dentro_da_tolerancia,
+        tolerancia_cents=c.tolerancia_cents,
+        dias_desde_ultima_conferencia=c.dias_desde_ultima_conferencia,
+        movimentos_ignorados=c.movimentos_ignorados,
+        notes=c.notes,
+    )
+
+
+def _conferencia_out(r: reconciliation.ConferenciaReport) -> ConferenciaReportOut:
+    """Dataclass → schema, campo a campo (padrão de `_projection_out`).
+
+    Sem `model_validate(dataclass)` de propósito: a conversão explícita é o lugar onde um campo novo
+    do serviço aparece como erro de compilação mental em vez de sumir em silêncio do contrato HTTP —
+    e num relatório de saldos "sumir em silêncio" é justamente como um campo `*_origem` deixaria de
+    ser entregue sem ninguém perceber (Regra dos Planos §1.3c).
+    """
+    return ConferenciaReportOut(
+        start=r.start,
+        end=r.end,
+        contas=[_conferencia_conta_out(c) for c in r.contas],
+        total_divergencia_cents=r.total_divergencia_cents,
+        contas_avaliadas=r.contas_avaliadas,
+        contas_sem_checkpoint=r.contas_sem_checkpoint,
+        contas_fora_da_banda=[
+            ContaForaDaBandaOut(
+                bank_account_id=f.bank_account_id,
+                bank_account_name=f.bank_account_name,
+                divergencia_cents=f.divergencia_cents,
+                tolerancia_cents=f.tolerancia_cents,
+            )
+            for f in r.contas_fora_da_banda
+        ],
+        notes=r.notes,
+    )
+
+
+@router.get("/reconciliation-report", response_model=ConferenciaReportOut)
+def reconciliation_report(
+    start: date = Query(..., description="Início do período (data de calendário), YYYY-MM-DD"),
+    end: date = Query(..., description="Fim do período (data de calendário), YYYY-MM-DD"),
+    bank_account_id: str | None = Query(
+        default=None, description="Confere só esta conta. Omitir = todas as contas ativas."
+    ),
+    _user: CurrentUser = Depends(_guard),
+    db: Session = Depends(get_tenant_db),
+) -> ConferenciaReportOut:
+    """*"Meu saldo bate?"* — a divergência entre o banco e o e1p, **por conta**. SOMENTE LEITURA.
+
+    Não escreve nada: nenhum saldo é declarado, nenhum movimento é criado, editado ou baixado,
+    nenhum `status` é recalculado. Chamar esta rota duas vezes deixa o banco de dados idêntico.
+
+    **A comparação é na data do CHECKPOINT de cada conta**, não em `end` e não hoje: para cada uma,
+    o saldo que o banco atesta (o último saldo informado dentro do período) é comparado com o saldo
+    derivado **naquela mesma data**. Comparar saldos apurados em datas diferentes acusaria como furo
+    tudo o que aconteceu no meio — e por isso contas diferentes podem ter datas de referência
+    diferentes no mesmo relatório.
+
+    **`indisponivel` é resposta legítima, não um erro.** Conta sem saldo informado no período vem
+    com `saldo_banco_origem='indisponivel'` e `divergencia_cents=null`: o e1p **diz que não sabe**
+    em vez de comparar contra zero, que inventaria uma divergência inteira com cara de fato.
+
+    **O consolidado nunca vem sozinho:** `total_divergencia_cents` cobre só as contas avaliáveis e
+    viaja sempre com `contas` e `contas_fora_da_banda` (epic §3.2).
+
+    `end < start` → 422. `bank_account_id` inexistente ou de outro tenant → 404 fail-closed.
+    """
+    if end < start:
+        raise HTTPException(status_code=422, detail="'end' não pode ser anterior a 'start'")
+    # `?bank_account_id=` (string vazia) == "todas as contas": normaliza para None em vez de virar
+    # um filtro que casa zero contas — mesmo tratamento de `cost_center_id` no
+    # `financial_intelligence/router.py`.
+    bank_account_id = bank_account_id or None
+    try:
+        report = reconciliation.reconciliation_report(
+            db, start=start, end=end, bank_account_id=bank_account_id
+        )
+    except service.BankError as e:
+        raise _err(e) from e
+    return _conferencia_out(report)
