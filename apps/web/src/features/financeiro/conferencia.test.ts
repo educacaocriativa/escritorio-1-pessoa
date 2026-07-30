@@ -7,10 +7,14 @@ import {
   FONTE_LABEL,
   fonteLabel,
   fraseConferencia,
+  LADO_BANCO_LABEL,
+  LADO_E1P_LABEL,
+  LADOS_GRUPO_LABEL,
   ordenarContas,
   tomVisual,
 } from "./conferencia";
-import { ORIGEM_LABEL } from "./projecao";
+import { DISPONIVEL_CAIXA_LABEL, TOTAL_EM_CONTAS_LABEL } from "./contas";
+import { ORIGEM_LABEL, ROTULO_BANCO } from "./projecao";
 
 function conta(over: Partial<ConferenciaConta> = {}): ConferenciaConta {
   return {
@@ -60,6 +64,9 @@ describe("fraseConferencia — os quatro casos do AC4", () => {
     expect(f.texto).toContain("faltam lançamentos de saída");
     // O número aparece em MÓDULO, com a direção dita em palavra — nunca "-R$ 2.340,00 abaixo".
     expect(f.texto).not.toContain("-R$");
+    // UX-001: os dois lados nomeados como nas colunas — quem AFIRMA × quem CALCULA.
+    expect(f.texto).toContain("O banco diz");
+    expect(f.texto).toContain("do que eu calculei");
   });
 
   it("divergência POSITIVA fora da banda: 'acima' + faltam lançamentos de ENTRADA", () => {
@@ -221,6 +228,74 @@ describe("FONTE_LABEL — eixo B, mapa SEPARADO do eixo A (D-3)", () => {
     // ...e nenhum rótulo repetido entre eles (o mesmo texto para eixos diferentes confundiria).
     const rotulosA = Object.values(ORIGEM_LABEL);
     expect(Object.values(FONTE_LABEL).filter((r) => rotulosA.includes(r))).toEqual([]);
+  });
+});
+
+describe("UX-001 — os dois lados da conferência têm nomes distintos e NÃO confundíveis", () => {
+  /**
+   * O defeito que este bloco existe para impedir: a tela chamava o checkpoint de "Saldo no banco"
+   * enquanto a Projeção chama de "no banco" (`ROTULO_BANCO`) o saldo DERIVADO — as duas pontas
+   * exatas desta subtração, com a mesma palavra. Não basta os rótulos serem outros: eles precisam
+   * continuar sendo *impossíveis de trocar um pelo outro*, e é isso que se afere aqui.
+   */
+  it("o par nomeia QUEM afirma cada número, e os dois nomes são diferentes", () => {
+    expect(LADO_BANCO_LABEL).toBe("O que o banco diz");
+    expect(LADO_E1P_LABEL).toBe("O que o e1p calculou");
+    expect(LADO_BANCO_LABEL).not.toBe(LADO_E1P_LABEL);
+    // Nem por substring: "Saldo" × "Saldo no banco" seriam "diferentes" e ainda assim confundíveis.
+    expect(LADO_BANCO_LABEL).not.toContain(LADO_E1P_LABEL);
+    expect(LADO_E1P_LABEL).not.toContain(LADO_BANCO_LABEL);
+    // O verbo é o que carrega a diferença conceitual — afirmação externa × derivação interna.
+    expect(LADO_BANCO_LABEL.toLowerCase()).toContain("diz");
+    expect(LADO_E1P_LABEL.toLowerCase()).toContain("calcul");
+  });
+
+  it("⚠️ o lado do e1p NUNCA se chama 'banco' — foi essa metade que produziu o defeito", () => {
+    expect(LADO_E1P_LABEL.toLowerCase()).not.toContain("banco");
+    expect(LADO_E1P_LABEL.toLowerCase()).toContain("e1p");
+  });
+
+  it("⚠️ o lado do banco NUNCA fala em cálculo — é o número que o e1p não produziu", () => {
+    expect(LADO_BANCO_LABEL.toLowerCase()).not.toMatch(/calcul|deriv|e1p|sistema/);
+    expect(LADO_BANCO_LABEL.toLowerCase()).toContain("banco");
+  });
+
+  it("nenhum dos dois colide com os rótulos de saldo que já vivem em outras telas", () => {
+    // Projeção ("no banco") e Contas & Saldos (os dois recortes da D-6). Um rótulo novo que
+    // repetisse qualquer um deles seria a mesma classe de defeito noutra dupla de telas.
+    for (const lado of [LADO_BANCO_LABEL, LADO_E1P_LABEL, LADOS_GRUPO_LABEL]) {
+      for (const outro of [ROTULO_BANCO, TOTAL_EM_CONTAS_LABEL, DISPONIVEL_CAIXA_LABEL]) {
+        expect(lado).not.toBe(outro);
+        expect(lado.toLowerCase()).not.toContain(outro.toLowerCase());
+      }
+    }
+  });
+
+  it("`ROTULO_BANCO` segue sendo SÓ o da Projeção — a correção foi do lado da Conferência", () => {
+    // Decisão registrada em `projecao.ts`: renomear a parcela da Projeção trocaria uma colisão por
+    // outra (ela encostaria em "Total em contas"/"Disponível como caixa"). O que impede a volta do
+    // defeito é esta invariante — "no banco" ter UM consumidor só.
+    expect(ROTULO_BANCO).toBe("no banco");
+    expect(`${LADO_BANCO_LABEL}|${LADO_E1P_LABEL}|${LADOS_GRUPO_LABEL}`).not.toContain(
+      ROTULO_BANCO,
+    );
+  });
+
+  it("a prosa usa o MESMO par das colunas — e nenhum dos quatro casos repete a colisão", () => {
+    const casos = [
+      conta({ divergencia_cents: -234_000, dentro_da_tolerancia: false }),
+      conta({ divergencia_cents: 120_000, dentro_da_tolerancia: false }),
+      conta({ divergencia_cents: 0, dentro_da_tolerancia: true }),
+      conta({ divergencia_cents: null, dentro_da_tolerancia: null }),
+    ];
+    for (const c of casos) expect(fraseConferencia(c).texto).not.toContain(ROTULO_BANCO);
+    // E os dois casos que comparam de fato nomeiam os dois lados, sem inverter os papéis.
+    for (const c of casos.slice(0, 2)) {
+      const texto = fraseConferencia(c).texto;
+      expect(texto).toContain("O banco diz");
+      expect(texto).toContain("eu calculei");
+      expect(texto.indexOf("O banco diz")).toBeLessThan(texto.indexOf("eu calculei"));
+    }
   });
 });
 

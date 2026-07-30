@@ -3,7 +3,14 @@ import { MemoryRouter } from "react-router-dom";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { api } from "../../lib/api";
 import ConferenciaPage from "./ConferenciaPage";
-import type { ConferenciaConta, ConferenciaReport } from "./conferencia";
+import {
+  type ConferenciaConta,
+  type ConferenciaReport,
+  LADO_BANCO_LABEL,
+  LADO_E1P_LABEL,
+  LADOS_GRUPO_LABEL,
+} from "./conferencia";
+import { ROTULO_BANCO } from "./projecao";
 
 /**
  * Testes de componente da Conferência (Story 8.7).
@@ -143,8 +150,13 @@ describe("AC4 — a frase vem ANTES da tabela, e nomeia a conta", () => {
 
     renderPage();
 
+    // A garantia (inalterada): valor, direção e NOME DA CONTA amarrados num único nó de texto —
+    // uma frase que dissesse "R$ 2.340,00 abaixo" sem dizer de qual conta não serve. O UX-001 só
+    // mudou a ordem e o sujeito ("O banco diz…" em vez de "Seu saldo no banco…").
     await waitFor(() =>
-      expect(screen.getByText(/2\.340,00 abaixo do que eu calculei na conta Itaú PJ/)).toBeInTheDocument(),
+      expect(
+        screen.getByText(/O banco diz que a conta Itaú PJ está R\$ 2\.340,00 abaixo do que eu calculei/),
+      ).toBeInTheDocument(),
     );
     expect(screen.getByText(/faltam lançamentos de saída/)).toBeInTheDocument();
   });
@@ -226,9 +238,14 @@ describe("AC6 — o consolidado nunca aparece sozinho (epic §3.2, decisão do f
     renderPage();
 
     await waitFor(() => expect(screen.getByText(/1\.200,00 acima/)).toBeInTheDocument());
-    // As três frases, cada uma nomeando a sua conta.
-    expect(screen.getByText(/1\.200,00 acima do que eu calculei na conta Itaú PJ/)).toBeInTheDocument();
-    expect(screen.getByText(/900,00 abaixo do que eu calculei na conta Nubank PJ/)).toBeInTheDocument();
+    // As três frases, cada uma nomeando a sua conta (mesma amarração de antes do UX-001: conta +
+    // valor + direção num nó só; o que mudou foi a ordem das palavras).
+    expect(
+      screen.getByText(/O banco diz que a conta Itaú PJ está R\$ 1\.200,00 acima do que eu calculei/),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByText(/O banco diz que a conta Nubank PJ está R\$ 900,00 abaixo do que eu calculei/),
+    ).toBeInTheDocument();
     expect(screen.getByText(/Está tudo batendo na conta Caixa da loja/)).toBeInTheDocument();
 
     // O consolidado existe, mas explicitamente desqualificado como veredito...
@@ -281,6 +298,99 @@ describe("AC6 — o consolidado nunca aparece sozinho (epic §3.2, decisão do f
     expect(frases[1]).toContain("Nubank PJ");
     expect(frases[2]).toContain("Caixa da loja");
     expect(frases[3]).toContain("Sem saldo");
+  });
+});
+
+describe("UX-001 — os dois lados da comparação: nomeados, distintos e visivelmente pareados", () => {
+  /** Uma conta de cada tom, para a varredura de texto cobrir as quatro prosas possíveis. */
+  const quatroTons = [
+    conta({ bank_account_id: "a", bank_account_name: "Itaú PJ", divergencia_cents: 120_000, dentro_da_tolerancia: false }),
+    conta({ bank_account_id: "b", bank_account_name: "Nubank PJ", divergencia_cents: -90_000, dentro_da_tolerancia: false }),
+    conta({ bank_account_id: "c", bank_account_name: "Caixa da loja", divergencia_cents: 4_000, dentro_da_tolerancia: true }),
+    conta({
+      bank_account_id: "d",
+      bank_account_name: "Poupança",
+      divergencia_cents: null,
+      dentro_da_tolerancia: null,
+      saldo_banco_cents: null,
+      saldo_banco_origem: "indisponivel",
+      saldo_banco_fonte: null,
+      saldo_banco_data: null,
+      saldo_sistema_cents: null,
+      dias_desde_ultima_conferencia: null,
+    }),
+  ];
+
+  it("as duas colunas têm nomes próprios e não-confundíveis, um por lado", async () => {
+    vi.mocked(api.get).mockResolvedValue({ data: report([conta()]) } as never);
+
+    renderPage();
+
+    await waitFor(() => expect(screen.getByRole("table")).toBeInTheDocument());
+    const tabela = screen.getByRole("table");
+    const banco = within(tabela).getByText(LADO_BANCO_LABEL);
+    const e1p = within(tabela).getByText(LADO_E1P_LABEL);
+    expect(banco.tagName).toBe("TH");
+    expect(e1p.tagName).toBe("TH");
+    // O cabeçalho antigo ("Saldo no banco" × "Saldo no e1p") não pode voltar por baixo.
+    expect(within(tabela).queryByText("Saldo no banco")).toBeNull();
+    expect(within(tabela).queryByText("Saldo no e1p")).toBeNull();
+  });
+
+  it("são apresentadas como UM PAR: vizinhas, sob uma legenda comum e na mesma faixa visual", async () => {
+    vi.mocked(api.get).mockResolvedValue({ data: report([conta()]) } as never);
+
+    renderPage();
+
+    await waitFor(() => expect(screen.getByRole("table")).toBeInTheDocument());
+    const tabela = screen.getByRole("table");
+    const banco = within(tabela).getByText(LADO_BANCO_LABEL);
+    const e1p = within(tabela).getByText(LADO_E1P_LABEL);
+
+    // 1) Vizinhas e na mesma linha de cabeçalho — nunca separadas por outra coluna.
+    expect(banco.parentElement).toBe(e1p.parentElement);
+    expect(banco.nextElementSibling).toBe(e1p);
+
+    // 2) Sob uma legenda que cobre EXATAMENTE as duas colunas.
+    const grupo = within(tabela).getByText(LADOS_GRUPO_LABEL);
+    expect((grupo as HTMLTableCellElement).colSpan).toBe(2);
+
+    // 3) Na mesma faixa visual, no cabeçalho E no corpo — é o que faz a comparação se ler linha a
+    //    linha. A asserção não fixa QUAL é a cor (estilo pode mudar), e sim que os quatro lugares
+    //    do par compartilham a MESMA — separar visualmente um lado do outro é o que se proíbe.
+    const faixa = grupo.className.split(" ").find((c) => c.startsWith("bg-"));
+    expect(faixa).toBeDefined();
+    expect(banco.className.split(" ")).toContain(faixa);
+    expect(e1p.className.split(" ")).toContain(faixa);
+    const celulas = Array.from(tabela.querySelectorAll("tbody tr")[0].children);
+    expect(celulas[1].className.split(" ")).toContain(faixa); // o que o banco diz
+    expect(celulas[2].className.split(" ")).toContain(faixa); // o que o e1p calculou
+  });
+
+  it("⚠️ a tela NUNCA usa 'no banco' — essa string nomeia o lado OPOSTO na Projeção", async () => {
+    // Simétrico ao guarda que a `ContasSaldosPage` já tem. `ROTULO_BANCO` é o rótulo da parcela
+    // DERIVADA da Projeção de Caixa; usá-lo aqui nomearia o checkpoint — a outra ponta da conta.
+    vi.mocked(api.get).mockResolvedValue({ data: report(quatroTons) } as never);
+
+    const { container } = renderPage();
+
+    await waitFor(() => expect(screen.getByRole("table")).toBeInTheDocument());
+    expect(container.textContent).not.toContain(ROTULO_BANCO);
+  });
+
+  it("a abertura da tela ensina o par antes de a tabela usá-lo", async () => {
+    vi.mocked(api.get).mockResolvedValue({ data: report([conta()]) } as never);
+
+    const { container } = renderPage();
+
+    await waitFor(() => expect(screen.getByRole("table")).toBeInTheDocument());
+    const intro = screen.getByText(/Compara, conta por conta/);
+    // Os dois lados nomeados na abertura, com a procedência de cada um.
+    expect(intro.textContent).toContain("o que o banco diz");
+    expect(intro.textContent).toContain("o que o e1p calculou");
+    expect(intro.textContent).toMatch(/declarou/);
+    expect(intro.textContent).toMatch(/lançamentos/);
+    expect(container.textContent).not.toContain(ROTULO_BANCO);
   });
 });
 

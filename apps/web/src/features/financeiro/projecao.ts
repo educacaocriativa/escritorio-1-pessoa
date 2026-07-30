@@ -126,8 +126,33 @@ export interface ParcelaSaldo {
   cents: number;
 }
 
-/** Vocabulário canônico da §1.2 do design. Não improvise sinônimos: "no banco" e "na plataforma"
- * são os termos que o épico inteiro usa para separar o plano 3 do plano 1. */
+/**
+ * Vocabulário canônico da §1.2 do design. Não improvise sinônimos: "no banco" e "na plataforma"
+ * são os termos que o épico inteiro usa para separar o plano 3 do plano 1.
+ *
+ * ⚠️ **UX-001 (gate do Epic 8) — decisão registrada: este rótulo NÃO mudou, e o motivo importa.**
+ *
+ * O achado foi que `"no banco"` nomeava os dois lados opostos da conferência: aqui, o saldo que o
+ * **e1p calculou** a partir dos movimentos; na tela de Conferência, o que o **banco atestou**. A
+ * correção foi feita **do lado da Conferência** (`LADO_BANCO_LABEL` × `LADO_E1P_LABEL`, em
+ * `conferencia.ts`), e não aqui, por três razões:
+ *
+ *  1. **Aqui o rótulo responde "onde está o dinheiro", não "quem afirmou o número".** A parcela
+ *     irmã é `ROTULO_PLATAFORMA` — outro *lugar*, não outra testemunha. Sem a outra ponta ao lado,
+ *     a ambiguidade não se materializa nesta tela.
+ *  2. **Renomear trocaria uma colisão por outra.** Qualquer sinônimo locacional ("nas contas
+ *     bancárias") encosta em `TOTAL_EM_CONTAS_LABEL` / `DISPONIVEL_CAIXA_LABEL` (`contas.ts`) —
+ *     que são recortes DIFERENTES deste mesmo dinheiro (esta parcela exclui aplicação; "Total em
+ *     contas" não). Foi exatamente essa colisão que a divergência D-6 já pagou para separar.
+ *  3. **O que impede a volta do defeito é a invariante, não o nome.** `conferencia.test.ts` e
+ *     `ConferenciaPage.test.tsx` travam que a Conferência não usa esta string e que seus dois
+ *     lados são não-confundíveis; `contas.test.ts` e `ContasSaldosPage.test.tsx` travam o mesmo
+ *     para Contas & Saldos. `"no banco"` tem hoje **um** consumidor: a parcela abaixo.
+ *
+ * Portanto: este rótulo nomeia **exclusivamente** a parcela bancária do saldo inicial da Projeção.
+ * Nunca o use para nomear um saldo que o e1p não calculou (o checkpoint declarado, o `<LEDGERBAL>`
+ * de um OFX) — para esse lado o vocabulário é "o que o banco diz".
+ */
 export const ROTULO_BANCO = "no banco";
 export const ROTULO_PLATAFORMA = "na plataforma (a liberar/sacar)";
 

@@ -9,6 +9,9 @@ import {
   type ConferenciaReport,
   fonteLabel,
   fraseConferencia,
+  LADO_BANCO_LABEL,
+  LADO_E1P_LABEL,
+  LADOS_GRUPO_LABEL,
   ordenarContas,
   tomVisual,
 } from "./conferencia";
@@ -34,6 +37,11 @@ import { type PeriodRange, resolvePeriod } from "./periodRange";
  * **Dentro da banda: 🟢 e silêncio.** Nenhum ícone de alerta, nenhuma cor de erro, nenhum ponto de
  * exclamação. Gritar por R$ 3,50 num saldo de R$ 25.000 treina o usuário a ignorar o alerta — e o
  * alerta é o produto (REQ-16).
+ *
+ * **Os dois lados têm nomes próprios (UX-001).** `LADO_BANCO_LABEL` × `LADO_E1P_LABEL`, sob uma
+ * legenda comum e numa faixa visual compartilhada. Esta tela **não** usa (e um teste garante que
+ * não volta a usar) a string `"no banco"`: ela é o nome da parcela DERIVADA na Projeção de Caixa,
+ * isto é, o lado oposto do que ela nomeava aqui.
  *
  * Read-only: `GET /bank/reconciliation-report`. Nada nesta tela escreve.
  */
@@ -77,9 +85,13 @@ export default function ConferenciaPage() {
         <div>
           <p className="text-sm text-neutral-500">Página / Financeiro / Conferência</p>
           <h1 className="text-2xl font-bold text-neutral-800">Conferência de saldos</h1>
+          {/* UX-001: a frase de abertura ENSINA o par de rótulos que a tabela usa, e diz de onde
+              vem cada lado — o do banco é o que você leu no extrato; o do e1p é derivado dos
+              lançamentos. Sem isso, "O que o banco diz" pareceria um número que o e1p buscou. */}
           <p className="mt-1 max-w-2xl text-sm text-neutral-500">
-            Compara, conta por conta, o saldo que você declarou com o que o e1p calculou. Serve para
-            achar lançamento faltando — não para fechar em zero.
+            Compara, conta por conta, o que o banco diz (o saldo que você declarou lendo o extrato)
+            com o que o e1p calculou a partir dos seus lançamentos. Serve para achar lançamento
+            faltando — não para fechar em zero.
           </p>
         </div>
         <PeriodPicker value={range} onChange={setRange} />
@@ -228,20 +240,53 @@ function ConsolidadoCard({
   );
 }
 
+/**
+ * Classes das duas colunas do par (UX-001). A mesma faixa clara e as mesmas bordas laterais no
+ * cabeçalho e em TODAS as células do corpo: é o que faz os dois lados serem lidos como **uma
+ * comparação**, e não como duas colunas quaisquer entre sete. Tom neutro de propósito — cor
+ * semântica nesta tela é reservada ao veredito (AC5: dentro da banda é 🟢 e silêncio).
+ */
+const PAR_CELL = "bg-neutral-50/70 border-x border-neutral-100";
+
 /** Detalhamento por conta. `overflow-x-auto` (AC8) — cortar esconderia as colunas da direita. */
 function TabelaContas({ contas }: { contas: ConferenciaConta[] }) {
   return (
     <div className="overflow-x-auto rounded-2xl bg-white shadow-sm">
       <table className="w-full min-w-[56rem] text-sm">
         <thead>
+          {/* UX-001 — os dois lados sob uma legenda comum. A `Divergência` (coluna seguinte) é a
+              subtração DESTE par; separá-los visualmente escondia essa relação. */}
+          <tr className="text-left text-xs uppercase text-neutral-400">
+            <th className="px-5 pt-3 font-medium" rowSpan={2} scope="col">
+              Conta
+            </th>
+            <th
+              className={`px-5 pt-3 pb-1 text-center text-[0.65rem] font-semibold tracking-wide text-neutral-500 ${PAR_CELL}`}
+              colSpan={2}
+              scope="colgroup"
+            >
+              {LADOS_GRUPO_LABEL}
+            </th>
+            <th className="px-5 pt-3 text-right font-medium" rowSpan={2} scope="col">
+              Divergência
+            </th>
+            <th className="px-5 pt-3 text-right font-medium" rowSpan={2} scope="col">
+              Tolerância
+            </th>
+            <th className="px-5 pt-3 font-medium" rowSpan={2} scope="col">
+              Última conferência
+            </th>
+            <th className="px-5 pt-3 text-right font-medium" rowSpan={2} scope="col">
+              Ignorados
+            </th>
+          </tr>
           <tr className="border-b border-neutral-100 text-left text-xs uppercase text-neutral-400">
-            <th className="px-5 py-2 font-medium">Conta</th>
-            <th className="px-5 py-2 text-right font-medium">Saldo no banco</th>
-            <th className="px-5 py-2 text-right font-medium">Saldo no e1p</th>
-            <th className="px-5 py-2 text-right font-medium">Divergência</th>
-            <th className="px-5 py-2 text-right font-medium">Tolerância</th>
-            <th className="px-5 py-2 font-medium">Última conferência</th>
-            <th className="px-5 py-2 text-right font-medium">Ignorados</th>
+            <th className={`px-5 pb-2 text-right font-medium ${PAR_CELL}`} scope="col">
+              {LADO_BANCO_LABEL}
+            </th>
+            <th className={`px-5 pb-2 text-right font-medium ${PAR_CELL}`} scope="col">
+              {LADO_E1P_LABEL}
+            </th>
           </tr>
         </thead>
         <tbody>
@@ -263,7 +308,8 @@ function LinhaConta({ conta: c }: { conta: ConferenciaConta }) {
         <p className="font-medium text-neutral-800">{c.bank_account_name}</p>
         <p className="text-xs text-neutral-400">{kindLabel(c.bank_account_kind)}</p>
       </td>
-      <td className="px-5 py-3 text-right">
+      {/* O par do UX-001 — mesma faixa do cabeçalho, para a comparação se ler linha a linha. */}
+      <td className={`px-5 py-3 text-right ${PAR_CELL}`}>
         <p className="tabular-nums text-neutral-800">
           {c.saldo_banco_cents === null ? "Não sei" : formatBRL(c.saldo_banco_cents)}
         </p>
@@ -274,7 +320,7 @@ function LinhaConta({ conta: c }: { conta: ConferenciaConta }) {
           <p className="text-xs text-neutral-400">em {formatDateBR(c.saldo_banco_data)}</p>
         )}
       </td>
-      <td className="px-5 py-3 text-right">
+      <td className={`px-5 py-3 text-right ${PAR_CELL}`}>
         <p className="tabular-nums text-neutral-800">
           {c.saldo_sistema_cents === null ? "Não sei" : formatBRL(c.saldo_sistema_cents)}
         </p>

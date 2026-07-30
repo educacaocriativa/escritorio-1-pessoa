@@ -88,6 +88,39 @@ export function fonteLabel(fonte: string | null): string {
   return FONTE_LABEL[fonte] ?? fonte;
 }
 
+// ── Os DOIS lados da comparação (UX-001) ─────────────────────────────────────────────────────
+
+/**
+ * Os nomes dos **dois lados da conferência** — o par que o UX-001 (gate do Epic 8) exigiu.
+ *
+ * **O defeito que este par corrige.** Esta tela chamava o checkpoint de *"Saldo no banco"* enquanto
+ * a Projeção de Caixa chama de **"no banco"** (`ROTULO_BANCO`, em `projecao.ts`) o saldo
+ * **derivado** — o lado OPOSTO desta mesma subtração. As duas pontas exatas da comparação cujo
+ * produto é a diferença entre elas, com a mesma palavra. Num produto cujo valor inteiro é ser
+ * testemunha confiável do dado, dois conceitos opostos com o mesmo nome não é detalhe de UI.
+ *
+ * **Por que ESTE par e não "Saldo A" × "Saldo B".** O verbo carrega a diferença conceitual:
+ * **"diz"** é uma afirmação externa (o extrato, que o e1p não produziu e não pode conferir sozinho)
+ * e **"calculou"** é uma derivação interna (a soma dos movimentos lançados). Nomes meramente
+ * distintos teriam removido a colisão sem ensinar a diferença.
+ *
+ * ⚠️ **Invariantes travadas em `conferencia.test.ts` — não relaxe nenhuma:**
+ *  - o lado do **e1p nunca contém a palavra "banco"** — foi essa metade que produziu o defeito;
+ *  - o lado do **banco nunca fala em cálculo/derivação** — é justamente o número que o e1p *não*
+ *    produziu;
+ *  - nenhum dos dois é, nem contém, `ROTULO_BANCO` / `TOTAL_EM_CONTAS_LABEL` /
+ *    `DISPONIVEL_CAIXA_LABEL` — os outros três rótulos de saldo já em uso no produto.
+ */
+export const LADO_BANCO_LABEL = "O que o banco diz";
+export const LADO_E1P_LABEL = "O que o e1p calculou";
+
+/**
+ * Legenda que cobre as duas colunas acima. É o que torna o par **visualmente** um par: sem ela, os
+ * dois rótulos são só duas colunas vizinhas entre sete, e a tela não diz que a leitura é uma
+ * comparação entre elas (a `Divergência`, três colunas adiante, é o resultado desta subtração).
+ */
+export const LADOS_GRUPO_LABEL = "Os dois lados da conferência";
+
 // ── A frase ──────────────────────────────────────────────────────────────────────────────────
 
 /**
@@ -95,7 +128,7 @@ export function fonteLabel(fonte: string | null): string {
  *
  * - `ok` — dentro da banda. **🟢 e silêncio**: nenhum ícone de alerta, nenhuma cor de erro.
  * - `atencao` — fora da banda, banco ACIMA do sistema (falta lançamento de ENTRADA). Amarelo:
- *   dinheiro a mais no banco é uma falha de registro, não um buraco no caixa.
+ *   dinheiro a mais na conta do que o e1p registrou é falha de registro, não buraco no caixa.
  * - `alerta` — fora da banda, banco ABAIXO do sistema (falta lançamento de SAÍDA). Vermelho: é o
  *   achado de maior valor do épico (REQ-14) — o dinheiro saiu e o e1p não sabe.
  * - `desconhecido` — sem saldo informado na janela. Não é erro nem sucesso: é "não sei".
@@ -147,11 +180,15 @@ export function fraseConferencia(c: ConferenciaConta): FraseConferencia {
   }
 
   const abaixo = c.divergencia_cents < 0;
+  // UX-001: a frase nomeia os dois lados com o MESMO par das colunas — "o banco diz" (afirmação
+  // externa) × "eu calculei" (derivação do e1p; o "eu" desta tela é o próprio e1p, como em "Não sei
+  // o saldo…"). A forma anterior — "Seu saldo no banco está X abaixo do que eu calculei" — chamava
+  // de "no banco" o checkpoint, exatamente a string que a Projeção usa para o número DERIVADO.
   return {
     tom: abaixo ? "alerta" : "atencao",
     texto:
-      `Seu saldo no banco está ${diferenca} ${abaixo ? "abaixo" : "acima"} do que eu calculei ` +
-      `na conta ${c.bank_account_name}. Provavelmente faltam lançamentos de ` +
+      `O banco diz que a conta ${c.bank_account_name} está ${diferenca} ` +
+      `${abaixo ? "abaixo" : "acima"} do que eu calculei. Provavelmente faltam lançamentos de ` +
       `${abaixo ? "saída" : "entrada"}.`,
   };
 }
