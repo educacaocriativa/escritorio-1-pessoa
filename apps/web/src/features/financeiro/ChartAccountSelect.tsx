@@ -32,7 +32,6 @@ export default function ChartAccountSelect({
       .get<ChartAccount[]>("/chart-of-accounts")
       .catch(() => ({ data: [] as ChartAccount[] }));
     setAccounts(data.filter((a) => groups.includes(a.grupo_dre)));
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [groups]);
 
   useEffect(() => {
