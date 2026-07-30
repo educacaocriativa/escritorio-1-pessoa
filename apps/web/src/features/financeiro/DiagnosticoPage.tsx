@@ -2,6 +2,8 @@ import { ChevronLeft, ChevronRight, Sparkles } from "lucide-react";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { api, apiErrorMessage } from "../../lib/api";
 import {
+  completudeCaveat,
+  completudeLevel,
   countByLevel,
   currentMonth,
   type Diagnostics,
@@ -54,6 +56,11 @@ export default function DiagnosticoPage() {
     [data],
   );
 
+  // Story 8.6 — a ressalva de completude (precedência semântica): quando o sistema não sabe se os
+  // lançamentos estão completos, isso é dito ANTES dos sinais, não junto com eles.
+  const caveat = useMemo(() => (data ? completudeCaveat(data.signals) : null), [data]);
+  const caveatLevel = useMemo(() => (data ? completudeLevel(data.signals) : null), [data]);
+
   return (
     <div className="space-y-6">
       <div className="flex flex-wrap items-end justify-between gap-3">
@@ -99,6 +106,22 @@ export default function DiagnosticoPage() {
             <CountCard level="amarelo" count={counts.amarelo} />
             <CountCard level="verde" count={counts.verde} />
           </div>
+
+          {/* Ressalva de completude (Story 8.6) — ANTES da lista, porque é o que decide se dá
+              para confiar nos números de baixo. Bloco discreto: âmbar quando 🟡, vermelho quando
+              🔴. Sem link para a conferência aqui — essa rota é da Story 8.7. */}
+          {caveat && (
+            <p
+              role="note"
+              className={`rounded-2xl p-4 text-sm ${
+                caveatLevel === "vermelho"
+                  ? "bg-red-50 text-red-800 ring-1 ring-red-200"
+                  : "bg-amber-50 text-amber-800 ring-1 ring-amber-200"
+              }`}
+            >
+              {caveat}
+            </p>
+          )}
 
           {/* Sinais determinísticos — SEMPRE presentes (mesmo sem IA). */}
           <section className="space-y-3">
