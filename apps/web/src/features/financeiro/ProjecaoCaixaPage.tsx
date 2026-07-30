@@ -1,4 +1,4 @@
-import { AlertTriangle, TrendingDown, TrendingUp } from "lucide-react";
+import { AlertTriangle, Minus, TrendingDown, TrendingUp } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { api, apiErrorMessage } from "../../lib/api";
 import {
@@ -154,6 +154,14 @@ function WindowCard({
 }) {
   // Story 8.1 (AC4b): quando o veredito é suprimido, o cartão para de gritar vermelho — mas o
   // NÚMERO continua exibido, com o rótulo de origem. Suprima a afirmação, nunca o número.
+  //
+  // ⚠️ O ÍCONE TAMBÉM É UMA AFIRMAÇÃO — a 3ª superfície contaminada da story (as duas primeiras
+  // foram `runway.days` e o `alert`). `cents >= 0 → TrendingUp verde` é o MESMO cruzamento de
+  // limiar sobre a MESMA soma contaminada que o `alert`, só que com polaridade invertida e em
+  // verde. Como `available_cents` só cresce (`request_payout` apenas marca `withdrawn`), o saldo
+  // projetado sai inflado e a seta verde para cima aparece justamente nas janelas em que o caixa
+  // verdadeiro pode estar apertado: o mesmo falso negativo do D-5, vestido de glifo. Sob supressão,
+  // ícone e cor neutros (`Minus`) — o e1p mostra o número e não afirma tendência nenhuma.
   return (
     <div
       className={`rounded-2xl p-5 shadow-sm ${
@@ -164,6 +172,8 @@ function WindowCard({
         <p className="text-sm text-neutral-500">Em {days} dias</p>
         {alert ? (
           <AlertTriangle size={18} className="text-danger" />
+        ) : alertSuprimido ? (
+          <Minus size={18} className="text-neutral-400" aria-label="Tendência não informada" />
         ) : cents >= 0 ? (
           <TrendingUp size={18} className="text-emerald-500" />
         ) : (

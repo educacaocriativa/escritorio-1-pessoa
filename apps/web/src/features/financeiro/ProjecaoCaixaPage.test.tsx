@@ -79,6 +79,50 @@ describe("ProjecaoCaixaPage — Story 8.1 (AC5): a tela declara a origem e não 
     expect(container.textContent).not.toContain("Caixa fica negativo nesta janela");
   });
 
+  it("o ÍCONE também é afirmação: sob supressão fica neutro, sem seta verde nem vermelha", async () => {
+    // 3ª superfície contaminada da story. `cents >= 0 → TrendingUp verde` é o mesmo cruzamento de
+    // limiar do `alert`, com polaridade invertida — e, como `available_cents` só cresce, a seta
+    // verde apareceria justamente nas janelas em que o caixa verdadeiro pode estar apertado.
+    // Cenário escolhido de propósito com saldo projetado POSITIVO: é onde o verde apareceria.
+    vi.mocked(api.get).mockResolvedValue({
+      data: {
+        ...projecaoSuprimida,
+        windows: projecaoSuprimida.windows.map((w) => ({ ...w, saldo_projetado_cents: 250000 })),
+      } satisfies Projection,
+    } as never);
+    const { container } = render(<ProjecaoCaixaPage />);
+
+    await waitFor(() => expect(screen.getAllByText(/2\.500,00/).length).toBe(3));
+    // Nenhuma tendência afirmada: nem o verde do TrendingUp, nem o danger do AlertTriangle.
+    expect(container.querySelectorAll(".text-emerald-500").length).toBe(0);
+    expect(container.querySelectorAll(".text-danger").length).toBe(0);
+    // ...e o glifo neutro está lá, um por janela (não é "sumiu o ícone", é "o ícone não afirma").
+    expect(screen.getAllByLabelText("Tendência não informada").length).toBe(3);
+  });
+
+  it("com origem confirmada (Story 8.8), o ícone volta a colorir — a supressão é reversível", async () => {
+    // O simétrico do teste acima: mesma tela, mesmos saldos positivos, flags em `false`. Prova de
+    // que a 8.8 restaura o ícone SOZINHA, só trocando a origem — sem tocar neste componente.
+    vi.mocked(api.get).mockResolvedValue({
+      data: {
+        ...projecaoSuprimida,
+        saldo_inicial_origem: "misto",
+        runway: { days: 43, days_suprimido: false, burn_rate_cents_per_day: 1000 },
+        windows: projecaoSuprimida.windows.map((w) => ({
+          ...w,
+          saldo_projetado_cents: 250000,
+          alert: false,
+          alert_suprimido: false,
+        })),
+      } satisfies Projection,
+    } as never);
+    const { container } = render(<ProjecaoCaixaPage />);
+
+    await waitFor(() => expect(screen.getAllByText(/2\.500,00/).length).toBe(3));
+    expect(container.querySelectorAll(".text-emerald-500").length).toBe(3);
+    expect(screen.queryAllByLabelText("Tendência não informada").length).toBe(0);
+  });
+
   it("com origem confirmada (Story 8.8), a tela volta a afirmar — nada foi removido, só calado", async () => {
     // Prova de que a supressão é dirigida pelos flags do backend, não hard-coded na tela: mesmo
     // componente, origem `misto` e flags falsos → runway em dias e alerta vermelho de volta.
