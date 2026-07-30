@@ -15,7 +15,9 @@ from sqlalchemy.orm import Session
 from app.config import settings
 from app.modules.settings import service as settings_service
 from app.modules.whatsapp_session.models import (
+    STATUS_CONNECTED,
     STATUS_CONNECTING,
+    STATUS_DISCONNECTED,
     PublicWhatsappInstance,
 )
 
@@ -109,3 +111,92 @@ def connect(db: Session, *, tenant_id: str) -> dict:
 
     data = resp.json()
     return {"qr_base64": data.get("base64", ""), "status": STATUS_CONNECTING}
+
+
+def _fetch_evolution_status(instance: str) -> str | None:
+    """Consulta a Evolution pelo status bruto da instância. Devolve o `status` da Evolution
+    ("open", "connecting", etc.) ou None se a instância não aparecer/a chamada falhar."""
+    try:
+        resp = httpx.get(
+            f"{settings.evolution_api_url}/instance/fetchInstances",
+            headers=_headers(), params={"instanceName": instance}, timeout=10,
+        )
+        resp.raise_for_status()
+    except httpx.HTTPError:
+        return None
+    data = resp.json()
+    items = data if isinstance(data, list) else []
+    for item in items:
+        inst = item.get("instance", item)
+        if inst.get("instanceName") == instance:
+            return inst.get("status")
+    return None
+
+
+def get_status(db: Session, *, tenant_id: str) -> str:
+    """PURAMENTE leitura — nunca escreve no banco (ver Global Constraints do plano). Devolve
+    'never' (nunca conectou), 'connecting', 'connected' ou 'disconnected'."""
+    instance = _instance_name(tenant_id)
+    row = db.get(PublicWhatsappInstance, instance)
+    if row is None:
+        return "never"
+    evo_status = _fetch_evolution_status(instance)
+    if evo_status == "open":
+        return STATUS_CONNECTED
+    if evo_status is None:
+        return STATUS_DISCONNECTED
+    return STATUS_CONNECTING
+
+
+def confirm(db: Session, *, tenant_id: str) -> str:
+    """Reverifica com a Evolution (nunca confia no client) e, se realmente 'open', É QUEM
+    seta `whatsapp_provider='evolution'` — a única escrita de transição-pra-conectado deste
+    módulo. Chamado pelo frontend ao ver 'connected' pela primeira vez; o worker (Onda 2,
+    4ª etapa) é a rede de segurança caso a aba feche antes disso."""
+    instance = _instance_name(tenant_id)
+    row = db.get(PublicWhatsappInstance, instance)
+    if row is None:
+        return "never"
+    evo_status = _fetch_evolution_status(instance)
+    if evo_status != "open":
+        return STATUS_CONNECTING if evo_status is not None else STATUS_DISCONNECTED
+    profile = settings_service.get_profile(db, tenant_id)
+    profile.whatsapp_provider = "evolution"
+    row.last_status = STATUS_CONNECTED
+    db.commit()
+    return STATUS_CONNECTED
+
+
+def refresh_qr(db: Session, *, tenant_id: str) -> str:
+    """QR expira em ~60s do lado da Evolution — pede um novo."""
+    _require_configured()
+    instance = _instance_name(tenant_id)
+    try:
+        resp = httpx.get(
+            f"{settings.evolution_api_url}/instance/connect/{instance}",
+            headers=_headers(), timeout=15,
+        )
+        resp.raise_for_status()
+    except httpx.HTTPError as exc:
+        raise WhatsappSessionError(f"Falha de rede ao renovar o QR: {exc}", 502) from exc
+    return resp.json().get("base64", "")
+
+
+def disconnect(db: Session, *, tenant_id: str) -> None:
+    """Logout na Evolution + limpa `whatsapp_provider` (usado pra trocar de número/transporte).
+    Não propaga falha de rede do logout — o produto ainda deve conseguir "esquecer" a conexão
+    localmente mesmo se a Evolution estiver fora do ar."""
+    instance = _instance_name(tenant_id)
+    try:
+        httpx.delete(
+            f"{settings.evolution_api_url}/instance/logout/{instance}",
+            headers=_headers(), timeout=15,
+        )
+    except httpx.HTTPError:
+        pass
+    profile = settings_service.get_profile(db, tenant_id)
+    profile.whatsapp_provider = None
+    row = db.get(PublicWhatsappInstance, instance)
+    if row is not None:
+        row.last_status = STATUS_DISCONNECTED
+    db.commit()
