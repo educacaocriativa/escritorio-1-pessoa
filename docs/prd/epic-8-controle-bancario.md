@@ -20,8 +20,17 @@
 > [`../decisions/0003-controle-bancario-nativo.md`](../decisions/0003-controle-bancario-nativo.md)
 > (Aceito, **Adendo 4**); pesquisa [`../research/2026-07-29-controle-bancario-requisitos-e-viabilidade.md`](../research/2026-07-29-controle-bancario-requisitos-e-viabilidade.md)
 > (REQ-1..32); gate [`../qa/epic-8-onda-0-1-gate-2026-07-30.md`](../qa/epic-8-onda-0-1-gate-2026-07-30.md);
-> `CLAUDE.md` §"Financeiro: Controle Bancário e Conferência" (as 7 regras invariantes).
+> `CLAUDE.md` §"Financeiro: Controle Bancário e Conferência" (as 7 regras invariantes);
+> **ratificação dos 7 conflitos da Onda 2** [`../architecture/controle-bancario-onda2-ratificacao.md`](../architecture/controle-bancario-onda2-ratificacao.md)
+> (@architect, 2026-07-30 — **normativa onde diverge do design**); **validação das 11 stories**
+> [`../stories/8.8-validacao-po-onda2.md`](../stories/8.8-validacao-po-onda2.md) (@po, 2026-07-30).
 > **Este epic NÃO reabre o "o quê" nem o "como".** Ele organiza a execução do que já foi decidido.
+>
+> ⚠️ **Atualizado em 2026-07-30 (2ª rodada) com as 4 correções escaladas ao @pm** — E-1 (`bank_audit`
+> não existe, §"Contexto"), E-2 (pré-condição do gate P1..P4 + F-D12 fechada, §3.1.2), E-3 (forma
+> canônica das pernas de transferência, item 2.24 e Story 8.18), E-4 (Stories **8.19** e **8.20** na §6
+> e na ordem de merge). Todas são **transcrição** da ratificação e da validação; nenhuma decisão de
+> escopo da Onda 2 foi reaberta.
 
 ---
 
@@ -57,13 +66,33 @@ O e1p conhece **três planos de dinheiro** e implementa só dois (ADR 0003, Cont
 
 **Ativos NOVOS a reusar, entregues pelas Ondas 0 e 1 (não recriar):**
 - `app/modules/bank/` — `bank_accounts`, `bank_transactions`, `bank_balance_checkpoints`,
-  `derived_balance`/`derived_balances_as_of`, `reconciliation.py` (read-only), `bank_audit`.
+  `derived_balance`/`derived_balances_as_of`, `reconciliation.py` (read-only).
 - `app/core/money_planes.py` — o eixo de **plano** (`plataforma｜banco｜misto｜indisponivel`).
 - `tests/test_money_planes.py` — gates estruturais da Regra dos Planos, **com varredura AST** e teste
   de mutação já aplicado (4 mutantes mortos no re-gate).
 - Telas `/financeiro/contas` e `/financeiro/conferencia`, com os **testes de colisão de rótulo** que o
   UX-001 instituiu (`contas.test.ts:157-168`) — qualquer rótulo novo passa por eles.
 - `app/worker.py::run_sweep` — itera tenants sob `tenant_session`, idempotente, réplica única.
+
+> 🔴 **CORREÇÃO 2026-07-30 — `app/scripts/bank_audit.py` NÃO EXISTE e nunca existiu.** Esta lista
+> chegou a citá-lo como ativo entregue pelas Ondas 0 e 1, sob a instrução *"não recriar"*. Verificado
+> pela @architect e pelo @po de forma independente: `grep -rn "bank_audit" apps/` → **zero**;
+> `apps/api/app/scripts/` tem `__init__.py`, `migrate_attachments_to_s3.py` e `scan_orphan_storage.py`.
+> A Story 8.9 obedeceu ao epic e mandou o @dev **editar um arquivo inexistente** — que é o modo de
+> falha exato desta entrada. A story já foi corrigida pelo @po; esta é a correção da **fonte**.
+>
+> **O que fica no lugar, e quando o script volta a ser assunto:**
+>
+> | Trabalho que o script prometia | Onde ele mora agora |
+> |---|---|
+> | Auditar `payables.bank_transaction_id` (cache) × `origin_id` (verdade) — **obrigação da Onda 2** | **Teste, não script:** `test_cache_de_movimento_nunca_diverge_do_origin_id`, cobrindo os cinco caminhos de mutação (baixar, trocar conta, trocar data, estornar, repagar). A divergência só é alcançável **por bug** — `sync_origin_movement` é o escritor único, devolve a linha na mesma chamada e na mesma transação. Condição alcançável só por bug se prova com teste; um script que ninguém tem gatilho para rodar não é garantia, é intenção documentada |
+> | Auditar o `status` materializado (`partial`/`matched`) | **Pré-requisito da Onda 5**, junto com `_refresh_status` (que também não existe — `bank/service.py:826` o descreve como trabalho da Onda 4). É lá que a divergência passa a ser alcançável **sem** bug: matcher concorrente, vínculo parcial |
+>
+> **Regra de método que fica** (é a segunda vez que uma lista de ativos induz uma story a especificar
+> errado — a primeira foi a entrada de CPF/CNPJ do `CLAUDE.md` §6.1, que levou a Story 8.2 a
+> especificar validação fraca): **uma lista de ativos é um conjunto de afirmações verificáveis sobre o
+> repositório.** Quem acrescenta um item aqui roda o `ls`/`grep` antes. Custo: 2 segundos por item.
+> → ratificação §C-4; validação do @po §3 e §7.1 (E-1)
 
 **Head de migrations no momento desta atualização: 0060** (`bank_balance_checkpoints`). ⚠️ O epic **não
 fixa número de revision**; o @sm/@dev **confirma o head real** no momento da implementação e encadeia a
@@ -245,16 +274,86 @@ Onda 1 avisaria. → design da Onda 2 §9.1; ADR 0003 Adendo 4.
 
 #### 3.1.2 A pré-condição do gate, e a regra de decisão corrigida
 
-> **PRÉ-CONDIÇÃO DO GATE (normativa).** A leitura do gate deste epic **só é válida a partir do primeiro
-> ciclo completo de conferência posterior à Onda 2**. Formalmente: na janela conferida, **toda
-> `Payable` paga e toda `Charge` recebida precisam ter conta bancária informada**. Se não tiverem, a
-> divergência contém um termo que o próprio sistema sabe explicar, e **o número não decide nada**.
+> ⚠️ **REESCRITA EM 2026-07-30 (ratificação §C-1). A redação anterior era INSATISFAZÍVEL.** Ela dizia
+> *"toda `Payable` paga e toda `Charge` recebida precisam ter conta bancária informada"* — e uma
+> `Charge` paga pelo trilho (gateway → webhook → Carteira) tem `transaction_id` e, pela **Invariante do
+> Trilho**, **nunca** terá `bank_account_id`. O trilho é o caminho normal do produto: qualquer janela
+> com uma cobrança normal fechava o gate **para sempre**. A frase era razoável **e** insatisfazível, e
+> nada entre as duas disparava — é o caso que originou a **Regra da Instanciação Obrigatória** do
+> `CLAUDE.md`. A redação abaixo é a da @architect, verbatim em substância.
 
-Como isso aparece para o dono: o relatório de conferência ganha uma **nota** no bloco 4 (*"o sistema
-declara o que não sabe"*, que já existe exatamente para isto):
+> **PRÉ-CONDIÇÃO DO GATE (normativa).**
+>
+> A leitura do gate é válida num ciclo de conferência **se e somente se**, na janela conferida, **não
+> existe evento conhecido pelo e1p que moveu dinheiro numa conta real do dono sem ter gerado o
+> `bank_transaction` correspondente.**
+>
+> Operacionalmente, **quatro termos**. Cada um tem o predicado que o decide e a onda que o zera:
+>
+> | # | População | Predicado | Zera na |
+> |---|---|---|---|
+> | **P1** | Baixa de Contas a Pagar sem conta informada | `Payable`, `status ∈ {paid, scheduled}`, `paid_at::date` na janela, `bank_account_id IS NULL` | **Onda 2** — a 8.12 torna a coluna obrigatória, então P1 vai a zero **por construção** assim que o legado (as 45, §7.2) for corrigido |
+> | **P2** | Recebimento fora do trilho sem conta informada | `Charge`, `status ∈ {paid, scheduled}`, `paid_at::date` na janela, `transaction_id IS NULL`, `bank_account_id IS NULL`, **e** `_not_investment_yield()` | **Onda 2** (8.15) |
+> | **P3** | Rendimento de aplicação sem perna bancária | `Charge` com `external_ref LIKE 'investment:%'`, `paid_at::date` na janela | **Onda 2b** |
+> | **P4** | Payout da Carteira liquidado sem perna bancária | payout com liquidação real na janela | **Onda 3**. ⚠️ **Hoje é vazio por construção**: `request_payout` só marca `withdrawn` (`wallet/service.py:227`) — nenhum dinheiro sai de conta real. Passa a ser contado quando o payout for real |
+>
+> **Fora da população, por construção e não por omissão:** `Charge` do trilho
+> (`transaction_id IS NOT NULL`). O dinheiro dela está na **Carteira**, não numa conta do dono, e ela
+> **não deve** gerar `bank_transaction` até o payout. Incluí-la é exatamente a leitura que tornava a
+> pré-condição insatisfazível — e a exclusão é a **Regra dos Planos**, não uma lacuna de preenchimento.
+>
+> **Membro:** um `Payable` pago em 12/07 com `bank_account_id IS NULL` (uma das 45 legadas) → P1,
+> conta.
+> **Não-membro:** uma `Charge` paga pelo webhook do Asaas em 12/07 → tem `transaction_id`, **não**
+> conta.
+>
+> ⚠️ **O `_not_investment_yield()` do P2 é IMPORTADO de `receivables/service.py:82-90`, nunca
+> reescrito.** Duas cópias divergem — e a ratificação é a prova de que já divergiram uma vez entre dois
+> @sm (a Story 8.15 lembrou o predicado; a 8.16 o esqueceu). Sem ele no P2, a `Charge` sintética de
+> rendimento cai inteira na população e **o gate não abre para nenhum tenant que registre rendimento**,
+> nunca, até a Onda 2b. → ratificação §C-1.2 (achado A-1)
+
+**Consequência de roadmap, escrita sem eufemismo porque muda a leitura do épico:**
+
+> **O gate não abre "depois da Onda 2" em geral.** Ele abre depois da Onda 2 **para um tenant cujos
+> únicos eventos que movem conta real na janela sejam baixa de Contas a Pagar e recebimento fora do
+> trilho.** Um tenant que registra rendimento precisa da **Onda 2b**; quando o payout virar real,
+> precisa da **Onda 3**. Isto **não é escopo novo** — P3 e P4 sempre foram termos da divergência. O que
+> muda é que o epic escrevia a pré-condição como se a Onda 2 a satisfizesse sozinha. → ratificação §C-1.4
+
+**F-D12 — RESPONDIDA E FECHADA (2026-07-30): o gate abre no primeiro ciclo completo pós-Onda 2, como
+planejado.**
+
+> **Pergunta:** o fundador registra rendimento de aplicação no e1p hoje? (Se sim, P3 é não-vazio e a
+> leitura do gate esperaria a Onda 2b.)
+>
+> **Resposta: NÃO.** Apurada por **consulta ao banco de produção**, não por pergunta ao fundador — que
+> é o que a @architect recomendou e o tipo de coisa que ela registra como *"deveria ter instanciado em
+> vez de descrito"*. Estado medido: **1 conta de investimento cadastrada, 0 rendimentos lançados**
+> (`charges` com `external_ref LIKE 'investment:%'` = **0**).
+>
+> **Decisão:** **a Onda 2b NÃO é pré-requisito da leitura do gate.** A ordem do §5 fica como está
+> (2 → 2b → 3 → …) e nada no roadmap muda por causa disto.
+>
+> ⚠️ **A decisão é frágil, e a fragilidade é o registro:** ela depende de um contador em zero, não de
+> uma propriedade estrutural. **No dia em que o fundador lançar o primeiro rendimento, P3 deixa de ser
+> vazio e a leitura do gate passa a depender da Onda 2b** — sem aviso, porque nada no produto liga um
+> alarme para isso. O que protege: a **nota do bloco 4 nomeia a própria onda** (item 2.20, Story 8.16
+> AC7), então a conferência vai dizer *"este termo fecha na Onda 2b"* na tela, no ciclo em que
+> acontecer. É degradação honesta, não silêncio. → ratificação §3.3; validação do @po §7.4
+
+Como isso aparece para o dono: o relatório de conferência ganha **até três notas** no bloco 4 (*"o
+sistema declara o que não sabe"*, que já existe exatamente para isto) — **uma por termo não-zero, cada
+uma nomeando a onda que a fecha**:
 
 > *"7 lançamentos deste período não informam de qual conta saíram (R$ 3.120,00). A divergência abaixo
-> inclui esse valor."*
+> inclui esse valor."* (P1/P2 — **some** quando o mutirão das 45 terminar)
+> *"2 rendimentos de aplicação deste período ainda não geram movimento bancário (R$ 340,00). A
+> divergência abaixo inclui esse valor."* (P3 — **não some nesta onda**; fecha na Onda 2b)
+
+Nomear a onda em cada nota é o que impede o dono de tentar corrigir à mão um termo que **software
+nenhum** consegue fechar ainda — e é o que torna a fragilidade do F-D12 visível na tela, no ciclo em
+que ela aparecer. → ratificação §C-1.5; Story 8.16 AC7
 
 ⚠️ **A nota ANOTA; ela NUNCA SUBTRAI.** Descontar o termo conhecido da divergência seria o checkpoint
 corrigindo o derivado com outra roupa — a divergência iria a zero por construção sempre que o sistema
@@ -280,7 +379,7 @@ certa, agora com **razão** em vez de suposição.
 
 | Leitura da conferência, **no primeiro ciclo completo pós-Onda 2** | Decisão |
 |---|---|
-| Pré-condição **não** satisfeita (há lançamento pago sem conta informada na janela) | **O gate não abre.** Nenhuma onda é liberada nem morta com base neste ciclo. Corrigir os lançamentos e reler no ciclo seguinte |
+| Pré-condição **não** satisfeita — **qualquer** de P1..P4 não-vazio na janela | **O gate não abre.** Nenhuma onda é liberada nem morta com base neste ciclo. **P1/P2 se corrigem com trabalho do dono** (informar a conta) e o ciclo seguinte já vale; **P3 e P4 não se corrigem com trabalho nenhum** — dependem, respectivamente, das Ondas 2b e 3. A nota do bloco 4 diz qual é o caso |
 | Divergência tipicamente **dentro** da banda e estável, por 3 ciclos | **Parar depois da Onda 3 (payout).** A **importação (Onda 4)** e a **sugestão de vínculo (Onda 5)** são over-engineering e **não** são liberadas. Desfecho **bom**, não fracasso (ADR 0003, Revisão futura (a)) |
 | Divergência **fora** da banda, recorrente, e o dono não consegue explicar de onde vem | Liberar a **importação (Onda 4)** — o furo precisa ser **localizado**, não só quantificado. ⚠️ Sujeita também à dependência D6 (OFX real existe em 2026?) |
 | Divergência fora da banda **explicada** por causa conhecida e pontual — inclusive por agendamento que não saiu (termo 5) | Corrigir a causa; **não** liberar a importação |
@@ -506,7 +605,7 @@ RLS e2e cross-tenant no Postgres real passa.
 | # | Item de escopo | Rastreio |
 |---|---|---|
 | 2.1 | `bank_transactions.origin_id` + **índice único parcial** `(tenant_id, source, origin_id) WHERE origin_id IS NOT NULL`; `SOURCES` ganha `payable` e `charge`; conjuntos `SOURCES_SISTEMA`/`SOURCES_EXTERNA`; `dedup_hash` de origem de sistema = `sha256(f"{source}|{origin_id}")`, **sem** `bank_account_id` (trocar a conta não reidrata o hash) | design Onda 2 §3.1, §3.2 |
-| 2.2 | `payables.bank_account_id` (**a decisão do usuário, autoritativa**) + `payables.bank_transaction_id` (**cache de leitura**) + índice `(tenant_id, bank_account_id)`. `bank_transactions.bank_account_id` é **derivada** e escrita só pelo sincronizador. Divergência entre o cache e o `origin_id` → quem manda é o `origin_id`, e o `bank_audit` **reporta sem corrigir em silêncio** | design Onda 2 §3.3 |
+| 2.2 | `payables.bank_account_id` (**a decisão do usuário, autoritativa**) + `payables.bank_transaction_id` (**cache de leitura**) + índice `(tenant_id, bank_account_id)`. `bank_transactions.bank_account_id` é **derivada** e escrita só pelo sincronizador. Divergência entre o cache e o `origin_id` → **quem manda é o `origin_id`**, e a regra de autoridade fica escrita na docstring das duas colunas. ⚠️ **A garantia é TESTE, não script** (`test_cache_de_movimento_nunca_diverge_do_origin_id`, os cinco caminhos de mutação) — `bank_audit` **não existe**, ver a correção no "Contexto do sistema existente" | design Onda 2 §3.3; ratificação §C-4.2 |
 | 2.3 | `charges.bank_account_id` + `charges.bank_transaction_id`, sob a **Invariante do Trilho** (§4.9). **Sem** coluna `payment_route` | design Onda 2 §3.4 |
 | 2.4 | `bank/origin.py::sync_origin_movement` — **ponto único de escrita**, idempotente, **não commita**; ausente→cria, presente→atualiza, origem desliquidada→apaga. Gate estrutural: `bank` **não** importa `payables`/`receivables` | design Onda 2 §3.5; §4.8 deste epic |
 | 2.5 | **`until=None` passa a significar HOJE** em `derived_balance`/`derived_balances_as_of` (fail-closed). `date.max` para histórico completo — feio de propósito. **6 chamadas em `bank/router.py`** a corrigir (`:128,140,153,169,184,202`). `BankBalanceOut.until` para de vir `null` e a tela ganha *"saldo em DD/MM"* de graça | design Onda 2 §4.2.1 |
@@ -528,7 +627,7 @@ RLS e2e cross-tenant no Postgres real passa.
 | 2.21 | **Manual curado:** o formulário deixa de ser "Novo movimento" e pergunta **para que serve** — `Tarifa / juros`, `IOF / imposto`, `Transferência entre minhas contas`, `Rendimento`, `Outro (descreva)` — alimentando `operation_nature`, coluna que **já existe**, nullable, vocabulário aberto. **Zero migration.** Não é whitelist rígida: recusar um fato bancário legítimo recriaria a incompletude que a onda combate | **fundador 2026-07-30**; design Onda 2 §7(a) |
 | 2.22 | **Guarda de contagem dupla:** `create_transaction` com `source='manual'` e `amount_cents < 0` procura `Payable` de **mesmo valor absoluto** em **±3 dias** → **409 com escolha** (`{"acao": "baixar_payable", "payable_id": ...}`), não bloqueio mudo; `confirmar_avulso=true` insiste. **É o pior modo de falha desta onda**: o pagamento lançado nos dois lugares derruba o saldo duas vezes e a divergência dobrada **parece um achado real**. Movimento manual negativo **continua legal** (tarifa, IOF, TED — criar `payable` de R$ 2,90 é a ERP-ificação que o produto recusa). Janela ±3 dias e valor exato: `[SUPOSIÇÃO do design, parametrizável]`, deliberadamente o **mesmo número** do enriquecimento (design-mãe §4.5) | design Onda 2 §7(b) |
 | 2.23 | **`source='manual'` já existente:** **nada automático, nenhuma migration, nenhuma reclassificação.** Uma linha manual é a afirmação do usuário; reescrevê-la é a tradução silenciosa que a lição D-3 proíbe. A conferência **anota** ("pode ser a mesma despesa da conta X") a partir da Onda 4. Informativo, nunca corretivo | design Onda 2 §7(c) |
-| 2.24 | **`bank_transfers` genérica** — duas pernas, `kind ∈ {own_transfer, investment_in, investment_out}`, **zero acoplamento com `investments`**, DRE-neutro por construção (§4.2). Usa o mesmo `sync_origin_movement` (`source='transfer'`, duas linhas com o mesmo `origin_id`). Transferir para uma `bank_account` com `kind='investment'` **já funciona** desde a Onda 1 | design Onda 2 §8 |
+| 2.24 | **`bank_transfers` genérica** — duas pernas, `kind ∈ {own_transfer, investment_in, investment_out}`, **zero acoplamento com `investments`**, DRE-neutro por construção (§4.2). Usa o mesmo `sync_origin_movement` (`source='transfer'`). ⚠️ **Forma canônica das pernas (ratificada, §C-3.1):** `origin_id = f"{transfer.id}:out"` e `f"{transfer.id}:in"`, **pareadas por `transfer_id`** (coluna que **já existe**, `bank/models.py:278`), `dedup_hash = sha256(f"{source}\|{origin_id}")` distinto por perna de graça, coluna **`VARCHAR(64)`**. **NÃO é "duas linhas com o mesmo `origin_id`"** — essa forma foi **rejeitada**: destrói a idempotência na origem onde ela mais importa (um retry de transferência move o dinheiro duas vezes). `origin_id` é a **chave de origem**, não "o id do lançamento": para origem de perna única (`payable`, `charge`, `yield`, `payout`) ela **é** o id; para origem de múltiplas pernas é `f"{id}:{perna}"`. A unidade de sincronização de uma transferência é **a perna**. O 422 de `posted_at` futuro mora em `create_transfer`, **antes** das duas chamadas ao sincronizador — nunca dentro de `_validate_posted_at`, que a partir da 8.14 **aceita** futuro para `SOURCES_SISTEMA` (achado A-3). Transferir para uma `bank_account` com `kind='investment'` **já funciona** desde a Onda 1 | design Onda 2 §8; ratificação §C-3 |
 | 2.25 | **Tela 8.7 ganha um terceiro número: "Agendado para sair"** (e "Agendado para entrar", quando houver). Sem ele o dono agenda um pagamento e não o vê em lugar nenhum. ⚠️ Passa pelos **mesmos testes de colisão de rótulo** que o UX-001 instituiu: não pode ser, nem conter, `ROTULO_BANCO`, `TOTAL_EM_CONTAS_LABEL` nem `DISPONIVEL_CAIXA_LABEL` | design Onda 2 §4.2.1 |
 
 **O que a Onda 2 explicitamente NÃO faz:** nenhum parser de arquivo; nenhum matcher; nenhuma tabela
@@ -725,12 +824,18 @@ somar sim, esconder a composição nunca.
 
 **Onda 0 + Onda 1: 8 stories (8.1–8.8), todas ✅ em produção** (PR #61, `7dba286`).
 
-### Onda 2 — a origem do movimento (10 stories, 8.9–8.18)
+### Onda 2 — a origem do movimento (12 stories, 8.9–8.20)
 
 > **Só nomeadas e delimitadas.** A story completa é do **@sm**.
 > O corte é `[DECOMPOSIÇÃO DO @PM]`; os **itens de escopo** vêm do design da Onda 2 e estão numerados
 > na §5 (2.1–2.25). **Nenhum item da §5 pode cair fora do conjunto de stories** — se o @sm/@po
 > reagrupar, precisa recontar os 25 itens.
+>
+> ⚠️ **8.19 e 8.20 são de natureza diferente das 10 primeiras, e por isso NÃO consomem item da §5.**
+> As 8.9–8.18 constroem a Onda 2; as 8.19 e 8.20 **corrigem comportamento das Ondas 0/1 que já está em
+> produção** e que foi achado durante a expansão da onda em stories. Os **25 itens seguem cobertos
+> pelas 8.9–8.18** — a recontagem continua batendo. Elas entram aqui, e não numa onda futura, porque
+> as duas tocam a **leitura da conferência**, que é a métrica primária do épico.
 > **Critério de corte usado:** (i) cada story cabe numa sessão de implementação; (ii) a ordem de merge
 > é a ordem de dependência, sem "story que precisa da seguinte para não deixar dado ruim no banco";
 > (iii) migration e backend de contrato vêm **antes** de qualquer chamador; (iv) frontend de superfície
@@ -820,22 +925,58 @@ Formulário manual deixa de ser "Novo movimento" e passa a perguntar **para que 
 (proibido).
 
 **Story 8.18 — Transferência entre contas próprias (`bank_transfers`)**
-Migration própria; duas pernas com o mesmo `origin_id`; `kind ∈ {own_transfer, investment_in,
-investment_out}`; **zero acoplamento com `investments`**; `test_transferencia_nao_altera_dre` (snapshot
-idêntico campo a campo); UI de transferência. Transferir para conta `kind='investment'` já funciona —
-a faceta de produto é a 2b. → item 2.24
+Migration própria; **duas pernas com `origin_id` `:out`/`:in`, pareadas por `transfer_id`** (a forma
+canônica ratificada — **não** "o mesmo `origin_id` nas duas", que quebra a idempotência num retry);
+`kind ∈ {own_transfer, investment_in, investment_out}`; **zero acoplamento com `investments`**;
+`test_transferencia_nao_altera_dre` (snapshot idêntico campo a campo); 422 de `posted_at` futuro **em
+`create_transfer`**, não em `_validate_posted_at` (A-3); UI de transferência. Transferir para conta
+`kind='investment'` já funciona — a faceta de produto é a 2b. → item 2.24; ratificação §C-3
 *Não inclui:* `investment_accounts.bank_account_id`, `principal_cents` derivado, `register_yield` (tudo
 Onda 2b — é lá que mora o backfill).
 
-**Total da Onda 2: 10 stories (8.9–8.18).**
+**Story 8.19 — O saldo de abertura é uma declaração (âncora quando não há checkpoint)**
+A Conferência para de dizer *"esta conta nunca teve saldo informado"* a quem informou o saldo **no
+cadastro da conta**: `dias_desde_ultima_conferencia` cai para `opening_date` quando
+`latest_checkpoint(on_or_before=end)` devolve `None`, e a nota do bloco 4 passa a dizer as duas coisas
+separadas — (a) existe um saldo de partida, informado por você em `{opening_date}`; (b) **dentro deste
+período** não houve saldo novo informado, então não há verdade externa para comparar. Como
+`opening_date` é `NOT NULL`, o campo **nunca mais volta `None`** — é mudança de contrato, e a story a
+declara. Read-only, **sem migration**.
+⚠️ **Escopo reduzido na v0.2 (@po):** a v0.1 dizia que a Projeção estava afirmando sem lastro em
+produção — **premissa refutada pelo fundador** (o saldo R$ 0,00 da C6 é real e consciente). Esta story
+**não toca `projection.py`**, e a Projeção **não** é regressão a corrigir.
+*Não inclui:* a comparação degenerada (saiu para a 8.20); o modo *"tenho a conta e NÃO sei o saldo"*
+(exige migration — escalado, fora da onda). → **não consome item da §5**; corrige comportamento das
+Ondas 0/1
+
+**Story 8.20 — A comparação degenerada: checkpoint na data de abertura não é conferência**
+`derived_balance(until=opening_date) ≡ opening_balance_cents` por construção (`_movements_sums` só soma
+`posted_at > opening_date`) e `_validate_reference_date` **aceita** `reference_date == opening_date` —
+então declarar o saldo no dia da abertura produz `divergencia_cents == 0` **por construção matemática**,
+satisfaz `todas_batendo` e pode emitir o 🟢 *"Está tudo batendo"* para um tenant com 45 contas pagas e
+razão bancário vazio. **É um 🟢 falso**, da mesma família do erro da §3.1.1: um número que mede a
+própria incompletude com aparência de fato.
+Tratamento (recomendação do @po, decisão final da @architect como co-requisito): **marcar
+não-avaliável no bloco 1, mantendo a contagem no bloco 4** — a declaração é legítima (*"o saldo da
+conta no dia em que ela abriu"* é verdade), **o que é degenerado é a comparação**; recusá-la com 422
+apagaria uma afirmação verdadeira, que é o inverso do princípio da Onda 0. Junto, no mesmo commit: a
+**docstring invertida** de `_validate_reference_date` (ela é o motivo de o defeito ter sobrevivido a 36
+testes — quem foi escrever o teste leu que o caso era *"o mais sadio que existe"*) e o **primeiro teste
+do cenário**. Read-only, **sem migration**.
+*Não inclui:* 422 na criação do checkpoint (rejeitado); "aceitar e apenas anotar" (rejeitado — mantém o
+🟢 possível). → **não consome item da §5**; especificação preservada no AC3 da 8.19
+
+**Total da Onda 2: 12 stories (8.9–8.20)** — 10 que constroem a onda (8.9–8.18, cobrindo os 25 itens da
+§5) + 2 que corrigem comportamento das Ondas 0/1 achado durante a expansão (8.19, 8.20).
 
 #### 6.1 Ordem de merge da Onda 2
 
 ```
-8.9 ──► 8.12 ──► 8.13 ──► 8.14 ──► 8.15 ──► 8.16
+8.9 ──► 8.12 ──► 8.13 ──► 8.14 ──► 8.15 ──► [8.20] ──► 8.16
  │                          ▲
 8.10 ─────────────────────┘        8.17 (independente, após 8.9)
 8.11 (independente — merge cedo)   8.18 (independente, após 8.9)
+8.19 (independente de tudo — não entra na frente de ninguém)
 ```
 
 | Ordem | Story | Por quê nesta posição |
@@ -847,12 +988,21 @@ Onda 2b — é lá que mora o backfill).
 | 5 | **8.13** | Superfície da 8.12. Separada porque o aceite em 360px é bloqueante e merece atenção isolada |
 | 6 | **8.14** | Precisa de 8.10 (corte de data) e de 8.12 (baixa com data). Remove o teto que a 8.12 pôs |
 | 7 | **8.15** | Precisa da 8.9; herda `scheduled` da 8.14 para `received_on` futuro |
-| 8 | **8.16** | Precisa de 8.14 (agendamento vencido) e 8.15 (recebimento fora do trilho) — é a leitura das duas |
-| 9 | **8.17** | Só precisa da 8.9. Pode correr em paralelo a partir daí. ⚠️ **Quanto mais tarde, mais tempo a janela de contagem dupla fica aberta** |
-| 10 | **8.18** | Só precisa da 8.9. Tem migration própria — merge por último evita conflito de head com a 8.9 |
+| 8 | **8.20** | **Não depende de nenhuma das 8.9–8.18** (corrige comportamento das Ondas 0/1), mas **tem de mergear ANTES da 8.16**. Razão: a 8.16 consome o **bloco 1** para o sinal de completude; com a comparação degenerada de pé, o épico ganha um caminho para se **auto-aprovar** — emitir 🟢 no mesmo ciclo em que a nota do bloco 4 diria que o gate ainda não pode ser lido. **Também bloqueia o passo 1 do mutirão** (§7.2): o fundador foi instruído a não declarar saldo até isto resolver |
+| 9 | **8.16** | Precisa de 8.14 (débito não confirmado), 8.15 (recebimento fora do trilho) **e 8.20** (bloco 1 confiável) — é a leitura das três |
+| 10 | **8.17** | Só precisa da 8.9. Pode correr em paralelo a partir daí. ⚠️ **Quanto mais tarde, mais tempo a janela de contagem dupla fica aberta** |
+| 11 | **8.18** | Só precisa da 8.9. Tem migration própria — merge por último evita conflito de head com a 8.9 |
+| — | **8.19** | **Não entra na frente de ninguém, e ninguém a espera.** Independe das 8.9–8.18 e não é pré-requisito de nenhuma delas. Entra quando houver folga. ⚠️ Seis stories chegaram a dizer que ela vinha primeiro — premissa da v0.1, **corrigida pelo @po nas seis** |
 
-**Paralelizável com segurança:** {8.11}, {8.10}, {8.17, 8.18 após 8.9}. **Serial obrigatório:**
-8.9 → 8.12 → 8.13, e 8.10+8.12 → 8.14 → 8.16.
+**Paralelizável com segurança:** {8.11}, {8.10}, {8.17, 8.18 após 8.9}, {8.19, a qualquer momento},
+{8.20, a qualquer momento **antes da 8.16**}. **Serial obrigatório:** 8.9 → 8.12 → 8.13, e
+8.10+8.12 → 8.14 → 8.16, e **8.20 → 8.16**.
+
+⚠️ **A 8.19 e a 8.20 são independentes ENTRE SI**, apesar de a especificação da 8.20 ter nascido dentro
+da 8.19 (AC3). Foram separadas porque são **classes de risco diferentes**: a 8.19 é leitura e texto com
+o bloco 1 **inalterado**; a 8.20 **muda o comportamento do bloco 1 de um relatório em produção**. Fundir
+as duas num diff só tira do gate a capacidade de julgar qual mudança quebrou o quê — é o mesmo argumento
+que mantém o SIG-001 fora da 8.16. → validação do @po §5
 
 ### Onda 2b em diante — stories não delimitadas
 
@@ -904,7 +1054,7 @@ decomposição que envelhece antes de ser usada, que é o defeito que a §3.1.1 
 | **`bank` importando `payables`/`receivables` (ciclo)** | Média | Médio | Asserção positiva nova em `test_money_planes.py` (§4.1d). Sem ela, o primeiro atalho de conveniência recria o ciclo | 8.9 |
 | **`source` com dois eixos degradar com o tempo** | Média | Médio | **Toda regra escrita contra `SOURCES_SISTEMA`/`SOURCES_EXTERNA`**, nunca contra valor solto. A mistura está em produção (0059) e **não** será consertada: exigiria reescrever coluna sob FORCE RLS por benefício estético | 8.9 |
 | **Seletor de conta fora da área visível em ~360px** | Média | **Alto — já aconteceu DUAS vezes** (PRs #56 e #58; uma conta real foi marcada paga sem o dono ver o checkbox) | Seletor **dentro da mesma barra fixa** do botão; aceite manual em 360px **bloqueia a story** | 8.13 |
-| **`payables.bank_transaction_id` (cache) divergir do `origin_id` (verdade)** | Baixa | Médio | Regra de autoridade escrita: quem manda é o `origin_id`; `bank_audit` **reporta sem corrigir em silêncio** (mesma disciplina do `status` materializado) | 8.9 |
+| **`payables.bank_transaction_id` (cache) divergir do `origin_id` (verdade)** | Baixa — **só alcançável por bug** (escritor único, mesma chamada, mesma transação) | Médio | Regra de autoridade escrita na docstring das duas colunas: quem manda é o `origin_id`. ⚠️ **A garantia é `test_cache_de_movimento_nunca_diverge_do_origin_id`** (baixar / trocar conta / trocar data / estornar / repagar), **não** um script de auditoria — `bank_audit` não existe (ratificação §C-4.2) | 8.9, 8.12 |
 | **45 estornos agitando a Agenda** (90 escritas de status; janela com 45 contas aparecendo vencidas) | Alta — é o plano escolhido | Baixo | Custo **conhecido e aceito** pelo fundador (F8). Nada quebra; contas com comprovante mantêm o anexo | — |
 
 ### 7.2 Alerta operacional — a ordem do mutirão das 45 não é negociável
@@ -955,7 +1105,7 @@ há onde informar a conta na baixa. → design Onda 2 §4.3, §4.4; ADR 0003 Ade
 | D6 | **Verificação empírica de OFX real** (3–4 bancos do público-alvo): o formato ainda é exportado? o `MEMO` carrega contraparte/CPF? o `endToEndId` do Pix aparece? | **4** | ⏳ Pendente — **@analyst**. Se nenhum banco relevante exportar OFX em 2026, o caminho de arquivo morre e as Ondas 0–3 sobrevivem intactas (ADR 0003, Revisão futura (b)) |
 | D7 | **Payout real** (`request_payout` hoje só marca `withdrawn`; exige dados bancários + KYC) | **3** | ⏳ Não decidido (D5 do design). Default: a Onda 3 permanece **registro contábil**, sem transferência real |
 | D8 | **O número da conferência** (o gate do §3.1) | **4, 5** | ⏳ ⚠️ **Corrigido em 2026-07-30:** o número **não** é o da Onda 1 — só é legível **depois da Onda 2**, no primeiro ciclo que satisfaz a pré-condição da §3.1.2 |
-| D9 | **A Onda 2 em produção** — pré-condição do gate | **4, 5** | ⏳ Nova. Sem ela, a divergência mede a **ausência de uma porta** (§3.1.1) |
+| D9 | **A Onda 2 em produção** — pré-condição do gate (zera **P1 e P2**) | **4, 5** | ⏳ Nova. Sem ela, a divergência mede a **ausência de uma porta** (§3.1.1). ⚠️ **A Onda 2 sozinha não satisfaz a pré-condição em geral**: P3 (rendimento) só zera na **2b** e P4 (payout) na **3**. Hoje ambos são vazios no tenant do fundador — P4 por construção, P3 por medição (F12) —, então a Onda 2 basta. **Isso é estado, não garantia** |
 | D10 | **Mutirão do fundador na ordem da §7.2** (recuar `opening_date` → estornar → repagar), com as Stories 8.11 e 8.12 em produção | — | ⏳ Operacional, do fundador. **Bloqueia a leitura do gate**, não o desenvolvimento |
 
 **Externas:** nenhuma. Zero serviço de terceiro no caminho crítico, zero custo recorrente novo
@@ -982,12 +1132,21 @@ há onde informar a conta na baixa. → design Onda 2 §4.3, §4.4; ADR 0003 Ade
 
 | # | Decisão | Fala / fonte | Onde reverbera |
 |---|---|---|---|
-| **F6** | **Onda 2 LIBERADA** — a origem do movimento entra agora, antes de qualquer coisa que dependa de arquivo | falha de escopo achada por ele; ADR Adendo 4 | §5; stories 8.9–8.18 |
+| **F6** | **Onda 2 LIBERADA** — a origem do movimento entra agora, antes de qualquer coisa que dependa de arquivo | falha de escopo achada por ele; ADR Adendo 4 | §5; stories 8.9–8.18 (+ 8.19 e 8.20, corretivas) |
 | **F7** | **Conta bancária OBRIGATÓRIA** na baixa de Contas a Pagar e no recebimento de Cobranças | *"opcional significa que alguém pula, e a conferência volta a medir o que você esqueceu de preencher"* | itens 2.6, 2.15; stories 8.12, 8.15 |
 | **F8** | **Backfill das 45 contas à mão: estornar e repagar**, conta a conta — **não** rota de correção em massa, **não** migration | motivo declarado: *"rever conta a conta pode ser desejável para conferir valores"*. Custo (90 escritas de status na Agenda) **conhecido e aceito** | §7.2; nenhuma story — é operação |
 | **F9** | **Lançamento manual reduzido ao que só existe no banco** | *"o que vamos fazer manual é apenas coisas diretas lá, como taxas e transferência para aplicações"* | itens 2.21, 2.22, 2.24; stories 8.17, 8.18 |
 | **F10** | **Data da baixa: default no vencimento (`due_date`), e data futura PERMITIDA** | *"deixar habilitado no vencimento, pois se estiver fazendo retroativo, pq não deu certo no dia — e no futuro também permitir, pq posso estar agendando"*. ⚠️ A recomendação anterior da @architect (`min(due_date, hoje)`) foi **revogada por ela mesma**: desenhava o produto em volta de uma limitação do modelo | item 2.7; story 8.12 |
 | **F11** | **Estado próprio `scheduled`, entrando JUNTO nesta onda** — não `paid` com data futura | Motivo decisivo, verificado no código: com `paid`+futuro a conta agendada **sai dos fluxos de saída** (`_window_sums` filtra `status=='open'`) **e** não entra no saldo inicial (`until=today`) — **o dinheiro some da Projeção**. É a máquina de falso negativo da Onda 0 ressuscitada na mesma tela que a Onda 0 consertou | itens 2.8, 2.9; story 8.14 |
+
+| **F12** | **F-D12 fechada: o gate abre no primeiro ciclo completo pós-Onda 2** — a Onda 2b **não** é pré-requisito da leitura do gate | ⚠️ **Não é fala do fundador: é consulta ao banco de produção** (2026-07-30) — 1 conta de investimento cadastrada, **0 rendimentos lançados**, então o termo P3 é vazio. Era o que a @architect recomendava ("perguntar antes de planejar… é uma consulta ao banco de dados dele, não uma decisão de produto") | §3.1.2; §5 (ordem inalterada); item 2.20; Story 8.16 AC7 |
+
+**⚠️ F12 é a única decisão desta lista que pode se desfazer sozinha.** As outras onze são escolhas de
+produto: só mudam se alguém as mudar. F12 depende de um **contador em zero** — no dia em que o fundador
+lançar o primeiro rendimento de aplicação, P3 deixa de ser vazio e a leitura do gate passa a depender da
+**Onda 2b**, sem que ninguém tenha decidido nada. Não há alarme para isso; o que há é a **nota do bloco
+4 nomeando a onda que fecha cada termo** (Story 8.16 AC7), que faz a mudança aparecer na tela no ciclo
+em que acontecer.
 
 **Requisito que o Epic 8 não conhecia, e que veio de F10:** **agendamento de pagamento no app do
 banco**. Não estava em lugar nenhum deste epic nem do design-mãe. Não é o fundador ignorando o
@@ -1010,7 +1169,7 @@ argumento; é o desenho não conhecendo o fluxo real.
 | **F-D7** | **Onda 2b (aplicação) entra logo depois da 2, ou espera?** | Logo depois — mas ela carrega **o único backfill** do épico, sob a armadilha do FORCE RLS. Merece story própria e atenção de gate | fundador | 2b |
 | **F-D8 / G-4** | **Soltar release sem a validação em ~360px?** | **Bloquear o release.** Aberta desde a Onda 1, e esta onda **acrescenta um seletor de conta na barra fixa do celular**. Dois PRs de fix de campo já foram pagos por essa lacuna | **fundador** | 1, 2 |
 | **@PM-1** | **NOVA — o "ponto de parada legítimo" agora é depois da Onda 3 (payout)?** | **Sim** `[DECISÃO DO @PM, a confirmar]`. É o fim das ondas de dependência externa zero. O design da Onda 2 **não** reescreveu a §5.1 do epic; esta leitura é minha | fundador | 3 |
-| **@PM-2** | **NOVA — a Onda 2 (10 stories, ~2,5 ondas) entra inteira, ou em duas liberações?** | **Inteira.** Fatiar reabre o risco do `paid`+futuro e deixa a pré-condição do gate insatisfeita por mais tempo. Mas o corte da §6.1 permite parar **depois da 8.14** com o produto coerente, se ele quiser reavaliar | fundador | 2 |
+| **@PM-2** | **NOVA — a Onda 2 (12 stories, ~2,5 ondas) entra inteira, ou em duas liberações?** | **Inteira.** Fatiar reabre o risco do `paid`+futuro e deixa a pré-condição do gate insatisfeita por mais tempo. Mas o corte da §6.1 permite parar **depois da 8.14** com o produto coerente, se ele quiser reavaliar. ⚠️ A **8.20 não é fatiável para fora**: sem ela a conferência pode emitir 🟢 falso, que é pior do que não ter a onda | fundador | 2 |
 
 **Herdadas do gate das Ondas 0–1 (`docs/qa/epic-8-onda-0-1-gate-2026-07-30.md`), ainda abertas:**
 
@@ -1061,7 +1220,7 @@ argumento; é o desenho não conhecendo o fluxo real.
 | *"é um sistema integrado, não tem o motivo de tudo começar do zero"* | **fala do fundador, 2026-07-29/30** |
 | Cinco eventos que o sistema conhece; zero ligados | design Onda 2 §1.2 (inventário sobre `payables.apply_paid:241`, `receipts.link_receipt:191`, `receivables.mark_paid:380`, `investments.register_yield`, `wallet.request_payout:227`) |
 | A divergência da Onda 1 mede a **ausência de uma porta**; o gate teria pedido a onda mais cara | design Onda 2 §9.1; ADR 0003 Adendo 4 |
-| Pré-condição do gate: toda `Payable` paga e `Charge` recebida com conta informada na janela | design Onda 2 §9.3 |
+| Pré-condição do gate: **P1..P4**, com a `Charge` do trilho fora **por construção** | `controle-bancario-onda2-ratificacao.md` §C-1.3 (normativa) + design Onda 2 §9.3 reescrita. ⚠️ **A redação anterior deste epic** (*"toda `Payable` paga e toda `Charge` recebida"*) era **insatisfazível** e foi revogada |
 | A nota do bloco 4 **anota, nunca subtrai** (é a Regra 5 do `CLAUDE.md`) | design Onda 2 §9.3 |
 | Decomposição da divergência em 5 termos | **[ANÁLISE da @architect]** — derivada dos eventos que o sistema conhece (design Onda 2 §9.2) |
 | Regra da Origem, índice único parcial, `sync_origin_movement` não commita | design Onda 2 §2, §3.2, §3.5; ADR 0003 Adendo 4, item 11 |
@@ -1083,10 +1242,33 @@ argumento; é o desenho não conhecendo o fluxo real.
 | Conta obrigatória; manual só para taxas e transferência; backfill à mão; default no vencimento com futuro permitido; `scheduled` junto | **falas e decisões do fundador, 2026-07-29/30** (§9.1, F6–F11) |
 | Janela de ±3 dias e valor exato na guarda de contagem dupla | **`[SUPOSIÇÃO do design, parametrizável]`** — mesmo número do enriquecimento (design-mãe §4.5), de propósito |
 | Esforço da Onda 2 = 2,5 ondas de trabalho | **`[ESTIMATIVA DO @PM]`** — o design da Onda 2 **não** estima; derivada do número de stories e do escopo tocado |
-| Corte das 10 stories da Onda 2 (8.9–8.18) e a ordem de merge da §6.1 | **`[DECOMPOSIÇÃO DO @PM]`** — os 25 itens de escopo vêm do design; o corte, não |
+| Corte das 10 stories construtivas da Onda 2 (8.9–8.18) e a ordem de merge da §6.1 | **`[DECOMPOSIÇÃO DO @PM]`** — os 25 itens de escopo vêm do design; o corte, não |
 | Teto de `paid_on` em "hoje" na Story 8.12, removido na 8.14 | **`[CORTE DO @PM]`** — implementa a mecânica do design §4.2.4 (nunca deixar `paid`+futuro no banco), não a contradiz |
 | Ponto de parada legítimo agora é depois da Onda 3 (payout) | **`[DECISÃO DO @PM, a confirmar]`** (§9.2, @PM-1) — o design da Onda 2 não reescreveu a §5.1 |
 | `declarado`/`extrato` revogados do vocabulário de `*_origem` | ratificação do design; `CLAUDE.md` regra 2 — **o epic estava desatualizado** |
+
+**Acrescentado em 2026-07-30, 2ª rodada** — correções do @pm a partir da ratificação da @architect
+(`controle-bancario-onda2-ratificacao.md`) e da validação do @po (`docs/stories/8.8-validacao-po-onda2.md`).
+**Nada aqui é análise nova do @pm: é transcrição do que já foi decidido por elas.**
+
+| Afirmação deste epic | Fonte |
+|---|---|
+| `app/scripts/bank_audit.py` **não existe**; `app/scripts/` tem 3 arquivos (`__init__`, `migrate_attachments_to_s3`, `scan_orphan_storage`) | ratificação §C-4.1 (`grep -rn "bank_audit" apps/api` → 0); validação do @po §3 (`grep -rn "bank_audit" apps/` → 0), **verificado duas vezes, independentemente** |
+| A obrigação da Onda 2 vira **teste** (`test_cache_de_movimento_nunca_diverge_do_origin_id`, 5 caminhos); o script fica como pré-requisito da **Onda 5** | ratificação §C-4.2 |
+| `_refresh_status` também não existe; é descrito como trabalho da Onda 4 | `bank/service.py:826`; ratificação §4 |
+| Pré-condição P1..P4, com o par membro/não-membro **dentro** do bloco normativo | ratificação §C-1.3 |
+| `_not_investment_yield()` existe e é **importado**, nunca reescrito | `receivables/service.py:82-90`; ratificação §C-1.5 |
+| A `Charge` de rendimento nasce `paid`, `paid_at=now()`, sem `transaction_id` e sem `bank_account_id` — cairia inteira no P2 sem o predicado | `investments/service.py:163-177`; ratificação §C-1.2 (achado A-1) |
+| `request_payout` só marca `withdrawn` ⇒ P4 é **vazio por construção** hoje | `wallet/service.py:227`; ratificação §C-1.3 |
+| **F-D12 respondida: 1 conta de investimento cadastrada, 0 rendimentos lançados** (`charges` com `external_ref LIKE 'investment:%'` = 0) ⇒ P3 vazio ⇒ o gate abre no primeiro ciclo completo pós-Onda 2 | **consulta ao banco de produção, 2026-07-30** (não é fala do fundador); pergunta em ratificação §3.3 e validação do @po §7.4 |
+| Forma canônica das pernas: `:out`/`:in`, pareadas por `transfer_id`, `VARCHAR(64)`; *"mesmo `origin_id` nas duas"* **rejeitada** (retry moveria o dinheiro duas vezes) | ratificação §C-3.1, §C-3.3 |
+| `origin_id` é **chave de origem**, não "o id do lançamento"; a unidade de sincronização de uma transferência é **a perna** | ratificação §C-3.2 (normativa) |
+| O 422 de `posted_at` futuro da transferência mora em `create_transfer`, não em `_validate_posted_at` | ratificação §C-3.4 (achado A-3) |
+| `transfer_id` já existe em `bank_transactions` | `bank/models.py:278` |
+| Story **8.19** existe, é da Onda 2, com escopo reduzido (não toca `projection.py`; a premissa da v0.1 foi refutada pelo fundador) | `docs/stories/8.19.story.md` v0.2; validação do @po §6 |
+| Story **8.20** existe (comparação degenerada), merge **antes da 8.16**, tratamento = não-avaliável no bloco 1 | validação do @po §5 (veredito) — especificação preservada no AC3 da 8.19 |
+| `derived_balance(until=opening_date) ≡ opening_balance_cents`; `reference_date == opening_date` é aceito; o cenário **não tem teste** (36 testes, zero o exercitam) | `bank/service.py::_movements_sums`, `::_validate_reference_date`; `test_bank_reconciliation_report.py`; validação do @po §5 |
+| 8.19 e 8.20 **não consomem item da §5** — corrigem comportamento das Ondas 0/1 | **`[DECOMPOSIÇÃO DO @PM]`**, derivada do veredito do @po (§5) e do escopo reduzido da 8.19; os 25 itens seguem cobertos pelas 8.9–8.18 |
 
 ---
 
@@ -1165,3 +1347,28 @@ teria sido lido como superado cedo demais.
 | **X7** | **O design da Onda 2 não dá estimativa de esforço.** A minha (2,5 ondas) é `[ESTIMATIVA DO @PM]` derivada do número de stories — não há velocity confiável, e a Onda 1 (estimada em 1,5) consumiu 3 migrations e 8 stories | @pm / fundador |
 | **X8** | **`packages/shared-types/src/generated.ts` continua defasado** e sem check de drift no CI — **zero menções a `bank`** desde o PR #45. A Onda 2 acrescenta campos a `payables`, `charges` e `bank_transactions`, ou seja, **aumenta a dívida**. Não bloqueia, mas cresce | @devops / Epic 6 |
 | **X9** | **`scripts/check.sh` mascara falha de frontend** com `|| true` no vitest e resolve `ruff`/`python` do PATH. A Onda 2 tem 3 stories com frontend (8.13, 8.14, 8.17/8.18) — **rodar as etapas individualmente** até isso ser corrigido | @devops |
+| **X10** | **A `Charge` sintética de rendimento é lembrada num lugar e esquecida no outro.** O mesmo predicado (`_not_investment_yield()`) foi aplicado pela Story 8.15 e omitido pela 8.16, escritas por @sm diferentes que não conversam. Corrigido nas duas, e a regra que fica é *"importar, nunca reescrever"* — mas **o padrão vai se repetir** em qualquer predicado compartilhado entre módulos. Não há gate mecânico para isso | @architect / @po (vigilância); ratificação §C-1.2 |
+
+### 11.7 As quatro escalações ao @pm — RESOLVIDAS nesta rodada (2026-07-30)
+
+> Registrado para que ninguém reabra o que já foi corrigido, e para que a **próxima** story leia o epic
+> corrigido em vez de reproduzir o defeito. As quatro vinham da ratificação da @architect (§3.1) e da
+> validação do @po (§7.1).
+
+| # | O quê | Onde ficou | Estado |
+|---|---|---|---|
+| **E-1 / B-1** | `bank_audit` listado como ativo entregue, sob a instrução *"não recriar"* | §"Contexto do sistema existente" (removido da lista + bloco de correção com o que fica no lugar); item **2.2**; risco correspondente na **§7.1** | ✅ **Corrigido** — era 🔴 **bloqueio da 8.9** |
+| **E-2** | §3.1.2 com pré-condição **insatisfazível** (`Charge` do trilho nunca terá `bank_account_id`) | §3.1.2 reescrita com **P1..P4**, membro/não-membro dentro do bloco normativo, `Charge` do trilho fora **por construção**, consequência de roadmap e **F-D12 fechada**; 1ª linha da tabela de decisão; nota do bloco 4 vira **até três notas** | ✅ **Corrigido** |
+| **E-3** | Forma velha das pernas de transferência (*"mesmo `origin_id`"*) | Item **2.24** e **Story 8.18** na §6 — `:out`/`:in`, `transfer_id`, `VARCHAR(64)`, 422 em `create_transfer` | ✅ **Corrigido** |
+| **E-4** | 8.19 e 8.20 fora da §6 | §6 (as duas delimitadas), **§6.1** (ordem de merge, com **8.20 antes da 8.16**), total 10 → **12 stories**, e a nota de que **não consomem item da §5** | ✅ **Corrigido** |
+
+**O que continua aberto e NÃO é do @pm** (transcrito da validação do @po, para não se perder):
+
+- **B-2 — a Story 8.20 precisa ser escrita** (@sm) e o **tratamento** confirmado (@architect). Bloqueia
+  a **8.16** e o passo 1 do mutirão; **não** bloqueia 8.9–8.15, 8.17, 8.18.
+- **SIG-001** — a virada de mês apagando conferência recente: arquitetura já decidida, falta virar
+  story própria (@po). **Fora da 8.16**, de propósito.
+- **"Tenho a conta e NÃO sei o saldo"** — não existe forma de o dono declarar isso; exige migration.
+  Escalado pela 8.19, fora da Onda 2.
+- **`TRANSFER_KINDS` sem não-membro escrito** (8.18 AC5) — risco baixo (validação por lista fechada, com
+  o precedente `platform_wallet`), registrado pelo @po e não corrigido.
