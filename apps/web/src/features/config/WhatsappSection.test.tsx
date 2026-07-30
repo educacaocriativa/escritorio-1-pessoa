@@ -34,6 +34,7 @@ function profile(overrides: Partial<TenantProfile> = {}): TenantProfile {
     timezone: "America/Sao_Paulo",
     default_entry_funnel_id: null,
     whatsapp_configured: false,
+    whatsapp_provider: null,
     whatsapp_phone_id: "",
     whatsapp_waba_id: "",
     whatsapp_template_bindings: {},
@@ -417,5 +418,37 @@ describe("WhatsappSection — vínculos de template por propósito", () => {
     expect(
       await screen.findByText("Template deve ter exatamente 4 variáveis para este propósito"),
     ).toBeInTheDocument();
+  });
+});
+
+describe("EvolutionQrCard", () => {
+  it("mostra o botão de conectar quando whatsapp_provider é null", async () => {
+    mockGet(profile({ whatsapp_provider: null }));
+    render(<WhatsappSection />);
+    expect(await screen.findByText(/conectar por qr code/i)).toBeInTheDocument();
+  });
+
+  it("pede o QR e mostra a imagem ao clicar em conectar", async () => {
+    mockGet(profile({ whatsapp_provider: null }));
+    vi.mocked(api.post).mockImplementation((url: string) => {
+      if (url === "/whatsapp-session/connect") {
+        return Promise.resolve({ data: { qr_base64: "data:image/png;base64,FAKE" } } as never);
+      }
+      return Promise.reject(new Error(`unexpected POST ${url}`));
+    });
+    const user = userEvent.setup();
+    render(<WhatsappSection />);
+    const btn = await screen.findByText(/conectar por qr code/i);
+    await user.click(btn);
+    const img = await screen.findByAltText(/qr code/i);
+    expect(img).toHaveAttribute("src", "data:image/png;base64,FAKE");
+  });
+
+  it("mostra 'Conectado' quando whatsapp_provider é evolution", async () => {
+    mockGet(profile({ whatsapp_provider: "evolution" }));
+    render(<WhatsappSection />);
+    // regex ancorado: "Não conectado" (badge da Meta, sempre presente quando whatsapp_configured
+    // é false) também contém a substring "conectado" — só o match EXATO é o badge da Evolution.
+    expect(await screen.findByText(/^conectado$/i)).toBeInTheDocument();
   });
 });
