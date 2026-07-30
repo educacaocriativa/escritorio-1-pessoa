@@ -63,6 +63,15 @@ def _imported_modules(path: pathlib.Path) -> list[str]:
     suíte inteira fala de `app.modules.bank` o tempo todo) sem quebrar o teste. Imports RELATIVOS
     são devolvidos com um prefixo `.` para que o chamador os inspecione — o projeto usa imports
     absolutos (Constitution, Artigo VI), então um relativo aqui já é anomalia por si só.
+
+    ⚠️ **O `ImportFrom` devolve o caminho COM o alias apenso** (`app.modules` + `bank` →
+    `app.modules.bank`), e essa linha é o que torna o gate auditável. Sem ela,
+    `from app.modules import bank` produzia só `"app.modules"` — que não casa com nenhum dos
+    prefixos proibidos — e **passava nos dois testes**: o AST não via o `bank`, e o teste por texto
+    cru procura a string literal `"app.modules.bank"`, que essa forma de import não contém.
+    Verificado por mutação no quality gate do Epic 8 (2026-07-30): com o import evasivo dentro de
+    `wallet/service.py`, a suíte inteira ficava verde. O módulo também é devolvido sozinho, para
+    que um `import app.modules.bank as x` continue casando pelo prefixo.
     """
     tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
     modules: list[str] = []
@@ -70,8 +79,11 @@ def _imported_modules(path: pathlib.Path) -> list[str]:
         if isinstance(node, ast.Import):
             modules.extend(alias.name for alias in node.names)
         elif isinstance(node, ast.ImportFrom):
-            prefix = "." * node.level
-            modules.append(f"{prefix}{node.module or ''}")
+            base = f"{'.' * node.level}{node.module or ''}"
+            modules.append(base)
+            # `from X import y` também vale como "importou X.y" — é a forma evasiva.
+            sep = "" if base.endswith(".") else "."
+            modules.extend(f"{base}{sep}{alias.name}" for alias in node.names)
     return modules
 
 

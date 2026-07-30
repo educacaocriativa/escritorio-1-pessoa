@@ -358,14 +358,23 @@ _IMPORTS_PROIBIDOS = (
 def _imported_modules(path: pathlib.Path) -> list[str]:
     """Módulos importados, via AST (não por texto) — a docstring do motor **precisa** poder citar
     `Session`/`core.ai`/`bank` em prosa sem quebrar o teste. Mesmo padrão de `test_money_planes.py`
-    e `test_tenancy_guard.py`."""
+    e `test_tenancy_guard.py`.
+
+    ⚠️ **O alias do `ImportFrom` entra no caminho** (`app.core` + `ai` → `app.core.ai`). Sem isso,
+    `from app.core import ai` produzia só `"app.core"`, que não casa com nenhum prefixo de
+    `_IMPORTS_PROIBIDOS` — o motor podia importar a IA e o gate ficava verde. Furo da mesma classe
+    encontrado no `test_money_planes.py` durante o quality gate do Epic 8 (2026-07-30) e corrigido
+    nos dois lugares."""
     tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
     modules: list[str] = []
     for node in ast.walk(tree):
         if isinstance(node, ast.Import):
             modules.extend(alias.name for alias in node.names)
         elif isinstance(node, ast.ImportFrom):
-            modules.append(f"{'.' * node.level}{node.module or ''}")
+            base = f"{'.' * node.level}{node.module or ''}"
+            modules.append(base)
+            sep = "" if base.endswith(".") else "."
+            modules.extend(f"{base}{sep}{alias.name}" for alias in node.names)
     return modules
 
 

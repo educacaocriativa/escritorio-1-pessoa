@@ -778,7 +778,14 @@ def test_conferencia_nao_importa_wallet_nem_le_transactions():
         if isinstance(node, ast.Import):
             importados.extend(a.name for a in node.names)
         elif isinstance(node, ast.ImportFrom):
-            importados.append(node.module or "")
+            # ⚠️ O alias entra no caminho: sem isso, `from app.modules import wallet` produzia só
+            # `"app.modules"` e passava nas duas asserções abaixo (nem "wallet" nem "core.ai"
+            # apareciam). Furo encontrado no quality gate do Epic 8 (2026-07-30), corrigido também
+            # em `test_money_planes.py` e `test_financial_intelligence_completeness.py`.
+            base = f"{'.' * node.level}{node.module or ''}"
+            importados.append(base)
+            sep = "" if base.endswith(".") else "."
+            importados.extend(f"{base}{sep}{a.name}" for a in node.names)
 
     assert not [m for m in importados if "wallet" in m], (
         f"a conferência importou a Carteira (plano 1): {importados}"
