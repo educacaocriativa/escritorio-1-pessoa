@@ -15,10 +15,13 @@ estática (mesmo estilo de `tests/test_tenancy_guard.py`), e não num comentári
   (a) nenhum cálculo de saldo bancário lê `transactions`, nenhum cálculo de saldo de carteira lê
       `bank_transactions`, e as duas somas **nunca** ocupam o mesmo campo numérico;
   (b) `app.modules.bank` **pode** importar `app.modules.wallet`; `app.modules.wallet` **nunca**
-      importa `app.modules.bank` — o único ponto de contato legítimo (o payout da Carteira, Onda 6)
+      importa `app.modules.bank` — o único ponto de contato legítimo (o payout da Carteira, Onda 3)
       vive do lado `bank` e se comunica por `core/events` (design §6.6);
   (c) todo campo de API que carrega saldo declara a procedência num irmão `*_origem`
-      (`app.core.money_planes`).
+      (`app.core.money_planes`);
+  (d) **[Story 8.9]** `payables`/`receivables` **podem** importar `app.modules.bank`;
+      `app.modules.bank` **nunca** importa `payables`/`receivables` — a dependência é **de negócio
+      para banco, jamais a volta** (design Onda 2 §3.5).
 
 **Os testes da regra, e onde cada um mora:**
   1. `test_wallet_nao_importa_bank`        — aqui (parte b, direção proibida)
@@ -28,6 +31,9 @@ estática (mesmo estilo de `tests/test_tenancy_guard.py`), e não num comentári
   5. `test_projecao_declara_origem_do_saldo_inicial` — **NÃO está aqui**: é da Story 8.1 e vive em
      `tests/test_financial_intelligence_projection.py` (parte c). Duplicá-lo criaria dois testes de
      mesmo nome em arquivos diferentes; este comentário existe para o leitor achar o quinto.
+  6. `test_bank_nao_importa_payables`      — aqui (parte d, Story 8.9)
+  7. `test_sources_particionam_o_vocabulario` — aqui (Story 8.9: os dois conjuntos de `source`)
+  8. `test_origin_type_e_payment_route_nao_existem` — aqui (Story 8.9: o D-3 pela terceira vez)
 """
 from __future__ import annotations
 
@@ -45,6 +51,7 @@ from app.modules.wallet.models import STATUS_AVAILABLE, STATUS_PENDING, Transact
 APP_DIR = pathlib.Path(__file__).resolve().parents[1] / "app"
 WALLET_DIR = APP_DIR / "modules" / "wallet"
 BANK_DIR = APP_DIR / "modules" / "bank"
+MODULES_DIR = APP_DIR / "modules"
 
 
 # ── Varredura estática (parte b da regra) ─────────────────────────────────────────────────────
@@ -160,6 +167,136 @@ def test_bank_nao_referencia_transaction():
         "app/modules/bank passou a referenciar a Carteira (plano 1). Isto NÃO é proibido pelo "
         f"design (§1.3b permite bank → wallet), mas hoje não deveria existir: {offenders}. Se o "
         "uso for legítimo, atualize ESTE teste com a justificativa escrita — não o apague."
+    )
+
+
+# ── Parte (d) da regra — a direção de import de NEGÓCIO → BANCO (Story 8.9, AC10) ─────────────
+
+_NEGOCIO_PROIBIDO = ("app.modules.payables", "app.modules.receivables")
+
+
+def test_bank_nao_importa_payables():
+    """`app.modules.bank` NUNCA importa `payables`/`receivables` — a **asserção positiva** do §1.3d.
+
+    É o gate que a Onda 2 acrescenta, e ele fecha a direção que o design deixou implícita. A partir
+    da Story 8.12, `payables`/`receivables` **passam a importar** `app.modules.bank` (é assim que a
+    baixa gera o movimento) — e é exatamente esse novo tráfego que torna urgente afirmar a direção
+    contrária: sem isso, o primeiro atalho de conveniência (*"o módulo bank só precisa dar uma
+    olhadinha na conta a pagar"*) recria um ciclo entre os dois planos.
+
+    ⚠️ **Consequência de projeto que esta story trava:** o aviso pró-ativo da Story 8.11 e qualquer
+    leitura de `payables` a partir do módulo `bank` são **proibidos**. Quem precisa cruzar os dois
+    lados faz isso **do lado do negócio**.
+
+    ⚠️ **Sem allowlist, e isso é deliberado**, pelo mesmo motivo de `test_wallet_nao_importa_bank`:
+    o ponto de contato foi desenhado numa direção só. Se uma story futura "precisar" de uma exceção,
+    o que ela precisa de verdade é inverter a chamada.
+    """
+    offenders: list[str] = []
+    for path in _python_files(BANK_DIR):
+        for module in _imported_modules(path):
+            nu = module.lstrip(".")
+            if module.startswith(_NEGOCIO_PROIBIDO) or nu.startswith(("payables", "receivables")):
+                offenders.append(f"{path.relative_to(APP_DIR)} → import {module}")
+
+    assert not offenders, (
+        "Regra dos Planos §1.3d VIOLADA: app/modules/bank importa payables/receivables — a "
+        f"direção proibida. Ocorrências: {offenders}. A dependência é de NEGÓCIO para BANCO, "
+        "jamais a volta: `payables`/`receivables` chamam `bank.origin.sync_origin_movement`, e o "
+        "módulo `bank` não sabe que eles existem. Quem precisa cruzar os dois lados faz isso do "
+        "lado do negócio."
+    )
+
+
+def test_bank_nao_importa_payables_tambem_por_texto_cru():
+    """O equivalente literal do `grep -r "app.modules.payables" app/modules/bank/`.
+
+    Redundante com o teste por AST **de propósito**, e a redundância não é simétrica: o AST pega a
+    forma evasiva `from app.modules import payables` (que o grep não pega, porque a string literal
+    não aparece); o grep pega o que o AST não vê (`importlib.import_module("app.modules.payables")`,
+    um `__import__` montado por string). Foi a mutação do re-gate da Onda 1 (TEST-001) que provou
+    que **os dois** são necessários — com o import evasivo dentro de `wallet/service.py`, a suíte
+    inteira ficava verde.
+    """
+    offenders: list[str] = []
+    for path in _python_files(BANK_DIR):
+        texto = path.read_text(encoding="utf-8")
+        for proibido in _NEGOCIO_PROIBIDO:
+            if proibido in texto:
+                offenders.append(f"{path.relative_to(APP_DIR)} → {proibido}")
+    assert not offenders, (
+        f"Menção a {_NEGOCIO_PROIBIDO} dentro de app/modules/bank: {offenders}. "
+        "Ver test_bank_nao_importa_payables."
+    )
+
+
+# ── Story 8.9 — o vocabulário de `source` é uma PARTIÇÃO, e o D-3 não ganha uma terceira vida ──
+
+
+def test_sources_particionam_o_vocabulario():
+    """`SOURCES_EXTERNA ∪ SOURCES_SISTEMA == SOURCES`, e a interseção é vazia (AC3).
+
+    Toda regra da Onda 2 é escrita contra os **conjuntos**, nunca contra um valor solto de `source`
+    — e é isso que impede a mistura de eixos que existe na coluna desde a 0059 (portas de entrada
+    `manual|ofx|csv` convivendo com origens de lançamento) de **infectar** as regras. Um valor novo
+    que entrasse em um conjunto e sumisse do outro deixaria uma regra em silêncio: por isso a união
+    e a interseção são testadas, e por isso `SOURCES` é **derivada**, nunca uma terceira lista.
+    """
+    from app.modules.bank.models import SOURCES, SOURCES_EXTERNA, SOURCES_SISTEMA
+
+    assert set(SOURCES_EXTERNA) | set(SOURCES_SISTEMA) == set(SOURCES)
+    assert set(SOURCES_EXTERNA) & set(SOURCES_SISTEMA) == set(), (
+        "um valor de `source` está nos DOIS conjuntos — a pergunta que eles respondem ('o e1p "
+        "conhece o lançamento de negócio desta linha?') deixou de ter resposta única"
+    )
+    assert len(SOURCES) == len(SOURCES_EXTERNA) + len(SOURCES_SISTEMA) == len(set(SOURCES))
+    # E o vocabulário cabe na coluna `String(16)` — `"payable"` (7) e `"charge"` (6) cabem, então
+    # a Story 8.9 não precisa de migration de tipo. Um valor novo maior reprova AQUI.
+    from app.modules.bank.models import BankTransaction as _BT
+
+    largura = _BT.__table__.c.source.type.length
+    grandes = {s: len(s) for s in SOURCES if len(s) > largura}
+    assert not grandes, f"valor de `source` maior que VARCHAR({largura}): {grandes}"
+
+
+def test_origin_type_e_payment_route_nao_existem():
+    """**AC8 — teste de AUSÊNCIA.** Nem `origin_type`, nem `payment_route`, em `app/modules/**`.
+
+    Os dois seriam a terceira encarnação do defeito D-3 (dois conceitos, um campo — ou, aqui, um
+    conceito, dois campos):
+
+    - `origin_type` — para todo valor de `SOURCES_SISTEMA`, `source` **já responde** *"qual tipo de
+      lançamento"*. Um segundo campo dizendo a mesma coisa pode divergir do primeiro;
+    - `payment_route` — a rota é **DERIVADA** dos dois ponteiros da `Charge`
+      (`"trilho" if transaction_id else "banco"`); um rótulo separado vira a terceira fonte de
+      verdade sobre por onde o dinheiro entrou.
+
+    O teste é barato e existe porque a "melhoria" é **óbvia para quem chegar depois** — quem abrir
+    `bank_transactions` e vir `source='payable'` sem um tipo explícito vai querer acrescentá-lo.
+    """
+    offenders: list[str] = []
+    for path in sorted(MODULES_DIR.rglob("*.py")):
+        if "__pycache__" in path.parts:
+            continue
+        tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+        for node in ast.walk(tree):
+            nome = None
+            if isinstance(node, ast.Name):
+                nome = node.id
+            elif isinstance(node, ast.Attribute):
+                nome = node.attr
+            elif isinstance(node, ast.arg):
+                nome = node.arg
+            elif isinstance(node, ast.keyword):
+                nome = node.arg
+            if nome in ("origin_type", "payment_route"):
+                offenders.append(f"{path.relative_to(APP_DIR)}:{node.lineno} → {nome}")
+
+    assert not offenders, (
+        f"`origin_type`/`payment_route` reapareceram: {offenders}. Os dois são o defeito D-3 outra "
+        "vez: `source` já diz qual tipo de lançamento originou o movimento, e a rota de pagamento "
+        "é derivada de `transaction_id`/`bank_account_id` — nunca rotulada. Ver design Onda 2 "
+        "§3.2 e §3.4."
     )
 
 

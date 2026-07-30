@@ -116,24 +116,51 @@ class BankAccount(Base, TenantMixin, TimestampMixin):
     )
 
 
-# ── Vocabulário de `source` — a ORIGEM da linha de extrato (design §2.2) ──────────────────────
-# Só `manual` é escrito na Onda 1. Os demais estão declarados porque o vocabulário da coluna é
+# ── Vocabulário de `source` — a ORIGEM da linha de extrato (design §2.2, Onda 2 §3.1) ─────────
+# Só `manual` era escrito na Onda 1. Os demais estão declarados porque o vocabulário da coluna é
 # fechado no design e declará-los custa zero — descobrir depois que era fechado custa uma migration.
-SOURCE_MANUAL = "manual"      # lançado à mão pelo usuário (Story 8.3 — o ÚNICO desta onda)
-SOURCE_OFX = "ofx"            # importado de arquivo OFX (Onda 3)
-SOURCE_CSV = "csv"            # importado de CSV (Onda 3)
-SOURCE_TRANSFER = "transfer"  # perna de transferência entre contas do usuário (Onda 6)
-SOURCE_YIELD = "yield"        # rendimento de aplicação (Onda 6)
-SOURCE_PAYOUT = "payout"      # payout da Carteira e1p caindo no banco (Onda 6)
+SOURCE_MANUAL = "manual"      # lançado à mão pelo usuário (Story 8.3)
+SOURCE_OFX = "ofx"            # importado de arquivo OFX (Onda 4)
+SOURCE_CSV = "csv"            # importado de CSV (Onda 4)
+SOURCE_PAYABLE = "payable"    # NOVO (Story 8.9) — baixa de Contas a Pagar
+SOURCE_CHARGE = "charge"      # NOVO (Story 8.9) — recebimento fora do trilho
+SOURCE_TRANSFER = "transfer"  # perna de transferência entre contas do usuário (Story 8.18)
+SOURCE_YIELD = "yield"        # rendimento de aplicação (Onda 2b)
+SOURCE_PAYOUT = "payout"      # payout da Carteira e1p caindo no banco (Onda 3)
 
-SOURCES: tuple[str, ...] = (
-    SOURCE_MANUAL,
-    SOURCE_OFX,
-    SOURCE_CSV,
+# ⚠️ **OS DOIS CONJUNTOS — e a regra normativa que eles instituem (Onda 2 §3.1, Story 8.9 AC3).**
+#
+# A partir da Story 8.9, **nenhuma regra deste repositório é escrita contra um valor SOLTO de
+# `source`**: toda regra é escrita contra `SOURCES_SISTEMA` ou `SOURCES_EXTERNA`. A pergunta que os
+# dois conjuntos respondem é única e limpa — *"o e1p conhece o lançamento de negócio que corresponde
+# a esta linha?"* — e acrescentar uma origem nova passa a ser **uma entrada numa tupla**, sem que
+# nenhuma regra mude.
+#
+# **Por que a disciplina do conjunto é obrigatória aqui, e não estilo.** `source` mistura DOIS
+# eixos: `manual|ofx|csv` são **portas de entrada** e `payable|charge|transfer|yield|payout` são
+# **origens de lançamento**. A mistura nasceu no design-mãe §2.2 e foi para produção na migration
+# 0059 — e ela **NÃO será consertada** (Onda 2 §3.1): consertar exige reescrever uma coluna com dado
+# em produção, sob `FORCE ROW LEVEL SECURITY` (a armadilha da 0046), para benefício conceitual e
+# zero benefício de usuário. O que impede a mancha de INFECTAR o resto é exatamente a regra acima:
+# ninguém pergunta *"`source == 'ofx'`?"*, todo mundo pergunta *"`source in SOURCES_EXTERNA`?"*.
+#
+# ⚠️ Corolário que a §4.2.0 do design da Onda 2 grava em pedra: **não existe um booleano
+# `permite_futuro` decidido pelo chamador.** Um booleano é o parâmetro que alguém passa `True` no
+# caminho manual, um dia, por conveniência — e nenhum gate de AST o pega, porque não há import
+# envolvido. O eixo já existe e é `source`. Um eixo, uma pergunta.
+SOURCES_SISTEMA: tuple[str, ...] = (
+    SOURCE_PAYABLE,
+    SOURCE_CHARGE,
     SOURCE_TRANSFER,
     SOURCE_YIELD,
     SOURCE_PAYOUT,
 )
+SOURCES_EXTERNA: tuple[str, ...] = (SOURCE_MANUAL, SOURCE_OFX, SOURCE_CSV)
+
+# DERIVADA da união, nunca uma terceira lista escrita à mão: uma lista manual permitiria um valor
+# novo entrar em um conjunto e sumir do outro em silêncio (`test_sources_particionam_o_vocabulario`
+# em `tests/test_money_planes.py` prova união == SOURCES e interseção == vazio).
+SOURCES: tuple[str, ...] = SOURCES_EXTERNA + SOURCES_SISTEMA
 
 # ── Vocabulário de `status` — o estado de CONCILIAÇÃO do movimento (design §2.2) ──────────────
 # ⚠️ Ver o aviso (d) na docstring de `BankTransaction`: nesta onda só `unmatched` e `ignored` são
@@ -232,6 +259,44 @@ class BankTransaction(Base, TenantMixin, TimestampMixin):
             "dedup_hash",
             unique=True,
         ),
+        # ÚNICO **PARCIAL** — a garantia de idempotência da Regra da Origem (Onda 2 §3.2,
+        # Story 8.9 AC2). **É ESTE ÍNDICE, e não o `dedup_hash`, que impede o movimento de existir
+        # duas vezes:** preencher a conta duas vezes, reprocessar a mesma baixa ou um retry de
+        # request esbarram aqui, no banco, fail-closed, no espírito da RLS.
+        #
+        # ⚠️ **Sobre o `WHERE origin_id IS NOT NULL` — e uma correção ao texto da Story 8.9.** A
+        # AC2 justifica a cláusula dizendo que *"sem ela, todo movimento manual colidiria com todo
+        # outro movimento manual"*. **Isso é falso**, e o próprio design da Onda 2 escreve o motivo
+        # duas páginas antes, ao rejeitar a coluna `leg`: **no Postgres, `NULL` é distinto de
+        # `NULL` em índice único por padrão** (idem no SQLite). Duas linhas com `origin_id IS NULL`
+        # conviveriam num índice TOTAL — a cláusula não é o que as salva.
+        #
+        # O que a cláusula faz de verdade, e por que ela fica:
+        #   (1) **tamanho e intenção** — o índice carrega só as linhas de origem de sistema, que
+        #       são a minoria, em vez de uma entrada por movimento do tenant (mesmo raciocínio do
+        #       `ix_bank_transactions_status`, parcial pelo mesmo motivo);
+        #   (2) **não depender do comportamento de `NULL`** — a convivência de dois movimentos
+        #       externos passa a ser ESTRUTURAL (eles nem estão no índice) em vez de depender de
+        #       `NULLS DISTINCT`, que é o default do Postgres mas é **configurável desde o PG15**
+        #       (`NULLS NOT DISTINCT`). Uma "melhoria" futura que ligasse isso quebraria o
+        #       lançamento manual em silêncio.
+        # **Consequência para quem testa:** nenhum teste de COMPORTAMENTO distingue o índice
+        # parcial do total — os dois se comportam igual hoje. A guarda contra a remoção da cláusula
+        # é ESTRUTURAL (`test_indice_de_origem_e_parcial`), e é assim de propósito.
+        #
+        # `tenant_id` PRIMEIRO pelo mesmo motivo dos outros três índices únicos deste módulo:
+        # índice único é GLOBAL e não respeita RLS. Sem ele, o tenant B receberia uma violação
+        # inexplicável por causa de um dado do tenant A — bug **e** vazamento de existência (a
+        # lição que `uq_bank_accounts_tenant_ident` já pagou na Story 8.2).
+        Index(
+            "uq_bank_transactions_origin",
+            "tenant_id",
+            "source",
+            "origin_id",
+            unique=True,
+            postgresql_where=text("origin_id IS NOT NULL"),
+            sqlite_where=text("origin_id IS NOT NULL"),
+        ),
     )
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
@@ -271,9 +336,42 @@ class BankTransaction(Base, TenantMixin, TimestampMixin):
     fiscal_document_ref: Mapped[str | None] = mapped_column(
         String(64), default=None, nullable=True
     )
-    # Vocabulário `SOURCES`. Nesta onda SEMPRE `manual`, fixado no service — a API **não** aceita
-    # `source` do cliente (AC6): quem escolhe a origem é o caminho de código, nunca o payload.
+    # Vocabulário `SOURCES`. `create_transaction` fixa `manual` — a API **não** aceita `source` do
+    # cliente (8.3 AC6): quem escolhe a origem é o caminho de código, nunca o payload. A partir da
+    # Story 8.9, os valores de `SOURCES_SISTEMA` são escritos por **uma única função do
+    # repositório**, `bank/origin.py::sync_origin_movement`. `String(16)` continua servindo:
+    # `"payable"` (7) e `"charge"` (6) cabem — **sem migration de tipo**.
     source: Mapped[str] = mapped_column(String(16), nullable=False)
+    # ── A CHAVE DE ORIGEM (Story 8.9, Onda 2 §3.2) ───────────────────────────────────────────
+    # **INVARIANTE DA ORIGEM (normativa, testada nas DUAS direções):**
+    #     `source ∈ SOURCES_SISTEMA` ⟺ `origin_id IS NOT NULL`.
+    # Aplicada no **service** (`origin.sync_origin_movement`), não por `CheckConstraint` — padrão
+    # do projeto: integridade no service, onde ela pode explicar. Testar só um sentido deixaria
+    # passar exatamente o estado que a importação da Onda 4 vai criar por acidente (linha externa
+    # com `origin_id` preenchido), por isso `test_origem_do_sistema_sempre_tem_origin_id` verifica
+    # os dois.
+    #
+    # ⚠️ **`origin_id` é a CHAVE DE ORIGEM, NÃO "o id do lançamento"** (ratificação §C-3.3). Para
+    # origem de **perna única** (`payable`, `charge`, `yield`, `payout`) ela **é** o id do
+    # lançamento; para origem de **múltiplas pernas** é `f"{id}:{perna}"` — hoje só `transfer`, com
+    # `out`/`in` (Story 8.18). O que ela garante é a unicidade da **unidade de sincronização**, e a
+    # unidade de sincronização de uma transferência é a PERNA, não a transferência; o pareamento
+    # entre as pernas é trabalho de `transfer_id`, logo acima.
+    #
+    # ⚠️ **`VARCHAR(64)` e não 36, por assimetria de custo — não por conforto.** `uuid4` (36) +
+    # `":out"` (4) = 40, e o vocabulário de perna pode crescer. Em Postgres `VARCHAR(n)` é
+    # armazenamento **variável** (64 e 36 custam o mesmo em disco; o `n` é restrição, não reserva),
+    # enquanto errar para menos custa `ALTER COLUMN` sobre tabela com dado sob `FORCE ROW LEVEL
+    # SECURITY` — a armadilha da 0046, que o ADR 0003 nomeia como o único ponto desse tipo do
+    # épico. `test_origin_id_cabe_na_coluna` reprova em CI, e não no `ALTER COLUMN`, a origem de
+    # várias pernas que não couber.
+    #
+    # **Regra de autoridade (Onda 2 §3.3):** `bank_transactions.bank_account_id` é **DERIVADA** de
+    # `payables.bank_account_id`/`charges.bank_account_id` (a decisão autoritativa do usuário) pelo
+    # sincronizador, e é escrita por **nenhum outro caminho**. Se o cache de leitura
+    # (`payable.bank_transaction_id`) divergir do movimento cujo `origin_id = payable.id`, **quem
+    # manda é o `origin_id`**.
+    origin_id: Mapped[str | None] = mapped_column(String(64), default=None, nullable=True)
     import_batch_id: Mapped[str | None] = mapped_column(String(36), default=None, nullable=True)
     transfer_id: Mapped[str | None] = mapped_column(String(36), default=None, nullable=True)
     # Vocabulário `STATUSES`. Ver invariante (d).

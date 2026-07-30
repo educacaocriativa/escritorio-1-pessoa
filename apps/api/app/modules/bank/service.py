@@ -752,16 +752,20 @@ def _validate_amount(amount_cents: int) -> int:
     return amount_cents
 
 
-def _validate_posted_at(posted_at: date, account: BankAccount) -> date:
-    """As duas guardas de data do lançamento. Ambas 422, ambas com o porquê na mensagem.
+def validate_posted_at_floor(posted_at: date, account: BankAccount) -> date:
+    """O **piso** da data do movimento: `posted_at > opening_date`. 422, com o porquê na mensagem.
 
-    1. **`posted_at > opening_date`** — a fórmula do saldo derivado (design §3.1) só soma movimento
-       POSTERIOR à data de abertura, porque tudo até ali já está dentro de `opening_balance_cents`.
-       Aceitar a data e não somar o movimento seria pior do que recusar: a linha existiria, o saldo
-       não mudaria, e ninguém entenderia por quê.
-    2. **Não futura** — extrato bancário é fato passado. Data futura é erro de digitação (ano
-       errado é o caso comum), e um movimento no futuro entra no saldo de `until=None` e some do
-       saldo de hoje, o que aparece como divergência inexplicável na conferência da 8.5.
+    A fórmula do saldo derivado (design §3.1) só soma movimento POSTERIOR à data de abertura,
+    porque tudo até ali já está dentro de `opening_balance_cents`. Aceitar a data e não somar o
+    movimento seria pior do que recusar: a linha existiria, o saldo não mudaria, e ninguém
+    entenderia por quê.
+
+    ⚠️ **Extraída de `_validate_posted_at` pela Story 8.9, e é PÚBLICA de propósito.** O piso vale
+    para **os dois** conjuntos de `source`, sem exceção (design Onda 2 §4.2.0); o **teto** (recusar
+    data futura) vale só para `SOURCES_EXTERNA` e continua morando em `_validate_posted_at`, com o
+    caminho manual. `bank/origin.py::sync_origin_movement` chama ESTA função em vez de recopiar a
+    comparação — a story manda reusar a guarda existente e **não duplicar a fórmula**, porque duas
+    cópias do mesmo predicado divergem no dia em que só uma for corrigida.
     """
     if posted_at <= account.opening_date:
         raise BankError(
@@ -770,6 +774,25 @@ def _validate_posted_at(posted_at: date, account: BankAccount) -> date:
             "aconteceu até aquele dia — lançar antes disso contaria o mesmo dinheiro duas vezes.",
             422,
         )
+    return posted_at
+
+
+def _validate_posted_at(posted_at: date, account: BankAccount) -> date:
+    """As duas guardas de data do lançamento **externo** (`SOURCES_EXTERNA`). Ambas 422.
+
+    1. **`posted_at > opening_date`** — o piso, delegado a `validate_posted_at_floor` (que vale
+       para toda origem, inclusive as do sistema).
+    2. **Não futura** — extrato bancário é fato passado. Data futura é erro de digitação (ano
+       errado é o caso comum), e um movimento no futuro entra no saldo de `until=None` e some do
+       saldo de hoje, o que aparece como divergência inexplicável na conferência da 8.5.
+
+    ⚠️ **O teto NÃO se aplica a `SOURCES_SISTEMA`** (design Onda 2 §4.2.0, normativo): *"o e1p pode
+    afirmar o futuro do que ele mesmo agendou; não pode afirmar o futuro do que outro atestou"*. Um
+    OFX descreve o que já aconteceu; um pagamento agendado no app do banco, não. O corte é por
+    `source` — **nunca** por um booleano `permite_futuro` decidido pelo chamador, que é o parâmetro
+    que alguém passa `True` no caminho manual, um dia, por conveniência.
+    """
+    validate_posted_at_floor(posted_at, account)
     if posted_at > _today():
         raise BankError(
             "A data do movimento não pode ser futura: o extrato registra o que já aconteceu.",

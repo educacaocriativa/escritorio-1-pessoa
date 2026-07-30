@@ -12,7 +12,7 @@ from __future__ import annotations
 
 from datetime import date, datetime
 
-from sqlalchemy import BigInteger, Date, DateTime, Integer, String, Text
+from sqlalchemy import BigInteger, Date, DateTime, Index, Integer, String, Text
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.db.base import Base, TenantMixin, TimestampMixin, _uuid
@@ -32,6 +32,14 @@ ALL_RECURRENCES = {RECUR_NONE, RECUR_WEEKLY, RECUR_MONTHLY, RECUR_YEARLY}
 
 class Payable(Base, TenantMixin, TimestampMixin):
     __tablename__ = "payables"
+
+    # Índice de leitura da Regra da Origem (Story 8.9): *"o que saiu desta conta?"*. Declarado aqui
+    # e não com `index=True` na coluna porque a migration 0061 o cria COMPOSTO com `tenant_id` na
+    # frente — e schema declarado divergindo do schema migrado é como o SQLite dos unitários passa
+    # a exercitar um banco que a produção não tem.
+    __table_args__ = (
+        Index("ix_payables_bank_account", "tenant_id", "bank_account_id"),
+    )
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
     description: Mapped[str] = mapped_column(Text, default="", nullable=False)
@@ -70,3 +78,32 @@ class Payable(Base, TenantMixin, TimestampMixin):
 
     agenda_event_id: Mapped[str | None] = mapped_column(String(36), nullable=True)
     external_ref: Mapped[str | None] = mapped_column(String(64), nullable=True)
+
+    # ── A Regra da Origem (Story 8.9, migration 0061, design Onda 2 §3.3) ────────────────────
+    # As duas colunas nascem NULL e **nenhum caminho de produção as escreve nesta story**: a Story
+    # 8.9 entrega o contrato, e a **8.12** liga `apply_paid` a ele. Sem FK dura (padrão do
+    # projeto, igual a `cost_center_id`/`chart_account_id`): a integridade é validada no service,
+    # sob RLS.
+    #
+    # **REGRA DE AUTORIDADE — não existem duas verdades, existe uma verdade e um cache:**
+    #
+    #   `bank_account_id`      → **DECISÃO DO USUÁRIO, AUTORITATIVA.** *"De qual conta este
+    #                            pagamento saiu?"* Existe desde a baixa, **inclusive quando o
+    #                            movimento ainda não pôde ser gerado**. É dela que
+    #                            `bank_transactions.bank_account_id` é DERIVADA, pelo
+    #                            sincronizador (`bank/origin.py::sync_origin_movement`) e por
+    #                            nenhum outro caminho.
+    #   `bank_transaction_id`  → **CACHE DE LEITURA.** Conveniência para responder *"qual é o
+    #                            movimento desta conta paga?"* sem um segundo SELECT. Se divergir
+    #                            do movimento cujo `origin_id = payable.id`, **quem manda é o
+    #                            `origin_id`** — o cache está errado, o movimento não.
+    #
+    # ⚠️ Por que a regra de autoridade mora no código e não só no design: a divergência entre o
+    # cache e o `origin_id` só é alcançável **por bug** (o sincronizador é o escritor único, devolve
+    # a linha na mesma chamada e na mesma transação), e condição alcançável só por bug se prova com
+    # **teste**, não com script — `test_cache_de_movimento_nunca_diverge_do_origin_id`
+    # (`tests/test_bank_origin.py`), que a 8.12 estende para os caminhos reais de mutação.
+    # `app/scripts/bank_audit.py` **não existe e não deve ser criado** aqui (ratificação §C-4); ele
+    # volta a ser necessário na Onda 5, junto de `_refresh_status`.
+    bank_account_id: Mapped[str | None] = mapped_column(String(36), nullable=True)
+    bank_transaction_id: Mapped[str | None] = mapped_column(String(36), nullable=True)

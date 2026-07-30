@@ -45,7 +45,7 @@ import pytest
 pytest.importorskip("testcontainers.postgres")
 
 from sqlalchemy import create_engine, text  # noqa: E402
-from sqlalchemy.exc import ProgrammingError  # noqa: E402
+from sqlalchemy.exc import IntegrityError, ProgrammingError  # noqa: E402
 from sqlalchemy.orm import Session  # noqa: E402
 from sqlalchemy.pool import NullPool  # noqa: E402
 from testcontainers.postgres import PostgresContainer  # noqa: E402
@@ -920,4 +920,236 @@ def test_corte_de_data_sob_rls_cross_tenant(app_url: str) -> None:
         assert bank_service.derived_balances_as_of(sn, as_of=bank_service.SEM_CORTE) == {}, (
             "FAIL-CLOSED falhou: sem `app.current_tenant_id`, pedir o histórico inteiro devolveu "
             "saldo. O estado seguro é 'não vejo nada', nunca 'vejo tudo'."
+        )
+
+
+# ── Story 8.9 — a REGRA DA ORIGEM (AC2, AC11) ────────────────────────────────────────────────
+#
+# > **[@dev 8.9] Desvio documentado das File Locations da Story 8.9.** A story previa um arquivo
+# > novo, `tests/test_bank_origin_rls.py`. Ele exigiria um **segundo** `PostgresContainer` (a
+# > fixture `app_url` tem escopo de MÓDULO) e, com ele, um segundo `alembic upgrade head` — minutos
+# > de CI para exercitar exatamente as mesmas tabelas já preparadas aqui. **A instrução escrita no
+# > topo deste arquivo pela 8.3 é explícita** (*"acrescente casos AQUI em vez de criar mais um
+# > arquivo de testcontainer"*), a 8.5 seguiu-a e registrou o mesmo desvio, e a 8.9 é a terceira a
+# > chegar. Seguimos o padrão real do repositório; registrado em Completion Notes.
+#
+# A fixture `app_url` passa a exercitar também a migration **0061** (a coluna `origin_id`, as duas
+# colunas de `payables` e de `charges` e os dois índices novos) na cadeia …→0059→0060→**0061**.
+
+
+def _sync_origem(app_url: str, tenant_id: str, **over) -> str | None:
+    """`sync_origin_movement` numa sessão com a GUC do tenant fixada. Commita ao sair."""
+    from app.modules.bank.models import SOURCE_PAYABLE
+    from app.modules.bank.origin import sync_origin_movement
+
+    kwargs = {
+        "tenant_id": tenant_id,
+        "actor": "dono",
+        "source": SOURCE_PAYABLE,
+        "origin_id": str(uuid4()),
+        "bank_account_id": None,
+        "posted_at": date(2026, 7, 10),
+        "amount_cents": -120_00,
+        "description": "Aluguel",
+    }
+    kwargs.update(over)
+    with _session_for(app_url, tenant_id) as session:
+        movimento = sync_origin_movement(session, **kwargs)
+        movimento_id = movimento.id if movimento is not None else None
+        session.commit()
+        return movimento_id
+
+
+def test_indice_unico_de_origem_no_postgres_real(app_url: str) -> None:
+    """**AC2 — as duas metades do índice único PARCIAL, no banco que a produção roda.**
+
+    Esta é a prova autoritativa: é aqui que a migration 0061 cria o índice de verdade, com o
+    `WHERE origin_id IS NOT NULL` do dialeto Postgres. O SQLite dos unitários exercita um
+    equivalente (`sqlite_where`), mas quem decide em produção é este.
+
+    ⚠️ **A idempotência da Onda 2 inteira é este índice, não o `dedup_hash`.** Um retry de request,
+    um reprocessamento de baixa ou um segundo caminho de escrita aberto por engano param aqui —
+    fail-closed, no espírito da RLS.
+    """
+    from app.modules.bank.models import SOURCE_PAYABLE, STATUS_MATCHED, BankTransaction
+
+    tenant = str(uuid4())
+    acc = _seed_account(app_url, tenant, name="Origem", opening=100_000, number="6111-1")
+    origin_id = str(uuid4())
+
+    assert _sync_origem(app_url, tenant, origin_id=origin_id, bank_account_id=acc) is not None
+
+    # (a) mesma `(tenant, source, origin_id)` → o BANCO recusa a segunda linha. Escrito
+    #     CONTORNANDO o sincronizador de propósito: o que precisa estar provado é que a garantia
+    #     sobrevive a um segundo caminho de escrita, não que a função tem um `if`.
+    with _session_for(app_url, tenant) as s:
+        s.add(
+            BankTransaction(
+                tenant_id=tenant,
+                bank_account_id=acc,
+                posted_at=date(2026, 7, 11),
+                amount_cents=-1,
+                raw_description="a mesma origem, de novo",
+                dedup_hash="hash-diferente-de-proposito",
+                source=SOURCE_PAYABLE,
+                origin_id=origin_id,
+                status=STATUS_MATCHED,
+            )
+        )
+        with pytest.raises(IntegrityError):
+            s.commit()
+        s.rollback()
+
+    # (b) duas linhas com `origin_id IS NULL` na mesma conta → **ambas passam**.
+    for i in (1, 2):
+        _lancar(
+            app_url, tenant, acc, amount_cents=-50_00, posted_at=date(2026, 7, 12),
+            description=f"Pix manual {i}",
+        )
+
+    with _session_for(app_url, tenant) as s:
+        assert s.query(BankTransaction).filter(BankTransaction.origin_id.is_(None)).count() == 2
+
+
+def test_indice_de_origem_nao_vaza_entre_tenants(app_url: str) -> None:
+    """`uq_bank_transactions_origin` é GLOBAL — `tenant_id` na frente é o que salva.
+
+    Dois tenants com a **mesma** `(source, origin_id)` precisam conviver. Sem `tenant_id` como
+    primeira coluna, o segundo levaria um erro de integridade causado por um dado que ele **não
+    pode nem ver**: bug **e** vazamento de existência — a mesma lição que
+    `uq_bank_accounts_tenant_ident` (8.2) e `uq_bank_transactions_dedup` (8.3) já pagaram.
+    """
+    from app.modules.bank.models import BankTransaction
+
+    tenant_a = str(uuid4())
+    tenant_b = str(uuid4())
+    acc_a = _seed_account(app_url, tenant_a, name="Org A", opening=100_000, number="6222-1")
+    acc_b = _seed_account(app_url, tenant_b, name="Org B", opening=100_000, number="6222-2")
+    mesmo_origin_id = str(uuid4())  # a MESMA chave de origem nos dois lados, de propósito
+
+    assert _sync_origem(app_url, tenant_a, origin_id=mesmo_origin_id, bank_account_id=acc_a)
+    assert _sync_origem(app_url, tenant_b, origin_id=mesmo_origin_id, bank_account_id=acc_b)
+
+    with _session_for(app_url, tenant_b) as sb:
+        assert (
+            sb.query(BankTransaction)
+            .filter(BankTransaction.origin_id == mesmo_origin_id)
+            .count()
+            == 1
+        ), "B enxergou o movimento de origem de A (ou o próprio em duplicidade)"
+
+
+def test_sync_origin_movement_isolamento_cross_tenant(app_url: str) -> None:
+    """**AC11 — A nunca alcança o movimento, o `payable` nem a `charge` de B.**
+
+    O modo de falha desta função é o mais grave do módulo, porque ela **escreve** no razão
+    bancário. Um vazamento aqui não apareceria como "vi uma linha que não é minha" — apareceria
+    como **dinheiro do vizinho entrando no meu extrato** (ou sumindo do dele), e portanto como uma
+    divergência inventada no único número que este produto vende como confiável.
+    """
+    from datetime import datetime
+
+    from app.modules.bank import service as bank_service
+    from app.modules.bank.models import SOURCE_PAYABLE, BankTransaction
+    from app.modules.bank.origin import sync_origin_movement
+    from app.modules.payables.models import STATUS_PAID, Payable
+    from app.modules.receivables.models import Charge
+
+    tenant_a = str(uuid4())
+    tenant_b = str(uuid4())
+    _seed_account(app_url, tenant_a, name="Sync A", opening=100_000, number="6333-1")
+    acc_b = _seed_account(app_url, tenant_b, name="Sync B", opening=100_000, number="6333-2")
+
+    origin_b = str(uuid4())
+    mov_b = _sync_origem(app_url, tenant_b, origin_id=origin_b, bank_account_id=acc_b)
+    assert mov_b is not None
+
+    # ── (1) A não escreve na conta de B: `get_account` é 404 fail-closed ─────────────────────
+    with _session_for(app_url, tenant_a) as sa:
+        with pytest.raises(bank_service.BankError) as exc:
+            sync_origin_movement(
+                sa, tenant_id=tenant_a, actor="a", source=SOURCE_PAYABLE,
+                origin_id=str(uuid4()), bank_account_id=acc_b,
+                posted_at=date(2026, 7, 10), amount_cents=-1_000, description="invasão",
+            )
+        assert exc.value.status_code == 404, "cross-tenant deve ser 404 fail-closed, não 403"
+
+    # ── (2) A "estorna" a origem de B: não acha nada, não apaga nada ─────────────────────────
+    with _session_for(app_url, tenant_a) as sa:
+        assert (
+            sync_origin_movement(
+                sa, tenant_id=tenant_a, actor="a", source=SOURCE_PAYABLE, origin_id=origin_b,
+                bank_account_id=None, posted_at=None, amount_cents=None, description="",
+            )
+            is None
+        )
+        sa.commit()
+
+    with _session_for(app_url, tenant_b) as sb:
+        sobrevivente = sb.get(BankTransaction, mov_b)
+        assert sobrevivente is not None, (
+            "RLS falhou: A apagou o movimento de origem de B — o extrato do vizinho perdeu uma "
+            "linha, e o saldo dele mudou sem que nada no sistema DELE tivesse acontecido"
+        )
+        assert sobrevivente.origin_id == origin_b
+        assert (
+            bank_service.derived_balance(sb, bank_account_id=acc_b, until=date(2026, 7, 31))
+            == 100_000 - 120_00
+        )
+
+    # ── (3) As COLUNAS NOVAS de payables/charges também não vazam (migration 0061) ───────────
+    with _session_for(app_url, tenant_b) as sb:
+        p_b = Payable(
+            tenant_id=tenant_b, description="conta de B", category="Geral", supplier="Forn",
+            amount_cents=120_00, due_date=date(2026, 7, 10), status=STATUS_PAID,
+            paid_at=datetime.fromisoformat("2026-07-10T12:00:00+00:00"),
+            bank_account_id=acc_b, bank_transaction_id=mov_b,
+        )
+        c_b = Charge(
+            tenant_id=tenant_b, description="cobrança de B", kind="service", method="pix",
+            amount_cents=300_00, due_date=date(2026, 7, 10), bank_account_id=acc_b,
+        )
+        sb.add_all([p_b, c_b])
+        sb.commit()
+        payable_b, charge_b = p_b.id, c_b.id
+
+    with _session_for(app_url, tenant_a) as sa:
+        assert sa.get(Payable, payable_b) is None, "A leu a conta a pagar de B"
+        assert sa.get(Charge, charge_b) is None, "A leu a cobrança de B"
+
+    # ── (4) Escrita com `tenant_id` alheio: barrada pelo WITH CHECK ──────────────────────────
+    with _session_for(app_url, tenant_a) as sa:
+        sa.add(
+            BankTransaction(
+                tenant_id=tenant_b,  # ← o ataque: plantar um movimento de origem no vizinho
+                bank_account_id=acc_b,
+                posted_at=date(2026, 7, 13),
+                amount_cents=999_999,
+                raw_description="Plantado por A",
+                dedup_hash="hash-plantado-origem",
+                source=SOURCE_PAYABLE,
+                origin_id=str(uuid4()),
+                status="matched",
+            )
+        )
+        with pytest.raises(ProgrammingError):
+            sa.commit()
+        sa.rollback()
+
+    # ── (5) Sem GUC: fail-closed. A busca da origem não acha, e nada é apagado ───────────────
+    with _session_for(app_url, None) as sn:
+        assert (
+            sync_origin_movement(
+                sn, tenant_id=tenant_b, actor="ninguem", source=SOURCE_PAYABLE,
+                origin_id=origin_b, bank_account_id=None, posted_at=None, amount_cents=None,
+                description="",
+            )
+            is None
+        )
+        sn.commit()
+
+    with _session_for(app_url, tenant_b) as sb:
+        assert sb.get(BankTransaction, mov_b) is not None, (
+            "FAIL-CLOSED falhou: sem `app.current_tenant_id` o sincronizador alcançou (e apagou) "
+            "o movimento de um tenant. O estado seguro é não ver nada."
         )
