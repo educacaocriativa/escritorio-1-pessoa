@@ -149,8 +149,7 @@ def process_pending(db: Session, *, tenant_id: str, limit: int = 50) -> int:
             elif notification.whatsapp_template_name:
                 status = whatsapp.send_template(
                     to=notification.recipient,
-                    token=profile.whatsapp_token or "",
-                    phone_id=profile.whatsapp_phone_id or "",
+                    profile=profile,
                     template_name=notification.whatsapp_template_name,
                     language=notification.whatsapp_template_language or "pt_BR",
                     variables=notification.whatsapp_template_variables or [],
@@ -159,8 +158,7 @@ def process_pending(db: Session, *, tenant_id: str, limit: int = 50) -> int:
                 status = whatsapp.send_text(
                     to=notification.recipient,
                     text=notification.message,
-                    token=profile.whatsapp_token,
-                    phone_id=profile.whatsapp_phone_id,
+                    profile=profile,
                 )
             notification.status = status
         except Exception as exc:  # noqa: BLE001 — isola a falha de UMA notificação (IV2)
