@@ -635,6 +635,50 @@ def test_patch_opening_date_para_tras_continua_permitido_e_pode_reparar(
     assert resp.json()["saldo_derivado_cents"] == 20_000, "o movimento voltou a somar"
 
 
+def test_patch_opening_date_ignora_movimento_de_OUTRA_conta_do_mesmo_tenant(
+    client: TestClient, headers
+):
+    """A guarda é **por conta**: movimento da conta A não pode bloquear a edição da conta B.
+
+    ⚠️ **Teste acrescentado no re-gate do Epic 8 (2026-07-30) por sobreviver a uma mutação.**
+    Removendo o filtro `BankTransaction.bank_account_id == account.id` de
+    `_validate_opening_date_move`, a suíte inteira ficava **verde** (`51 passed`) — o filtro mais
+    importante da guarda não era exercitado por nada.
+
+    O que a ausência dele causaria é o espelho exato do BANK-001: em vez de uma divergência
+    fantasma, um **bloqueio fantasma**. O usuário levaria 422 numa edição legítima, com uma
+    mensagem nomeando *"1 movimento lançado em ..."* que ele não encontra em lugar nenhum daquela
+    conta — porque está em outra. Um beco sem saída, e do mesmo tipo: o sistema afirmando com
+    precisão algo que não é verdade sobre a conta que o usuário está olhando.
+
+    As duas contas são deliberadamente do **mesmo tenant** (a RLS não ajuda aqui — ela esconde
+    tenant vizinho, não conta vizinha).
+    """
+    a = _create(
+        client, headers, number="1111-1", opening_balance_cents=100_000,
+        opening_date="2026-06-01",
+    )
+    b = _create(
+        client, headers, number="2222-2", opening_balance_cents=100_000,
+        opening_date="2026-06-01",
+    )
+    # O movimento vive SÓ na conta A, exatamente dentro da janela que a edição de B percorreria.
+    _lancar(client, headers, a["id"], amount_cents=-80_000, posted_at="2026-06-10")
+
+    resp = client.patch(
+        f"/bank/accounts/{b['id']}", json={"opening_date": "2026-06-15"}, headers=headers
+    )
+    assert resp.status_code == 200, (
+        "a guarda contou movimento de OUTRA conta e bloqueou uma edição legítima — o filtro "
+        f"`bank_account_id` sumiu de `_validate_opening_date_move`. Resposta: {resp.text}"
+    )
+    assert resp.json()["opening_date"] == "2026-06-15"
+    # E a conta A segue protegida: a guarda não foi afrouxada, só é por conta.
+    assert client.patch(
+        f"/bank/accounts/{a['id']}", json={"opening_date": "2026-06-15"}, headers=headers
+    ).status_code == 422
+
+
 # ── Auditoria ─────────────────────────────────────────────────────────────────────────────────
 
 

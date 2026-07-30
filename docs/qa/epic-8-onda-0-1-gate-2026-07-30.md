@@ -505,3 +505,318 @@ $ pnpm --filter @e1p/web test
 
 **Nenhum código de produção foi alterado.** As dez mutações do teste de mutação foram revertidas com
 `git restore` imediatamente após cada execução, e a árvore foi verificada limpa a cada passo.
+
+---
+---
+
+# RE-GATE — 2026-07-30 (2ª passagem)
+
+> **Revisor:** Quinn (@qa) · **HEAD:** `63a5a52` · **Base do re-gate:** `4da2a2e` (o HEAD do 1º gate)
+> **Seção acrescentada, não substitui nada acima.** O gate original permanece como registro do que
+> foi encontrado; esta seção registra o que foi verificado depois das correções.
+
+## Veredito do re-gate
+
+# ✅ CONCERNS
+
+**O FAIL está levantado.** BANK-001 e REL-001 foram fechados, e eu os verifiquei reproduzindo o
+cenário original e aplicando **9 mutações novas** — não pela palavra de ninguém. Sobram apenas itens
+que não bloqueiam o merge: dois que precisam de decisão da `@architect` (UX-001, SIG-001), um item
+de aceite manual do fundador (G-4) e dívidas pré-existentes ao épico.
+
+**Por que CONCERNS e não PASS:** UX-001 continua aberto e é um defeito de confiança real (*"no
+banco"* nomeando os dois lados opostos da comparação), e a validação em ~360px segue sem ter sido
+feita por ninguém. Nenhum dos dois é blocker de PR — são decisão de dono, não correção de @dev.
+
+---
+
+## Evidência executada (foreground, interpretador do venv)
+
+```
+$ ruff check .
+All checks passed!
+
+$ python -m pytest -q -m "not rls_e2e"
+1051 passed, 1 skipped, 22 deselected, 2173 warnings in 316.65s (0:05:16)
+
+$ python -m pytest -q -m "rls_e2e"
+22 passed, 1052 deselected in 103.31s (0:01:43)
+
+$ pnpm --filter @e1p/web typecheck     # tsc --noEmit
+=== TSC OK ===
+$ pnpm --filter @e1p/web lint          # eslint . --max-warnings 0
+=== LINT OK ===
+$ pnpm --filter @e1p/web test
+ Test Files  50 passed (50)
+      Tests  294 passed (294)
+```
+
+Backend `1051` = os `1050` declarados pelo coordenador **+1** teste que acrescentei (ver RG-1).
+Frontend `294` = os `293` declarados **+1** (ver RG-3).
+
+---
+
+## 1 · BANK-001 — **FECHADO**
+
+### O cenário original do gate, reproduzido
+
+Mesmo caso que devolvia `200` e `divergencia=-80000`:
+
+```
+=== [1] CENARIO ORIGINAL DO GATE
+    ANTES : derivado=20000 banco=20000 sistema=20000 div=0 dentro=True
+    PATCH opening_date -> 15/06 : 422
+    MSG: Esta conta tem 1 movimento lançado em 2026-06-10. Mover a data de abertura para
+         2026-06-15 tiraria esse lançamento do saldo desta conta, mas ele continuaria aparecendo
+         na lista de movimentos: o saldo mudaria sozinho e a conferência acusaria uma diferença
+         que não existe. Se quem está com a data errada é o movimento, corrija a data dele
+         primeiro. Se a conta recomeçou do zero, arquive-a e cadastre-a [...]
+    DEPOIS: derivado=20000 banco=20000 sistema=20000 div=0 dentro=True
+```
+
+A divergência inventada não acontece mais, e a mensagem faz o que uma boa recusa faz: diz **o que
+aconteceria**, não só que é inválido, e oferece saída.
+
+### As três decisões de borda — **as três estão certas**
+
+| Borda | Comportamento verificado | Julgamento |
+|---|---|---|
+| Mover **para trás** é livre | `200`; e o teste `..._para_tras_continua_permitido_e_pode_reparar` fabrica o órfão por escrita direta e prova que o movimento **volta a somar** | ✅ **Certa.** Recuar só pode *acrescentar* ao conjunto que soma (`posted_at > opening_date`) — não existe órfão a criar. E é o único caminho de reparo para o dado que já ficou torto antes da guarda existir. Bloquear seria proibir o conserto |
+| `posted_at == nova_data` é **recusado** | `422` na data exata; `200` em `nova_data = posted_at − 1d` | ✅ **Certa, e é a borda que mais importa.** `_movements_sums` soma com `>` estrito, então o movimento *na* data de abertura ficaria órfão igual. É a mesma assimetria que a 8.4 fixou em `_validate_reference_date` (movimento `>`, checkpoint `>=`) — coerência, não coincidência |
+| Movimento `ignored` **conta** | `422` mesmo com o saldo já sem ele (`saldo=100000`, o mov já fora), com nota própria na mensagem | ✅ **Certa, e é a mais sutil das três.** Hoje não muda número nenhum — o argumento é sobre o **futuro**: `unignore_transaction` promete *"devolve o movimento ao saldo"*, e depois da data movida ela não teria como cumprir. Seria o BANK-001 de novo, com o gatilho adiado para um clique. Escolher o inverso (deixar passar) seria otimizar por permissividade contra uma promessa escrita no próprio service |
+
+### Mutação — 4 mutantes, 4 mortos
+
+Os 3 do @dev conferem, e apliquei um 4º que ele não fez:
+
+| # | Mutação | Resultado |
+|---|---|---|
+| MG1 | Guarda inteira removida de `update_account` | ✅ `3 failed` — os três testes de borda |
+| MG2 | `posted_at <= nova` vira `<` | ✅ `1 failed` — `test_patch_opening_date_na_data_exata_do_movimento_422` |
+| MG3 | `status != STATUS_IGNORED` acrescentado à guarda (exclui ignorados) | ✅ `1 failed` — `..._conta_movimento_ignorado` |
+| **MG4** | **Filtro `bank_account_id == account.id` removido** | ❌ **SOBREVIVEU** (`51 passed`) → ver RG-1 |
+
+### RG-1 (LOW) — o filtro mais importante da guarda não era testado · **FECHADO por mim**
+
+Removendo `BankTransaction.bank_account_id == account.id` de `_validate_opening_date_move`, a suíte
+inteira ficava **verde**. Nada exercitava "movimento da conta A não pode bloquear a edição da conta B".
+
+O que a ausência causaria é o **espelho exato do BANK-001**: em vez de divergência fantasma, um
+**bloqueio fantasma** — `422` numa edição legítima, com uma mensagem nomeando *"1 movimento lançado
+em ..."* que o usuário não acha em lugar nenhum daquela conta, porque está em outra. Mesmo tipo de
+dano: o sistema afirmando com precisão algo que não é verdade sobre a conta que ele está olhando.
+
+**Acrescentado** `test_patch_opening_date_ignora_movimento_de_OUTRA_conta_do_mesmo_tenant`
+(`apps/api/tests/test_bank_accounts.py`), com as duas contas no **mesmo tenant** de propósito — a RLS
+não protege aqui, ela esconde tenant vizinho, não conta vizinha. Verificado: com o teste, MG4 morre
+(`1 failed, 51 passed`). Código de produção **não** foi tocado — está correto hoje.
+
+### RG-2 (LOW, cosmético) — concordância quebrada na mensagem do caso `ignored`
+
+Em `_validate_opening_date_move`, o @dev montou a concordância em pedaços (`"Ele está ignorado"` vs
+`"Eles estão ignorados"`) e depois concatena um sufixo fixo no **plural**:
+
+> "Ele está ignorado: hoje isso já **os** deixa fora do saldo, mas depois da mudança desfazer o
+> 'ignorar' deixaria de **devolvê-los** a ele, sem avisar."
+
+Singular + plural na mesma frase. Só aparece com **exatamente 1** movimento ignorado — que é o caso
+mais comum. Não corrigido (código de produção). Custo: duas variantes do sufixo, ~4 linhas.
+
+---
+
+## 2 · REL-001 — **FECHADO**
+
+### A preocupação do @dev sobre vácuo: **confirmada como resolvida**
+
+Ele reportou que a 1ª versão do teste de sucesso contava `api.get` no total e não matava o mutante
+"sucesso sem `load()`", porque `onChanged()` é o `load()` da **página** e sobe o contador sozinho.
+A versão final conta só `/bank/transactions`. **Verificado por mutação — não é vácuo:**
+
+| # | Mutação em `ContasSaldosPage.tsx` | Resultado |
+|---|---|---|
+| MR1 | `catch` removido de `ignorar` (volta ao bug original) | ✅ `1 failed` — o teste de falha |
+| MR2 | `catch { }` engolindo em silêncio (o anti-padrão clássico) | ✅ `1 failed` — o teste de falha |
+| **MR3** | **`load()` removido do sucesso de `ignorar`, `onChanged()` mantido** — *o mutante exato que enganou a 1ª versão* | ✅ **`1 failed`** — `"ignorar: no sucesso recarrega a lista"` |
+| MR4 | `load()` removido do sucesso de `removerDeclaracao` | ✅ `1 failed` |
+| MR5 | `load()` removido do sucesso de `desfazerIgnorar` | ❌ **SOBREVIVEU** (`16 passed`) → ver RG-3 |
+
+O par falha+sucesso é a forma certa, e o @dev acertou ao desconfiar do próprio teste: um `catch` que
+engolisse tudo passaria no teste de falha sozinho. **A autocorreção dele se sustenta sob mutação.**
+
+### RG-3 (LOW) — a terceira ação não tinha par de sucesso · **FECHADO por mim**
+
+`desfazerIgnorar` ficou só com o teste de falha (o @dev declarou: *"par de sucesso de **dois**"*), e
+removendo o `load()` do caminho feliz dela a suíte ficava verde. O dano é menor que o das irmãs, mas
+é da mesma família: `unignore` **devolve** dinheiro ao saldo, e sem o `load()` do detalhe o movimento
+segue desenhado como ignorado enquanto o saldo da página (recarregado por `onChanged()`) já mudou —
+dois números na mesma tela contando histórias diferentes sobre a mesma ação.
+
+**Acrescentado** o par de sucesso em `ContasSaldosPage.test.tsx`. Verificado: MR5 agora morre
+(`1 failed, 16 passed`). Código de produção **não** foi tocado.
+
+### Decisão de UX do @dev, julgada
+
+Fechar o modal **antes** de saber o desfecho, deixando a mensagem na seção atrás do overlay: ✅
+**certa**. A alternativa (manter aberto) mostraria exatamente o nada de antes, já que o elemento de
+erro vive na seção. Perder o motivo digitado é o preço menor — ele é opcional e curto; a informação
+de que a ação não aconteceu, não.
+
+---
+
+## 3 · Auditoria do `test_tenancy_guard.py` — **a leitura do coordenador está certa, e o furo é maior**
+
+**Confirmado ponto a ponto:**
+
+- ✅ Não usa AST — é substring (`if "get_db" in source`), então **não** tem a evasão de alias.
+- ✅ **Nenhuma violação hoje.** Os dois hits fora de router são menções em docstring
+  (`platform/service.py:269`, `whatsapp_inbox/service.py:86`) e os dois módulos estão na ALLOWLIST.
+- ✅ `bank` **não** está na ALLOWLIST e usa `get_tenant_db` em todas as rotas
+  (`bank/router.py:24,117,136,...`).
+- ✅ Varredura completa: **nenhum** módulo fora da ALLOWLIST cita `get_db` — nem em `router.py`, nem
+  em qualquer `.py` de `app/modules/`.
+
+**O que o coordenador descreveu como hipótese é, na verdade, concreto.** O ponto cego não é só
+*"um `service.py` poderia"* — **existe hoje um arquivo de rota real, montado, fora da varredura**:
+
+```
+glob atual: 29 arquivos | glob amplo: 30 arquivos
+arquivos que ENTRARIAM na varredura: ['app\modules\payables\receipts_router.py']
+```
+
+`app/modules/payables/receipts_router.py` é incluído no app (`app/modules/__init__.py:31,56`) e o
+glob `*/router.py` não casa com ele — o nome do arquivo não é `router.py`. **A própria docstring do
+teste sempre disse `**/router.py`**; era a implementação que discordava dela.
+
+E é justamente o módulo da bandeja de comprovantes, onde o `CLAUDE.md` já registra uma ressalva de
+isolamento por usuário.
+
+**Provado por mutação:** com `from app.db.session import get_db` dentro de `receipts_router.py`, a
+guarda passava (`2 passed`).
+
+### RG-4 — **FECHADO por mim** (era grátis, e eu medi antes)
+
+Antes de mexer, medi o custo de ampliar:
+
+```
+violacoes sob o glob AMPLO: NENHUMA
+se varresse TODO .py de modules (fora da allowlist): NENHUMA
+```
+
+Zero violação pré-existente — ampliar não arrasta nada para dentro deste PR. `_module_routers()`
+passou a varrer qualquer arquivo com `router` no nome (`rglob`), que é a intenção já documentada.
+Verificado: o mutante agora reprova (`1 failed`), baseline verde.
+
+**Resposta à pergunta do coordenador — follow-up ou bloqueante?** Nem um nem outro:
+**a parte que era barata e provadamente grátis eu fechei agora**, porque um router real invisível a
+uma guarda de isolamento não é dívida de arquitetura, é um bug de uma linha no glob.
+
+**O que fica como follow-up (LOW, fora deste PR):** a guarda só olha arquivos de **rota**. Um
+`service.py` que abrisse sessão global continua passando. Não ampliei para todo `.py` de propósito —
+a guarda é substring e não distingue código de prosa, então varrer tudo transformaria qualquer
+docstring que cite `get_db` em falso positivo (exatamente o caso de `platform/service.py:269` e
+`whatsapp_inbox/service.py:86`, que hoje só escapam por estarem na ALLOWLIST). Fazer isso direito
+pede AST — e aí a lição do TEST-001 se aplica: **com o alias apenso desde o primeiro dia.**
+
+---
+
+## 4 · `test_projection_saldo_misto.py` — **tinha a mesma evasão. Miss meu no 1º gate.**
+
+O coordenador estava certo em desconfiar. O arquivo tem **dois** coletores de import diferentes:
+
+- `test_a_projecao_nao_reimplementa_o_saldo_bancario` usa `ast.alias`
+  (`node.name.split(".")[-1]`) e **nunca teve o furo** — foi o que eu vi na primeira passagem e me
+  fez marcar o arquivo como limpo;
+- `test_dre_e_lucratividade_nao_importam_o_modulo_bank` tinha `importados.append(node.module or "")`
+  — **a evasão exata**, no gate que protege a DRE.
+
+**Provado por mutação:** `from app.modules import bank` dentro de `dre.py` → `1 passed`, gate verde
+com a DRE importando o plano 3. É o gate cuja própria mensagem diz *"saldo de conta não é receita nem
+despesa de competência — se entrou na DRE, entrou como número inventado"*.
+
+**FECHADO por mim** (mesma correção dos outros três). Verificado: o mutante agora mata
+(`FAILED test_dre_e_lucratividade_nao_importam_o_modulo_bank`), baseline `25 passed`.
+
+**Correção do 1º gate:** onde a seção TEST-001 diz "três arquivos", são **quatro**. Aprendizado
+registrado: *contar coletores, não arquivos* — um arquivo pode ter um coletor certo e outro errado, e
+foi exatamente o que aconteceu aqui.
+
+---
+
+## CodeRabbit (re-gate)
+
+Escopo reduzido aos 3 commits (`--committed --base-commit 4da2a2e`) — o combo sem `--committed`
+disparou o falso positivo de 610 arquivos e o CLI recusou.
+
+```
+{"type":"complete","status":"review_completed","findings":3,"reviewedFiles":[17 arquivos]}
+```
+
+**Zero achados nos dois arquivos de código corrigidos** (`bank/service.py`,
+`ContasSaldosPage.tsx`). Os 3 achados:
+
+| Severidade | Onde | Destino |
+|---|---|---|
+| major | `docs/qa/epic-8-onda-0-1-gate-2026-07-30.md` — *"rode `scripts/check.sh` e os 3 agentes de QA"* | ❌ **Rejeitado, com motivo.** É leitura literal do `CLAUDE.md` §5 sem saber que a ferramenta está quebrada: `check.sh` mascara falha do vitest e resolve `ruff`/`python` do PATH (MNT-003). Rodar as etapas individualmente é evidência **estritamente mais forte**, não mais fraca. Trocar por um verde de `check.sh` seria rebaixar o gate |
+| minor | `docs/stories/8.5.story.md` — *"sem achados atribuídos"* seguido de dois achados | ✅ **Aceito e corrigido** (texto meu, do 1º gate): passou a *"nenhum achado **bloqueante**"*, nomeando REL-002 e SIG-001 |
+| minor | `CLAUDE.md` §6.1 — CPF/CNPJ | ✅ Confirma o DOC-002 que eu já havia levantado. Segue como follow-up; `CLAUDE.md` não é artefato do @qa |
+
+> ⚠️ Os 4 arquivos de teste que **eu** alterei estavam sem commit e ficaram fora deste `--committed`.
+> Nenhum foi revisado por máquina — mas cada um foi verificado por mutação, que é o critério que este
+> gate usa e o mais forte dos dois para um arquivo de teste.
+
+---
+
+## Placar dos achados do 1º gate
+
+| ID | Severidade | Estado |
+|---|---|---|
+| **BANK-001** | 🔴 HIGH | ✅ **FECHADO** — reproduzido, 3 bordas julgadas certas, 4 mutantes mortos |
+| **TEST-001** | 🟠 MEDIUM | ✅ **FECHADO** — 4 coletores corrigidos (3 no 1º gate + 1 no re-gate) |
+| **REL-001** | 🟠 MEDIUM | ✅ **FECHADO** — 5 mutantes, incluindo o par de sucesso que faltava |
+| **UX-001** | 🟠 MEDIUM | 🔴 **ABERTO** — verificado: `projecao.ts:131` e `ConferenciaPage.tsx:239` inalterados. Decisão da `@architect` |
+| **SIG-001** | 🟠 MEDIUM | 🔴 **ABERTO** — não tocado. Decisão da `@architect` |
+| **MNT-001** | 🟠 MEDIUM | 🔴 **ABERTO** — 17 call sites com `target=''`. Pré-existente, follow-up |
+| **G-4** (~360px) | ⚠️ aceite manual | 🔴 **ABERTO** — nenhuma evidência nova. Decisão do fundador |
+| **MNT-002/003, REL-002, DOC-001/002/003** | 🟢 LOW | 🔴 Abertos, follow-up |
+| **RG-1** | 🟢 LOW | ✅ **FECHADO** — teste do filtro de conta |
+| **RG-2** | 🟢 LOW | 🔴 **ABERTO** — concordância singular/plural, cosmético |
+| **RG-3** | 🟢 LOW | ✅ **FECHADO** — par de sucesso de `desfazerIgnorar` |
+| **RG-4** | 🟢 LOW | ✅ **FECHADO** — glob do tenancy guard |
+
+---
+
+## O que ainda precisa de decisão antes do PR
+
+| # | Item | Quem decide | Bloqueia o PR? |
+|---|---|---|---|
+| 1 | **UX-001** — qual tela cede a palavra *"no banco"*. Preferência do gate: renomear as colunas da Conferência para *"O que o banco diz"* × *"O que o e1p calculou"* | `@architect` | **Não** — mas fica mais caro depois que o usuário aprender o rótulo errado |
+| 2 | **SIG-001** — a janela da conferência deve seguir o mês da DRE? | `@architect` | Não |
+| 3 | **G-1** — `saldo_projetado_cents` precisa de irmão `*_origem`? A regra é sobre o prefixo `saldo_` ou sobre saldo? | `@architect` | Não |
+| 4 | **G-4** — soltar para produção sem validar ~360px | **fundador** | Não bloqueia merge; **bloqueia release** |
+| 5 | **MNT-001** (17 call sites) e **RG-2** (concordância) viram story de follow-up? | `@po` / fundador | Não |
+| 6 | **RG-4 follow-up** — endurecer o tenancy guard para além de arquivos de rota (pede AST) | `@po` | Não |
+| 7 | **DOC-003** — reconciliar epic/stories com a ratificação | `@pm` / `@po` | Não |
+
+---
+
+## Alterações feitas por este re-gate
+
+| Arquivo | O que mudou | Autorização |
+|---|---|---|
+| `apps/api/tests/test_bank_accounts.py` | +1 teste: a guarda é **por conta** (mata MG4) | teste |
+| `apps/api/tests/test_projection_saldo_misto.py` | coletor de import do gate da DRE passa a apensar o alias | teste |
+| `apps/api/tests/test_tenancy_guard.py` | `_module_routers()` varre qualquer arquivo com `router` no nome | teste |
+| `apps/web/src/features/financeiro/ContasSaldosPage.test.tsx` | +1 par de sucesso para `desfazerIgnorar` (mata MR5) | teste |
+| `docs/stories/8.5.story.md` | *"sem achados"* → *"nenhum achado **bloqueante**"* (achado do CodeRabbit sobre texto meu) | seção do @qa |
+| `docs/qa/epic-8-onda-0-1-gate-2026-07-30.md` | esta seção | artefato do gate |
+
+**Nenhum código de produção foi alterado.** As 9 mutações desta passagem foram revertidas com
+`git restore` imediatamente após cada execução, com a árvore verificada limpa a cada passo.
+
+### Status das stories
+
+Mantidos como estão — a transição é decisão do coordenador, não deste re-gate. A 8.2 segue em
+`InProgress` (foi para lá pelo BANK-001, que está fechado) e as outras sete em `InReview`. Com o
+veredito em **CONCERNS**, a transição natural das oito é `→ Done`; não a apliquei porque a 8.2 exige
+o passo `InProgress → InReview → Done` e porque UX-001/G-4 podem mudar o desfecho conforme a decisão
+do fundador.

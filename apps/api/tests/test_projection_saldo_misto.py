@@ -731,7 +731,19 @@ def test_dre_e_lucratividade_nao_importam_o_modulo_bank(client: TestClient, head
             if isinstance(node, ast.Import):
                 importados.extend(a.name for a in node.names)
             elif isinstance(node, ast.ImportFrom):
-                importados.append(node.module or "")
+                # ⚠️ O alias entra no caminho (`app.modules` + `bank` → `app.modules.bank`).
+                # Sem isso, `from app.modules import bank` dentro de `dre.py` produzia só
+                # `"app.modules"`, que não casa com o `startswith` abaixo — e o gate ficava verde
+                # com a DRE importando o plano 3. Verificado por mutação no re-gate do Epic 8
+                # (2026-07-30); mesma correção já aplicada em `test_money_planes.py`,
+                # `test_financial_intelligence_completeness.py` e
+                # `test_bank_reconciliation_report.py`. Note que o OUTRO coletor deste arquivo
+                # (`test_a_projecao_nao_reimplementa_o_saldo_bancario`) nunca teve o furo, porque
+                # varre `ast.alias` — foi o que fez este passar despercebido na primeira rodada.
+                base = f"{'.' * node.level}{node.module or ''}"
+                importados.append(base)
+                sep = "" if base.endswith(".") else "."
+                importados.extend(f"{base}{sep}{a.name}" for a in node.names)
         ofensores = [m for m in importados if m.startswith("app.modules.bank")]
         assert not ofensores, (
             f"{caminho.name} passou a importar o módulo `bank`: {ofensores}. Saldo de conta não é "

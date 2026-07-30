@@ -304,6 +304,28 @@ describe("REL-001 — as ações que mexem no saldo não podem falhar em silênc
     expect(await screen.findByText("Erro inesperado")).toBeInTheDocument();
   });
 
+  it("desfazer ignorar: no sucesso recarrega a lista e não deixa erro na tela", async () => {
+    /**
+     * ⚠️ **Par acrescentado no re-gate do Epic 8 (2026-07-30) por sobreviver a uma mutação.**
+     * As outras duas ações ganharam o par de sucesso; esta ficou só com o de falha, e removendo o
+     * `load()` do caminho feliz de `desfazerIgnorar` a suíte ficava **verde** (`16 passed`).
+     *
+     * O dano é menor que o das irmãs, mas é da mesma família: `unignore` **devolve** dinheiro ao
+     * saldo derivado, e sem o `load()` do detalhe o movimento continua desenhado como ignorado
+     * enquanto o saldo da página (recarregado por `onChanged()`) já mudou — dois números na mesma
+     * tela contando histórias diferentes sobre a mesma ação.
+     */
+    mockApi([conta()], [], [movimento({ status: "ignored", ignored_reason: "duplicado" })]);
+    vi.mocked(api.post).mockResolvedValue({ data: {} } as never);
+    const user = await abrirMovimentos();
+    const antes = recargasDoDetalhe();
+
+    await user.click(screen.getByRole("button", { name: "Desfazer ignorar" }));
+
+    await waitFor(() => expect(recargasDoDetalhe()).toBeGreaterThan(antes));
+    expect(screen.queryByText("Erro inesperado")).toBeNull();
+  });
+
   it("remover declaração: a falha aparece na tela", async () => {
     mockApi([conta()], [checkpoint], []);
     vi.spyOn(window, "confirm").mockReturnValue(true);
