@@ -452,8 +452,7 @@ def run_node(
         resolved_vars = [_resolve_template_variable(v, c) for v in (params.get("variables") or [])]
         profile = settings_service.get_profile(db, tenant_id)
         status = whatsapp.send_template(
-            to=to_phone, token=profile.whatsapp_token or "",
-            phone_id=profile.whatsapp_phone_id or "",
+            to=to_phone, profile=profile,
             template_name=tpl.name, language=tpl.language, variables=resolved_vars,
         )
         rendered = _render_template_preview(tpl.body_text, resolved_vars)

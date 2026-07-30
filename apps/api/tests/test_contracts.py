@@ -148,8 +148,8 @@ def test_send_free_text_uses_tenant_credentials_when_no_template_bound(
     resp = client.post(f"/contracts/{c['id']}/send", headers=headers)
     assert resp.status_code == 200
     assert resp.json()["status"] == "sent"
-    assert captured["token"] == "tok-123"
-    assert captured["phone_id"] == "phone-456"
+    assert captured["profile"].whatsapp_token == "tok-123"
+    assert captured["profile"].whatsapp_phone_id == "phone-456"
     assert f"Segue o contrato '{c['title']}'" in captured["text"]
 
 
@@ -178,8 +178,8 @@ def test_send_uses_approved_bound_template(
 
     assert captured["template_name"] == tpl.name
     assert captured["language"] == tpl.language
-    assert captured["token"] == "tok-abc"
-    assert captured["phone_id"] == "phone-xyz"
+    assert captured["profile"].whatsapp_token == "tok-abc"
+    assert captured["profile"].whatsapp_phone_id == "phone-xyz"
     assert captured["to"] == "5511988887777"
     link = captured["variables"][2]
     assert captured["variables"] == ["Maria Cliente", c["title"], link]

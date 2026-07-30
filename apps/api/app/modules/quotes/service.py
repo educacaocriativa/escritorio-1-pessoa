@@ -216,17 +216,13 @@ def send_quote(db: Session, *, quote_id: str, tenant_id: str, actor: str) -> Quo
         variables = [client_name, q.title, valor, link]
         phone_to = q.client_whatsapp or (client.phone if client and client.phone else None) or ""
         status = whatsapp.send_template(
-            to=phone_to, token=profile.whatsapp_token or "",
-            phone_id=profile.whatsapp_phone_id or "",
+            to=phone_to, profile=profile,
             template_name=template.name, language=template.language, variables=variables,
         )
         msg = _render_template_preview(template.body_text, variables)
     else:
         msg = f"Olá! Segue sua proposta de {q.title}: {valor}. Veja em: {link}".strip()
-        status = whatsapp.send_text(
-            to=recipient, text=msg,
-            token=profile.whatsapp_token, phone_id=profile.whatsapp_phone_id,
-        )
+        status = whatsapp.send_text(to=recipient, text=msg, profile=profile)
     db.add(
         Notification(
             tenant_id=tenant_id, channel="whatsapp", recipient=recipient,

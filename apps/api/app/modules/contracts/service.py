@@ -289,16 +289,13 @@ def send_contract(db: Session, *, contract_id: str, tenant_id: str, actor: str) 
         variables = [client_name, c.title, link]
         status = whatsapp.send_template(
             to=client.phone if client and client.phone else "",
-            token=profile.whatsapp_token or "", phone_id=profile.whatsapp_phone_id or "",
+            profile=profile,
             template_name=template.name, language=template.language, variables=variables,
         )
         msg = _render_template_preview(template.body_text, variables)
     else:
         msg = f"Olá! Segue o contrato '{c.title}' para sua assinatura: {link}".strip()
-        status = whatsapp.send_text(
-            to=recipient, text=msg,
-            token=profile.whatsapp_token, phone_id=profile.whatsapp_phone_id,
-        )
+        status = whatsapp.send_text(to=recipient, text=msg, profile=profile)
     db.add(
         Notification(
             tenant_id=tenant_id, channel="whatsapp", recipient=recipient,

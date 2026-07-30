@@ -561,13 +561,16 @@ def test_collect_with_ai_without_binding_uses_free_text_with_tenant_credentials(
     client: TestClient, headers, db, tenant_id, monkeypatch
 ):
     """Sem vínculo configurado: comportamento antigo (mensagem completa de texto livre via
-    `send_text`), mas agora repassando as credenciais do tenant (mesmo vazias no teste)."""
+    `send_text`), mas agora repassando o TenantProfile do tenant via `profile=` (credenciais
+    vazias no teste, mas o parâmetro é usado) — ver despachante em
+    app/core/whatsapp/__init__.py (Onda 0 da feature de WhatsApp por Evolution API)."""
     from app.core import whatsapp
 
     calls: list[dict] = []
 
-    def fake_send_text(*, to, text, token=None, phone_id=None):
-        calls.append({"to": to, "text": text, "token": token, "phone_id": phone_id})
+    def fake_send_text(*, to, text, profile=None, token=None, phone_id=None):
+        calls.append({"to": to, "text": text, "profile": profile, "token": token,
+                       "phone_id": phone_id})
         return "logged"
 
     monkeypatch.setattr(whatsapp, "send_text", fake_send_text)
@@ -583,9 +586,10 @@ def test_collect_with_ai_without_binding_uses_free_text_with_tenant_credentials(
     assert len(body["message"]) > 10
     assert body["status"] == "logged"
     assert len(calls) == 1
-    # credenciais do tenant repassadas explicitamente (None no teste, mas o parâmetro é usado)
-    assert calls[0]["token"] is None
-    assert calls[0]["phone_id"] is None
+    # credenciais do tenant repassadas via profile= (vazias no teste, mas o parâmetro é usado)
+    assert calls[0]["profile"] is not None
+    assert calls[0]["profile"].whatsapp_token is None
+    assert calls[0]["profile"].whatsapp_phone_id is None
 
 
 def test_collect_with_ai_with_approved_binding_uses_template(
@@ -672,8 +676,8 @@ def test_collect_with_ai_with_pending_binding_falls_back_to_free_text(
 def test_send_message_manual_uses_tenant_credentials(
     client: TestClient, headers, monkeypatch
 ):
-    """Mensagem manual continua texto livre (não vira template), mas agora repassa as
-    credenciais do tenant para `send_text`."""
+    """Mensagem manual continua texto livre (não vira template), mas agora repassa o
+    TenantProfile do tenant via `profile=` para `send_text`."""
     from app.core import whatsapp
 
     calls: list[dict] = []
@@ -691,8 +695,8 @@ def test_send_message_manual_uses_tenant_credentials(
     assert r.status_code == 200
     assert len(calls) == 1
     assert calls[0]["text"] == "Oi, passando para lembrar 🙂"
-    assert "token" in calls[0]
-    assert "phone_id" in calls[0]
+    assert "profile" in calls[0]
+    assert calls[0]["profile"] is not None
 
 
 def test_unset_charge_chart_account(client: TestClient, headers):

@@ -607,16 +607,13 @@ def collect_with_ai(db: Session, *, charge_id: str, tenant_id: str, actor: str) 
         variables = [name, phrase, valor, venc]
         status = whatsapp.send_template(
             to=client.phone if client and client.phone else "",
-            token=profile.whatsapp_token or "", phone_id=profile.whatsapp_phone_id or "",
+            profile=profile,
             template_name=template.name, language=template.language, variables=variables,
         )
         message = _render_template_preview(template.body_text, variables)
     else:
         message = _compose_dunning(name, charge.amount_cents, charge.due_date, charge.description)
-        status = whatsapp.send_text(
-            to=recipient, text=message,
-            token=profile.whatsapp_token, phone_id=profile.whatsapp_phone_id,
-        )
+        status = whatsapp.send_text(to=recipient, text=message, profile=profile)
 
     db.add(
         Notification(
@@ -653,9 +650,7 @@ def send_message(db: Session, *, charge_id: str, tenant_id: str, actor: str, tex
         client.name if client else "cliente"
     )
     profile = settings_service.get_profile(db, tenant_id)
-    status = whatsapp.send_text(
-        to=recipient, text=text, token=profile.whatsapp_token, phone_id=profile.whatsapp_phone_id,
-    )
+    status = whatsapp.send_text(to=recipient, text=text, profile=profile)
     db.add(
         Notification(
             tenant_id=tenant_id, channel="whatsapp", recipient=recipient,
