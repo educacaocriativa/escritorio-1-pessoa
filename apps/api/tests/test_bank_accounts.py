@@ -12,6 +12,10 @@ Cobre (Tasks 3-5,7 / AC1-7 / IV1,IV5):
 - saldo derivado: `derived_balance`, `derived_balances_as_of` (data comum) e `active_balance_total`
   (exclui `investment`);
 - todo saldo exposto declara `saldo_derivado_origem == ORIGEM_BANCO` (AC6);
+- **a data de abertura não passa por cima de movimento já lançado** (BANK-001, gate de 2026-07-30):
+  mover `opening_date` para frente tirava movimentos do saldo derivado **sem tirá-los da lista**, e
+  a conferência da 8.5 relatava um furo inexistente. A guarda e as três decisões de borda (para
+  trás, `posted_at == nova_data`, movimento `ignored`) estão na seção BANK-001 mais abaixo;
 - **IV1** DRE intacta depois de cadastrar conta com saldo (verdade permanente: `bank_*` nunca entra
   na DRE) e **IV5** Projeção de Caixa — ⚠️ **atualizado pela Story 8.8**: cadastrar conta agora
   MUDA a projeção (origem `misto` + parcela bancária), e o que se afere é que ela muda **só na
@@ -31,7 +35,7 @@ from fastapi.testclient import TestClient
 from sqlalchemy.orm import Session
 
 from app.core.money_planes import ORIGEM_BANCO, ORIGEM_MISTO, ORIGEM_PLATAFORMA, ORIGENS
-from app.modules.bank import service
+from app.modules.bank import reconciliation, service
 from app.modules.bank.models import (
     KIND_CASH,
     KIND_CHECKING,
@@ -467,6 +471,168 @@ def test_patch_opening_date_futura_422(client: TestClient, headers):
         f"/bank/accounts/{acc['id']}", json={"opening_date": futuro}, headers=headers
     )
     assert resp.status_code == 422, resp.text
+
+
+# ── BANK-001 — a data de abertura não passa por cima de movimento já lançado ──────────────────
+#
+# ⚠️ **A guarda irmã de `posted_at > opening_date`, do outro lado da relação.** Lançar movimento
+# ANTES da abertura é recusado desde a 8.3 porque *"a linha existiria, o saldo não mudaria, e
+# ninguém entenderia por quê"*. O MESMO estado era alcançável por trás, empurrando a data de
+# abertura por cima de um movimento existente: o saldo derivado mudava sozinho
+# (`_movements_sums` filtra `posted_at > opening_date`) com o movimento ainda visível na lista, e a
+# conferência da 8.5 passava a relatar uma divergência **inventada** — o modo de falha que este
+# épico inteiro existe para impedir. Achado BANK-001 do gate da Onda 0+1 (2026-07-30).
+#
+# A guarda é ESTREITA de propósito: só recusa quando a data anda para FRENTE **e** existe movimento
+# na janela que deixaria de somar. Recuar continua livre (só pode acrescentar movimento ao saldo,
+# nunca tirar) e é o caminho de reparo de quem já moveu a data antes desta guarda existir.
+
+
+def _lancar(client: TestClient, headers, account_id: str, *, amount_cents: int,
+            posted_at: str, description: str = "movimento") -> dict:
+    resp = client.post(
+        f"/bank/accounts/{account_id}/transactions",
+        json={"posted_at": posted_at, "amount_cents": amount_cents, "description": description},
+        headers=headers,
+    )
+    assert resp.status_code == 201, resp.text
+    return resp.json()
+
+
+def _conferencia(db: Session, *, start: date, end: date) -> reconciliation.ConferenciaReport:
+    return reconciliation.reconciliation_report(db, start=start, end=end, today=date(2026, 7, 28))
+
+
+def test_patch_opening_date_para_frente_por_cima_de_movimento_422(
+    client: TestClient, headers, db: Session
+):
+    """**BANK-001, o cenário exato do gate.** Conta aberta 01/06 com R$ 1.000, débito de R$ 800 em
+    10/06, saldo declarado de R$ 200 em 20/06 — batendo **exatamente**. Mover a abertura para 15/06
+    devolvia 200 e a conferência passava a acusar R$ 800 de furo, com o débito visível na tela.
+
+    O teste afere as duas metades: o 422 **e** que a divergência continua zero depois da tentativa
+    (a conta não pode ter sido alterada pela metade).
+    """
+    acc = _create(client, headers, opening_balance_cents=100_000, opening_date="2026-06-01")
+    _lancar(client, headers, acc["id"], amount_cents=-80_000, posted_at="2026-06-10",
+            description="Aluguel")
+    assert client.post(
+        f"/bank/accounts/{acc['id']}/checkpoints",
+        json={"reference_date": "2026-06-20", "balance_cents": 20_000},
+        headers=headers,
+    ).status_code == 201
+
+    antes = _conferencia(db, start=date(2026, 6, 1), end=date(2026, 6, 30)).contas[0]
+    assert (antes.saldo_banco_cents, antes.saldo_sistema_cents) == (20_000, 20_000)
+    assert antes.divergencia_cents == 0, "pré-condição: está batendo exatamente"
+
+    resp = client.patch(
+        f"/bank/accounts/{acc['id']}", json={"opening_date": "2026-06-15"}, headers=headers
+    )
+    assert resp.status_code == 422, resp.text
+    detail = resp.json()["detail"]
+    # A mensagem diz QUANTOS movimentos e QUAL o mais antigo — sem isso o usuário não sabe o que
+    # está no caminho nem por onde sair.
+    assert "1 movimento lançado" in detail
+    assert "2026-06-10" in detail
+    assert "saldo de abertura" in detail
+
+    # Nada mudou: nem a data, nem o saldo, nem a conferência.
+    depois_conta = client.get(f"/bank/accounts/{acc['id']}", headers=headers).json()
+    assert depois_conta["opening_date"] == "2026-06-01"
+    assert depois_conta["saldo_derivado_cents"] == 20_000
+    depois = _conferencia(db, start=date(2026, 6, 1), end=date(2026, 6, 30)).contas[0]
+    assert depois.divergencia_cents == 0, (
+        "a conferência passou a relatar uma divergência que não existe — é exatamente o BANK-001"
+    )
+    assert len(client.get("/bank/transactions", headers=headers).json()) == 1
+
+
+def test_patch_opening_date_na_data_exata_do_movimento_422(client: TestClient, headers):
+    """A borda: `_movements_sums` soma `posted_at > opening_date`, **estritamente**.
+
+    Movimento exatamente na nova data de abertura ficaria órfão igual — daí a guarda usar `<=`. É a
+    mesma assimetria que a 8.4 fixou: movimento exige `>`, checkpoint aceita `>=`.
+    """
+    acc = _create(client, headers, opening_balance_cents=100_000, opening_date="2026-06-01")
+    _lancar(client, headers, acc["id"], amount_cents=-80_000, posted_at="2026-06-10")
+
+    resp = client.patch(
+        f"/bank/accounts/{acc['id']}", json={"opening_date": "2026-06-10"}, headers=headers
+    )
+    assert resp.status_code == 422, resp.text
+    assert "2026-06-10" in resp.json()["detail"]
+
+
+def test_patch_opening_date_para_frente_conta_movimento_ignorado(client: TestClient, headers):
+    """Movimento `ignored` **conta** para a guarda, mesmo já estando fora do saldo derivado.
+
+    Hoje ele não muda número nenhum, e é por isso que a decisão precisa estar escrita: deixar a data
+    passar por cima dele quebraria a promessa de `unignore` (*"devolve o movimento ao saldo"*) num
+    clique futuro, em silêncio — o mesmo modo de falha do BANK-001, com o gatilho adiado.
+    """
+    acc = _create(client, headers, opening_balance_cents=100_000, opening_date="2026-06-01")
+    tx = _lancar(client, headers, acc["id"], amount_cents=-80_000, posted_at="2026-06-10")
+    assert client.post(
+        f"/bank/transactions/{tx['id']}/ignore", json={"reason": "duplicado"}, headers=headers
+    ).status_code == 200
+    # Pré-condição: ignorado já não soma — mover a data não mudaria o saldo de hoje.
+    assert client.get(
+        f"/bank/accounts/{acc['id']}", headers=headers
+    ).json()["saldo_derivado_cents"] == 100_000
+
+    resp = client.patch(
+        f"/bank/accounts/{acc['id']}", json={"opening_date": "2026-06-15"}, headers=headers
+    )
+    assert resp.status_code == 422, resp.text
+    assert "ignorado" in resp.json()["detail"]
+
+
+def test_patch_opening_date_para_frente_sem_movimento_no_caminho_continua_permitido(
+    client: TestClient, headers
+):
+    """A operação legítima segue passando: a guarda é sobre órfãos, não sobre a direção da data.
+
+    Conta cadastrada com a abertura errada, **antes** de qualquer movimento — corrigir para frente é
+    o caso normal e não pode custar um 422.
+    """
+    acc = _create(client, headers, opening_balance_cents=100_000, opening_date="2026-06-01")
+    _lancar(client, headers, acc["id"], amount_cents=-80_000, posted_at="2026-06-20")
+
+    resp = client.patch(
+        f"/bank/accounts/{acc['id']}", json={"opening_date": "2026-06-15"}, headers=headers
+    )
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["opening_date"] == "2026-06-15"
+    # O movimento de 20/06 continua depois da abertura, então continua somando.
+    assert resp.json()["saldo_derivado_cents"] == 20_000
+
+
+def test_patch_opening_date_para_tras_continua_permitido_e_pode_reparar(
+    client: TestClient, headers, db: Session
+):
+    """Recuar a abertura **nunca** cria órfão — só pode acrescentar movimento ao saldo.
+
+    E é o caminho de reparo de uma conta que já ficou com movimento órfão (dado anterior à guarda,
+    simulado aqui escrevendo a coluna direto): ao recuar, o movimento volta a somar.
+    """
+    acc = _create(client, headers, opening_balance_cents=100_000, opening_date="2026-06-01")
+    _lancar(client, headers, acc["id"], amount_cents=-80_000, posted_at="2026-06-10")
+
+    # O estado que a guarda passa a impedir, fabricado por escrita direta (só assim ele existe).
+    linha = db.get(BankAccount, acc["id"])
+    linha.opening_date = date(2026, 6, 15)
+    db.commit()
+    assert client.get(
+        f"/bank/accounts/{acc['id']}", headers=headers
+    ).json()["saldo_derivado_cents"] == 100_000, "pré-condição: o movimento está órfão"
+
+    resp = client.patch(
+        f"/bank/accounts/{acc['id']}", json={"opening_date": "2026-06-01"}, headers=headers
+    )
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["opening_date"] == "2026-06-01"
+    assert resp.json()["saldo_derivado_cents"] == 20_000, "o movimento voltou a somar"
 
 
 # ── Auditoria ─────────────────────────────────────────────────────────────────────────────────

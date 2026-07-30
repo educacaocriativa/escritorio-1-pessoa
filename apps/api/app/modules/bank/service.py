@@ -107,6 +107,109 @@ def _validate_opening_date(opening_date: date) -> date:
     return opening_date
 
 
+def _validate_opening_date_move(db: Session, *, account: BankAccount, nova: date) -> date:
+    """Recusa (422) mover a data de abertura **para frente** por cima de movimentos já lançados.
+
+    É a guarda irmã de `_validate_posted_at`, do outro lado da mesma relação. Lá, o movimento é
+    recusado quando cai antes da abertura, porque *"aceitar a data e não somar o movimento seria
+    pior do que recusar: a linha existiria, o saldo não mudaria, e ninguém entenderia por quê"*.
+    Aqui o mesmo estado é alcançado pelo outro lado — não mexendo no movimento, mas mudando a data
+    de corte por baixo dele —, e o resultado é ainda pior: o saldo derivado **muda sozinho**
+    (`_movements_sums` filtra `posted_at > opening_date`), o movimento **continua na lista**, e a
+    conferência da 8.5 passa a comparar um checkpoint correto contra um derivado inflado. O produto
+    então relata uma divergência que não existe, e manda o dono caçar um lançamento que está bem
+    ali na tela. Divergência inventada é pior que divergência escondida: depois de duas caçadas
+    frustradas ele para de confiar no sinal, e o sinal é o produto.
+
+    **Só olha para frente.** `nova <= account.opening_date` passa direto: recuar a data só pode
+    **acrescentar** movimentos ao conjunto que soma (o filtro é `posted_at > opening_date`), nunca
+    tirar — não há órfão a criar. Recuar é, aliás, o caminho de reparo de quem já moveu a data para
+    frente antes desta guarda existir: devolve ao saldo os movimentos que tinham ficado de fora.
+
+    **A borda é `<=`, não `<`.** Um movimento exatamente na nova data de abertura **não** soma
+    (`_movements_sums` usa `>`), então ele ficaria órfão igual. É a mesma assimetria que a 8.4
+    documentou em `_validate_reference_date`: movimento exige `posted_at > opening_date`, checkpoint
+    aceita `reference_date >= opening_date`.
+
+    **Movimento `ignored` conta para a guarda**, apesar de já estar fora do saldo derivado. Hoje ele
+    não muda número nenhum — mas `unignore_transaction` promete *"devolve o movimento ao saldo"*, e
+    depois da data movida ela não teria como cumprir: o status voltaria para `unmatched` e o saldo
+    não se mexeria, em silêncio. Deixar a data passar por cima dele seria armar exatamente o mesmo
+    modo de falha, com o gatilho adiado para um clique futuro.
+
+    A contagem é da janela `(opening_date atual, nova]` — os movimentos que **deixariam** de somar.
+    Um órfão pré-existente (posted_at antes da abertura atual, só possível em dado anterior a esta
+    guarda) já não soma e não é criado por esta edição; incluí-lo na contagem diria ao usuário que
+    esta operação causou algo que ela não causou.
+    """
+    if nova <= account.opening_date:
+        return nova
+
+    total, ignorados, mais_antigo = db.execute(
+        select(
+            func.count(BankTransaction.id),
+            func.sum(case((BankTransaction.status == STATUS_IGNORED, 1), else_=0)),
+            func.min(BankTransaction.posted_at),
+        ).where(
+            BankTransaction.bank_account_id == account.id,
+            BankTransaction.posted_at > account.opening_date,
+            BankTransaction.posted_at <= nova,
+        )
+    ).one()
+    if not total:
+        return nova
+
+    # SQLite devolve `DATE` como texto em agregações; o Postgres devolve `date`. Mesma normalização
+    # de `days_since_last_declared_balance` — sem ela a mensagem quebraria só em um dos dois bancos.
+    if isinstance(mais_antigo, str):
+        mais_antigo = date.fromisoformat(mais_antigo)
+
+    # Concordância montada em pedaços, e não com ternários dentro da f-string: a mensagem é a parte
+    # do produto que o usuário lê no pior momento dele, e ela precisa ser legível também aqui.
+    if total == 1:
+        quantos = f"1 movimento lançado em {mais_antigo.isoformat()}"
+        efeito = (
+            "tiraria esse lançamento do saldo desta conta, mas ele continuaria aparecendo na "
+            "lista de movimentos"
+        )
+        conserto = "Se quem está com a data errada é o movimento, corrija a data dele primeiro."
+    else:
+        quantos = (
+            f"{total} movimentos lançados entre {account.opening_date.isoformat()} e "
+            f"{nova.isoformat()} (o mais antigo em {mais_antigo.isoformat()})"
+        )
+        efeito = (
+            "tiraria esses lançamentos do saldo desta conta, mas eles continuariam aparecendo na "
+            "lista de movimentos"
+        )
+        conserto = (
+            "Se quem está com a data errada são os movimentos, corrija as datas deles primeiro."
+        )
+
+    nota_ignorados = ""
+    if ignorados == total:
+        alvo = "Ele está ignorado" if total == 1 else "Eles estão ignorados"
+        nota_ignorados = f" {alvo}"
+    elif ignorados == 1:
+        nota_ignorados = " 1 deles está ignorado"
+    elif ignorados:
+        nota_ignorados = f" {ignorados} deles estão ignorados"
+    if nota_ignorados:
+        nota_ignorados += (
+            ": hoje isso já os deixa fora do saldo, mas depois da mudança desfazer o 'ignorar' "
+            "deixaria de devolvê-los a ele, sem avisar."
+        )
+
+    raise BankError(
+        f"Esta conta tem {quantos}. Mover a data de abertura para {nova.isoformat()} {efeito}: o "
+        f"saldo mudaria sozinho e a conferência acusaria uma diferença que não existe."
+        f"{nota_ignorados} {conserto} Se a conta recomeçou do zero, arquive-a e cadastre-a de novo "
+        "com o saldo de abertura do dia. Se você só quer acertar o valor de partida, altere o "
+        "saldo de abertura sem mexer na data.",
+        422,
+    )
+
+
 # ── Leitura ──────────────────────────────────────────────────────────────────────────────────
 
 
@@ -359,13 +462,22 @@ def update_account(
     """Edita a conta. `is_primary=True` troca a primária na MESMA transação (AC7).
 
     `archived_at` não é editável por aqui (arquivar tem rota própria, com auditoria própria).
+
+    `opening_date` passa por **duas** guardas: a de data futura (a mesma do cadastro) e a de
+    `_validate_opening_date_move`, que recusa empurrar a data para frente por cima de movimentos já
+    lançados — a guarda irmã de `_validate_posted_at`. Sem ela o saldo derivado muda sozinho com os
+    movimentos ainda visíveis na lista, e a conferência relata uma divergência inventada.
     """
     acc = get_account(db, account_id)
 
     if data.kind is not None:
         acc.kind = _validate_kind(data.kind)
     if data.opening_date is not None:
-        acc.opening_date = _validate_opening_date(data.opening_date)
+        # A ordem importa: as duas guardas comparam contra a data ATUAL da conta, então nenhuma
+        # escrita em `acc.opening_date` pode acontecer antes das duas passarem.
+        acc.opening_date = _validate_opening_date_move(
+            db, account=acc, nova=_validate_opening_date(data.opening_date)
+        )
     for field in (
         "name",
         "institution",
