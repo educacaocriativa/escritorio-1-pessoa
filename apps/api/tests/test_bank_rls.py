@@ -1,5 +1,5 @@
-"""Isolamento cross-tenant de `bank_accounts` (Story 8.2) e `bank_transactions` (Story 8.3) no
-Postgres REAL.
+"""Isolamento cross-tenant de `bank_accounts` (8.2), `bank_transactions` (8.3) e
+`bank_balance_checkpoints` (8.4) no Postgres REAL.
 
 Valida, sob RLS real (papel NÃO-superusuário `e1p_app` — superusuário faz bypass **mesmo com
 FORCE**, `CLAUDE.md` Regra de Ouro nº 1):
@@ -13,14 +13,15 @@ FORCE**, `CLAUDE.md` Regra de Ouro nº 1):
 - **saldo derivado por conta:** o saldo que cada tenant apura é o dele (é o número que a Story 8.5
   vai comparar com o extrato — vazamento aqui seria uma divergência inexplicável no relatório).
 
-Também exercita `alembic upgrade head` como `e1p_app`, o que confirma que as migrations **0058** e
-**0059** aplicam limpo na cadeia (…→0057→0058→0059) — incluindo os índices PARCIAIS e o único de
-dedupe, que o SQLite dos testes unitários cria com outro dialeto.
+Também exercita `alembic upgrade head` como `e1p_app`, o que confirma que as migrations **0058**,
+**0059** e **0060** aplicam limpo na cadeia (…→0057→0058→0059→0060) — incluindo os índices PARCIAIS
+e os únicos (dedupe de movimento e dia do checkpoint), que o SQLite dos testes unitários cria com
+outro dialeto.
 
-⚠️ **Este arquivo é o ponto de extensão da Story 8.4** (`bank_balance_checkpoints`): acrescente
-casos AQUI em vez de criar mais um arquivo de testcontainer — cada boot de Postgres custa minutos
-de CI, e as três tabelas compartilham o mesmo bootstrap. A 8.3 seguiu essa instrução (segunda
-função de teste neste arquivo, mesmo container por função).
+⚠️ **Este arquivo é o ponto de extensão do módulo `bank`**: acrescente casos AQUI em vez de criar
+mais um arquivo de testcontainer — cada boot de Postgres custa minutos de CI, e as três tabelas
+compartilham o mesmo bootstrap. A 8.3 e a 8.4 seguiram essa instrução (funções novas neste arquivo,
+mesmo container de escopo de módulo).
 
 Módulo marcado `rls_e2e`: NÃO roda no `pytest -q`/`scripts/check.sh` (suíte SQLite), só no job
 dedicado do CI (`cross-tenant-rls`) ou manualmente com Docker (`pytest -m rls_e2e`).
@@ -154,7 +155,7 @@ def app_url() -> Iterator[str]:
         url = f"postgresql+psycopg://e1p_app:{_APP_PASS}@{host}:{port}/{_DB_NAME}"
 
         _bootstrap_rls_role(super_url)
-        # Aplica a cadeia inteira (incl. 0058 e 0059) e, com isso, VALIDA o encadeamento: um
+        # Aplica a cadeia inteira (incl. 0058, 0059 e 0060) e, com isso, VALIDA o encadeamento: um
         # `down_revision` errado nesta onda apareceria aqui como "multiple heads".
         _run_migrations_as_app(url)
         yield url
@@ -414,3 +415,214 @@ def test_dedupe_unique_index_nao_vaza_entre_tenants(app_url: str) -> None:
         assert (
             sb.query(BankTransaction).filter(BankTransaction.dedup_hash == mesmo_hash).count() == 1
         ), "B enxergou o movimento de A (ou o próprio em duplicidade)"
+
+
+# ── Story 8.4 — o SALDO DECLARADO (AC9) ──────────────────────────────────────────────────────
+
+
+def _declarar(
+    app_url: str,
+    tenant_id: str,
+    account_id: str,
+    *,
+    balance_cents: int,
+    reference_date: date,
+) -> str:
+    from app.modules.bank import service as bank_service
+    from app.modules.bank.schemas import CheckpointCreate
+
+    with _session_for(app_url, tenant_id) as session:
+        cp, criado = bank_service.declare_balance(
+            session,
+            bank_account_id=account_id,
+            tenant_id=tenant_id,
+            actor="quem-declarou",
+            data=CheckpointCreate(
+                reference_date=reference_date, balance_cents=balance_cents
+            ),
+        )
+        assert criado is True
+        return cp.id
+
+
+def test_bank_checkpoint_isolamento_cross_tenant(app_url: str) -> None:
+    """O saldo declarado de A é invisível e intocável para B — e `latest_checkpoint` não vaza.
+
+    O último caso é o que só existe nesta story: `latest_checkpoint` é a função que a conferência
+    (8.5) consome, e um vazamento ali não apareceria como "vi uma linha que não é minha", e sim
+    como a **verdade externa do vizinho** sendo comparada com o saldo derivado deste tenant — uma
+    divergência inventada, plausível e silenciosa, no relatório que o produto vende como confiável.
+    """
+    from app.modules.bank import service as bank_service
+    from app.modules.bank.models import BankBalanceCheckpoint
+
+    tenant_a = str(uuid4())
+    tenant_b = str(uuid4())
+    acc_a = _seed_account(app_url, tenant_a, name="Saldo A", opening=100_000, number="8888-1")
+    acc_b = _seed_account(app_url, tenant_b, name="Saldo B", opening=100_000, number="8888-2")
+
+    dia = date(2026, 7, 15)
+    cp_a = _declarar(app_url, tenant_a, acc_a, balance_cents=123_456, reference_date=dia)
+    cp_b = _declarar(app_url, tenant_b, acc_b, balance_cents=999_999, reference_date=dia)
+
+    # ── Leitura: A lista e lê só o dele ──────────────────────────────────────────────────────
+    with _session_for(app_url, tenant_a) as sa:
+        assert [c.id for c in bank_service.list_checkpoints(sa)] == [cp_a]
+        assert sa.get(BankBalanceCheckpoint, cp_b) is None, "RLS falhou: A leu o checkpoint de B"
+        with pytest.raises(bank_service.BankError) as exc:
+            bank_service.get_checkpoint(sa, cp_b)
+        assert exc.value.status_code == 404, "cross-tenant deve ser 404 fail-closed, não 403"
+
+    with _session_for(app_url, tenant_b) as sb:
+        assert [c.id for c in bank_service.list_checkpoints(sb)] == [cp_b]
+
+    # ── `latest_checkpoint`: a verdade externa de A não é a de B ─────────────────────────────
+    with _session_for(app_url, tenant_a) as sa:
+        achado = bank_service.latest_checkpoint(sa, bank_account_id=acc_a, on_or_before=dia)
+        assert achado is not None and achado.balance_cents == 123_456
+        # A conta de B nem existe para A: o resultado honesto é `None` (= "não há verdade externa
+        # aqui" → `ORIGEM_INDISPONIVEL` na 8.5), JAMAIS o checkpoint do vizinho.
+        assert (
+            bank_service.latest_checkpoint(sa, bank_account_id=acc_b, on_or_before=dia) is None
+        ), (
+            "RLS falhou: `latest_checkpoint` devolveu a verdade externa de outro tenant — a 8.5 "
+            "compararia o saldo do banco do vizinho com o saldo derivado deste tenant"
+        )
+        # Idem para o contador de abandono: `None` (nunca declarado), não os dias de B.
+        assert (
+            bank_service.days_since_last_declared_balance(
+                sa, bank_account_id=acc_b, today=date(2026, 7, 31)
+            )
+            is None
+        )
+        assert (
+            bank_service.days_since_last_declared_balance(sa, today=date(2026, 7, 31)) == 16
+        ), "o consolidado do tenant A contou o checkpoint de B"
+
+    # ── Delete: A não alcança o checkpoint de B ──────────────────────────────────────────────
+    with _session_for(app_url, tenant_a) as sa:
+        with pytest.raises(bank_service.BankError) as exc:
+            bank_service.delete_checkpoint(
+                sa, checkpoint_id=cp_b, tenant_id=tenant_a, actor="a"
+            )
+        assert exc.value.status_code == 404
+
+    with _session_for(app_url, tenant_b) as sb:
+        sobrevivente = sb.get(BankBalanceCheckpoint, cp_b)
+        assert sobrevivente is not None and sobrevivente.balance_cents == 999_999, (
+            "RLS falhou: A conseguiu apagar o saldo declarado de B"
+        )
+
+    # ── Escrita com tenant_id alheio: barrada pelo WITH CHECK ────────────────────────────────
+    with _session_for(app_url, tenant_a) as sa:
+        sa.add(
+            BankBalanceCheckpoint(
+                tenant_id=tenant_b,  # ← o ataque: plantar uma "verdade externa" no vizinho
+                bank_account_id=acc_b,
+                reference_date=date(2026, 7, 16),
+                balance_cents=1,
+                origin="manual",
+            )
+        )
+        with pytest.raises(ProgrammingError):
+            sa.commit()
+        sa.rollback()
+
+    with _session_for(app_url, tenant_b) as sb:
+        assert [c.id for c in bank_service.list_checkpoints(sb)] == [cp_b], (
+            "WITH CHECK falhou: A plantou um saldo declarado no tenant de B"
+        )
+
+    # ── Sem GUC: fail-closed ─────────────────────────────────────────────────────────────────
+    with _session_for(app_url, None) as sn:
+        assert bank_service.list_checkpoints(sn) == [], (
+            "FAIL-CLOSED falhou: sem `app.current_tenant_id` a leitura de saldos declarados "
+            "devolveu linhas. O estado seguro é não ver nada."
+        )
+        assert sn.get(BankBalanceCheckpoint, cp_a) is None
+        assert (
+            bank_service.latest_checkpoint(sn, bank_account_id=acc_a, on_or_before=dia) is None
+        )
+
+
+def test_checkpoint_unique_do_dia_nao_vaza_entre_tenants(app_url: str) -> None:
+    """`uq_bank_checkpoint_day` é GLOBAL (não respeita RLS) — `tenant_id` na frente é o que salva.
+
+    Dois tenants declarando o saldo do MESMO dia, na MESMA `bank_account_id`, com a MESMA origem,
+    precisam conviver. Sem `tenant_id` como primeira coluna da constraint, o segundo levaria um 409
+    causado por um dado que ele não pode nem ver: bug **e** vazamento de existência.
+    """
+    from app.modules.bank.models import BankBalanceCheckpoint
+
+    tenant_a = str(uuid4())
+    tenant_b = str(uuid4())
+    conta_compartilhada = str(uuid4())  # mesmo id de conta nos dois lados, de propósito
+    mesmo_dia = date(2026, 7, 20)
+
+    for tenant_id in (tenant_a, tenant_b):
+        with _session_for(app_url, tenant_id) as session:
+            session.add(
+                BankBalanceCheckpoint(
+                    tenant_id=tenant_id,
+                    bank_account_id=conta_compartilhada,
+                    reference_date=mesmo_dia,
+                    balance_cents=50_000,
+                    origin="manual",
+                )
+            )
+            session.commit()  # o segundo NÃO pode estourar IntegrityError
+
+    with _session_for(app_url, tenant_b) as sb:
+        assert (
+            sb.query(BankBalanceCheckpoint)
+            .filter(BankBalanceCheckpoint.reference_date == mesmo_dia)
+            .count()
+            == 1
+        ), "B enxergou o checkpoint de A (ou o próprio em duplicidade)"
+
+
+def test_redeclaracao_e_origin_convivem_no_postgres_real(app_url: str) -> None:
+    """A constraint do dia no Postgres real: redeclarar CORRIGE; `manual` e `ofx` coexistem.
+
+    O SQLite dos testes unitários cria o índice único com outro dialeto, então o comportamento de
+    AC3/AC4 sob a constraint de verdade é confirmado aqui. A linha `ofx` é escrita direto pelo
+    modelo — a API a recusa com 422 nesta onda.
+    """
+    from app.modules.bank import service as bank_service
+    from app.modules.bank.models import BankBalanceCheckpoint
+    from app.modules.bank.schemas import CheckpointCreate
+
+    tenant = str(uuid4())
+    acc = _seed_account(app_url, tenant, name="Redeclara", opening=10_000, number="6666-6")
+    dia = date(2026, 7, 22)
+
+    primeiro = _declarar(app_url, tenant, acc, balance_cents=1_234_00, reference_date=dia)
+
+    with _session_for(app_url, tenant) as s:
+        cp, criado = bank_service.declare_balance(
+            s,
+            bank_account_id=acc,
+            tenant_id=tenant,
+            actor="quem-corrigiu",
+            data=CheckpointCreate(reference_date=dia, balance_cents=12_340_00),
+        )
+        assert criado is False and cp.id == primeiro
+        assert cp.balance_cents == 12_340_00
+        assert cp.created_by == "quem-corrigiu"
+
+        # `origin` na chave única não é redundância: o mesmo dia aceita a outra porta de entrada.
+        s.add(
+            BankBalanceCheckpoint(
+                tenant_id=tenant,
+                bank_account_id=acc,
+                reference_date=dia,
+                balance_cents=12_340_00,
+                origin="ofx",
+            )
+        )
+        s.commit()
+
+        assert s.query(BankBalanceCheckpoint).count() == 2
+        # E o desempate do mesmo dia é pela REGRA (`ofx` na frente), não pela ordem de inserção.
+        vencedor = bank_service.latest_checkpoint(s, bank_account_id=acc, on_or_before=dia)
+        assert vencedor.origin == "ofx"

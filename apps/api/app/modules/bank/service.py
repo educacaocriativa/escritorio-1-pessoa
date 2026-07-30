@@ -1,5 +1,6 @@
-"""Regras do módulo bancário: contas + conta primária + **saldo derivado** (Story 8.2) e os
-**movimentos** que fazem esse saldo se mover (Story 8.3).
+"""Regras do módulo bancário: contas + conta primária + **saldo derivado** (Story 8.2), os
+**movimentos** que fazem esse saldo se mover (Story 8.3) e o **saldo declarado** — a verdade
+externa contra a qual o derivado é medido (Story 8.4).
 
 **Isolamento:** por RLS, e só por RLS — nenhuma query aqui filtra `tenant_id` à mão (Regra de Ouro
 nº 1 do `CLAUDE.md`: defesa-em-profundidade foi considerada e REJEITADA para não criar o padrão
@@ -14,6 +15,13 @@ nº 1 do `CLAUDE.md`: defesa-em-profundidade foi considerada e REJEITADA para n�
 `bank_accounts` e não pode passar a existir; ver o aviso (b) na docstring de `models.py`. A soma
 dos movimentos tem **uma** implementação (`_movements_sums`) e é ela que aplica o
 `status <> 'ignored'` — quem consome o saldo não refiltra.
+
+**O checkpoint (Story 8.4) NUNCA corrige o saldo derivado.** Nenhuma função desta seção escreve em
+`BankTransaction` nem em `BankAccount`: declarar um saldo cria (ou corrige) UMA linha em
+`bank_balance_checkpoints` e mais nada. Se o checkpoint passasse a ajustar o derivado — por um
+"movimento de ajuste" automático, a boa intenção mais provável aqui —, a divergência iria a zero
+por construção e o produto perderia a métrica que vende. Ver o aviso (c) na docstring de
+`BankBalanceCheckpoint` e o teste `test_checkpoint_nao_altera_saldo_derivado`.
 """
 from __future__ import annotations
 
@@ -21,7 +29,7 @@ import hashlib
 from collections.abc import Iterable, Sequence
 from datetime import UTC, date, datetime
 
-from sqlalchemy import and_, func, or_, select
+from sqlalchemy import and_, case, func, or_, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
@@ -31,11 +39,15 @@ from app.modules.bank.models import (
     KIND_INVESTMENT,
     KIND_PLATFORM_WALLET,
     KINDS,
+    ORIGIN_MANUAL,
+    ORIGIN_OFX,
+    ORIGINS,
     SOURCE_MANUAL,
     STATUS_IGNORED,
     STATUS_UNMATCHED,
     STATUSES,
     BankAccount,
+    BankBalanceCheckpoint,
     BankTransaction,
 )
 from app.modules.bank.schemas import (
@@ -43,6 +55,7 @@ from app.modules.bank.schemas import (
     BankAccountUpdate,
     BankTransactionCreate,
     BankTransactionUpdate,
+    CheckpointCreate,
 )
 
 _DUPLICATE_MSG = (
@@ -712,3 +725,339 @@ def unignore_transaction(
     db.commit()
     db.refresh(tx)
     return tx
+
+
+# ── Saldo declarado / checkpoint (Story 8.4) ─────────────────────────────────────────────────
+#
+# **Nenhuma função desta seção toca em `BankAccount` ou `BankTransaction`.** É a invariante que
+# mantém a divergência mensurável: o checkpoint é a verdade EXTERNA, o derivado é o que o sistema
+# calculou, e os dois só se encontram na comparação read-only da Story 8.5. Ver o aviso (c) na
+# docstring de `BankBalanceCheckpoint`.
+
+
+# Desempate determinístico de `latest_checkpoint` quando dois `origin` compartilham o MESMO
+# `reference_date`: **`ofx` na frente de `manual`**. O `<LEDGERBAL>` do arquivo do banco é a mesma
+# verdade externa com um intermediário humano a menos. Só passa a ter efeito na Onda 3 (hoje a API
+# escreve apenas `manual`); está aqui para a regra não ser inventada duas vezes.
+#
+# Um `CASE` explícito, e não `ORDER BY origin DESC`: por acidente alfabético 'ofx' > 'manual', então
+# o `DESC` daria o mesmo resultado hoje e o resultado ERRADO no dia em que um terceiro valor entrar
+# no vocabulário — uma regra de negócio que depende da ortografia dos valores é uma regra que ainda
+# não foi escrita. `else_` maior que os dois conhecidos: valor novo entra por último até que alguém
+# decida onde ele fica.
+_ORIGIN_RANK = case(
+    {ORIGIN_OFX: 0, ORIGIN_MANUAL: 1},
+    value=BankBalanceCheckpoint.origin,
+    else_=99,
+)
+
+
+def _validate_origin(origin: str) -> str:
+    """Só `manual` é escrito nesta onda (AC3). `ofx` é recusado com a explicação, não com um enum.
+
+    A coluna aceita os dois valores desde já (`ORIGINS`) porque o vocabulário do eixo B é fechado no
+    design e declará-lo custa zero; o que a Onda 1 não tem é o **caminho de código** que produz um
+    `ofx` honesto — ele viria do `<LEDGERBAL>` de um arquivo importado, com `import_batch_id`
+    preenchido apontando para o lote. Aceitar `ofx` de um cliente HTTP hoje criaria uma linha que
+    diz "o banco atestou isto" sem nenhum arquivo por trás: uma verdade externa forjada, dentro da
+    tabela cujo propósito é ser a única coisa que o sistema não inventou.
+    """
+    if origin == ORIGIN_MANUAL:
+        return origin
+    if origin in ORIGINS:
+        raise BankError(
+            f"O saldo de origem '{origin}' ainda não pode ser registrado: ele vem do arquivo do "
+            "banco, e a importação de extrato ainda não existe. Informe o saldo desta conta no fim "
+            "do dia olhando o app do banco.",
+            422,
+        )
+    raise BankError(
+        f"Origem de saldo inválida: '{origin}'. Use um de: {', '.join(ORIGINS)}.", 422
+    )
+
+
+def _validate_reference_date(reference_date: date, account: BankAccount) -> date:
+    """As duas guardas de data do saldo declarado. Ambas 422, ambas protegendo a comparação da 8.5.
+
+    1. **Não futura** — não se declara o saldo de amanhã: o número que o usuário está olhando no app
+       do banco é sempre de um dia que já terminou (ou do dia corrente). Data futura é erro de
+       digitação (ano errado é o caso comum) e produziria uma comparação contra um saldo derivado
+       que ainda não terminou de acontecer.
+    2. **`reference_date >= account.opening_date`** — antes da data de abertura o e1p não conhece a
+       conta e o saldo derivado **não existe** para ser comparado; a conferência apontaria uma
+       divergência inteira, inventada, contra um número que o sistema não tinha como calcular.
+
+    ⚠️ Note a assimetria deliberada com `_validate_posted_at` (movimento), que exige
+    `posted_at > opening_date`, **estritamente**. Aqui `reference_date == opening_date` é
+    **aceito**, e é o caso mais sadio que existe: `opening_balance_cents` é, por definição, o saldo
+    ao fim do dia de abertura, então `derived_balance(until=opening_date)` devolve exatamente ele e
+    a comparação vale. Para o movimento, o mesmo dia significaria contar duas vezes um dinheiro que
+    já está dentro do saldo de abertura — daí um `>` lá e um `>=` aqui.
+    """
+    if reference_date > _today():
+        raise BankError(
+            "A data do saldo não pode ser futura: informe o saldo de um dia que já terminou, "
+            "olhando o app do banco.",
+            422,
+        )
+    if reference_date < account.opening_date:
+        raise BankError(
+            f"A data do saldo precisa ser igual ou posterior a "
+            f"{account.opening_date.isoformat()}, a data de abertura desta conta no e1p. Antes "
+            "desse dia o e1p não conhece a conta e não teria com o que comparar o saldo informado.",
+            422,
+        )
+    return reference_date
+
+
+# ── Leitura ──────────────────────────────────────────────────────────────────────────────────
+
+
+def get_checkpoint(db: Session, checkpoint_id: str) -> BankBalanceCheckpoint:
+    """404 fail-closed — cross-tenant cai aqui pela RLS (a linha não existe para quem pergunta)."""
+    cp = db.get(BankBalanceCheckpoint, checkpoint_id)
+    if cp is None:
+        raise BankError("Saldo declarado não encontrado", 404)
+    return cp
+
+
+def list_checkpoints(
+    db: Session,
+    *,
+    bank_account_id: str | None = None,
+    start: date | None = None,
+    end: date | None = None,
+    limit: int = 100,
+    offset: int = 0,
+) -> list[BankBalanceCheckpoint]:
+    """Saldos declarados do tenant, do mais recente para o mais antigo. Paginação OBRIGATÓRIA.
+
+    `start`/`end` são datas de calendário e **inclusivas** nas duas pontas, mesmo contrato de
+    `list_transactions` — `reference_date` é `DATE`, então não existe aritmética de fuso aqui.
+
+    A ordenação desempata por `created_at` desc: sem desempate, dois checkpoints do mesmo dia (o
+    caso `manual` + `ofx` da Onda 3) sairiam em ordem indefinida e a paginação quebraria em
+    silêncio — a linha do fim da página 1 reaparece no topo da 2.
+    """
+    limit = max(1, min(limit, 500))
+    stmt = select(BankBalanceCheckpoint).order_by(
+        BankBalanceCheckpoint.reference_date.desc(), BankBalanceCheckpoint.created_at.desc()
+    )
+    if bank_account_id:
+        stmt = stmt.where(BankBalanceCheckpoint.bank_account_id == bank_account_id)
+    if start is not None:
+        stmt = stmt.where(BankBalanceCheckpoint.reference_date >= start)
+    if end is not None:
+        stmt = stmt.where(BankBalanceCheckpoint.reference_date <= end)
+    return list(db.scalars(stmt.limit(limit).offset(max(0, offset))).all())
+
+
+def latest_checkpoint(
+    db: Session,
+    *,
+    bank_account_id: str,
+    on_or_before: date,
+    origins: tuple[str, ...] | None = None,
+) -> BankBalanceCheckpoint | None:
+    """O saldo declarado mais recente desta conta com `reference_date <= on_or_before`, ou `None`.
+
+    **É a função central que a conferência (Story 8.5) consome** e o contrato mais importante desta
+    story. Duas coisas precisam ficar ditas em voz alta:
+
+    **1. `None` é o caminho NORMAL, não um erro.** Quando não há checkpoint na janela, a 8.5 declara
+    `saldo_banco_origem = ORIGEM_INDISPONIVEL` (eixo A, `app.core.money_planes`) e o relatório **diz
+    que não sabe**, em vez de comparar contra zero — o que seria o pior bug possível aqui: uma
+    divergência inteira, inventada, com aparência de fato. Não transforme este `None` em exceção,
+    nem em `0`, nem no saldo de abertura.
+
+    **2. A comparação usa o `reference_date` DO CHECKPOINT DEVOLVIDO, não `on_or_before`.** A 8.5
+    faz `derived_balance(..., until=cp.reference_date)`, com o mesmo `D` dos dois lados. Se o
+    checkpoint encontrado é de 15/07 e o relatório pediu até 31/07, comparar o saldo do banco de
+    15/07 com o saldo do sistema de 31/07 acusaria como divergência tudo o que aconteceu no meio —
+    o erro clássico desta classe de relatório, que o design §5.1 manda **recusar**.
+
+    `origins` filtra o eixo B (`('manual',)`, `('ofx',)`); `None` = qualquer porta de entrada.
+    Desempate no mesmo dia: **`ofx` antes de `manual`** — ver `_ORIGIN_RANK`. `LIMIT 1`.
+
+    Não valida a conta de propósito: é uma função de leitura consumida em laço pela conferência, e a
+    RLS já garante que checkpoint de outro tenant não aparece (conta inexistente → nenhuma linha →
+    `None`, que é o mesmo estado honesto de "não há verdade externa aqui").
+    """
+    stmt = (
+        select(BankBalanceCheckpoint)
+        .where(
+            BankBalanceCheckpoint.bank_account_id == bank_account_id,
+            BankBalanceCheckpoint.reference_date <= on_or_before,
+        )
+        .order_by(
+            BankBalanceCheckpoint.reference_date.desc(),
+            _ORIGIN_RANK.asc(),
+            BankBalanceCheckpoint.created_at.desc(),
+        )
+        .limit(1)
+    )
+    if origins:
+        stmt = stmt.where(BankBalanceCheckpoint.origin.in_(_validate_origins(origins)))
+    return db.scalars(stmt).first()
+
+
+def _validate_origins(origins: Sequence[str]) -> tuple[str, ...]:
+    invalidos = [o for o in origins if o not in ORIGINS]
+    if invalidos:
+        raise BankError(
+            f"Origem de saldo inválida: {', '.join(invalidos)}. Use um de: {', '.join(ORIGINS)}.",
+            422,
+        )
+    return tuple(origins)
+
+
+def days_since_last_declared_balance(
+    db: Session, *, bank_account_id: str | None = None, today: date
+) -> int | None:
+    """Dias desde o ÚLTIMO saldo declarado (da conta, ou do tenant inteiro). `None` = nunca houve.
+
+    É o insumo da frase honesta *"saldo não confirmado há 47 dias"* (design §5.1 bloco 4): o sistema
+    **declara que não sabe** em vez de culpar o usuário por não conferir. `None` é "nunca
+    declarado", que é diferente de `0` ("declarado hoje") — devolver `0` nos dois casos apagaria
+    justamente a distinção que a frase precisa fazer.
+
+    `bank_account_id=None` dá a visão consolidada do tenant; informado, dá a da conta. Os dois
+    existem porque um diagnóstico geral quer o consolidado e um relatório por conta precisa apontar
+    **qual** conta está desatualizada (epic §9 F3).
+
+    ⚠️ **NÃO é o `dias_desde_ultima_conferencia` da Story 8.5** — semânticas diferentes, e ligar as
+    duas ao mesmo campo daria dois números com o mesmo nome. Aqui é `MAX(reference_date)` **sem
+    teto**; lá é a distância até o checkpoint que caiu **dentro da janela do relatório**
+    (`latest_checkpoint(on_or_before=end)`). Consumidores previstos: a Story 8.7 ("último saldo
+    declarado" no cartão da conta) e a Onda 3. ⚠️ **[@dev 8.4] Nenhum consumidor existe ainda no
+    repositório** — ela é entregue por AC7 com a semântica que a story fixou, e a assinatura não
+    foi ajustada a nenhum chamador imaginado. Quem for consumi-la primeiro deve conferir se é este
+    número que quer, e não o da 8.5.
+
+    Agregação no banco, UMA query — nunca carregar linhas para achar o máximo em Python.
+    """
+    stmt = select(func.max(BankBalanceCheckpoint.reference_date))
+    if bank_account_id:
+        stmt = stmt.where(BankBalanceCheckpoint.bank_account_id == bank_account_id)
+    ultimo = db.scalar(stmt)
+    if ultimo is None:
+        return None
+    # SQLite devolve `DATE` como texto em agregações; o Postgres devolve `date`. Normalizar aqui
+    # mantém o contrato (`int | None`) idêntico nos dois bancos — sem isso o subtrair explodiria só
+    # na suíte unitária, ou só em produção, conforme quem fosse o primeiro a rodar.
+    if isinstance(ultimo, str):
+        ultimo = date.fromisoformat(ultimo)
+    return (today - ultimo).days
+
+
+# ── Escrita ──────────────────────────────────────────────────────────────────────────────────
+
+
+def declare_balance(
+    db: Session,
+    *,
+    bank_account_id: str,
+    tenant_id: str,
+    actor: str,
+    data: CheckpointCreate,
+) -> tuple[BankBalanceCheckpoint, bool]:
+    """Registra *"o saldo desta conta, no fim deste dia, era X"*. Devolve `(checkpoint, criado)`.
+
+    O `bool` é **"criado agora"**: `True` → o router responde 201, `False` → 200 (AC4).
+
+    **Redeclarar o mesmo dia CORRIGE, não conflita.** Um checkpoint é a declaração de um fato, e
+    quem digitou 1.234,00 no lugar de 12.340,00 precisa corrigir com um gesto — não com um ciclo
+    apagar→recriar, que é o oposto do teto de simplicidade do design §0. Um 409 aqui seria o sistema
+    tratando o próprio erro de digitação do usuário como uma violação de integridade.
+
+    **Este método NÃO cria, altera nem baixa movimento nenhum.** Não existe "movimento de ajuste"
+    para fechar a diferença entre o declarado e o derivado, e nunca pode existir: ver o aviso (c) na
+    docstring de `BankBalanceCheckpoint`.
+
+    Validações, todas antes de qualquer escrita e nesta ordem (a ordem define o status que o usuário
+    recebe quando erra duas coisas ao mesmo tempo): conta visível (404 fail-closed pela RLS) → conta
+    não arquivada (422) → `origin` (422) → data não futura (422) → data >= abertura (422).
+    `balance_cents` **não** tem guarda de sinal: negativo é um saldo legítimo.
+    """
+    acc = get_account(db, bank_account_id)
+    if acc.archived_at is not None:
+        raise BankError(
+            "Esta conta está arquivada e não recebe saldos novos. Se ela voltou a ser usada, "
+            "cadastre-a de novo com o saldo de abertura do dia.",
+            422,
+        )
+    origin = _validate_origin(data.origin)
+    reference_date = _validate_reference_date(data.reference_date, acc)
+
+    existente = db.scalars(
+        select(BankBalanceCheckpoint).where(
+            BankBalanceCheckpoint.bank_account_id == acc.id,
+            BankBalanceCheckpoint.reference_date == reference_date,
+            BankBalanceCheckpoint.origin == origin,
+        )
+    ).first()
+
+    criado = existente is None
+    if existente is not None:
+        cp = existente
+        cp.balance_cents = data.balance_cents
+        # Quem corrigiu passa a ser o autor: o rastro de QUEM declarou o número que está valendo é
+        # mais útil que o de quem declarou o número que foi substituído — e o histórico completo da
+        # correção continua no `audit_entries`, que é onde ele pertence.
+        cp.created_by = actor
+    else:
+        cp = BankBalanceCheckpoint(
+            tenant_id=tenant_id,
+            bank_account_id=acc.id,
+            reference_date=reference_date,
+            balance_cents=data.balance_cents,
+            origin=origin,
+            # Só a importação da Onda 3 preenche.
+            import_batch_id=None,
+            created_by=actor,
+        )
+        db.add(cp)
+
+    try:
+        # `flush` ANTES do `audit.record`, mesmo padrão de `create_account`/`create_transaction`:
+        # `id` tem default Python-side (`_uuid`), aplicado só no INSERT — sem o flush o rastro
+        # nasceria com `target=''`, apontando para nada.
+        db.flush()
+        audit.record(
+            db, tenant_id=tenant_id, actor=actor, action="bank.checkpoint.declare", target=cp.id
+        )
+        db.commit()
+    except IntegrityError as e:
+        # A CORRIDA: duas declarações simultâneas do mesmo dia passam as duas pelo `select` acima
+        # sem achar nada e as duas tentam inserir. O `UNIQUE` é a garantia final (fail-closed, no
+        # espírito da RLS) e a perdedora recebe 409 — o único caminho em que esta rota devolve 409,
+        # e ele não é o de redeclaração, que é o caminho normal acima.
+        db.rollback()
+        raise BankError(
+            "Outro registro para o saldo desta conta neste dia foi gravado ao mesmo tempo. "
+            "Recarregue e confira o valor.",
+            409,
+        ) from e
+    db.refresh(cp)
+    return cp, criado
+
+
+def delete_checkpoint(
+    db: Session, *, checkpoint_id: str, tenant_id: str, actor: str
+) -> None:
+    """Remove uma declaração indevida. **O único `DELETE` físico do módulo `bank`.**
+
+    Contas se arquivam e movimentos se ignoram — os dois têm histórico dependente e apagá-los
+    destruiria a auditoria, que é o produto. Um checkpoint não tem nada pendurado nele e é uma
+    declaração pontual: mantê-lo "arquivado" só poluiria `latest_checkpoint` com um estado a
+    filtrar, e um estado a filtrar é um estado que alguém vai esquecer de filtrar. O rastro da
+    remoção fica em `audit_entries`.
+
+    404 fail-closed para inexistente e para cross-tenant (a RLS esconde a linha).
+    """
+    cp = get_checkpoint(db, checkpoint_id)
+    audit.record(
+        db, tenant_id=tenant_id, actor=actor, action="bank.checkpoint.delete", target=cp.id
+    )
+    db.delete(cp)
+    db.commit()

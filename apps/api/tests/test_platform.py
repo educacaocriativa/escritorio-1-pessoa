@@ -11,7 +11,7 @@ from app.core.audit import PlatformAuditEntry
 from app.core.security import hash_password
 from app.modules.agenda.models import AgendaEvent
 from app.modules.auth.models import Tenant, User
-from app.modules.bank.models import BankAccount, BankTransaction
+from app.modules.bank.models import BankAccount, BankBalanceCheckpoint, BankTransaction
 from app.modules.crm.models import Client
 from app.modules.platform import service as platform_service
 from app.modules.settings.models import TenantProfile
@@ -544,6 +544,20 @@ def _seed_business_data(db: Session, tenant_id: str) -> None:
             status="unmatched",
         )
     )
+    # Story 8.4 (IV5): o saldo que o usuário declarou olhando o app do banco — quanto dinheiro ele
+    # tinha, em que conta e em que dia. É a "verdade externa" do produto e, portanto, um retrato
+    # patrimonial: se a purga dinâmica de subclasses de `TenantMixin` deixasse esta tabela para
+    # trás, ela sobreviveria à exclusão da conta (LGPD). Verificado, não assumido.
+    db.add(
+        BankBalanceCheckpoint(
+            tenant_id=tenant_id,
+            bank_account_id="conta-qualquer",
+            reference_date=date(2026, 7, 15),
+            balance_cents=1_234_56,
+            origin="manual",
+            created_by="usuario-qualquer",
+        )
+    )
     db.commit()
 
 
@@ -557,6 +571,12 @@ def test_delete_account_purges_and_writes_platform_log(
     assert db.query(AgendaEvent).filter(AgendaEvent.tenant_id == tid).count() == 1
     assert db.query(BankAccount).filter(BankAccount.tenant_id == tid).count() == 1
     assert db.query(BankTransaction).filter(BankTransaction.tenant_id == tid).count() == 1
+    assert (
+        db.query(BankBalanceCheckpoint)
+        .filter(BankBalanceCheckpoint.tenant_id == tid)
+        .count()
+        == 1
+    )
 
     resp = client.delete(f"/admin/accounts/{tid}", headers=admin_headers)
     assert resp.status_code == 204, resp.text
@@ -568,6 +588,13 @@ def test_delete_account_purges_and_writes_platform_log(
     assert db.query(BankAccount).filter(BankAccount.tenant_id == tid).count() == 0
     # Story 8.3 (IV6): e o extrato junto — nenhum movimento (nem o CPF da contraparte) sobrevive.
     assert db.query(BankTransaction).filter(BankTransaction.tenant_id == tid).count() == 0
+    # Story 8.4 (IV5): e os saldos declarados também — o retrato de quanto o usuário tinha no banco.
+    assert (
+        db.query(BankBalanceCheckpoint)
+        .filter(BankBalanceCheckpoint.tenant_id == tid)
+        .count()
+        == 0
+    )
     assert db.query(Tenant).filter(Tenant.id == tid).first() is None
     assert db.query(User).filter(User.tenant_id == tid).count() == 0
 

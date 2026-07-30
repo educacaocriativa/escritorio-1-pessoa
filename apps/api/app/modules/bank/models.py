@@ -1,8 +1,9 @@
-"""Conta bancária e movimento bancário — entidades de NEGÓCIO (RLS). O **plano 3** do dinheiro.
+"""Conta, movimento e saldo declarado — entidades de NEGÓCIO (RLS). O **plano 3** do dinheiro.
 
-`BankAccount` (Story 8.2) é a conta; `BankTransaction` (Story 8.3) é a linha de extrato. Cada uma
-tem a sua própria docstring com as invariantes que a mantêm correta — leia a do modelo que você vai
-mexer, além destes três avisos, que valem para o módulo inteiro:
+`BankAccount` (Story 8.2) é a conta; `BankTransaction` (Story 8.3) é a linha de extrato;
+`BankBalanceCheckpoint` (Story 8.4) é a **verdade externa** do saldo num dia. Cada uma tem a sua
+própria docstring com as invariantes que a mantêm correta — leia a do modelo que você vai mexer,
+além destes três avisos, que valem para o módulo inteiro:
 
 **(a) Este é o plano 3 — nunca some com o plano 1 sem rótulo.** Os três planos de dinheiro
 (design `controle-bancario-design.md` §1.1) são: **plataforma** (`transactions`,
@@ -279,3 +280,107 @@ class BankTransaction(Base, TenantMixin, TimestampMixin):
     status: Mapped[str] = mapped_column(String(16), default=STATUS_UNMATCHED, nullable=False)
     # Por que o usuário mandou ignorar. Texto livre curto — vira a explicação na conferência.
     ignored_reason: Mapped[str] = mapped_column(String(120), default="", nullable=False)
+
+
+# ── Vocabulário de `origin` — o **EIXO B** da procedência (design §1.3.1) ─────────────────────
+#
+# A pergunta que este eixo responde: *"por qual PORTA este saldo EXTERNO entrou no e1p?"*
+# Sufixo de campo de API: `*_fonte`. Este é o vocabulário CANÔNICO do eixo B, e ele mora aqui — ao
+# lado da coluna `bank_balance_checkpoints.origin` que descreve — enquanto o **eixo A** (`*_origem`
+# ∈ `plataforma|banco|misto|indisponivel`, a pergunta *"de qual PLANO de dinheiro o número vem?"*)
+# mora em `app/core/money_planes.py`.
+#
+# ⚠️ **Os dois eixos NUNCA se traduzem um no outro.** A ratificação da @architect (D-3) removeu da
+# Story 8.4 uma camada que mapeava `origin='manual'` → `ORIGEM_DECLARADO`; essa tradução foi
+# apontada como **a prova** de que havia dois conceitos achatados num campo só. `declarado` e
+# `extrato` estão REVOGADOS como valores de `*_origem`; a Story 8.5 lê `origin` **direto**, sem
+# traduzir. Consequência boa: na Onda 3, ZERO mudança de vocabulário — `ofx` já existe aqui.
+ORIGIN_MANUAL = "manual"  # o usuário olhou o app do banco e digitou o número (o ÚNICO desta onda)
+# RESERVADO para a Onda 3: o `<LEDGERBAL>` do arquivo OFX importado. **Ninguém escreve nele hoje** —
+# a API recusa com 422 (AC3) e `import_batch_id` nasce sempre NULL. Declarar custa zero; descobrir
+# depois que o vocabulário era fechado custa uma migration.
+ORIGIN_OFX = "ofx"
+
+ORIGINS: tuple[str, ...] = (ORIGIN_MANUAL, ORIGIN_OFX)
+
+
+class BankBalanceCheckpoint(Base, TenantMixin, TimestampMixin):
+    """*"O saldo desta conta, no FIM deste dia, era X."* A **verdade externa** (Story 8.4).
+
+    Três avisos, e o terceiro é o mais importante do épico inteiro:
+
+    **(a) É esta tabela que torna a conferência possível SEM IMPORTAÇÃO NENHUMA** (design §2.4). Ela
+    é a "Opção B" do estudo antecedente (saldo declarado) preservada dentro do desenho maior em vez
+    de descartada, e é por causa dela que a Onda 1 entrega valor sozinha, antes de qualquer parser
+    existir. O custo para o usuário é o menor de todo o épico: ~1 vez por mês, 5 segundos,
+    **confirmando** um número que já está na tela do app do banco — dentro do teto de simplicidade
+    do design §0 (*"o e1p pode pedir que o usuário CONFIRME um número; não que ele CONSTRUA um
+    número"*). O contraste deliberado é a Onda 3, onde baixar e subir o OFX é reconhecido no próprio
+    design como *"o pedido mais caro"*.
+
+    **(b) `reference_date` é O FIM DAQUELE DIA.** É um `Date` (jamais `DateTime`, design §2.4 e
+    `CLAUDE.md` §6.0) e a comparação da conferência (Story 8.5) é, obrigatoriamente,
+    `latest_checkpoint(..., on_or_before=D)` × `derived_balance(..., until=D)` com **o mesmo `D`**,
+    onde `D` é o `reference_date` do checkpoint encontrado — nunca "hoje", nunca o fim do período
+    pedido. `until` de `derived_balance` também é inclusivo, então as duas janelas coincidem por
+    construção. Comparar saldos apurados em datas diferentes é o erro clássico desta classe de
+    relatório, e o design §5.1 manda **recusar**, não arredondar.
+
+    **(c) O checkpoint NUNCA corrige o saldo derivado.** O saldo do sistema é derivado dos
+    movimentos (`opening_balance_cents + SUM(amount_cents)`, design §3.1); este número é a verdade
+    externa. Os dois existem para serem **comparados**, jamais reconciliados automaticamente. Se
+    algum dia alguém fizer o checkpoint ajustar o saldo — por um "movimento de ajuste" automático,
+    que é a "melhoria" bem-intencionada mais provável aqui —, a divergência iria a zero **por
+    construção** e o produto perderia a única coisa que está vendendo: a capacidade de dizer
+    **quanto** está faltando (`|divergencia_cents|` por conta é a métrica primária do epic §3.1).
+    Corolário: nada aqui materializa saldo. Esta tabela **não é cache de saldo** — é registro de uma
+    declaração, com data e autor. A defesa permanente contra essa boa intenção é o teste nomeado
+    `test_checkpoint_nao_altera_saldo_derivado`.
+
+    **Por que existe um checkpoint por CONTA e não um "saldo declarado do tenant"** (epic §9 F3): a
+    topologia real do usuário é corrente + poupança + aplicação, possivelmente em bancos diferentes.
+    Três contas divergindo +R$ 1.200, −R$ 900 e +R$ 40 dão +R$ 340 consolidado, que *parece saudável
+    e esconde dois problemas* — por isso a conferência é **por conta**, e um consolidado só existe
+    acompanhado da decomposição (epic §3.2).
+
+    **`origin` na constraint única não é redundância:** o mesmo dia pode ter um checkpoint `manual`
+    **e** um `ofx`, porque são dois fatos independentes (e divergirem entre si já é informação: ou o
+    usuário digitou errado, ou o arquivo é de outro período). Ver `ORIGINS` acima e o desempate
+    determinístico documentado em `service.latest_checkpoint`.
+
+    **Referências soltas, sem FK dura** (`bank_account_id`, `import_batch_id`): padrão do projeto —
+    a integridade é validada no service, sob RLS.
+    """
+
+    __tablename__ = "bank_balance_checkpoints"
+
+    # ÚNICO **total** (não parcial). `tenant_id` PRIMEIRO porque índice único é GLOBAL e não
+    # respeita RLS — sem ele o tenant B levaria um 409 por causa de um dado do tenant A (bug **e**
+    # vazamento de existência), mesmo raciocínio de `BankAccount`/`BankTransaction`.
+    # ⚠️ Declarado também AQUI, e não só na migration: a suíte unitária cria o schema com
+    # `Base.metadata.create_all` em SQLite (`tests/conftest.py`), e sem esta declaração o caminho de
+    # redeclaração (AC4) e a corrida de `IntegrityError` não seriam exercidos fora do Postgres.
+    __table_args__ = (
+        Index(
+            "uq_bank_checkpoint_day",
+            "tenant_id",
+            "bank_account_id",
+            "reference_date",
+            "origin",
+            unique=True,
+        ),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
+    # Referência SOLTA — validada no service via `get_account` (404 fail-closed pela RLS).
+    bank_account_id: Mapped[str] = mapped_column(String(36), nullable=False)
+    # Ver aviso (b): **`Date`, jamais `DateTime`**. Não "melhore" para TIMESTAMP em story nenhuma.
+    reference_date: Mapped[date] = mapped_column(Date, nullable=False)
+    # PODE ser negativo (conta no limite / cheque especial) — sem default e sem guarda de sinal.
+    balance_cents: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    # Vocabulário `ORIGINS` (eixo B). Validado no service; nesta onda só `manual` é aceito.
+    origin: Mapped[str] = mapped_column(String(12), nullable=False)
+    # Sempre NULL nesta onda — só a importação da Onda 3 preenche.
+    import_batch_id: Mapped[str | None] = mapped_column(String(36), default=None, nullable=True)
+    # `user_id` de quem declarou. Nullable porque a linha `ofx` da Onda 3 não terá autor humano.
+    created_by: Mapped[str | None] = mapped_column(String(36), default=None, nullable=True)

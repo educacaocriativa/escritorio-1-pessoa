@@ -1,4 +1,4 @@
-"""Schemas da conta bancária (Story 8.2) e do movimento bancário (Story 8.3).
+"""Schemas da conta (8.2), do movimento (8.3) e do saldo declarado (8.4) — módulo bancário.
 
 **Nenhum saldo trafega sem procedência** (Regra dos Planos §1.3c): todo campo que carrega saldo tem
 um irmão `*_origem` preenchido com uma constante de `app.core.money_planes` — nunca uma string
@@ -6,7 +6,23 @@ literal solta. Aqui a origem é sempre `ORIGEM_BANCO`, porque o número vem do p
 
 ⚠️ `BankTransactionOut.amount_cents` **não** é um saldo e por isso não tem `*_origem`: é o valor de
 UM movimento, não o resultado de uma soma. A regra §1.3c fala de campos que carregam saldo — quem
-carrega saldo neste módulo é `saldo_derivado_cents`, e ele declara.
+carrega saldo neste módulo é `saldo_derivado_cents` (8.2) e `balance_cents` (8.4), e os dois
+declaram.
+
+### Os DOIS eixos de procedência, e como eles aparecem aqui (design §1.3.1)
+
+- **Eixo A — plano** (`*_origem`, `app.core.money_planes`): *"de qual PLANO de dinheiro este número
+  vem?"* → `plataforma|banco|misto|indisponivel`. **Obrigatório em todo campo de saldo.**
+  `BankAccountOut.saldo_derivado_origem` e `CheckpointOut.balance_origem` são ambos `ORIGEM_BANCO`,
+  e é justamente por isso que os dois números são **comparáveis** na Story 8.5: o saldo que o
+  sistema calculou e o saldo que o banco atesta são o mesmo plano visto por dois caminhos.
+- **Eixo B — porta de entrada** (`*_fonte`, `app.modules.bank.models.ORIGINS`): *"por qual PORTA
+  este saldo EXTERNO entrou no e1p?"* → `manual|ofx`. Obrigatório **só** em saldo atestado por
+  terceiro, que hoje é exclusivamente o checkpoint — o saldo derivado não tem eixo B porque não
+  entrou por porta nenhuma: ele é calculado aqui dentro. Em `CheckpointOut` o eixo B é o campo
+  `origin` (mesmo nome da coluna, AC8); a Story 8.5 o lê **direto**, sem traduzir, no campo
+  `saldo_banco_fonte` do relatório dela. Um segundo campo `balance_fonte` espelhando `origin` no
+  mesmo payload seria duas fontes para o mesmo valor — exatamente o que este épico combinou evitar.
 """
 from __future__ import annotations
 
@@ -16,6 +32,7 @@ from pydantic import BaseModel, Field, field_validator
 
 from app.core.money_planes import ORIGEM_BANCO
 from app.core.validators import validate_document
+from app.modules.bank.models import ORIGIN_MANUAL
 
 
 def _digits_or_empty(v: str | None) -> str | None:
@@ -271,3 +288,63 @@ class BankTransactionOut(BaseModel):
     ignored_reason: str
     created_at: datetime
     updated_at: datetime
+
+
+# ── Saldo declarado / checkpoint (Story 8.4) ─────────────────────────────────────────────────
+
+
+class CheckpointCreate(BaseModel):
+    """*"O saldo desta conta, no FIM deste dia, era X."* A conta vem do PATH, nunca do corpo.
+
+    `origin` **existe** no corpo (ao contrário de `BankTransactionCreate.source`, que é fixado no
+    service) porque o vocabulário do eixo B é aberto ao cliente por desenho: na Onda 3 a mesma
+    escrita virá do caminho de importação com `origin='ofx'`. Nesta onda o service recusa qualquer
+    valor diferente de `manual` com 422 (AC3), e a validação mora lá — e não num `Literal` do
+    Pydantic — para que a mensagem possa explicar **por que** `ofx` ainda não é aceito, em vez de
+    devolver o erro genérico de enum.
+
+    `balance_cents` PODE ser negativo: conta no limite / cheque especial é um saldo legítimo, e
+    recusá-lo forçaria o usuário a mentir o número que ele está olhando na tela do banco.
+    """
+
+    reference_date: date
+    balance_cents: int
+    origin: str = Field(default=ORIGIN_MANUAL, max_length=12)
+
+    @field_validator("origin")
+    @classmethod
+    def _origin(cls, v: str) -> str:
+        return v.strip()
+
+
+class CheckpointOut(BaseModel):
+    """O saldo declarado como a API o devolve.
+
+    ⚠️ **NÃO expõe o saldo do sistema nem a divergência**, de propósito. Comparar os dois é a Story
+    8.5, num serviço read-only próprio, com a banda de tolerância e a decomposição por conta que o
+    epic §3.2 exige. Se a divergência nascesse aqui também, existiriam duas implementações do mesmo
+    número — e a daqui nasceria **sem** a banda e **sem** a decomposição, que é a forma de um
+    consolidado saudável esconder duas contas com problema.
+
+    **Colunas da tabela fora deste contrato:** `import_batch_id` é criada pela migration desta story
+    porque a Onda 3 depende dela (design §7.3), mas nesta onda nenhum caminho de código a escreve —
+    é NULL por construção. Quem passar a populá-la define o contrato de saída dela.
+    """
+
+    id: str
+    bank_account_id: str
+    # Data de calendário. É o **fim** deste dia — a mesma janela de `derived_balance(until=...)`.
+    reference_date: date
+    # O saldo que o banco atesta. Centavos, pode ser negativo.
+    balance_cents: int
+    # Eixo A (plano) do saldo acima — OBRIGATÓRIO pela Regra dos Planos §1.3c. Constante
+    # `ORIGEM_BANCO`: o número que o usuário leu no app do banco é o plano 3, sempre. Nunca
+    # `indisponivel` — se este objeto existe, o número existe; "não sei" é a AUSÊNCIA de checkpoint
+    # (`latest_checkpoint` → `None`), e quem traduz essa ausência em `ORIGEM_INDISPONIVEL` é o
+    # relatório da 8.5, não este contrato.
+    balance_origem: str = ORIGEM_BANCO
+    # Eixo B (porta de entrada) do MESMO saldo: `manual` nesta onda, `ofx` na Onda 3. Ver a nota
+    # sobre os dois eixos no topo deste módulo — os eixos não se traduzem um no outro.
+    origin: str
+    created_by: str | None
+    created_at: datetime
