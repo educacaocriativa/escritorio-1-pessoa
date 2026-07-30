@@ -11,6 +11,8 @@ from app.modules.financial_intelligence.engine import (
     AMARELO,
     VERDE,
     VERMELHO,
+    CompletenessAccountInput,
+    CompletenessInput,
     EngineInput,
     InvestmentReturn,
     MarginTrend,
@@ -26,12 +28,14 @@ def _input(
     runway_days: int | None = None,
     windows: list[ProjectionWindowInput] | None = None,
     investments: list[InvestmentReturn] | None = None,
+    completeness: CompletenessInput | None = None,
 ) -> EngineInput:
     return EngineInput(
         margins=margins or [],
         runway_days=runway_days,
         projection_windows=windows or [],
         investments=investments or [],
+        completeness=completeness,
     )
 
 
@@ -152,3 +156,76 @@ def test_iv1_same_input_same_output_deterministic() -> None:
     assert all(isinstance(s, Signal) for s in first)
     # Repetível quantas vezes for: nenhum estado global mutável.
     assert compute_signals(data) == first
+
+
+# ── Story 8.6 — completude: compatibilidade retroativa (IV2) e precedência semântica (AC5) ──
+
+
+def test_iv2_completeness_none_produz_exatamente_a_lista_de_antes() -> None:
+    """IV2 — o campo novo não muda uma vírgula do que a 5.8 devolvia.
+
+    Não basta "os testes antigos passam": aqui a igualdade é **explícita** entre a saída com
+    `completeness` omitido (a chamada da 5.8) e com `completeness=None` — mesma ordem, mesmos
+    títulos, mesmas explicações. Se a completude um dia começar a emitir algo com entrada `None`
+    (por exemplo um verde "não há nada a conferir"), este teste cai antes de a mentira chegar à
+    tela de quem nunca cadastrou conta bancária."""
+    margins = [MarginTrend("Alpha", 0.40, 0.24, "1 mês")]
+    windows = [ProjectionWindowInput(60, True)]
+    investments = [InvestmentReturn("CDB", -0.01)]
+
+    sem_campo = compute_signals(
+        EngineInput(
+            margins=margins,
+            runway_days=90,
+            projection_windows=windows,
+            investments=investments,
+        )
+    )
+    com_none = compute_signals(
+        _input(margins=margins, runway_days=90, windows=windows, investments=investments,
+               completeness=None)
+    )
+    assert sem_campo == com_none
+    # E nenhum sinal de completude apareceu do nada.
+    assert [s.source for s in sem_campo] == ["lucratividade", "projecao", "projecao",
+                                             "investimento"]
+
+
+def test_sinal_de_completude_vem_antes_dos_demais_no_mesmo_nivel() -> None:
+    """AC5 — precedência SEMÂNTICA: dentro do mesmo nível, completude primeiro.
+
+    *"Não confio nos outros sinais até você fechar isto"* (design §5.3): se o sistema não sabe se os
+    lançamentos estão completos, margem e runway estão calculados sobre base possivelmente furada.
+    A garantia é a ordem de avaliação em `compute_signals` + o sort estável — sem campo novo em
+    `Signal`. Uma story futura que insira uma regra ANTES da completude quebra isso em silêncio; é
+    este teste que avisa."""
+    data = _input(
+        margins=[MarginTrend("Alpha", 0.30, 0.22, "1 mês")],  # 🟡 lucratividade
+        runway_days=45,  # 🔴 projecao
+        completeness=CompletenessInput(
+            contas=[
+                CompletenessAccountInput("Itaú PJ", -90_000, 5_000, 60),  # 🔴 + 🟡 completude
+            ]
+        ),
+    )
+    signals = compute_signals(data)
+    assert [s.level for s in signals] == [VERMELHO, VERMELHO, AMARELO, AMARELO]
+    # 🔴 de completude ANTES do 🔴 de runway; 🟡 de completude ANTES do 🟡 de margem.
+    assert [s.source for s in signals] == ["completude", "projecao", "completude", "lucratividade"]
+
+
+def test_verde_de_completude_nao_passa_na_frente_de_um_vermelho_de_outra_origem() -> None:
+    """O limite da precedência: ela vale DENTRO do nível, nunca acima da gravidade.
+
+    Um 🟢 "está tudo batendo" no topo, acima de um 🔴 de runway, transformaria o sinal num
+    analgésico — exatamente o oposto do que a regra existe para fazer."""
+    data = _input(
+        runway_days=45,  # 🔴
+        completeness=CompletenessInput(
+            contas=[CompletenessAccountInput("Itaú PJ", 0, 5_000, 1)]  # 🟢
+        ),
+    )
+    signals = compute_signals(data)
+    assert [s.level for s in signals] == [VERMELHO, VERDE]
+    assert signals[0].source == "projecao"
+    assert signals[1].source == "completude"

@@ -100,23 +100,39 @@ class LedgerEntryOut(BaseModel):
 class ProjectionWindowOut(BaseModel):
     """Saldo de caixa projetado para uma janela (dias a partir de hoje), em regime de CAIXA.
 
-    `saldo_projetado_cents` é CUMULATIVO: saldo inicial da Carteira + entradas abertas − saídas
-    abertas cujo vencimento cai até o fim da janela. `alert=True` quando o saldo fica NEGATIVO nessa
-    janela — sinal explícito que a Story 5.8 consome como indicador 🔴 sem recalcular."""
+    `saldo_projetado_cents` é CUMULATIVO: saldo inicial (ver `ProjectionOut.saldo_inicial_origem`) +
+    entradas abertas − saídas abertas cujo vencimento cai até o fim da janela. `alert=True` quando o
+    saldo fica NEGATIVO nessa janela — sinal explícito que a Story 5.8 consome como indicador 🔴 sem
+    recalcular.
+
+    **Story 8.1 (AC4b):** `alert_suprimido=True` quando esse veredito foi CALADO porque o saldo
+    inicial é de origem `plataforma` (o disponível da Carteira e1p, não a conta bancária). O `alert`
+    é um cruzamento de limiar sobre uma soma que contém o termo contaminado — erro no saldo inicial
+    vira erro de veredito. **`saldo_projetado_cents` continua exposto e deve continuar sendo
+    exibido**, com o rótulo de origem ao lado: suprime-se a AFIRMAÇÃO, nunca o NÚMERO.
+    **Invariante de contrato:** `alert_suprimido is True ⇒ alert is False`."""
 
     days: int
     saldo_projetado_cents: int
     alert: bool
+    alert_suprimido: bool
 
 
 class RunwayOut(BaseModel):
     """Runway: fôlego de caixa no ritmo de queima atual.
 
     `days` = dias até o saldo inicial zerar na queima líquida diária (saídas − entradas da maior
-    janela / dias), ou `None` quando não há queima (caixa crescendo/estável) — "sem risco", sem
-    divisão por zero. `burn_rate_cents_per_day` é a queima diária (0 quando não há queima)."""
+    janela / dias), ou `None` em DOIS casos que o consumidor **não pode** confundir:
+      - não há queima (caixa crescendo/estável) → `days_suprimido=False`, "sem risco";
+      - **Story 8.1 (AC3):** havia queima, mas o número foi CALADO porque o saldo inicial é de
+        origem `plataforma` → `days_suprimido=True`, "não sei". A UI **jamais** deve exibir
+        "sem risco" aqui — trocar um número falso por tranquilidade falsa é pior que o bug original.
+    `burn_rate_cents_per_day` é a queima diária (0 quando não há queima) e **NÃO é suprimido**: ele
+    deriva das contas em aberto, não do saldo inicial — não está contaminado.
+    **Invariante de contrato:** `days_suprimido is True ⇒ days is None`."""
 
     days: int | None
+    days_suprimido: bool
     burn_rate_cents_per_day: int
 
 
@@ -124,9 +140,33 @@ class ProjectionOut(BaseModel):
     """Projeção de fluxo de caixa 30/60/90 dias + runway (Story 5.7), em regime de CAIXA.
 
     OPOSTO da DRE (que usa competência): aqui a data é a de PAGAMENTO PREVISTO (vencimento dos itens
-    em aberto), nunca `competence_date`. `saldo_inicial_cents` é o disponível da Carteira (mesmo
-    número do Cockpit). `windows` traz uma janela por horizonte pedido (default 30/60/90), com o
-    saldo projetado e o sinal `alert`. `notes` documenta o regime e as exclusões — não em silêncio.
+    em aberto), nunca `competence_date`. `windows` traz uma janela por horizonte pedido (default
+    30/60/90), com o saldo projetado e o sinal `alert`. `notes` documenta o regime, a procedência do
+    saldo e as supressões — não em silêncio.
+
+    **`saldo_inicial_cents` + `saldo_inicial_origem` (Story 8.1, AC1).** Regra dos Planos §1.3c:
+    nenhum saldo trafega sem procedência. `saldo_inicial_origem` tem valor em
+    `app.core.money_planes.ORIGENS` (`plataforma`|`banco`|`misto`|`indisponivel`). O consumidor DEVE
+    exibir a origem junto do número.
+
+    **Story 8.8 — `misto` e as duas parcelas.** Havendo ao menos uma conta bancária ativa que não
+    seja aplicação, a origem passa a ser `misto` e `saldo_inicial_cents` é a soma de:
+      - `saldo_inicial_banco_cents` — Σ do saldo derivado das contas **ativas**, **exceto**
+        aplicações (`kind='investment'`), até `today`. ⚠️ **Não é** "o total de todas as suas
+        contas": a tela "Contas & Saldos" (Story 8.7) soma TODAS e por isso é outro número, também
+        legítimo — nunca rotule os dois igual;
+      - `saldo_inicial_plataforma_cents` — `available_cents` da Carteira e1p (plano 1). `pending`
+        fica de fora: ainda não liberou.
+    **Invariante de contrato:** `saldo_inicial_cents == saldo_inicial_banco_cents +
+    saldo_inicial_plataforma_cents`, em TODOS os caminhos — inclusive no fallback `plataforma`,
+    onde a parcela bancária é 0. Os dois campos são **obrigatórios e sempre presentes**: somar plano
+    3 + plano 1 só é autorizado (§6.1) acompanhado de origem declarada **e** da composição visível.
+    Quem consome DEVE exibir as duas parcelas separadas — **somar sim; esconder a composição,
+    nunca**. Exibir apenas o total é o bug do §1.1 numa forma nova.
+
+    Sem conta bancária cadastrada, o comportamento da Story 8.1 permanece como **fallback**:
+    origem `plataforma`, parcela bancária 0 e as inferências caladas (`RunwayOut.days_suprimido`,
+    `ProjectionWindowOut.alert_suprimido`).
 
     `overdue_inflow_cents`/`overdue_outflow_cents`: parcela de itens em aberto JÁ VENCIDOS
     (`due_date < hoje`) que a projeção conta como caixa esperado imediato — já embutida em todas as
@@ -135,6 +175,11 @@ class ProjectionOut(BaseModel):
 
     today: date
     saldo_inicial_cents: int
+    saldo_inicial_origem: str
+    # Story 8.8 (AC2) — a composição de `saldo_inicial_cents`. Adição estritamente ADITIVA ao
+    # contrato: nada foi removido, renomeado ou teve o tipo trocado (IV4 — endpoint em produção).
+    saldo_inicial_banco_cents: int
+    saldo_inicial_plataforma_cents: int
     overdue_inflow_cents: int
     overdue_outflow_cents: int
     windows: list[ProjectionWindowOut]

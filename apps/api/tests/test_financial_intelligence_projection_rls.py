@@ -6,6 +6,12 @@ SERVIÇO REAL (`cash_projection`) sob RLS, rodando como o papel NÃO-superusuár
 agregação roda no Postgres com a GUC de tenant fixada na sessão, sem filtro manual de `tenant_id`
 (Regra de Ouro nº 1).
 
+**Story 8.8 (IV6) — extensão ADITIVA:** desde a Onda 1 o saldo inicial soma também a parcela
+**bancária** (plano 3, `bank_accounts` + `bank_transactions`), o que traz uma superfície nova de
+vazamento cross-tenant: a projeção do tenant A **nunca** pode somar saldo de conta do tenant B.
+Cada tenant do teste passa a ter conta bancária com movimento, e as parcelas (`banco`/`plataforma`)
+são conferidas separadamente — conferir só o total esconderia uma compensação entre as duas.
+
 Mesmo padrão/bootstrap de test_financial_intelligence_dre_rls.py. Módulo marcado `rls_e2e`: NÃO roda
 no `pytest -q`/`scripts/check.sh` (suíte SQLite), só no job dedicado do CI ou manualmente com Docker
 (`pytest -m rls_e2e`).
@@ -65,15 +71,26 @@ def _run_migrations_as_app(app_url: str) -> None:
 
 
 def _seed_tenant(
-    app_url: str, tenant_id: str, *, available: int, inflow: int, outflow: int
+    app_url: str,
+    tenant_id: str,
+    *,
+    available: int,
+    inflow: int,
+    outflow: int,
+    bank_opening: int,
+    bank_movement: int,
 ) -> None:
     """Para um tenant (GUC setada ANTES dos INSERTs): saldo disponível na Carteira + uma cobrança e
-    uma conta a pagar EM ABERTO com vencimento em +10 dias (dentro de todas as janelas)."""
+    uma conta a pagar EM ABERTO com vencimento em +10 dias (dentro de todas as janelas) + uma
+    **conta bancária** com um movimento (Story 8.8 — a parcela do plano 3)."""
+    from app.modules.bank.models import KIND_CHECKING, BankAccount, BankTransaction
     from app.modules.payables.models import Payable
     from app.modules.receivables.models import Charge
     from app.modules.wallet.models import Transaction
 
     due = TODAY + timedelta(days=10)
+    abertura = TODAY - timedelta(days=30)
+    conta_id = str(uuid4())
     engine = create_engine(app_url, poolclass=NullPool)
     try:
         with engine.connect() as conn:
@@ -104,6 +121,23 @@ def _seed_tenant(
                     due_date=due, status="open",
                 )
             )
+            # Story 8.8 — a parcela BANCÁRIA (plano 3). Conta corrente (não é `investment`, senão
+            # ficaria fora do caixa por design) com um movimento posterior à abertura.
+            session.add(
+                BankAccount(
+                    id=conta_id, tenant_id=tenant_id, name="Conta do tenant",
+                    kind=KIND_CHECKING, opening_balance_cents=bank_opening,
+                    opening_date=abertura,
+                )
+            )
+            session.add(
+                BankTransaction(
+                    tenant_id=tenant_id, bank_account_id=conta_id,
+                    posted_at=TODAY - timedelta(days=1), amount_cents=bank_movement,
+                    raw_description="movimento", dedup_hash=str(uuid4()), source="manual",
+                    status="unmatched",
+                )
+            )
             session.commit()
             session.close()
     finally:
@@ -127,6 +161,11 @@ def _project(app_url: str, tenant_id: str | None) -> dict:
             session.close()
             return {
                 "saldo_inicial_cents": result.saldo_inicial_cents,
+                # Story 8.8: as parcelas são conferidas SEPARADAS. Só o total esconderia uma
+                # compensação entre os dois planos (banco vazado a mais, plataforma a menos).
+                "banco": result.saldo_inicial_banco_cents,
+                "plataforma": result.saldo_inicial_plataforma_cents,
+                "origem": result.saldo_inicial_origem,
                 "w30": result.windows[0].saldo_projetado_cents,
             }
     finally:
@@ -151,21 +190,39 @@ def test_projection_cross_tenant_a_nao_ve_b() -> None:
 
         tenant_a = str(uuid4())
         tenant_b = str(uuid4())
-        # A: disponível 100000, entrada 50000, saída 30000 → w30 = 120000
-        _seed_tenant(app_url, tenant_a, available=100000, inflow=50000, outflow=30000)
-        # B: valores bem diferentes — não podem vazar para A
-        _seed_tenant(app_url, tenant_b, available=777777, inflow=1, outflow=999999)
+        # A: disponível 100000, entrada 50000, saída 30000, banco 200000 + 5000 → w30 = 325000
+        _seed_tenant(
+            app_url, tenant_a, available=100000, inflow=50000, outflow=30000,
+            bank_opening=200000, bank_movement=5000,
+        )
+        # B: valores bem diferentes em TODOS os planos — não podem vazar para A
+        _seed_tenant(
+            app_url, tenant_b, available=777777, inflow=1, outflow=999999,
+            bank_opening=888888, bank_movement=-333,
+        )
 
         a = _project(app_url, tenant_a)
-        assert a["saldo_inicial_cents"] == 100000, "RLS falhou: saldo do A somou Carteira do B"
-        assert a["w30"] == 120000, "RLS falhou: projeção do A incluiu itens do B"
+        assert a["plataforma"] == 100000, "RLS falhou: parcela de Carteira do A somou a do B"
+        assert a["banco"] == 205000, "RLS falhou: parcela BANCÁRIA do A somou conta do B"
+        assert a["saldo_inicial_cents"] == 305000
+        assert a["origem"] == "misto", "com conta bancária a origem é `misto` (Story 8.8)"
+        assert a["w30"] == 305000 + 50000 - 30000, "RLS falhou: projeção do A incluiu itens do B"
 
         b = _project(app_url, tenant_b)
-        assert b["saldo_inicial_cents"] == 777777, "RLS falhou: saldo do B somou Carteira do A"
-        assert b["w30"] == 777777 + 1 - 999999
+        assert b["plataforma"] == 777777, "RLS falhou: parcela de Carteira do B somou a do A"
+        assert b["banco"] == 888555, "RLS falhou: parcela BANCÁRIA do B somou conta do A"
+        assert b["saldo_inicial_cents"] == 777777 + 888555
+        assert b["w30"] == 777777 + 888555 + 1 - 999999
 
-        # Fail-closed: sem GUC de tenant, a agregação enxerga ZERO linhas.
+        # Fail-closed: sem GUC de tenant, a agregação enxerga ZERO linhas — inclusive as contas
+        # bancárias, então a projeção cai no fallback `plataforma` em vez de somar o banco de
+        # alguém. Uma RLS que falhasse aberta aqui daria origem `misto` com saldo de outro tenant.
         blind = _project(app_url, None)
         assert blind["saldo_inicial_cents"] == 0 and blind["w30"] == 0, (
             "RLS não é fail-closed: sem tenant setado a projeção deveria ver zero"
+        )
+        assert blind["banco"] == 0 and blind["plataforma"] == 0
+        assert blind["origem"] == "plataforma", (
+            "sem tenant a projeção não pode enxergar conta bancária nenhuma — se a origem virou "
+            "`misto`, a RLS deixou uma `bank_accounts` de algum tenant visível"
         )

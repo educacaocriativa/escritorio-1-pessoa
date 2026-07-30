@@ -92,6 +92,55 @@ def _seed_investment(app_url: str, tenant_id: str, *, name: str, principal: int)
         engine.dispose()
 
 
+def _seed_bank_account(
+    app_url: str, tenant_id: str, *, name: str, opening: int, declarado: int
+) -> None:
+    """Uma conta bancária com saldo declarado divergente → sinal 🔴 de completude (Story 8.6),
+    cuja explicação cita o NOME DA CONTA — o vetor de vazamento novo que esta story introduz.
+
+    O nome da conta é PII pelo mesmo critério de `MarginTrend.project_name`: ele viaja na
+    explicação do sinal e só é anonimizado pelo narrador na saída para o Claude. Se a RLS falhar,
+    o sintoma não é "vi uma linha do vizinho" — é o diagnóstico de A **acusando um furo** medido
+    contra a verdade externa de B."""
+    from app.modules.bank.models import (
+        KIND_CHECKING,
+        ORIGIN_MANUAL,
+        BankAccount,
+        BankBalanceCheckpoint,
+    )
+
+    engine = create_engine(app_url, poolclass=NullPool)
+    try:
+        with engine.connect() as conn:
+            conn.execute(
+                text("SELECT set_config('app.current_tenant_id', :tid, false)"), {"tid": tenant_id}
+            )
+            conn.commit()  # ver a nota de `_seed_investment`: fixa a GUC e encerra a txn.
+            session = Session(bind=conn)
+            account = BankAccount(
+                tenant_id=tenant_id,
+                name=name,
+                kind=KIND_CHECKING,
+                opening_balance_cents=opening,
+                opening_date=START,
+            )
+            session.add(account)
+            session.flush()
+            session.add(
+                BankBalanceCheckpoint(
+                    tenant_id=tenant_id,
+                    bank_account_id=account.id,
+                    reference_date=date(2026, 7, 20),
+                    balance_cents=declarado,
+                    origin=ORIGIN_MANUAL,
+                )
+            )
+            session.commit()
+            session.close()
+    finally:
+        engine.dispose()
+
+
 def _diagnose(app_url: str, tenant_id: str | None) -> list[tuple[str, str]]:
     """Roda o diagnóstico REAL sob a ótica de `tenant_id` (None = sem GUC → RLS fail-closed).
     Retorna [(level, explanation), ...]."""
@@ -144,5 +193,57 @@ def test_diagnostics_cross_tenant_a_nao_ve_b() -> None:
         assert "Aplicacao-DO-B" in b_text
         assert "Aplicacao-DO-A" not in b_text, "RLS falhou: B viu a aplicação do A"
 
-        # Fail-closed: sem GUC de tenant, o motor não recebe nenhum dado → nenhum sinal.
-        assert _diagnose(app_url, None) == [], "RLS não é fail-closed: sem tenant deveria ver zero"
+        # Fail-closed: sem GUC de tenant, o motor não recebe dado de negócio nenhum. O único sinal
+        # possível é o 🟡 de completude "nenhuma conta bancária cadastrada" (Story 8.6) — que é o
+        # comportamento correto: sem tenant o sistema não vê conta nenhuma e DIZ que não sabe.
+        sem_tenant = _diagnose(app_url, None)
+        assert all(lvl == "amarelo" for lvl, _exp in sem_tenant), sem_tenant
+        assert all("Nenhuma conta bancária cadastrada" in exp for _lvl, exp in sem_tenant), (
+            f"RLS não é fail-closed: sem tenant vazou algum dado de negócio: {sem_tenant}"
+        )
+
+
+def test_diagnostics_completude_cross_tenant_nao_vaza_nome_de_conta() -> None:
+    """Story 8.6 / IV5 — o sinal de completude de A não cita a conta bancária de B.
+
+    A completude é o primeiro sinal do diagnóstico a nomear uma entidade do módulo `bank`. Como o
+    isolamento é RLS e só RLS (Regra de Ouro nº 1 — nenhum filtro manual de `tenant_id` em
+    `reconciliation_report` nem em `diagnostics._completeness`), um vazamento aqui apareceria como
+    um 🔴 acusando um furo de R$ X medido contra o saldo declarado do vizinho.
+    """
+    with PostgresContainer(
+        "postgres:16-alpine",
+        username=_ROOT_USER,
+        password=_ROOT_PASS,
+        dbname=_DB_NAME,
+        driver="psycopg",
+    ) as pg:
+        host = pg.get_container_host_ip()
+        port = pg.get_exposed_port(5432)
+        super_url = f"postgresql+psycopg://{_ROOT_USER}:{_ROOT_PASS}@{host}:{port}/{_DB_NAME}"
+        app_url = f"postgresql+psycopg://e1p_app:{_APP_PASS}@{host}:{port}/{_DB_NAME}"
+
+        _bootstrap_rls_role(super_url)
+        _run_migrations_as_app(app_url)
+
+        tenant_a = str(uuid4())
+        tenant_b = str(uuid4())
+        # Divergência de R$ 1.200 em A e de R$ 900 em B — as duas MUITO acima da banda (R$ 50).
+        _seed_bank_account(
+            app_url, tenant_a, name="Conta-DO-A", opening=1_000_000, declarado=1_120_000
+        )
+        _seed_bank_account(
+            app_url, tenant_b, name="Conta-DO-B", opening=1_000_000, declarado=910_000
+        )
+
+        a_signals = _diagnose(app_url, tenant_a)
+        a_text = " ".join(exp for _lvl, exp in a_signals)
+        assert "Conta-DO-A" in a_text, "o diagnóstico de A deveria nomear a conta de A"
+        assert "R$ 1.200,00" in a_text
+        assert "Conta-DO-B" not in a_text, "RLS falhou: A viu a conta bancária do B"
+        assert "R$ 900,00" not in a_text, "RLS falhou: A viu a divergência do B"
+
+        b_signals = _diagnose(app_url, tenant_b)
+        b_text = " ".join(exp for _lvl, exp in b_signals)
+        assert "Conta-DO-B" in b_text and "R$ 900,00" in b_text
+        assert "Conta-DO-A" not in b_text, "RLS falhou: B viu a conta bancária do A"
