@@ -5,6 +5,7 @@ import {
   FileSignature,
   FileText,
   Globe,
+  Landmark,
   Layers,
   LayoutDashboard,
   LineChart,
@@ -63,6 +64,14 @@ export const navSections: NavSection[] = [
     title: "Financeiro",
     items: [
       { label: "Financeiro", to: "/financeiro", icon: Wallet, ready: true, exact: true },
+      // Story 8.7 — ao lado da Carteira de propósito: o rótulo é "onde está o meu dinheiro", e a
+      // vizinhança reforça a distinção dos planos ("na plataforma" × conta bancária). Fica FORA
+      // de "Análise & Configuração Financeira" para não ser lido como relatório contábil.
+      // ⚠️ A conferência (`/financeiro/conferencia`) NÃO entra aqui, e não é esquecimento: um item
+      // "Conciliação bancária" comunicaria "software de contabilidade" a todo usuário — inclusive
+      // a quem nunca abre a tela — e viraria a conferência numa obrigação periódica. Ela é resposta
+      // a um sinal. Coberto por teste em `navigation.test.ts`.
+      { label: "Contas & Saldos", to: "/financeiro/contas", icon: Landmark, ready: true },
       { label: "Cobranças", to: "/cobrancas", icon: Receipt, ready: true },
       { label: "Contas a Pagar", to: "/pagar", icon: CreditCard, ready: true },
       { label: "Fila de pagamentos", to: "/financeiro/fila-pagamentos", icon: ListChecks, ready: true },

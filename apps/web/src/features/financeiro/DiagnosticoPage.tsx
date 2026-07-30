@@ -1,5 +1,6 @@
 import { ChevronLeft, ChevronRight, Sparkles } from "lucide-react";
 import { useCallback, useEffect, useMemo, useState } from "react";
+import { Link } from "react-router-dom";
 import { api, apiErrorMessage } from "../../lib/api";
 import {
   completudeCaveat,
@@ -109,7 +110,8 @@ export default function DiagnosticoPage() {
 
           {/* Ressalva de completude (Story 8.6) — ANTES da lista, porque é o que decide se dá
               para confiar nos números de baixo. Bloco discreto: âmbar quando 🟡, vermelho quando
-              🔴. Sem link para a conferência aqui — essa rota é da Story 8.7. */}
+              🔴. A porta para a conferência fica no CARTÃO do sinal de completude (Story 8.7,
+              abaixo), não aqui: a ressalva é um aviso de leitura, o sinal é o que se investiga. */}
           {caveat && (
             <p
               role="note"
@@ -175,6 +177,17 @@ function SignalCard({ signal }: { signal: Signal }) {
         {/* Explicação NUMÉRICA — sempre visível, é a base sólida do diagnóstico. */}
         <p className="mt-1 text-sm text-neutral-700">{signal.explanation}</p>
         <p className="mt-1 text-xs text-neutral-400">{sourceLabel(signal.source)}</p>
+        {/* Story 8.7 — a 1ª das duas portas de entrada da conferência (a 2ª é o "Conferir" por
+            conta em Contas & Saldos). O sinal diz QUE há divergência; o link leva a ONDE ela
+            está. A conferência não é item de menu de propósito — ela é resposta a este sinal. */}
+        {signal.source === "completude" && (
+          <Link
+            to="/financeiro/conferencia"
+            className="mt-2 inline-block text-xs font-medium text-primary-600 underline"
+          >
+            Ver a conferência
+          </Link>
+        )}
       </div>
     </li>
   );

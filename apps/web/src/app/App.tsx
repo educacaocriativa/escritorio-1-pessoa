@@ -15,6 +15,8 @@ import CrmPage from "../features/crm/CrmPage";
 import ConversasPage from "../features/conversas/ConversasPage";
 import EstoquePage from "../features/estoque/EstoquePage";
 import CentrosCustoPage from "../features/financeiro/CentrosCustoPage";
+import ConferenciaPage from "../features/financeiro/ConferenciaPage";
+import ContasSaldosPage from "../features/financeiro/ContasSaldosPage";
 import ContratoDrePage from "../features/financeiro/ContratoDrePage";
 import DiagnosticoPage from "../features/financeiro/DiagnosticoPage";
 import DrePage from "../features/financeiro/DrePage";
@@ -62,6 +64,11 @@ export default function App() {
           <Route path="/crm/clients/:id" element={<ClientDetailPage />} />
           <Route path="/conversas" element={<ConversasPage />} />
           <Route path="/financeiro" element={<FinanceiroPage />} />
+          <Route path="/financeiro/contas" element={<ContasSaldosPage />} />
+          {/* Story 8.7 — rota DELIBERADAMENTE fora da sidebar: a conferência é resposta a um
+              sinal (o cartão de completude do diagnóstico / o "Conferir" de uma conta), não uma
+              tarefa de rotina. Ver a docstring de ConferenciaPage.tsx antes de "consertar" isto. */}
+          <Route path="/financeiro/conferencia" element={<ConferenciaPage />} />
           <Route path="/financeiro/plano-contas" element={<PlanoContasPage />} />
           <Route path="/financeiro/centros-custo" element={<CentrosCustoPage />} />
           <Route path="/financeiro/investimentos" element={<InvestimentosPage />} />

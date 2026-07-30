@@ -1,0 +1,327 @@
+/**
+ * Contas & Saldos (Story 8.7) — tipos + lógica PURA consumida pela `ContasSaldosPage`.
+ *
+ * Espelho manual dos schemas de `apps/api/app/modules/bank/schemas.py` (Stories 8.2/8.3/8.4).
+ * `packages/shared-types` é mantido à mão e está defasado desde o PR #45; o padrão vigente do
+ * módulo `financeiro` é declarar o tipo localmente no `.ts` da feature (`projecao.ts`,
+ * `diagnostico.ts`, `investimentos.ts`) — é o que seguimos aqui.
+ *
+ * **Nenhum saldo sem procedência** (Regra dos Planos §1.3c): todo campo `saldo_*_cents` do backend
+ * viaja com o irmão `saldo_*_origem`, e a tela é obrigada a exibir o rótulo do irmão colado ao
+ * número. O vocabulário do eixo A vive num mapa só — `ORIGEM_LABEL`, em `projecao.ts` (Story 8.1) —
+ * e é RE-EXPORTADO aqui de propósito: quem for mexer nesta feature encontra o rótulo pronto e não
+ * cria um segundo mapa. O eixo B (`*_fonte`: manual/ofx) é outra pergunta e tem mapa próprio em
+ * `conferencia.ts`. Os dois nunca se misturam.
+ */
+export { formatBRL } from "./dre";
+// RE-EXPORT, não uma segunda implementação: existe UM mapa de rótulo de origem no frontend
+// (`projecao.ts`, Story 8.1) e ele cobre os 4 valores do vocabulário (`plataforma`, `banco`,
+// `misto`, `indisponivel`). Se faltar um valor novo, acrescente LÁ.
+export { ORIGEM_LABEL, origemLabel } from "./projecao";
+
+import { formatBRL } from "./dre";
+
+// ── Tipos (espelho do backend) ───────────────────────────────────────────────────────────────
+
+/** `BankAccountOut` (Story 8.2). Datas são datas de CALENDÁRIO (`YYYY-MM-DD`), nunca instantes. */
+export interface BankAccount {
+  id: string;
+  name: string;
+  kind: string;
+  institution: string;
+  institution_code: string;
+  branch: string;
+  number: string;
+  holder_document: string;
+  pix_key: string;
+  opening_balance_cents: number;
+  opening_date: string;
+  is_primary: boolean;
+  /** ISO datetime ou `null`. Conta arquivada nunca entra em soma nenhuma. */
+  archived_at: string | null;
+  /** Derivado a cada leitura: abertura + Σ movimentos não ignorados. Não existe coluna de saldo. */
+  saldo_derivado_cents: number;
+  /** Eixo A do saldo acima — sempre `banco`. Exibido colado ao número. */
+  saldo_derivado_origem: string;
+  created_at: string;
+}
+
+/** `BankTransactionOut` (Story 8.3). */
+export interface BankTransaction {
+  id: string;
+  bank_account_id: string;
+  posted_at: string;
+  /** COM SINAL: `+` entrada, `−` saída. Nunca `0` (o backend recusa com 422). */
+  amount_cents: number;
+  /** O que o banco/usuário disse, congelado. Carrega PII — ver a nota de PII no fim deste módulo. */
+  raw_description: string;
+  user_description: string;
+  /** `user_description or raw_description` — a regra JÁ vem resolvida do backend (8.3 Task 6). */
+  description: string;
+  counterparty_name: string;
+  counterparty_document: string;
+  operation_nature: string | null;
+  source: string;
+  status: string;
+  ignored_reason: string;
+  created_at: string;
+  updated_at: string;
+}
+
+/** `CheckpointOut` (Story 8.4) — "o saldo desta conta, no fim deste dia, era X". */
+export interface BankBalanceCheckpoint {
+  id: string;
+  bank_account_id: string;
+  reference_date: string;
+  balance_cents: number;
+  /** Eixo A (plano) — sempre `banco`. */
+  balance_origem: string;
+  /** Eixo B (porta de entrada) — `manual`|`ofx`, cru. Rótulo em `conferencia.ts`. */
+  origin: string;
+  created_by: string | null;
+  created_at: string;
+}
+
+// ── Tipo de conta (`models.KINDS`) ───────────────────────────────────────────────────────────
+
+export const KIND_CHECKING = "checking";
+export const KIND_SAVINGS = "savings";
+export const KIND_INVESTMENT = "investment";
+export const KIND_CASH = "cash";
+
+/**
+ * Vocabulário de TIPO de conta. Não confundir com o `kindLabel` de `costCenters.ts`: aquele
+ * traduz tipos de centro de custo (sócio/área/unidade) e não tem nenhum valor em comum com este.
+ * São dois vocabulários distintos de dois domínios distintos, e fundi-los num mapa só produziria
+ * exatamente o achatamento que o design §1.3.1 proíbe para os eixos de procedência.
+ */
+export const KIND_LABEL: Record<string, string> = {
+  [KIND_CHECKING]: "Conta corrente",
+  [KIND_SAVINGS]: "Poupança",
+  [KIND_INVESTMENT]: "Aplicação",
+  [KIND_CASH]: "Caixa",
+};
+
+/** Pares [valor, rótulo] na ordem do `<select>` de cadastro. */
+export const BANK_ACCOUNT_KINDS: ReadonlyArray<readonly [string, string]> = [
+  [KIND_CHECKING, KIND_LABEL[KIND_CHECKING]],
+  [KIND_SAVINGS, KIND_LABEL[KIND_SAVINGS]],
+  [KIND_INVESTMENT, KIND_LABEL[KIND_INVESTMENT]],
+  [KIND_CASH, KIND_LABEL[KIND_CASH]],
+];
+
+/** Rótulo do tipo, tolerante a um valor novo do backend (mostra o cru em vez de sumir). */
+export function kindLabel(kind: string): string {
+  return KIND_LABEL[kind] ?? kind;
+}
+
+// ── Status do movimento (`models.STATUSES`) ──────────────────────────────────────────────────
+
+export const STATUS_UNMATCHED = "unmatched";
+export const STATUS_PARTIAL = "partial";
+export const STATUS_MATCHED = "matched";
+export const STATUS_IGNORED = "ignored";
+
+/**
+ * Rótulo do status **do ponto de vista do saldo**, que é a única pergunta que a Onda 1 responde:
+ * o movimento conta ou não conta. "Conciliado"/"Parcial" existem no vocabulário do backend para a
+ * Onda 4 e são traduzidos aqui só para não aparecerem crus se chegarem.
+ */
+export const STATUS_LABEL: Record<string, string> = {
+  [STATUS_UNMATCHED]: "No saldo",
+  [STATUS_PARTIAL]: "Parcialmente vinculado",
+  [STATUS_MATCHED]: "Vinculado",
+  [STATUS_IGNORED]: "Ignorado (fora do saldo)",
+};
+
+export function statusLabel(status: string): string {
+  return STATUS_LABEL[status] ?? status;
+}
+
+/** Movimento fora do saldo derivado. `ignore`/`unignore` são o par — não existe `DELETE`. */
+export function isIgnored(tx: BankTransaction): boolean {
+  return tx.status === STATUS_IGNORED;
+}
+
+// ── Exibição do valor assinado ───────────────────────────────────────────────────────────────
+
+export interface SignedAmountView {
+  entrada: boolean;
+  /** "Entrada" | "Saída" — derivado do SINAL, nunca de um campo `kind` inventado pela UI. */
+  rotulo: string;
+  /** Valor absoluto formatado com o sinal explícito na frente ("+ R$ 10,00" / "− R$ 10,00"). */
+  texto: string;
+  /** Classe Tailwind da cor do número (verde entrada / neutro escuro saída). */
+  className: string;
+}
+
+/**
+ * Exibição de um `amount_cents` **assinado**.
+ *
+ * O extrato bancário é uma sequência assinada e o backend a preserva assim (8.3). A UI **não**
+ * inventa um par `kind` + valor absoluto: se ela o fizesse, existiriam duas representações do
+ * mesmo fato e o dia em que uma delas fosse gravada de volta com o sinal trocado seria o dia em
+ * que o saldo derivado passaria a mentir. Aqui só derivamos a APRESENTAÇÃO.
+ *
+ * `0` não é produzível pelo backend (422); se chegar, é tratado como entrada e exibido como
+ * `+ R$ 0,00` — visível e estranho, em vez de silenciosamente classificado como saída.
+ */
+export function signedAmountView(cents: number): SignedAmountView {
+  const entrada = cents >= 0;
+  return {
+    entrada,
+    rotulo: entrada ? "Entrada" : "Saída",
+    // "−" é o sinal de menos tipográfico (U+2212), não o hífen: alinha melhor em `tabular-nums`.
+    texto: `${entrada ? "+" : "−"} ${formatBRL(Math.abs(cents))}`,
+    className: entrada ? "text-emerald-600" : "text-neutral-800",
+  };
+}
+
+// ── Os DOIS totais, num cálculo só ───────────────────────────────────────────────────────────
+
+/**
+ * ⚠️ **A divergência D-6 e como ela foi resolvida.**
+ *
+ * A Projeção de Caixa (Story 8.8) chama de **"no banco"** (`ROTULO_BANCO`, em `projecao.ts`) uma
+ * parcela que vem de `bank.service.active_balance_total`, que **exclui `kind='investment'`**
+ * (design §6.1: dinheiro aplicado não é caixa para pagar a conta de amanhã). Se esta tela chamasse
+ * a soma de TODAS as contas com o mesmo nome, o dono veria dois números diferentes com o mesmo
+ * rótulo em duas telas — e num produto cujo valor inteiro é ser testemunha confiável do dado, isso
+ * não é um detalhe de UI: é a perda da confiança no número.
+ *
+ * A solução: **dois rótulos distintos, nenhum deles "no banco"**, e um só cálculo. `ROTULO_BANCO`
+ * continua sendo exclusivamente o nome da parcela da Projeção.
+ */
+export const TOTAL_EM_CONTAS_LABEL = "Total em contas";
+export const DISPONIVEL_CAIXA_LABEL = "Disponível como caixa";
+
+/** Tipos que NÃO são caixa imediato — espelha o default de `active_balance_total` (design §6.1). */
+export const KINDS_FORA_DO_CAIXA: readonly string[] = [KIND_INVESTMENT];
+
+/** Conta que entra em soma: ativa (não arquivada). Arquivada nunca entra, em nenhum recorte. */
+export function contasAtivas(accounts: BankAccount[]): BankAccount[] {
+  return accounts.filter((a) => a.archived_at === null);
+}
+
+/**
+ * Σ dos saldos derivados das contas **ativas**, com recorte opcional por tipo. Centavos. PURA.
+ *
+ * Um cálculo, dois rótulos (ver `resumoSaldos`) — **não** duas funções: duas implementações da
+ * mesma soma divergiriam no primeiro dia em que alguém corrigisse só uma delas.
+ */
+export function totalSaldoCents(
+  accounts: BankAccount[],
+  opts: { excludeKinds?: readonly string[] } = {},
+): number {
+  const excluded = new Set(opts.excludeKinds ?? []);
+  return contasAtivas(accounts)
+    .filter((a) => !excluded.has(a.kind))
+    .reduce((acc, a) => acc + a.saldo_derivado_cents, 0);
+}
+
+export interface ResumoSaldo {
+  rotulo: string;
+  cents: number;
+  /** Texto curto que diz o que ESTE recorte inclui — o total nunca aparece sem ele. */
+  explicacao: string;
+}
+
+/**
+ * Os totais a exibir no topo da lista de contas, já rotulados. PURA.
+ *
+ * Devolve **um** item quando não há conta de aplicação ativa (os dois recortes coincidem e a
+ * segunda linha seria ruído) e **dois** quando há — nessa ordem. Nunca devolve um total ambíguo,
+ * e nunca usa o rótulo da parcela da Projeção (`ROTULO_BANCO`).
+ */
+export function resumoSaldos(accounts: BankAccount[]): ResumoSaldo[] {
+  const total = totalSaldoCents(accounts);
+  const temAplicacao = contasAtivas(accounts).some((a) => KINDS_FORA_DO_CAIXA.includes(a.kind));
+  const primeiro: ResumoSaldo = {
+    rotulo: TOTAL_EM_CONTAS_LABEL,
+    cents: total,
+    explicacao: "Soma de todas as suas contas ativas, incluindo aplicações.",
+  };
+  if (!temAplicacao) return [primeiro];
+  return [
+    primeiro,
+    {
+      rotulo: DISPONIVEL_CAIXA_LABEL,
+      cents: totalSaldoCents(accounts, { excludeKinds: KINDS_FORA_DO_CAIXA }),
+      explicacao:
+        "Exclui as aplicações — é esta parcela que a Projeção de Caixa soma ao disponível da Carteira e1p.",
+    },
+  ];
+}
+
+// ── Entrada de dinheiro e datas ──────────────────────────────────────────────────────────────
+
+/**
+ * "1.234,56" / "1234.56" / "1234" → centavos. Vazio ou inválido → `0`. Aceita sinal negativo
+ * (saldo de abertura de conta no limite é legítimo).
+ *
+ * ⚠️ **Achado registrado, não corrigido aqui:** o repositório tem hoje ~8 conversões BRL→centavos
+ * escritas inline (`Math.round(parseFloat(v.replace(",", ".")) * 100)`) espalhadas por
+ * `CobrancasPage`, `FinanceiroPage`, `InvestimentosPage`, `EstoquePage`, `FunnelBuilderPage` e
+ * `QuoteBuilderPage`, mais um `toCents` local em `ComprovantePage`. Nenhuma delas trata o ponto de
+ * milhar ("1.234,56" vira 1,23 em metade delas). Consolidar tudo num helper único ao lado de
+ * `formatBRL` é a correção certa — e está **fora do escopo desta story** (tocaria 7 telas que a
+ * IV1 manda deixar intactas). Esta é a única versão testada; ver Dev Agent Record.
+ */
+export function parseCentsBRL(raw: string): number {
+  const s = raw.trim().replace(/\s/g, "");
+  let clean: string;
+  if (s.includes(",")) {
+    // Formato pt-BR: a vírgula é o decimal, todo ponto é separador de milhar.
+    clean = s.replace(/\./g, "").replace(",", ".");
+  } else if (/^-?\d{1,3}(\.\d{3})+$/.test(s)) {
+    // Sem vírgula, mas com grupos de 3 dígitos ("1.234", "1.234.567"): milhar, não decimal.
+    clean = s.replace(/\./g, "");
+  } else {
+    // Sem vírgula e sem cara de milhar ("1234.56", "1234"): o ponto é decimal.
+    clean = s;
+  }
+  const n = Number.parseFloat(clean);
+  return Number.isFinite(n) ? Math.round(n * 100) : 0;
+}
+
+/** Centavos → valor editável em `<input>` ("1234,56"), sem símbolo de moeda nem milhar. */
+export function centsToInput(cents: number): string {
+  return (cents / 100).toFixed(2).replace(".", ",");
+}
+
+/**
+ * Hoje como data de CALENDÁRIO local (`YYYY-MM-DD`), para default de campo de data.
+ *
+ * Local (e não UTC) de propósito: o usuário está declarando "o saldo de hoje" olhando para o
+ * calendário dele. Isto é default de FORMULÁRIO — não tem nada a ver com o casamento de evento
+ * all-day do `CLAUDE.md` §6.0, que compara datas já gravadas e continua sendo feito por string.
+ */
+export function hojeISO(): string {
+  const d = new Date();
+  const mm = String(d.getMonth() + 1).padStart(2, "0");
+  const dd = String(d.getDate()).padStart(2, "0");
+  return `${d.getFullYear()}-${mm}-${dd}`;
+}
+
+/** "2026-07-30" → "30/07/2026". Fatiamento de string: nunca `new Date(...)` (bug de fuso). */
+export function formatDateBR(iso: string): string {
+  const [y, m, d] = iso.slice(0, 10).split("-");
+  return d && m && y ? `${d}/${m}/${y}` : iso;
+}
+
+// ── ⚠️ PII nesta superfície (registro para a Onda 3/4) ───────────────────────────────────────
+//
+// `BankTransaction.raw_description` e `user_description` — e, a partir da Onda 3,
+// `counterparty_name` e `counterparty_document` — carregam **PII de terceiro que nunca contratou
+// com a e1p** (nome e CPF/CNPJ de quem pagou/recebeu, coletados por via indireta). A tela de
+// movimentos desta story JÁ exibe os dois primeiros; os de contraparte são preenchíveis à mão no
+// modal de lançamento e, portanto, também exibíveis.
+//
+// Consequências para quem vier depois:
+//  1. **Onda 4 exige o anonimizador** (`core/anonymizer`, Regra de Ouro nº 2) antes de QUALQUER
+//     chamada a `core/ai` que toque esses campos — inclusive na classificação automática. Mandar a
+//     descrição crua "porque é só uma categoria" é exatamente o caminho pelo qual PII vaza.
+//  2. **Não copiar** esses valores para lugar novo: log, `document.title`, query string, título de
+//     modal ou telemetria. Minimização é regra (REQ-18) — nesta tela eles aparecem na célula da
+//     tabela e no campo do formulário, e em nenhum outro lugar.
+//  3. Nada de IA nesta onda: sugestão de match e classificação são Onda 4.

@@ -1,0 +1,350 @@
+import { render, screen, waitFor, within } from "@testing-library/react";
+import { MemoryRouter } from "react-router-dom";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import { api } from "../../lib/api";
+import ConferenciaPage from "./ConferenciaPage";
+import type { ConferenciaConta, ConferenciaReport } from "./conferencia";
+
+/**
+ * Testes de componente da Conferência (Story 8.7).
+ *
+ * ⚠️ **Desvio declarado do texto da story:** o AC7/Testing afirma que *"o projeto não tem infra de
+ * teste de componente React para estas telas"*. A premissa está **desatualizada** desde a Story 7.3
+ * (jsdom + `@testing-library/react`, com `components/Modal.test.tsx` deixado como modelo) e a
+ * Story 8.1 já a usou em `ProjecaoCaixaPage.test.tsx`. Dois ACs desta story vivem SÓ na tela — o
+ * silêncio dentro da banda (AC5) e a ordem "frase antes da tabela" com o consolidado nunca sozinho
+ * (AC4/AC6) — e aferi-los por inspeção visual seria deixar sem rede justamente a regressão mais
+ * fácil de introduzir num ajuste de estilo.
+ */
+vi.mock("../../lib/api", () => ({
+  api: { get: vi.fn() },
+  apiErrorMessage: () => "Erro inesperado",
+}));
+
+function conta(over: Partial<ConferenciaConta> = {}): ConferenciaConta {
+  return {
+    bank_account_id: "acc-1",
+    bank_account_name: "Itaú PJ",
+    bank_account_kind: "checking",
+    saldo_banco_cents: 2_500_000,
+    saldo_banco_origem: "banco",
+    saldo_banco_fonte: "manual",
+    saldo_banco_data: "2026-07-31",
+    saldo_sistema_cents: 2_500_000,
+    saldo_sistema_origem: "banco",
+    divergencia_cents: 0,
+    dentro_da_tolerancia: true,
+    tolerancia_cents: 12_500,
+    dias_desde_ultima_conferencia: 0,
+    movimentos_ignorados: 0,
+    notes: [],
+    ...over,
+  };
+}
+
+function report(contas: ConferenciaConta[], over: Partial<ConferenciaReport> = {}): ConferenciaReport {
+  const avaliaveis = contas.filter((c) => c.divergencia_cents !== null);
+  return {
+    start: "2026-01-01",
+    end: "2026-12-31",
+    contas,
+    total_divergencia_cents: avaliaveis.length
+      ? avaliaveis.reduce((a, c) => a + (c.divergencia_cents ?? 0), 0)
+      : null,
+    contas_avaliadas: avaliaveis.length,
+    contas_sem_checkpoint: contas.length - avaliaveis.length,
+    contas_fora_da_banda: contas
+      .filter((c) => c.dentro_da_tolerancia === false && c.divergencia_cents !== null)
+      .map((c) => ({
+        bank_account_id: c.bank_account_id,
+        bank_account_name: c.bank_account_name,
+        divergencia_cents: c.divergencia_cents ?? 0,
+        tolerancia_cents: c.tolerancia_cents,
+      })),
+    notes: [],
+    ...over,
+  };
+}
+
+function renderPage(url = "/financeiro/conferencia") {
+  return render(
+    <MemoryRouter initialEntries={[url]}>
+      <ConferenciaPage />
+    </MemoryRouter>,
+  );
+}
+
+beforeEach(() => {
+  vi.mocked(api.get).mockReset();
+});
+
+describe("AC5 — dentro da banda: 🟢 e SILÊNCIO VISUAL (o teste obrigatório desta story)", () => {
+  it("R$ 3,50 de divergência num saldo de R$ 25.000 não produz alerta NENHUM", async () => {
+    vi.mocked(api.get).mockResolvedValue({
+      data: report([
+        conta({
+          saldo_banco_cents: 2_500_350,
+          divergencia_cents: 350,
+          dentro_da_tolerancia: true,
+          tolerancia_cents: 12_500,
+        }),
+      ]),
+    } as never);
+
+    const { container } = renderPage();
+
+    await waitFor(() => expect(screen.getByText(/Está tudo batendo/)).toBeInTheDocument());
+    // O estado verde está lá...
+    expect(screen.getByText("🟢")).toBeInTheDocument();
+    // ...e NADA de alerta: nenhum ícone, nenhuma cor de erro, nenhum "atenção"/"!".
+    expect(screen.queryByLabelText("Divergência fora da tolerância")).toBeNull();
+    expect(container.querySelectorAll(".text-danger")).toHaveLength(0);
+    expect(container.querySelectorAll("[class*='text-red']")).toHaveLength(0);
+    expect(container.querySelectorAll("[class*='bg-red']")).toHaveLength(0);
+    expect(container.querySelectorAll("[class*='amber']")).toHaveLength(0);
+    expect(container.textContent).not.toMatch(/atenç|alerta|!/i);
+    expect(screen.queryByText("🔴")).toBeNull();
+    expect(screen.queryByText("🟡")).toBeNull();
+  });
+
+  it("fora da banda, aí sim o alerta aparece — a supressão é do CASO, não da tela", async () => {
+    vi.mocked(api.get).mockResolvedValue({
+      data: report([
+        conta({
+          saldo_banco_cents: 2_266_000,
+          divergencia_cents: -234_000,
+          dentro_da_tolerancia: false,
+          tolerancia_cents: 12_500,
+        }),
+      ]),
+    } as never);
+
+    const { container } = renderPage();
+
+    await waitFor(() =>
+      expect(screen.getByLabelText("Divergência fora da tolerância")).toBeInTheDocument(),
+    );
+    expect(screen.getByText("🔴")).toBeInTheDocument();
+    expect(container.querySelectorAll(".text-danger").length).toBeGreaterThan(0);
+  });
+});
+
+describe("AC4 — a frase vem ANTES da tabela, e nomeia a conta", () => {
+  it("a frase de divergência negativa aponta o valor, a conta e o que provavelmente falta", async () => {
+    vi.mocked(api.get).mockResolvedValue({
+      data: report([
+        conta({
+          saldo_banco_cents: 2_266_000,
+          divergencia_cents: -234_000,
+          dentro_da_tolerancia: false,
+        }),
+      ]),
+    } as never);
+
+    renderPage();
+
+    await waitFor(() =>
+      expect(screen.getByText(/2\.340,00 abaixo do que eu calculei na conta Itaú PJ/)).toBeInTheDocument(),
+    );
+    expect(screen.getByText(/faltam lançamentos de saída/)).toBeInTheDocument();
+  });
+
+  it("a frase está no DOM antes da tabela — não é 'a tabela com um resumo em cima'", async () => {
+    vi.mocked(api.get).mockResolvedValue({
+      data: report([conta({ divergencia_cents: -234_000, dentro_da_tolerancia: false })]),
+    } as never);
+
+    const { container } = renderPage();
+
+    await waitFor(() => expect(screen.getByText(/2\.340,00 abaixo/)).toBeInTheDocument());
+    const frase = screen.getByText(/2\.340,00 abaixo/);
+    const tabela = container.querySelector("table");
+    expect(tabela).not.toBeNull();
+    // `DOCUMENT_POSITION_FOLLOWING` = a tabela vem DEPOIS da frase na ordem do documento.
+    expect(frase.compareDocumentPosition(tabela as Node) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  });
+
+  it("saldo indisponível: a frase não traz número nenhum e oferece declarar o saldo", async () => {
+    vi.mocked(api.get).mockResolvedValue({
+      data: report([
+        conta({
+          bank_account_name: "Nubank PJ",
+          saldo_banco_cents: null,
+          saldo_banco_origem: "indisponivel",
+          saldo_banco_fonte: null,
+          saldo_banco_data: null,
+          saldo_sistema_cents: null,
+          divergencia_cents: null,
+          dentro_da_tolerancia: null,
+          tolerancia_cents: 0,
+          dias_desde_ultima_conferencia: null,
+        }),
+      ]),
+    } as never);
+
+    renderPage();
+
+    const frase = await screen.findByText(/Não sei o saldo da conta Nubank PJ/);
+    expect(frase.textContent).not.toMatch(/\d/);
+    expect(screen.getByRole("link", { name: "Declarar o saldo desta conta" })).toHaveAttribute(
+      "href",
+      "/financeiro/contas",
+    );
+    // O consolidado também diz "não sei" em vez de inventar um zero tranquilizador (e a tabela
+    // repete a mesma resposta nas células de saldo — em nenhum lugar aparece um R$ 0,00 falso).
+    expect(screen.getAllByText("Não sei").length).toBeGreaterThan(0);
+    expect(screen.queryByText(/R\$\s*0,00/)).toBeNull();
+  });
+});
+
+describe("AC6 — o consolidado nunca aparece sozinho (epic §3.2, decisão do fundador F3)", () => {
+  const tres = [
+    conta({
+      bank_account_id: "a",
+      bank_account_name: "Itaú PJ",
+      divergencia_cents: 120_000,
+      dentro_da_tolerancia: false,
+    }),
+    conta({
+      bank_account_id: "b",
+      bank_account_name: "Nubank PJ",
+      divergencia_cents: -90_000,
+      dentro_da_tolerancia: false,
+    }),
+    conta({
+      bank_account_id: "c",
+      bank_account_name: "Caixa da loja",
+      bank_account_kind: "cash",
+      divergencia_cents: 4_000,
+      dentro_da_tolerancia: true,
+    }),
+  ];
+
+  it("+R$ 1.200 / −R$ 900 / +R$ 40: as TRÊS linhas aparecem, e os +R$ 340 não são veredito", async () => {
+    vi.mocked(api.get).mockResolvedValue({ data: report(tres) } as never);
+
+    renderPage();
+
+    await waitFor(() => expect(screen.getByText(/1\.200,00 acima/)).toBeInTheDocument());
+    // As três frases, cada uma nomeando a sua conta.
+    expect(screen.getByText(/1\.200,00 acima do que eu calculei na conta Itaú PJ/)).toBeInTheDocument();
+    expect(screen.getByText(/900,00 abaixo do que eu calculei na conta Nubank PJ/)).toBeInTheDocument();
+    expect(screen.getByText(/Está tudo batendo na conta Caixa da loja/)).toBeInTheDocument();
+
+    // O consolidado existe, mas explicitamente desqualificado como veredito...
+    expect(screen.getByText(/Soma das divergências/)).toBeInTheDocument();
+    expect(screen.getByText(/não é um veredito/)).toBeInTheDocument();
+    // ...e a decomposição está na MESMA tela, visível, não atrás de "expandir".
+    expect(screen.queryByText(/expandir/i)).toBeNull();
+    const linhas = document.querySelectorAll("tbody tr");
+    expect(linhas).toHaveLength(3);
+  });
+
+  it("quando o total não cobre todas as contas, a tela diz isso", async () => {
+    const comLacuna = [
+      ...tres,
+      conta({
+        bank_account_id: "d",
+        bank_account_name: "Poupança",
+        divergencia_cents: null,
+        dentro_da_tolerancia: null,
+        saldo_banco_cents: null,
+        saldo_banco_origem: "indisponivel",
+        saldo_banco_fonte: null,
+        saldo_banco_data: null,
+        saldo_sistema_cents: null,
+        dias_desde_ultima_conferencia: null,
+      }),
+    ];
+    vi.mocked(api.get).mockResolvedValue({ data: report(comLacuna) } as never);
+
+    renderPage();
+
+    await waitFor(() =>
+      expect(screen.getByText(/Esta soma não cobre todas as suas contas/)).toBeInTheDocument(),
+    );
+    expect(screen.getByText(/1 conta está sem saldo informado/)).toBeInTheDocument();
+  });
+
+  it("a ordem de leitura é 'o que dói primeiro' — não avaliáveis por último", async () => {
+    const comLacuna = [
+      conta({ bank_account_id: "z", bank_account_name: "Sem saldo", divergencia_cents: null, dentro_da_tolerancia: null }),
+      ...tres,
+    ];
+    vi.mocked(api.get).mockResolvedValue({ data: report(comLacuna) } as never);
+
+    const { container } = renderPage();
+
+    await waitFor(() => expect(screen.getByText(/1\.200,00 acima/)).toBeInTheDocument());
+    const frases = Array.from(container.querySelectorAll("ul > li")).map((li) => li.textContent);
+    expect(frases[0]).toContain("Itaú PJ");
+    expect(frases[1]).toContain("Nubank PJ");
+    expect(frases[2]).toContain("Caixa da loja");
+    expect(frases[3]).toContain("Sem saldo");
+  });
+});
+
+describe("Contrato consumido e estados de borda", () => {
+  it("com ?account_id= confere só aquela conta e oferece a volta para todas", async () => {
+    vi.mocked(api.get).mockResolvedValue({ data: report([conta()]) } as never);
+
+    renderPage("/financeiro/conferencia?account_id=acc-42");
+
+    await waitFor(() => expect(api.get).toHaveBeenCalled());
+    expect(api.get).toHaveBeenCalledWith(
+      "/bank/reconciliation-report",
+      expect.objectContaining({
+        params: expect.objectContaining({ bank_account_id: "acc-42" }),
+      }),
+    );
+    expect(screen.getByRole("link", { name: "Ver todas as contas" })).toBeInTheDocument();
+  });
+
+  it("sem ?account_id= NÃO manda o filtro (string vazia viraria 'nenhuma conta')", async () => {
+    vi.mocked(api.get).mockResolvedValue({ data: report([conta()]) } as never);
+
+    renderPage();
+
+    await waitFor(() => expect(api.get).toHaveBeenCalled());
+    const params = vi.mocked(api.get).mock.calls[0][1]?.params as Record<string, unknown>;
+    expect(params).not.toHaveProperty("bank_account_id");
+  });
+
+  it("os dois eixos de procedência aparecem na tabela, lado a lado e sem se misturarem", async () => {
+    vi.mocked(api.get).mockResolvedValue({ data: report([conta()]) } as never);
+
+    renderPage();
+
+    await waitFor(() => expect(screen.getByText(/Está tudo batendo/)).toBeInTheDocument());
+    const tabela = screen.getByRole("table");
+    // Eixo A (plano) e eixo B (porta de entrada) — vocabulários distintos, ambos exibidos.
+    expect(within(tabela).getAllByText("saldo da sua conta bancária").length).toBeGreaterThan(0);
+    expect(within(tabela).getByText("informado por você")).toBeInTheDocument();
+  });
+
+  it("sem conta cadastrada, convida a cadastrar em vez de mostrar uma tabela vazia", async () => {
+    vi.mocked(api.get).mockResolvedValue({ data: report([]) } as never);
+
+    renderPage();
+
+    await waitFor(() =>
+      expect(screen.getByText(/ainda não tem conta bancária cadastrada/)).toBeInTheDocument(),
+    );
+    expect(screen.getByRole("link", { name: "Cadastrar uma conta" })).toHaveAttribute(
+      "href",
+      "/financeiro/contas",
+    );
+    expect(screen.queryByRole("table")).toBeNull();
+  });
+
+  it("a tabela rola na horizontal (AC8) — nunca corta as colunas da direita", async () => {
+    vi.mocked(api.get).mockResolvedValue({ data: report([conta()]) } as never);
+
+    const { container } = renderPage();
+
+    await waitFor(() => expect(screen.getByRole("table")).toBeInTheDocument());
+    const wrapper = screen.getByRole("table").parentElement;
+    expect(wrapper?.className).toContain("overflow-x-auto");
+    expect(container.querySelectorAll(".overflow-hidden")).toHaveLength(0);
+  });
+});
