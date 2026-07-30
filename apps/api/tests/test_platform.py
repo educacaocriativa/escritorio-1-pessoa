@@ -11,7 +11,7 @@ from app.core.audit import PlatformAuditEntry
 from app.core.security import hash_password
 from app.modules.agenda.models import AgendaEvent
 from app.modules.auth.models import Tenant, User
-from app.modules.bank.models import BankAccount
+from app.modules.bank.models import BankAccount, BankTransaction
 from app.modules.crm.models import Client
 from app.modules.platform import service as platform_service
 from app.modules.settings.models import TenantProfile
@@ -526,6 +526,24 @@ def _seed_business_data(db: Session, tenant_id: str) -> None:
             opening_date=date(2026, 7, 1),
         )
     )
+    # Story 8.3 (IV6): o EXTRATO do usuário — quem pagou o quê, quando e para quem, incluindo o
+    # CPF/CNPJ de contrapartes que nunca contrataram com a e1p. Se a purga dinâmica de subclasses
+    # de `TenantMixin` deixasse esta tabela para trás, sobreviveria à exclusão da conta justamente
+    # o dado de terceiro mais sensível do produto. Verificado, não assumido.
+    db.add(
+        BankTransaction(
+            tenant_id=tenant_id,
+            bank_account_id="conta-qualquer",
+            posted_at=date(2026, 7, 10),
+            amount_cents=-50_00,
+            raw_description="PIX ENVIADO JOAO DA SILVA",
+            counterparty_name="João da Silva",
+            counterparty_document="11144477735",
+            dedup_hash="hash-de-teste",
+            source="manual",
+            status="unmatched",
+        )
+    )
     db.commit()
 
 
@@ -538,6 +556,7 @@ def test_delete_account_purges_and_writes_platform_log(
     assert db.query(Client).filter(Client.tenant_id == tid).count() == 1
     assert db.query(AgendaEvent).filter(AgendaEvent.tenant_id == tid).count() == 1
     assert db.query(BankAccount).filter(BankAccount.tenant_id == tid).count() == 1
+    assert db.query(BankTransaction).filter(BankTransaction.tenant_id == tid).count() == 1
 
     resp = client.delete(f"/admin/accounts/{tid}", headers=admin_headers)
     assert resp.status_code == 204, resp.text
@@ -547,6 +566,8 @@ def test_delete_account_purges_and_writes_platform_log(
     assert db.query(AgendaEvent).filter(AgendaEvent.tenant_id == tid).count() == 0
     # Story 8.2 (IV6): a conta bancária do tenant também foi purgada.
     assert db.query(BankAccount).filter(BankAccount.tenant_id == tid).count() == 0
+    # Story 8.3 (IV6): e o extrato junto — nenhum movimento (nem o CPF da contraparte) sobrevive.
+    assert db.query(BankTransaction).filter(BankTransaction.tenant_id == tid).count() == 0
     assert db.query(Tenant).filter(Tenant.id == tid).first() is None
     assert db.query(User).filter(User.tenant_id == tid).count() == 0
 
