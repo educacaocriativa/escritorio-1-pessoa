@@ -1,11 +1,16 @@
-import { render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter } from "react-router-dom";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { api } from "../../lib/api";
 import { PageActionsProvider } from "../../store/pageActions";
 import ContasSaldosPage from "./ContasSaldosPage";
-import type { BankAccount, BankBalanceCheckpoint, BankTransaction } from "./contas";
+import type {
+  BankAccount,
+  BankBalanceCheckpoint,
+  BankTransaction,
+  PayablesPaidBefore,
+} from "./contas";
 import { DISPONIVEL_CAIXA_LABEL, TOTAL_EM_CONTAS_LABEL } from "./contas";
 import { ROTULO_BANCO } from "./projecao";
 
@@ -80,16 +85,30 @@ function movimento(over: Partial<BankTransaction> = {}): BankTransaction {
   };
 }
 
+/** Resposta default do agregado da Story 8.11 — silêncio (nenhuma conta paga antes). */
+const SEM_PAGAS: PayablesPaidBefore = {
+  count: 0,
+  total_cents: 0,
+  oldest_paid_on: null,
+  newest_paid_on: null,
+};
+
 /** Mock de `api.get` que responde por URL (a página faz contas + checkpoints em paralelo). */
 function mockApi(
   accounts: BankAccount[],
   checkpoints: BankBalanceCheckpoint[] = [],
   txs: BankTransaction[] = [],
+  paidBefore: PayablesPaidBefore | Error = SEM_PAGAS,
 ) {
   vi.mocked(api.get).mockImplementation((url: string) => {
     if (url === "/bank/accounts") return Promise.resolve({ data: accounts } as never);
     if (url.includes("/checkpoints")) return Promise.resolve({ data: checkpoints } as never);
     if (url === "/bank/transactions") return Promise.resolve({ data: txs } as never);
+    if (url === "/payables/bills/paid-before") {
+      return paidBefore instanceof Error
+        ? Promise.reject(paidBefore)
+        : Promise.resolve({ data: paidBefore } as never);
+    }
     return Promise.resolve({ data: [] } as never);
   });
 }
@@ -350,6 +369,237 @@ describe("REL-001 — as ações que mexem no saldo não podem falhar em silênc
 
     await waitFor(() => expect(recargasDoDetalhe()).toBeGreaterThan(antes));
     expect(screen.queryByText("Erro inesperado")).toBeNull();
+  });
+});
+
+describe("⚠️ Story 8.11 — a metade da guarda que vive no FORMULÁRIO (AC2b)", () => {
+  /**
+   * **Sem estes testes a Story 8.11 é decorativa, e isso não é figura de linguagem.**
+   *
+   * Até aqui, `AccountModal.save()` mandava `opening_balance_cents` SEMPRE, pré-preenchido com o
+   * valor antigo, nos dois caminhos (POST e PATCH). O 422 que o backend passou a devolver quando o
+   * recuo vem sem saldo — a guarda do design §4.3, o gêmeo do BANK-001 pela porta oposta — **nunca
+   * dispararia pela UI real**: o usuário recuaria a data, o formulário mandaria o saldo velho por
+   * conta própria, o backend responderia 200, e a divergência inventada aconteceria exatamente
+   * como se a guarda não existisse.
+   *
+   * A guarda de API continua indispensável (Atalho do iOS, script, curl, cliente futuro) — mas é
+   * daqui que vem a proteção do dono na semana do mutirão das 45 contas (epic §7.2).
+   */
+  const CONTA = conta({ id: "acc-1", opening_date: "2026-06-15", opening_balance_cents: 100_000 });
+
+  beforeEach(() => {
+    vi.mocked(api.patch).mockReset();
+    vi.mocked(api.post).mockReset();
+    vi.mocked(api.patch).mockResolvedValue({ data: {} } as never);
+  });
+
+  /** Abre o modal de EDIÇÃO da conta (é lá que o conceito de "recuo" existe). */
+  async function abrirEdicao(accounts: BankAccount[] = [CONTA]) {
+    const user = userEvent.setup();
+    mockApi(accounts);
+    renderPage();
+    await user.click(await screen.findByText("Editar"));
+    await waitFor(() => expect(screen.getByText("Editar conta")).toBeInTheDocument());
+    return user;
+  }
+
+  function campoData() {
+    return screen.getByLabelText("Data de abertura") as HTMLInputElement;
+  }
+
+  function campoSaldo() {
+    // O rótulo MUDA ao recuar (passa a nomear o dia pedido) — por isso a busca é por prefixo.
+    return screen.getByLabelText(/^Saldo/) as HTMLInputElement;
+  }
+
+  it("recuar a data LIMPA o saldo herdado e desabilita o salvar até haver valor", async () => {
+    await abrirEdicao();
+    expect(campoSaldo().value).toBe("1000,00");
+
+    fireEvent.change(campoData(), { target: { value: "2026-06-01" } });
+
+    await waitFor(() => expect(campoSaldo().value).toBe(""));
+    // O saldo antigo era o saldo de OUTRO dia: reaproveitá-lo é a divergência inventada.
+    expect(screen.getByRole("button", { name: "Salvar" })).toBeDisabled();
+    // ...e a tela diz de QUAL dia é o saldo pedido — as duas datas, como no 422 do backend.
+    expect(screen.getByText(/O saldo que você informou era o saldo de/)).toBeInTheDocument();
+    expect(screen.getByText("15/06/2026")).toBeInTheDocument();
+    expect(screen.getByLabelText(/^Saldo em 01\/06\/2026 \(R\$\) — obrigatório$/)).toBeTruthy();
+  });
+
+  it("digitado o saldo novo, o salvar reabre e o PATCH leva o valor REDECLARADO", async () => {
+    const user = await abrirEdicao();
+    fireEvent.change(campoData(), { target: { value: "2026-06-01" } });
+    await waitFor(() => expect(campoSaldo().value).toBe(""));
+
+    await user.type(campoSaldo(), "3400,00");
+    const salvar = screen.getByRole("button", { name: "Salvar" });
+    await waitFor(() => expect(salvar).toBeEnabled());
+    await user.click(salvar);
+
+    await waitFor(() => expect(api.patch).toHaveBeenCalled());
+    const [url, body] = vi.mocked(api.patch).mock.calls[0];
+    expect(url).toBe("/bank/accounts/acc-1");
+    expect(body).toMatchObject({ opening_date: "2026-06-01", opening_balance_cents: 340_000 });
+  });
+
+  it("avançar a data NÃO limpa nada (a guarda é sobre o recuo, não sobre mexer na data)", async () => {
+    await abrirEdicao();
+
+    fireEvent.change(campoData(), { target: { value: "2026-06-20" } });
+
+    await waitFor(() => expect(campoData().value).toBe("2026-06-20"));
+    expect(campoSaldo().value).toBe("1000,00");
+    expect(screen.getByRole("button", { name: "Salvar" })).toBeEnabled();
+    expect(screen.queryByText(/O saldo que você informou era o saldo de/)).toBeNull();
+  });
+
+  it("AC10 — em ~360px os campos EMPILHAM e nada é cortado dentro do modal", async () => {
+    /**
+     * O que dá para garantir em jsdom (que não tem layout) é a **regra estrutural**, e é ela que
+     * regride numa mudança de estilo: os pares Agência/Conta e Saldo/Data ficam em UMA coluna
+     * abaixo de `sm` (em 360px o modal tem ~280px úteis; duas colunas dariam ~134px e um
+     * `input[type=date]` já não cabe), e o modal não usa `overflow-hidden` (que CORTA — a lição
+     * dos PRs #56/#58, em que "Estornar" e o checkbox de baixa ficaram inalcançáveis).
+     *
+     * ⚠️ A conferência de ALTURA em 360px não cabe aqui e está registrada no Dev Agent Record:
+     * `components/Modal.tsx` não tem `max-h`/`overflow-y-auto`, então um modal mais alto que a
+     * viewport transborda **sem rolagem**. É defeito pré-existente de componente compartilhado —
+     * reportado, não corrigido nesta story.
+     */
+    await abrirEdicao();
+    const container = document.body;
+
+    const grades = Array.from(container.querySelectorAll("div.grid"));
+    expect(grades.length).toBeGreaterThanOrEqual(2);
+    for (const g of grades) {
+      expect(g.className).toContain("grid-cols-1");
+      expect(g.className).toContain("sm:grid-cols-2");
+    }
+    expect(container.querySelectorAll(".overflow-hidden")).toHaveLength(0);
+  });
+
+  it("durante o recuo, a dica genérica ('use o saldo de HOJE') sai de cena", async () => {
+    // Duas instruções opostas na mesma tela é como se perde a confiança na que está certa.
+    await abrirEdicao();
+    expect(screen.getByText(/o saldo que o app do seu banco mostra hoje/)).toBeInTheDocument();
+
+    fireEvent.change(campoData(), { target: { value: "2026-06-01" } });
+
+    await waitFor(() =>
+      expect(screen.queryByText(/o saldo que o app do seu banco mostra hoje/)).toBeNull(),
+    );
+  });
+
+  it("voltar a data para o lugar RESTAURA o saldo — nunca manda um 0 fabricado", async () => {
+    /**
+     * ⚠️ O modo de falha que este teste fecha: limpar no recuo e **não** restaurar deixaria o campo
+     * vazio depois de o usuário desistir, e `parseCentsBRL("")` é **0**. O PATCH zeraria o saldo de
+     * abertura em silêncio — trocar um bug de saldo por outro, pior porque ninguém o pediu.
+     */
+    await abrirEdicao();
+    fireEvent.change(campoData(), { target: { value: "2026-06-01" } });
+    await waitFor(() => expect(campoSaldo().value).toBe(""));
+
+    fireEvent.change(campoData(), { target: { value: "2026-06-15" } });
+
+    await waitFor(() => expect(campoSaldo().value).toBe("1000,00"));
+    expect(screen.getByRole("button", { name: "Salvar" })).toBeEnabled();
+  });
+});
+
+describe("Story 8.11 — o aviso pró-ativo: o e1p diz QUAL número buscar, e não inventa nenhum (AC3/AC4)", () => {
+  const PAGAS: PayablesPaidBefore = {
+    count: 45,
+    total_cents: 1_234_500,
+    oldest_paid_on: "2026-03-10",
+    newest_paid_on: "2026-07-28",
+  };
+
+  beforeEach(() => {
+    vi.mocked(api.patch).mockReset();
+    vi.mocked(api.post).mockReset();
+  });
+
+  async function abrirCadastro(paidBefore: PayablesPaidBefore | Error) {
+    const user = userEvent.setup();
+    mockApi([], [], [], paidBefore);
+    renderPage();
+    await user.click(await screen.findByRole("button", { name: "Cadastrar primeira conta" }));
+    await waitFor(() => expect(screen.getByText("Nova conta")).toBeInTheDocument());
+    return user;
+  }
+
+  it("com contas pagas anteriores, diz quantas, o intervalo e o total PAGO", async () => {
+    await abrirCadastro(PAGAS);
+
+    const aviso = await screen.findByText(/45 contas pagas entre 10\/03\/2026 e 28\/07\/2026/);
+    expect(aviso).toBeInTheDocument();
+    // "pagos" e não "saldo": o total é o que saiu da conta, nunca um valor de partida (AC4).
+    expect(aviso.textContent).toContain("pagos");
+    expect(aviso.textContent).toMatch(/não vão entrar no extrato do e1p/);
+  });
+
+  it("o botão da sugestão preenche SÓ a data — o saldo continua sendo digitado pelo usuário", async () => {
+    const user = await abrirCadastro(PAGAS);
+    const saldoAntes = (screen.getByLabelText(/^Saldo/) as HTMLInputElement).value;
+
+    // O dia ANTERIOR à mais antiga (09/03), nunca o mesmo dia: `posted_at > opening_date` é
+    // estrito, então abrir em 10/03 deixaria justamente a conta mais antiga de fora.
+    const botao = await screen.findByRole("button", { name: /Abrir em 09\/03\/2026/ });
+    await user.click(botao);
+
+    expect((screen.getByLabelText("Data de abertura") as HTMLInputElement).value).toBe(
+      "2026-03-09",
+    );
+    expect((screen.getByLabelText(/^Saldo/) as HTMLInputElement).value).toBe(saldoAntes);
+  });
+
+  it("sem contas pagas anteriores, SILÊNCIO — nenhum aviso, nenhum botão", async () => {
+    await abrirCadastro(SEM_PAGAS);
+
+    await waitFor(() =>
+      expect(vi.mocked(api.get).mock.calls.some(([u]) => u === "/payables/bills/paid-before")).toBe(
+        true,
+      ),
+    );
+    expect(screen.queryByText(/contas pagas/)).toBeNull();
+    expect(screen.queryByRole("button", { name: /^Abrir em/ })).toBeNull();
+  });
+
+  it("falha do endpoint degrada em SILÊNCIO: o modal segue funcional e a conta é cadastrável", async () => {
+    /**
+     * O aviso é conveniência; cadastrar a conta é o produto. Mesmo padrão fail-safe de `PagarPage`
+     * com `require_module`: uma falha de rede/401/módulo não permitido **nunca** pode bloquear o
+     * cadastro — nem virar uma mensagem de erro que o usuário não sabe o que fazer com ela.
+     */
+    const user = await abrirCadastro(new Error("boom"));
+    vi.mocked(api.post).mockResolvedValue({ data: conta() } as never);
+
+    await waitFor(() =>
+      expect(vi.mocked(api.get).mock.calls.some(([u]) => u === "/payables/bills/paid-before")).toBe(
+        true,
+      ),
+    );
+    expect(screen.queryByText("Erro inesperado")).toBeNull();
+    expect(screen.queryByText(/contas pagas/)).toBeNull();
+
+    await user.type(screen.getByLabelText("Nome da conta"), "Itaú PJ");
+    await user.click(screen.getByRole("button", { name: "Cadastrar conta" }));
+
+    await waitFor(() => expect(api.post).toHaveBeenCalledWith("/bank/accounts", expect.anything()));
+  });
+
+  it("a frase do aviso não reusa NENHUM rótulo de saldo do produto (UX-001 / D-6)", async () => {
+    await abrirCadastro(PAGAS);
+    const aviso = await screen.findByText(/45 contas pagas/);
+
+    // "no banco" nomeia a PARCELA da Projeção; os outros dois são os totais desta tela. Texto de
+    // formulário não é rótulo de saldo, e confundi-los é a colisão que o épico já pagou p/ separar.
+    expect(aviso.textContent).not.toContain(ROTULO_BANCO);
+    expect(aviso.textContent).not.toContain(TOTAL_EM_CONTAS_LABEL);
+    expect(aviso.textContent).not.toContain(DISPONIVEL_CAIXA_LABEL);
   });
 });
 

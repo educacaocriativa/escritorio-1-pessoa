@@ -64,6 +64,32 @@ class PayableUpdate(BaseModel):
         return v
 
 
+class PayablesPaidBeforeOut(BaseModel):
+    """Agregado read-only: "quantas contas eu já paguei ANTES deste dia?" (Story 8.11, AC5/AC6).
+
+    Serve ao aviso pró-ativo do cadastro de conta bancária: antes de escolher a data de abertura,
+    o dono vê quantas contas pagas ficariam **fora** do extrato do e1p com aquela escolha (o saldo
+    derivado só soma `posted_at > opening_date`, e `_validate_posted_at` recusa o resto com 422).
+
+    ⚠️ **`total_cents` é o total PAGO, e nunca um saldo** (AC4 / `CLAUDE.md` Regra 5). O saldo de
+    abertura é um fato **sobre o banco**, que o sistema por definição não conhece; derivá-lo do
+    histórico de `payables` seria somar o que o sistema sabe e chamar de "o que o banco diz" — a
+    circularidade que faria a divergência ir a zero por construção no dia um, matando a métrica
+    primária do épico. **O e1p não inventa o número: ele diz qual número ir buscar.** Nenhum campo
+    daqui pode ser oferecido, sugerido ou pré-preenchido como `opening_balance_cents`.
+
+    ⚠️ **Mora em `payables`, e não em `bank`, por restrição normativa** (epic §4.1d): a dependência
+    é de negócio para banco, **nunca a volta**. `app.modules.bank` não importa `payables`.
+    """
+
+    count: int
+    total_cents: int
+    # Datas de CAIXA (`paid_at::date`), nunca de competência nem de vencimento. `None` quando
+    # `count == 0` — "não há", jamais uma data fabricada.
+    oldest_paid_on: date | None
+    newest_paid_on: date | None
+
+
 class PayableOut(BaseModel):
     id: str
     tenant_id: str

@@ -302,6 +302,75 @@ def reverse_payable(db: Session, *, payable_id: str, tenant_id: str, actor: str)
     return p
 
 
+def _as_utc_date(value: object) -> date | None:
+    """Normaliza o resultado de `MIN/MAX(paid_at)` para uma data de calendário em UTC.
+
+    O SQLite devolve `TIMESTAMP` como **texto** em agregações; o Postgres devolve `datetime`
+    (tz-aware). Sem esta normalização a função quebraria só em um dos dois bancos — mesmo cuidado
+    que `bank.service._validate_opening_date_move` já toma com `MIN(posted_at)`.
+    """
+    if value is None:
+        return None
+    if isinstance(value, str):
+        # "2026-07-10 12:00:00.000000" → 2026-07-10 (o texto do SQLite já está em UTC).
+        return date.fromisoformat(value[:10])
+    if isinstance(value, datetime):
+        dt = value if value.tzinfo is not None else value.replace(tzinfo=UTC)
+        return dt.astimezone(UTC).date()
+    if isinstance(value, date):
+        return value
+    return None
+
+
+def paid_before(db: Session, *, date_: date) -> dict:
+    """Agregado read-only: contas **pagas** cujo dinheiro saiu ANTES de `date_` (Story 8.11).
+
+    Alimenta o aviso pró-ativo do cadastro de conta bancária: "você tem N contas pagas entre X e Y
+    — se esta conta abrir em `date_`, elas não vão entrar no extrato do e1p". O e1p **diz qual
+    número ir buscar**; ele não inventa nenhum (AC4).
+
+    **Eixo de CAIXA, nunca de competência** (`payables/models.py:6-9`, verbatim: *"fluxo de caixa
+    usa `paid_at`; DRE/lucratividade usam `competence_date`. Nunca inverter"*). A pergunta aqui é
+    *"o dinheiro saiu da conta antes de ela abrir no e1p?"* — pergunta de caixa. `due_date` daria a
+    contagem errada para toda conta paga em atraso ou adiantada, que é justamente o caso do mutirão
+    (epic §7.2).
+
+    **A borda é `<`, estrita, e ela combina com a guarda que já existe.** `_movements_sums` soma
+    `posted_at > opening_date` e `_validate_posted_at` recusa `posted_at <= opening_date`: uma
+    conta paga **exatamente na** `opening_date` fica de fora do saldo do mesmo jeito. Por isso a
+    data que o aviso sugere é o **dia anterior** à conta paga mais antiga, e não o mesmo dia.
+
+    Conta com `status='paid'` e `paid_at IS NULL` (legado) fica **fora**: sem a data do caixa não
+    dá para afirmar de que lado da abertura ela cai, e chutar seria inventar.
+
+    Comparação por **data de calendário em UTC** feita como limite de timestamp
+    (`paid_at < meia-noite UTC de date_`) — mesmo padrão de `summary()` acima, dialeto-agnóstico e
+    sem `::date` (que o SQLite dos testes não tem).
+
+    Isolamento por RLS, sem filtro manual de `tenant_id` (Regra de Ouro nº 1).
+    """
+    corte = datetime.combine(date_, time.min, tzinfo=UTC)
+    count, total, oldest, newest = db.execute(
+        select(
+            func.count(Payable.id),
+            func.coalesce(func.sum(Payable.amount_cents), 0),
+            func.min(Payable.paid_at),
+            func.max(Payable.paid_at),
+        ).where(
+            Payable.status == STATUS_PAID,
+            Payable.paid_at.is_not(None),
+            Payable.paid_at < corte,
+        )
+    ).one()
+    return {
+        "count": int(count or 0),
+        # Total PAGO — rotulado como tal na UI e jamais oferecido como saldo de abertura (AC4).
+        "total_cents": int(total or 0),
+        "oldest_paid_on": _as_utc_date(oldest),
+        "newest_paid_on": _as_utc_date(newest),
+    }
+
+
 def list_categories(db: Session) -> list[str]:
     rows = db.scalars(select(Payable.category).distinct().order_by(Payable.category)).all()
     return list(rows)

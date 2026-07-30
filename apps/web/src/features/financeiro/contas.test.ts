@@ -2,8 +2,10 @@ import { describe, expect, it } from "vitest";
 import {
   type BankAccount,
   BANK_ACCOUNT_KINDS,
+  avisoContasPagasAnteriores,
   centsToInput,
   contasAtivas,
+  diaAnteriorISO,
   DISPONIVEL_CAIXA_LABEL,
   formatDateBR,
   isIgnored,
@@ -15,6 +17,7 @@ import {
   KINDS_FORA_DO_CAIXA,
   origemLabel,
   parseCentsBRL,
+  type PayablesPaidBefore,
   resumoSaldos,
   signedAmountView,
   statusLabel,
@@ -243,5 +246,76 @@ describe("formatDateBR — data de calendário por STRING, nunca `new Date` loca
     // fuso que sumiu com eventos da Agenda (CLAUDE.md §6.0).
     expect(formatDateBR("2026-01-01")).toBe("01/01/2026");
     expect(formatDateBR("2026-07-30T00:00:00Z")).toBe("30/07/2026");
+  });
+});
+
+describe("Story 8.11 — diaAnteriorISO: por que o DIA ANTERIOR, e não o mesmo dia", () => {
+  it("volta um dia, atravessando mês, ano e ano bissexto", () => {
+    expect(diaAnteriorISO("2026-03-10")).toBe("2026-03-09");
+    expect(diaAnteriorISO("2026-03-01")).toBe("2026-02-28");
+    expect(diaAnteriorISO("2026-01-01")).toBe("2025-12-31");
+    expect(diaAnteriorISO("2024-03-01")).toBe("2024-02-29"); // bissexto
+  });
+
+  it("aritmética em UTC — não perde um dia extra em fuso negativo", () => {
+    // Com `new Date("2026-03-01")` + hora local −03:00, o "dia anterior" sairia 27/02 (dois dias
+    // antes). É a mesma classe de bug que sumiu com eventos da Agenda (CLAUDE.md §6.0).
+    expect(diaAnteriorISO("2026-03-01")).not.toBe("2026-02-27");
+  });
+
+  it("entrada inválida volta como veio — nunca uma data inventada", () => {
+    expect(diaAnteriorISO("")).toBe("");
+    expect(diaAnteriorISO("nao-e-data")).toBe("nao-e-data");
+  });
+});
+
+describe("Story 8.11 — a frase do aviso: silêncio por default e nenhum saldo dentro", () => {
+  const PAGAS: PayablesPaidBefore = {
+    count: 45,
+    total_cents: 1_234_500,
+    oldest_paid_on: "2026-03-10",
+    newest_paid_on: "2026-07-28",
+  };
+
+  it("com N > 0, nomeia quantas, o intervalo, o total PAGO e a data escolhida", () => {
+    const frase = avisoContasPagasAnteriores(PAGAS, "2026-07-30");
+    expect(frase).toContain("45 contas pagas entre 10/03/2026 e 28/07/2026");
+    expect(frase).toContain("pagos"); // total PAGO — jamais um saldo (AC4)
+    expect(frase).toContain("30/07/2026");
+    expect(frase).toContain("não vão entrar no extrato do e1p");
+  });
+
+  it("N == 1 fala no singular (a mensagem é lida no pior momento do usuário)", () => {
+    const frase = avisoContasPagasAnteriores(
+      { count: 1, total_cents: 25_000, oldest_paid_on: "2026-05-02", newest_paid_on: "2026-05-02" },
+      "2026-06-01",
+    );
+    expect(frase).toContain("1 conta paga em 02/05/2026");
+    expect(frase).toContain("ela não vai entrar");
+    expect(frase).not.toContain("entre");
+  });
+
+  it("N == 0, dado ausente ou falha do endpoint → `null` (SILÊNCIO, nunca um aviso vazio)", () => {
+    expect(
+      avisoContasPagasAnteriores(
+        { count: 0, total_cents: 0, oldest_paid_on: null, newest_paid_on: null },
+        "2026-07-30",
+      ),
+    ).toBeNull();
+    expect(avisoContasPagasAnteriores(null, "2026-07-30")).toBeNull();
+    // Contagem sem data: estado incoerente do backend — cala em vez de montar meia frase.
+    expect(
+      avisoContasPagasAnteriores(
+        { count: 3, total_cents: 1, oldest_paid_on: null, newest_paid_on: null },
+        "2026-07-30",
+      ),
+    ).toBeNull();
+  });
+
+  it("⚠️ a frase NÃO reusa rótulo de saldo do produto (UX-001 / D-6)", () => {
+    const frase = avisoContasPagasAnteriores(PAGAS, "2026-07-30") ?? "";
+    expect(frase).not.toContain(ROTULO_BANCO);
+    expect(frase).not.toContain(TOTAL_EM_CONTAS_LABEL);
+    expect(frase).not.toContain(DISPONIVEL_CAIXA_LABEL);
   });
 });

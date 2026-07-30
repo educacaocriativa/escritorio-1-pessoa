@@ -309,6 +309,73 @@ export function formatDateBR(iso: string): string {
   return d && m && y ? `${d}/${m}/${y}` : iso;
 }
 
+// ── Story 8.11 — o aviso pró-ativo do cadastro ───────────────────────────────────────────────
+
+/**
+ * `PayablesPaidBeforeOut` — o agregado de `GET /payables/bills/paid-before?date=` (Story 8.11).
+ *
+ * ⚠️ **Nada aqui é, vira ou sugere um saldo de abertura** (AC4 / `CLAUDE.md` Regra 5).
+ * `total_cents` é o total **pago** e é rotulado como tal. O saldo de abertura é um fato *sobre o
+ * banco*, que o sistema por definição não conhece — derivá-lo daqui seria somar o que o sistema
+ * sabe e chamar de "o que o banco diz", a circularidade que faria a divergência ir a zero por
+ * construção no dia um. **O e1p não inventa o número: ele diz qual número ir buscar.**
+ */
+export interface PayablesPaidBefore {
+  count: number;
+  total_cents: number;
+  oldest_paid_on: string | null;
+  newest_paid_on: string | null;
+}
+
+/**
+ * O dia ANTERIOR a uma data ISO. PURA. `"2026-03-01"` → `"2026-02-28"`.
+ *
+ * ⚠️ **Por que o dia anterior, e não o mesmo dia.** O saldo derivado soma `posted_at >
+ * opening_date`, **estritamente**, e `_validate_posted_at` recusa `posted_at <= opening_date` com
+ * 422: uma conta paga exatamente na data de abertura fica de fora do saldo do mesmo jeito. Abrir a
+ * conta no dia da conta mais antiga deixaria justamente ela para trás — a parede uma casa adiante.
+ *
+ * Aritmética em UTC (`Date.UTC`) para não pegar o bug de fuso do `CLAUDE.md` §6.0: com `new
+ * Date("2026-03-01")` + hora local negativa, o dia anterior sairia dois dias antes.
+ */
+export function diaAnteriorISO(iso: string): string {
+  const partes = iso.slice(0, 10).split("-").map(Number);
+  if (partes.length !== 3 || partes.some((n) => !Number.isFinite(n))) return iso;
+  const [y, m, d] = partes;
+  return new Date(Date.UTC(y, m - 1, d - 1)).toISOString().slice(0, 10);
+}
+
+/**
+ * A frase do aviso pró-ativo (AC3), ou `null` quando não há o que dizer. PURA.
+ *
+ * **Silêncio é o default.** Zero contas pagas anteriores → `null` → nenhum aviso na tela. É a mesma
+ * disciplina anti-ruído da banda de tolerância da conferência: *"dentro da banda, verde e
+ * SILÊNCIO"*. Uma tela que avisa sobre um conjunto vazio destrói a confiança no aviso.
+ *
+ * ⚠️ **Vocabulário:** esta frase é texto de FORMULÁRIO e não pode conter `ROTULO_BANCO`
+ * ("no banco", que na Projeção nomeia uma parcela de saldo), `TOTAL_EM_CONTAS_LABEL` nem
+ * `DISPONIVEL_CAIXA_LABEL` — reusá-los aqui recriaria a colisão D-6/UX-001 que o épico já pagou
+ * para separar. Há teste fixando isso.
+ */
+export function avisoContasPagasAnteriores(
+  dados: PayablesPaidBefore | null,
+  openingDate: string,
+): string | null {
+  if (!dados || dados.count <= 0 || !dados.oldest_paid_on) return null;
+  const total = formatBRL(dados.total_cents);
+  const quando =
+    dados.newest_paid_on && dados.newest_paid_on !== dados.oldest_paid_on
+      ? `entre ${formatDateBR(dados.oldest_paid_on)} e ${formatDateBR(dados.newest_paid_on)}`
+      : `em ${formatDateBR(dados.oldest_paid_on)}`;
+  const quantas =
+    dados.count === 1 ? "1 conta paga" : `${dados.count} contas pagas`;
+  const elas = dados.count === 1 ? "ela não vai" : "elas não vão";
+  return (
+    `Você tem ${quantas} ${quando} (${total} pagos). Se esta conta abrir em ` +
+    `${formatDateBR(openingDate)}, ${elas} entrar no extrato do e1p.`
+  );
+}
+
 // ── ⚠️ PII nesta superfície (registro para a Onda 3/4) ───────────────────────────────────────
 //
 // `BankTransaction.raw_description` e `user_description` — e, a partir da Onda 3,

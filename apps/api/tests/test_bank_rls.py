@@ -716,3 +716,119 @@ def test_conferencia_isolamento_cross_tenant(app_url: str) -> None:
             "batendo"
         )
         assert vazio.contas_avaliadas == 0 and vazio.contas_fora_da_banda == []
+
+
+# ── Story 8.11 — a guarda do recuo e o agregado do aviso, sob RLS real ────────────────────────
+
+
+def test_recuo_do_opening_date_sob_rls(app_url: str) -> None:
+    """Os **+2 casos do design §4.3** no Postgres real: recuo com saldo → 200; sem saldo → 422.
+
+    Vale rodar aqui, e não só no SQLite, por dois motivos: a guarda compara uma coluna `DATE` do
+    Postgres (que volta como `datetime.date`, e não como texto) e o caminho de escrita passa pelo
+    `commit`/`refresh` sob RLS — onde um `db.refresh()` sem a GUC já derrubou o produto inteiro
+    antes (`CLAUDE.md` §6.0, o bug do refresh pós-commit).
+    """
+    from app.modules.bank import service as bank_service
+    from app.modules.bank.schemas import BankAccountUpdate
+
+    tenant = str(uuid4())
+    acc = _seed_account(app_url, tenant, name="Recuo", opening=100_000, number="9911-1")
+
+    # (a) Recuo SEM redeclarar o saldo → 422, e nada é gravado (nem a data).
+    with _session_for(app_url, tenant) as s:
+        with pytest.raises(bank_service.BankError) as exc:
+            bank_service.update_account(
+                s, account_id=acc, tenant_id=tenant, actor="dono",
+                data=BankAccountUpdate(opening_date=date(2026, 6, 1)),
+            )
+        assert exc.value.status_code == 422
+        assert "2026-07-01" in str(exc.value) and "2026-06-01" in str(exc.value)
+
+    with _session_for(app_url, tenant) as s:
+        conta = bank_service.get_account(s, acc)
+        assert conta.opening_date == date(2026, 7, 1), "o 422 gravou a data pela metade"
+        assert conta.opening_balance_cents == 100_000
+
+    # (b) Recuo COM o saldo daquele dia → 200, e o saldo derivado parte do valor REDECLARADO.
+    with _session_for(app_url, tenant) as s:
+        atualizada = bank_service.update_account(
+            s, account_id=acc, tenant_id=tenant, actor="dono",
+            data=BankAccountUpdate(opening_date=date(2026, 6, 1), opening_balance_cents=340_000),
+        )
+        assert atualizada.opening_date == date(2026, 6, 1)
+        assert atualizada.opening_balance_cents == 340_000
+        assert bank_service.derived_balance(s, bank_account_id=acc) == 340_000
+
+
+def test_paid_before_isolamento_cross_tenant(app_url: str) -> None:
+    """`GET /payables/bills/paid-before` (Story 8.11): A nunca conta as contas pagas de B.
+
+    O modo de falha aqui é **o aviso do vizinho**: o cadastro da conta bancária de A diria "você
+    tem N contas pagas entre X e Y" com dados que não são dele — e a data sugerida, que ele vai
+    usar como `opening_date` real, viria do histórico de outro escritório. Vazamento de PII de
+    negócio **e** um número errado no exato campo que a Regra 5 protege.
+
+    Também exercita o fail-closed: sem a GUC, o agregado é zero e as datas são `None` — nunca a
+    soma de todo mundo. Um agregado que vaze não devolve "uma linha estranha", devolve um TOTAL —
+    a forma mais silenciosa possível de vazamento.
+    """
+    from datetime import datetime
+
+    from app.modules.payables import service as payables_service
+    from app.modules.payables.models import STATUS_PAID, Payable
+
+    tenant_a = str(uuid4())
+    tenant_b = str(uuid4())
+
+    def _pagar(tenant_id: str, *, amount: int, dia: str) -> None:
+        with _session_for(app_url, tenant_id) as s:
+            s.add(
+                Payable(
+                    tenant_id=tenant_id,
+                    description="conta",
+                    category="Geral",
+                    supplier="Fornecedor",
+                    amount_cents=amount,
+                    due_date=date.fromisoformat(dia),
+                    status=STATUS_PAID,
+                    paid_at=datetime.fromisoformat(f"{dia}T12:00:00+00:00"),
+                )
+            )
+            s.commit()
+
+    _pagar(tenant_a, amount=120_000, dia="2026-05-03")
+    _pagar(tenant_a, amount=80_000, dia="2026-06-20")
+    _pagar(tenant_b, amount=999_999, dia="2026-01-09")
+
+    corte = date(2026, 7, 30)
+
+    with _session_for(app_url, tenant_a) as sa:
+        agregado = payables_service.paid_before(sa, date_=corte)
+        assert agregado["count"] == 2, f"A contou conta paga de B: {agregado}"
+        assert agregado["total_cents"] == 200_000, "o valor pago de B entrou no total de A"
+        assert agregado["oldest_paid_on"] == date(2026, 5, 3), (
+            "a data mais antiga veio do histórico de OUTRO tenant — é ela que o dono usaria como "
+            "`opening_date` da conta bancária dele"
+        )
+        assert agregado["newest_paid_on"] == date(2026, 6, 20)
+
+    with _session_for(app_url, tenant_b) as sb:
+        assert payables_service.paid_before(sb, date_=corte) == {
+            "count": 1,
+            "total_cents": 999_999,
+            "oldest_paid_on": date(2026, 1, 9),
+            "newest_paid_on": date(2026, 1, 9),
+        }
+
+    # ── Sem GUC: fail-closed. Zero, e NUNCA a soma de todos os tenants ───────────────────────
+    with _session_for(app_url, None) as sn:
+        assert payables_service.paid_before(sn, date_=corte) == {
+            "count": 0,
+            "total_cents": 0,
+            "oldest_paid_on": None,
+            "newest_paid_on": None,
+        }, (
+            "FAIL-CLOSED falhou: sem `app.current_tenant_id` o agregado devolveu números. Num "
+            "agregado o vazamento não aparece como linha estranha — aparece como um TOTAL."
+        )

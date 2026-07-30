@@ -210,6 +210,53 @@ def _validate_opening_date_move(db: Session, *, account: BankAccount, nova: date
     )
 
 
+def _validate_opening_date_recuo(
+    *, account: BankAccount, nova: date, novo_saldo: int | None
+) -> None:
+    """Recusa (422) **recuar** a data de abertura sem redeclarar `opening_balance_cents`.
+
+    **É o gêmeo do BANK-001 pela porta oposta** (design Onda 2 §4.3). O BANK-001 era mover a data
+    para FRENTE por cima de movimento lançado: o saldo derivado mudava sozinho e a conferência
+    relatava um furo inexistente. `_validate_opening_date_move` fechou aquele lado — e deixou este
+    aberto de propósito, porque recuar *"é o caminho de reparo"*.
+
+    Só que `opening_balance_cents` é **o saldo do banco NAQUELA data**, e não um número solto. Ao
+    recuar a abertura sem trocá-lo, o saldo de partida passa a afirmar que o banco tinha aquele
+    valor num dia em que ele não tinha — e a divergência que a conferência da 8.5 relata é
+    **inventada**, exatamente da mesma família. Divergência inventada é pior que divergência
+    escondida: *"depois de duas caçadas frustradas ele para de confiar no sinal, e o sinal é o
+    produto"*.
+
+    **A guarda é sobre AUSÊNCIA, não sobre o valor.** O saldo do dia anterior pode legitimamente
+    ser igual ao antigo, então recusar "o mesmo número" seria recusar um fato possível. O que esta
+    função exige é que o número venha **no mesmo PATCH** — presença é a única coisa que a API
+    consegue distinguir de "não mudou" (`None` = campo ausente, em `BankAccountUpdate`).
+
+    ⚠️ **Por isso ela é necessária e INSUFICIENTE, e a metade que falta é do formulário.** Um
+    cliente que reenvie o valor antigo por conta própria — como o `AccountModal` fazia até a Story
+    8.11 — passa por aqui com 200 e produz a divergência inventada do mesmo jeito. A API não tem
+    como saber se aquele número foi conferido no extrato ou herdado de um campo pré-preenchido.
+    Quem garante a **redeclaração** é a UI (AC2b: ao recuar, o campo é limpo e o salvar fica
+    desabilitado até haver um valor digitado); esta guarda protege a API contra todo o resto
+    (Atalho do iOS, script, curl, cliente futuro).
+
+    **Recuo é `nova < account.opening_date`, estritamente.** Data igual não é recuo (não muda nada)
+    e avançar cai na guarda irmã, `_validate_opening_date_move`.
+    """
+    if nova >= account.opening_date:
+        return
+    if novo_saldo is not None:
+        return
+    raise BankError(
+        f"O saldo de abertura que você informou era o saldo de "
+        f"{account.opening_date.isoformat()}. Para abrir esta conta em {nova.isoformat()}, "
+        "informe o saldo daquele dia — o número está no extrato do seu banco. Sem ele, o e1p "
+        "partiria de um valor que o banco não tinha naquela data e a conferência acusaria uma "
+        "diferença que não existe.",
+        422,
+    )
+
+
 # ── Leitura ──────────────────────────────────────────────────────────────────────────────────
 
 
@@ -463,21 +510,33 @@ def update_account(
 
     `archived_at` não é editável por aqui (arquivar tem rota própria, com auditoria própria).
 
-    `opening_date` passa por **duas** guardas: a de data futura (a mesma do cadastro) e a de
-    `_validate_opening_date_move`, que recusa empurrar a data para frente por cima de movimentos já
-    lançados — a guarda irmã de `_validate_posted_at`. Sem ela o saldo derivado muda sozinho com os
-    movimentos ainda visíveis na lista, e a conferência relata uma divergência inventada.
+    `opening_date` passa por **três** guardas, uma por direção do movimento da data:
+
+    1. `_validate_opening_date` — data futura (a mesma do cadastro);
+    2. `_validate_opening_date_move` — **para frente** por cima de movimento já lançado (BANK-001,
+       a guarda irmã de `_validate_posted_at`). Sem ela o saldo derivado muda sozinho com os
+       movimentos ainda visíveis na lista, e a conferência relata uma divergência inventada;
+    3. `_validate_opening_date_recuo` (Story 8.11) — **para trás** sem redeclarar
+       `opening_balance_cents`. O saldo de abertura é o saldo do banco NAQUELA data: recuar sem
+       trocá-lo produz a mesma divergência inventada, pela porta oposta.
     """
     acc = get_account(db, account_id)
 
+    # ⚠️ **Nenhuma escrita em `acc` antes das três guardas de data.** Todas comparam contra a data
+    # ATUAL da conta (`acc.opening_date`) e contra o saldo que veio NESTE PATCH — escrever qualquer
+    # um dos dois antes faria a guarda seguinte se comparar com o valor novo e passar sempre.
+    nova_abertura: date | None = None
+    if data.opening_date is not None:
+        nova_abertura = _validate_opening_date(data.opening_date)
+        _validate_opening_date_move(db, account=acc, nova=nova_abertura)
+        _validate_opening_date_recuo(
+            account=acc, nova=nova_abertura, novo_saldo=data.opening_balance_cents
+        )
+
     if data.kind is not None:
         acc.kind = _validate_kind(data.kind)
-    if data.opening_date is not None:
-        # A ordem importa: as duas guardas comparam contra a data ATUAL da conta, então nenhuma
-        # escrita em `acc.opening_date` pode acontecer antes das duas passarem.
-        acc.opening_date = _validate_opening_date_move(
-            db, account=acc, nova=_validate_opening_date(data.opening_date)
-        )
+    if nova_abertura is not None:
+        acc.opening_date = nova_abertura
     for field in (
         "name",
         "institution",

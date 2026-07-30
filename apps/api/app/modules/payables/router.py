@@ -1,6 +1,8 @@
 """Rotas de Contas a Pagar."""
 from __future__ import annotations
 
+from datetime import date as date_type
+
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.orm import Session
 
@@ -10,6 +12,7 @@ from app.modules.payables.models import Payable
 from app.modules.payables.schemas import (
     PayableCreate,
     PayableOut,
+    PayablesPaidBeforeOut,
     PayablesSummary,
     PayableUpdate,
     PaymentQueueOut,
@@ -62,6 +65,24 @@ def list_bills(
     db: Session = Depends(get_tenant_db),
 ) -> list[PayableOut]:
     return [_out(p) for p in service.list_payables(db, status=status)]
+
+
+@router.get("/bills/paid-before", response_model=PayablesPaidBeforeOut)
+def bills_paid_before(
+    date: date_type = Query(description="Data de corte (YYYY-MM-DD). A borda é `<`, estrita."),
+    _user: CurrentUser = Depends(_guard),
+    db: Session = Depends(get_tenant_db),
+) -> PayablesPaidBeforeOut:
+    """Quantas contas eu já **paguei** antes deste dia? (Story 8.11, AC5/AC6)
+
+    ⚠️ **A ordem de registro importa:** esta rota precisa vir ANTES de `GET /bills/{payable_id}`.
+    O FastAPI casa na ordem de declaração — invertida, `paid-before` seria lido como um
+    `payable_id` e esta rota nunca seria alcançada (404 "Conta não encontrada").
+
+    Read-only, agregado (não devolve lista, então não tem paginação), isolado por RLS. Não escreve
+    nada e **não produz saldo nenhum** — ver a nota da Regra 5 em `PayablesPaidBeforeOut`.
+    """
+    return PayablesPaidBeforeOut(**service.paid_before(db, date_=date))
 
 
 @router.get("/bills/{payable_id}", response_model=PayableOut)

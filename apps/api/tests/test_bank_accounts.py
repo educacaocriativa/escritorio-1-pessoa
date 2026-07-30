@@ -615,6 +615,15 @@ def test_patch_opening_date_para_tras_continua_permitido_e_pode_reparar(
 
     E é o caminho de reparo de uma conta que já ficou com movimento órfão (dado anterior à guarda,
     simulado aqui escrevendo a coluna direto): ao recuar, o movimento volta a somar.
+
+    ⚠️ **[Story 8.11 — @dev] Este teste MUDOU DE FORMA, e isso é a correção, não uma regressão.**
+    Enquanto valia só a 8.2 ele recuava a data **sozinha**, sem redeclarar `opening_balance_cents`
+    — e era esse exato PATCH que produzia o gêmeo do BANK-001 pela porta oposta (design Onda 2
+    §4.3): o saldo de abertura antigo era o saldo da data ANTIGA, e passar a afirmá-lo na data nova
+    inventa uma divergência. O caminho de reparo **continua aberto** e é o que este teste segue
+    provando — ele agora só carrega junto o número que o torna verdadeiro. Mesmo padrão com que a
+    Story 8.1 atualizou os testes de runway da 5.7. O par (recuo **sem** saldo → 422) está logo
+    abaixo, na seção da 8.11.
     """
     acc = _create(client, headers, opening_balance_cents=100_000, opening_date="2026-06-01")
     _lancar(client, headers, acc["id"], amount_cents=-80_000, posted_at="2026-06-10")
@@ -628,7 +637,10 @@ def test_patch_opening_date_para_tras_continua_permitido_e_pode_reparar(
     ).json()["saldo_derivado_cents"] == 100_000, "pré-condição: o movimento está órfão"
 
     resp = client.patch(
-        f"/bank/accounts/{acc['id']}", json={"opening_date": "2026-06-01"}, headers=headers
+        f"/bank/accounts/{acc['id']}",
+        # O saldo do banco em 01/06 — conferido no extrato, não herdado do campo antigo (8.11).
+        json={"opening_date": "2026-06-01", "opening_balance_cents": 100_000},
+        headers=headers,
     )
     assert resp.status_code == 200, resp.text
     assert resp.json()["opening_date"] == "2026-06-01"
@@ -677,6 +689,224 @@ def test_patch_opening_date_ignora_movimento_de_OUTRA_conta_do_mesmo_tenant(
     assert client.patch(
         f"/bank/accounts/{a['id']}", json={"opening_date": "2026-06-15"}, headers=headers
     ).status_code == 422
+
+
+# ── Story 8.11 — o gêmeo do BANK-001 pela porta OPOSTA: recuar sem redeclarar o saldo ─────────
+#
+# ⚠️ `_validate_opening_date_move` (acima) fecha o lado de FRENTE e deixa o recuo livre, porque
+# recuar *"é o caminho de reparo"*. Só que `opening_balance_cents` é **o saldo do banco NAQUELA
+# data**: recuar sem trocá-lo passa a afirmar que o banco tinha aquele valor num dia em que ele não
+# tinha, e a conferência da 8.5 relata uma divergência **inventada** — a mesma classe do BANK-001,
+# pela porta oposta (design Onda 2 §4.3).
+#
+# A guarda é sobre **ausência**, não sobre o valor: o saldo do dia anterior pode legitimamente ser
+# igual ao antigo. O que a API consegue distinguir é presença × ausência do campo no PATCH — e é
+# por isso que ela é necessária e **insuficiente**. Um cliente que reenvie o valor antigo por conta
+# própria (era o que o `AccountModal` fazia) passa com 200. A metade que garante a REDECLARAÇÃO é
+# do formulário e está em `apps/web/src/features/financeiro/ContasSaldosPage.test.tsx`.
+
+
+def test_patch_recuar_opening_date_sem_saldo_422(client: TestClient, headers):
+    """**O cenário exato da 8.11.** Recuar a abertura sem informar o saldo daquele dia → 422.
+
+    A mensagem nomeia **as duas datas** e diz **onde** buscar o número: sem isso o usuário sabe que
+    não pode, mas não sabe o que fazer — e o passo 1 do mutirão (epic §7.2) é justamente este.
+    """
+    acc = _create(client, headers, opening_balance_cents=100_000, opening_date="2026-06-15")
+
+    resp = client.patch(
+        f"/bank/accounts/{acc['id']}", json={"opening_date": "2026-06-01"}, headers=headers
+    )
+    assert resp.status_code == 422, resp.text
+    detail = resp.json()["detail"]
+    assert "2026-06-15" in detail, "a mensagem não diz de QUE dia era o saldo antigo"
+    assert "2026-06-01" in detail, "a mensagem não diz para QUE dia o saldo é pedido"
+    assert "extrato" in detail, "a mensagem não diz onde o número está"
+
+    # Nada foi gravado — nem a data (a guarda roda ANTES de qualquer escrita em `acc`).
+    depois = client.get(f"/bank/accounts/{acc['id']}", headers=headers).json()
+    assert depois["opening_date"] == "2026-06-15"
+    assert depois["opening_balance_cents"] == 100_000
+
+
+def test_patch_recuar_opening_date_com_saldo_200(client: TestClient, headers):
+    """A operação legítima segue permitida: recuar **com** o saldo daquele dia grava os dois.
+
+    O saldo gravado é o **novo** — se fosse o antigo, a guarda seria decorativa.
+    """
+    acc = _create(client, headers, opening_balance_cents=100_000, opening_date="2026-06-15")
+
+    resp = client.patch(
+        f"/bank/accounts/{acc['id']}",
+        json={"opening_date": "2026-06-01", "opening_balance_cents": 340_000},
+        headers=headers,
+    )
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["opening_date"] == "2026-06-01"
+    assert body["opening_balance_cents"] == 340_000
+    assert body["saldo_derivado_cents"] == 340_000, "o saldo derivado parte do valor REDECLARADO"
+
+
+def test_patch_recuar_opening_date_com_o_MESMO_valor_e_permitido(client: TestClient, headers):
+    """A guarda é sobre AUSÊNCIA, não sobre o valor.
+
+    O saldo do banco no dia anterior pode legitimamente ser igual ao da data antiga (nenhum
+    movimento no meio). Recusar "o mesmo número" seria recusar um fato possível — e empurraria o
+    usuário a digitar qualquer coisa só para passar pela parede.
+    """
+    acc = _create(client, headers, opening_balance_cents=100_000, opening_date="2026-06-15")
+
+    resp = client.patch(
+        f"/bank/accounts/{acc['id']}",
+        json={"opening_date": "2026-06-01", "opening_balance_cents": 100_000},
+        headers=headers,
+    )
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["opening_date"] == "2026-06-01"
+
+
+def test_patch_opening_date_igual_a_atual_nao_e_recuo(client: TestClient, headers):
+    """Reenviar a MESMA data não é recuo e não dispara nada.
+
+    O formulário manda o corpo inteiro a cada salvamento; se data igual exigisse saldo, editar o
+    nome da conta passaria a exigir a redeclaração do saldo — um 422 no caminho mais banal do
+    produto.
+    """
+    acc = _create(client, headers, opening_balance_cents=100_000, opening_date="2026-06-15")
+
+    resp = client.patch(
+        f"/bank/accounts/{acc['id']}",
+        json={"name": "Itaú PJ (matriz)", "opening_date": "2026-06-15"},
+        headers=headers,
+    )
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["name"] == "Itaú PJ (matriz)"
+    assert resp.json()["opening_balance_cents"] == 100_000
+
+
+def test_patch_avancar_opening_date_nao_exige_saldo(client: TestClient, headers):
+    """**Mutante:** sem a condição de direção, o AVANÇO passaria a exigir saldo indevidamente.
+
+    Avançar tem guarda própria (`_validate_opening_date_move`, BANK-001) e nenhuma relação com a
+    redeclaração: o saldo de abertura antigo continua sendo o saldo de uma data ANTERIOR à nova, e
+    tudo o que aconteceu até lá segue dentro dele.
+    """
+    acc = _create(client, headers, opening_balance_cents=100_000, opening_date="2026-06-01")
+
+    resp = client.patch(
+        f"/bank/accounts/{acc['id']}", json={"opening_date": "2026-06-15"}, headers=headers
+    )
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["opening_date"] == "2026-06-15"
+
+
+def test_recuo_sem_saldo_nao_regride_a_guarda_do_BANK_001(client: TestClient, headers):
+    """As duas guardas convivem: cada direção tem a sua, e a nova não afrouxou a antiga.
+
+    Com movimento no caminho, avançar continua levando 422 **com a mensagem do BANK-001** (que fala
+    de movimento órfão), e não com a mensagem nova (que fala de saldo).
+    """
+    acc = _create(client, headers, opening_balance_cents=100_000, opening_date="2026-06-01")
+    _lancar(client, headers, acc["id"], amount_cents=-80_000, posted_at="2026-06-10")
+
+    resp = client.patch(
+        f"/bank/accounts/{acc['id']}",
+        # Manda o saldo junto: mesmo assim o avanço é recusado — a guarda do BANK-001 é sobre
+        # movimento órfão, e nenhum saldo redeclarado a satisfaz.
+        json={"opening_date": "2026-06-15", "opening_balance_cents": 999_999},
+        headers=headers,
+    )
+    assert resp.status_code == 422, resp.text
+    assert "1 movimento lançado" in resp.json()["detail"]
+    assert "informe o saldo daquele dia" not in resp.json()["detail"]
+    assert client.get(
+        f"/bank/accounts/{acc['id']}", headers=headers
+    ).json()["opening_balance_cents"] == 100_000, "o PATCH recusado gravou o saldo pela metade"
+
+
+# ── IV1/IV3 — a conferência é o que esta story protege; a projeção não é tocada ───────────────
+
+
+def _conta_com_movimento_orfao(client: TestClient, headers, db: Session) -> dict:
+    """Reproduz o dano do BANK-001 (dado anterior à guarda) e devolve a conta já danificada.
+
+    Conta abre 01/06 com R$ 1.000, débito de R$ 800 em 10/06, saldo declarado de R$ 200 em 20/06 —
+    batendo exato. A abertura é então empurrada para 15/06 **por escrita direta** (só assim esse
+    estado existe hoje): o débito vira órfão, o derivado volta para R$ 1.000 e a conferência passa
+    a acusar R$ 800 de furo que não existe.
+    """
+    acc = _create(client, headers, opening_balance_cents=100_000, opening_date="2026-06-01")
+    _lancar(client, headers, acc["id"], amount_cents=-80_000, posted_at="2026-06-10",
+            description="Aluguel")
+    assert client.post(
+        f"/bank/accounts/{acc['id']}/checkpoints",
+        json={"reference_date": "2026-06-20", "balance_cents": 20_000},
+        headers=headers,
+    ).status_code == 201
+
+    linha = db.get(BankAccount, acc["id"])
+    linha.opening_date = date(2026, 6, 15)
+    db.commit()
+    inventada = _conferencia(db, start=date(2026, 6, 1), end=date(2026, 6, 30)).contas[0]
+    assert inventada.divergencia_cents == -80_000, "pré-condição: a divergência inventada existe"
+    return acc
+
+
+def test_IV1a_recuo_COM_saldo_repara_a_conferencia(client: TestClient, headers, db: Session):
+    """**O teste mais importante desta story:** a guarda **não** fechou o caminho de reparo.
+
+    Recuar com o saldo daquele dia devolve o movimento ao saldo derivado e a divergência inventada
+    some. Se este teste cair, a 8.11 transformou a saída do BANK-001 numa parede — e o mutirão das
+    45 contas (epic §7.2) fica sem passo 1.
+    """
+    acc = _conta_com_movimento_orfao(client, headers, db)
+
+    resp = client.patch(
+        f"/bank/accounts/{acc['id']}",
+        json={"opening_date": "2026-06-01", "opening_balance_cents": 100_000},
+        headers=headers,
+    )
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["saldo_derivado_cents"] == 20_000
+
+    depois = _conferencia(db, start=date(2026, 6, 1), end=date(2026, 6, 30)).contas[0]
+    assert depois.divergencia_cents == 0, "o caminho de reparo parou de reparar"
+    assert depois.dentro_da_tolerancia is True
+
+
+def test_IV1b_recuo_SEM_saldo_e_recusado_e_nao_muda_nada(client: TestClient, headers, db: Session):
+    """A outra metade: o 422 não altera a conferência — nem para melhor, nem para pior."""
+    acc = _conta_com_movimento_orfao(client, headers, db)
+
+    resp = client.patch(
+        f"/bank/accounts/{acc['id']}", json={"opening_date": "2026-06-01"}, headers=headers
+    )
+    assert resp.status_code == 422, resp.text
+
+    depois = _conferencia(db, start=date(2026, 6, 1), end=date(2026, 6, 30)).contas[0]
+    assert depois.divergencia_cents == -80_000, "o PATCH recusado mudou a conferência"
+    assert client.get(
+        f"/bank/accounts/{acc['id']}", headers=headers
+    ).json()["opening_date"] == "2026-06-15"
+
+
+def test_IV3_recuo_recusado_deixa_a_projecao_identica(client: TestClient, headers, db: Session):
+    """IV3: `projection.py` não é editado, e um 422 aqui não pode mover a Projeção de Caixa.
+
+    Snapshot campo a campo — `_saldo_inicial` soma `active_balance_total`, que depende do saldo
+    derivado; se o PATCH recusado tivesse gravado a data pela metade, a semente andaria.
+    """
+    _seed_movimento_financeiro(client, headers)
+    acc = _create(client, headers, opening_balance_cents=500_000, opening_date="2026-06-15")
+    hoje = date(2026, 7, 20)
+    antes = asdict(projection_service.cash_projection(db, today=hoje))
+
+    assert client.patch(
+        f"/bank/accounts/{acc['id']}", json={"opening_date": "2026-06-01"}, headers=headers
+    ).status_code == 422
+
+    assert asdict(projection_service.cash_projection(db, today=hoje)) == antes
 
 
 # ── Auditoria ─────────────────────────────────────────────────────────────────────────────────
