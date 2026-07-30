@@ -292,6 +292,12 @@ def _send_invite(
             profile = settings_service.get_profile(tdb, tenant_id)
             template_id = (profile.whatsapp_template_bindings or {}).get(PURPOSE_STAFF_INVITE)
             template = tdb.get(WhatsappTemplate, template_id) if template_id else None
+            # Exceção deliberada (Onda 0 da spec de WhatsApp/Evolution): este call site NÃO
+            # migra para `whatsapp.send_template(profile=...)`/`send_text(profile=...)` como os
+            # outros 8 pontos do domínio. `profile` só existe DENTRO deste bloco `with
+            # tenant_session`; extrair token/phone_id como strings simples ANTES do bloco fechar
+            # é o que evita usar um `TenantProfile` (instância SQLAlchemy) já detached fora dele.
+            # O despachante aceita token=/phone_id= diretamente por causa exatamente deste caso.
             token, phone_id = profile.whatsapp_token, profile.whatsapp_phone_id
         if template is not None and template.status == STATUS_APPROVED:
             return whatsapp.send_template(
