@@ -1,7 +1,7 @@
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter } from "react-router-dom";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { api } from "../../lib/api";
 import { PageActionsProvider } from "../../store/pageActions";
 import ContasSaldosPage from "./ContasSaldosPage";
@@ -615,5 +615,68 @@ describe("AC8 — responsividade não é opcional neste repo (PR #56 / PR #58)",
     // Sem movimentos no período o componente mostra o estado vazio; o que precisa ser garantido
     // em qualquer estado é que a tela não usa `overflow-hidden` (que CORTA) em lugar nenhum.
     expect(container.querySelectorAll(".overflow-hidden")).toHaveLength(0);
+  });
+});
+
+describe("Story 8.10 — a data de apuração do saldo aparece na tela", () => {
+  /**
+   * **Por que congelar o relógio aqui.** A tela mostra a data de apuração do saldo *corrente*, que
+   * é "hoje" — e um teste que recalculasse "hoje" com o mesmo código da tela seria tautológico:
+   * passaria inclusive se a tela mostrasse a data errada, desde que errasse igual. Com o relógio
+   * fixo, a string esperada é literal.
+   *
+   * `shouldAdvanceTime` mantém os timers correndo para o `waitFor` do testing-library não travar.
+   */
+  beforeEach(() => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    vi.setSystemTime(new Date(2026, 6, 30, 12, 0, 0));
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it("cada conta mostra 'Saldo em DD/MM' ao lado do número — nunca um saldo sem data", async () => {
+    mockApi([conta({ id: "a", name: "Itaú PJ", saldo_derivado_cents: 4_000_000 })]);
+    renderPage();
+
+    await waitFor(() => expect(screen.getByText("Itaú PJ")).toBeInTheDocument());
+    expect(screen.getByText("Saldo em 30/07")).toBeInTheDocument();
+  });
+
+  it("os totais também dizem em que data foram apurados", async () => {
+    mockApi([
+      conta({ id: "a", saldo_derivado_cents: 4_000_000 }),
+      conta({ id: "c", kind: "investment", saldo_derivado_cents: 1_000_000 }),
+    ]);
+    renderPage();
+
+    await waitFor(() => expect(screen.getByText(TOTAL_EM_CONTAS_LABEL)).toBeInTheDocument());
+    expect(screen.getByText(/apuradas em 30\/07\/2026/)).toBeInTheDocument();
+  });
+
+  it("⚠️ a data do saldo CALCULADO não se confunde com a do saldo DECLARADO", async () => {
+    // As duas testemunhas na mesma linha da tela, com datas diferentes: o e1p apurou hoje; o banco
+    // atestou dia 28. Se as duas frases começassem igual, a tela diria a mesma coisa sobre coisas
+    // opostas — a colisão que o UX-001 pagou para desfazer.
+    mockApi([conta()], [checkpoint]);
+    renderPage();
+
+    await waitFor(() => expect(screen.getByText("Saldo em 30/07")).toBeInTheDocument());
+    expect(screen.getByText(/Saldo declarado em 28\/07\/2026/)).toBeInTheDocument();
+  });
+
+  it("AC9 — nenhum rótulo NOVO de total: continuam existindo só os dois da 8.7", async () => {
+    // "Agendado para sair" é da Story 8.14. Esta story não acrescenta terceiro número à tela.
+    mockApi([
+      conta({ id: "a", saldo_derivado_cents: 4_000_000 }),
+      conta({ id: "c", kind: "investment", saldo_derivado_cents: 1_000_000 }),
+    ]);
+    const { container } = renderPage();
+
+    await waitFor(() => expect(screen.getByText(TOTAL_EM_CONTAS_LABEL)).toBeInTheDocument());
+    expect(screen.getByText(DISPONIVEL_CAIXA_LABEL)).toBeInTheDocument();
+    expect(container.textContent).not.toMatch(/agendado/i);
+    expect(container.textContent).not.toContain(ROTULO_BANCO);
   });
 });

@@ -19,6 +19,8 @@ import {
   parseCentsBRL,
   type PayablesPaidBefore,
   resumoSaldos,
+  SALDO_APURADO_PREFIXO,
+  saldoApuradoEm,
   signedAmountView,
   statusLabel,
   STATUS_IGNORED,
@@ -314,6 +316,35 @@ describe("Story 8.11 — a frase do aviso: silêncio por default e nenhum saldo 
 
   it("⚠️ a frase NÃO reusa rótulo de saldo do produto (UX-001 / D-6)", () => {
     const frase = avisoContasPagasAnteriores(PAGAS, "2026-07-30") ?? "";
+    expect(frase).not.toContain(ROTULO_BANCO);
+    expect(frase).not.toContain(TOTAL_EM_CONTAS_LABEL);
+    expect(frase).not.toContain(DISPONIVEL_CAIXA_LABEL);
+  });
+});
+
+describe("Story 8.10 — saldoApuradoEm: a data em que o saldo derivado foi apurado", () => {
+  it('"2026-07-30" → "Saldo em 30/07" (dia/mês, sem ano — é sempre um saldo corrente)', () => {
+    expect(saldoApuradoEm("2026-07-30")).toBe("Saldo em 30/07");
+    expect(saldoApuradoEm("2026-01-05")).toBe("Saldo em 05/01");
+    // Aceita ISO com hora (mesmo contrato de `formatDateBR`), sempre por fatiamento de string —
+    // `new Date("2026-01-01")` voltaria um dia em fuso negativo (CLAUDE.md §6.0).
+    expect(saldoApuradoEm("2026-07-30T00:00:00Z")).toBe("Saldo em 30/07");
+  });
+
+  it("entrada inválida degrada para o texto cru — nunca devolve um prefixo órfão", () => {
+    // "Saldo em " sozinho seria pior do que uma data feia: uma frase pela metade ao lado de um
+    // número é exatamente o "saldo sem data de apuração" que esta story existe para eliminar.
+    expect(saldoApuradoEm("")).toBe("Saldo em ");
+    expect(saldoApuradoEm("sem-data")).toBe("Saldo em sem-data");
+  });
+
+  it("⚠️ o prefixo NÃO colide com o do saldo DECLARADO nem com rótulo de total (UX-001 / D-6)", () => {
+    // As duas pontas da comparação da Conferência: aqui é o que o e1p CALCULOU; "Saldo declarado
+    // em ..." é o que o BANCO diz. Compartilhar o prefixo faria a tela dizer a mesma coisa sobre
+    // duas testemunhas diferentes — a colisão exata que o UX-001 pagou para desfazer.
+    expect(SALDO_APURADO_PREFIXO).toBe("Saldo em");
+    expect("Saldo declarado em".startsWith(SALDO_APURADO_PREFIXO)).toBe(false);
+    const frase = saldoApuradoEm("2026-07-30");
     expect(frase).not.toContain(ROTULO_BANCO);
     expect(frase).not.toContain(TOTAL_EM_CONTAS_LABEL);
     expect(frase).not.toContain(DISPONIVEL_CAIXA_LABEL);

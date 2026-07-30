@@ -22,12 +22,19 @@ dos movimentos tem **uma** implementação (`_movements_sums`) e é ela que apli
 "movimento de ajuste" automático, a boa intenção mais provável aqui —, a divergência iria a zero
 por construção e o produto perderia a métrica que vende. Ver o aviso (c) na docstring de
 `BankBalanceCheckpoint` e o teste `test_checkpoint_nao_altera_saldo_derivado`.
+
+**O corte de data das superfícies correntes (Story 8.10).** `derived_balance(until=None)` e
+`derived_balances_as_of(as_of=None)` significam **hoje**, não "sem limite superior" — fail-closed,
+para que o movimento agendado da 8.14 nunca entre num saldo corrente por esquecimento de passar a
+data. O histórico inteiro se pede com `SEM_CORTE`; `active_balance_total` **mantém** o default
+antigo por decisão declarada. As três docstrings dizem o porquê, cada uma da sua metade.
 """
 from __future__ import annotations
 
 import hashlib
 from collections.abc import Iterable, Sequence
 from datetime import UTC, date, datetime
+from typing import Final
 
 from sqlalchemy import and_, case, func, or_, select
 from sqlalchemy.exc import IntegrityError
@@ -80,6 +87,42 @@ def _today() -> date:
     `CLAUDE.md` §6.1 e não é resolvida aqui.
     """
     return datetime.now(UTC).date()
+
+
+# ── O corte de data das superfícies de saldo corrente (Story 8.10) ───────────────────────────
+
+SEM_CORTE: Final[date] = date.max
+"""*"Sem limite superior"* — o saldo do histórico INTEIRO, inclusive movimento com data futura.
+
+**É feio de propósito, e a feiura é a funcionalidade** (design Onda 2 §4.2.1). Depois da Story 8.10
+o default de `derived_balance`/`derived_balances_as_of` é **hoje**; quem quiser o futuro num
+saldo precisa dizer `until=SEM_CORTE` — uma decisão **visível no diff**, que um revisor nota, e que
+uma busca por `SEM_CORTE` lista em qualquer momento do repositório.
+
+**Por que não existe `incluir_futuro=True`.** Dois campos para a mesma pergunta é o defeito D-3
+outra vez — o mesmo que já custou a este épico o achatamento dos dois eixos de proveniência. **Um
+campo, um significado.** E um booleano seria *discreto*: passaria despercebido numa revisão, que é
+exatamente o que não se quer para "este saldo inclui dinheiro que ainda não saiu da conta".
+
+⚠️ **Hoje ninguém no repositório usa esta constante**, e isso é o estado correto: nenhuma superfície
+corrente quer o futuro. Se você está prestes a ser o primeiro, escreva na story **por que**.
+"""
+
+
+def resolve_until(until: date | None) -> date:
+    """O corte efetivo de um saldo corrente: `None` → **hoje**. Nunca devolve `None`.
+
+    **A única implementação da normalização**, consumida por `derived_balance`,
+    `derived_balances_as_of` e pelo `GET /bank/accounts/{id}/balance` — que precisa devolver no
+    payload a data **efetivamente usada** (`BankBalanceOut.until`). Se o router recalculasse "hoje"
+    por conta própria, o número e a data do mesmo payload passariam a vir de dois relógios, e um
+    saldo cuja data de apuração não é a que ele diz é pior do que um saldo sem data nenhuma.
+
+    Mora **na fronteira pública**, e não dentro de `_movements_sums`: normalizar no privado
+    alcançaria também `active_balance_total` (ver a assimetria declarada na docstring dela) e a
+    conferência, extrapolando o item 2.5 do epic.
+    """
+    return _today() if until is None else until
 
 
 def _validate_kind(kind: str) -> str:
@@ -367,11 +410,22 @@ def derived_balance(db: Session, *, bank_account_id: str, until: date | None = N
 
         saldo = opening_balance_cents + SUM(movimentos até `until`)
 
-    `until` é um `date` (nunca `datetime`) e é **INCLUSIVO**. `until=None` significa **sem limite
-    superior**: o saldo atual completo, incluindo movimento com data futura se algum existir (hoje
-    o service recusa lançar no futuro, mas o saldo não depende dessa guarda para estar correto).
+    `until` é um `date` (nunca `datetime`) e é **INCLUSIVO**.
+
+    ⚠️ **`until=None` significa HOJE — não "sem limite superior" (Story 8.10).** A assinatura é a
+    mesma de antes byte a byte; o que mudou foi o **significado do default**, e a mudança é
+    deliberadamente invisível para quem chama. **Fail-closed:** nenhuma superfície de saldo corrente
+    pode incluir movimento agendado por esquecimento de passar a data. A partir da 8.14 existirá
+    movimento com `posted_at` no futuro (pagamento agendado); sem este corte, o *"Total em contas"*
+    passaria a mostrar dinheiro que já tem destino marcado — o gêmeo, pela porta oposta, da máquina
+    de falso negativo que a Onda 0 removeu da Projeção.
+
+    Para o histórico completo, **inclusive o futuro**, passe `until=SEM_CORTE` (`date.max`) — feio
+    de propósito; ver a docstring da constante.
+
     A conferência da Story 8.5 **sempre** passa `until` = a data de referência do checkpoint, porque
-    comparar saldos apurados em datas diferentes é o erro que o design §5.1 manda recusar.
+    comparar saldos apurados em datas diferentes é o erro que o design §5.1 manda recusar. Ela é
+    imune a esta mudança por construção: nunca chamou com `None`.
 
     Movimentos com `status='ignored'` ficam **de fora** — o filtro é aplicado aqui dentro e quem
     consome não refiltra (ver `_movements_sums`).
@@ -382,13 +436,24 @@ def derived_balance(db: Session, *, bank_account_id: str, until: date | None = N
     Conta inexistente (ou de outro tenant, escondida pela RLS) → `BankError` 404.
     """
     acc = get_account(db, bank_account_id)
-    return acc.opening_balance_cents + _movements_sum(db, account=acc, until=until)
+    return acc.opening_balance_cents + _movements_sum(
+        db, account=acc, until=resolve_until(until)
+    )
 
 
 def derived_balances_as_of(
     db: Session, *, as_of: date | None = None, include_archived: bool = False
 ) -> dict[str, int]:
     """Saldo de TODAS as contas numa **data comum** (`as_of`), em uma passada. `{id: centavos}`.
+
+    ⚠️ **`as_of=None` significa HOJE — não "sem limite superior" (Story 8.10).** Mesma regra, mesmo
+    motivo e mesma saída de emergência de `derived_balance`: `as_of=SEM_CORTE` para o histórico
+    inteiro. É o default desta função que a tela "Contas & Saldos" consome (`GET /bank/accounts`),
+    então é aqui que o *"Total em contas"* deixa de somar o pagamento agendado da 8.14.
+
+    ⚠️ **Para a 8.14:** o número *"Agendado para sair"* **não** sai daqui — depois da 8.10 esta
+    função devolve exatamente o oposto (só até hoje). Ele é a diferença entre o saldo com
+    `SEM_CORTE` e o corrente, ou uma soma própria sobre `posted_at > hoje`.
 
     ⛔ **PROIBIDA na conferência (design §5.1 / Story 8.5).** Lá cada conta tem a **sua própria**
     data de referência — o `reference_date` do checkpoint daquela conta —, e um `as_of` comum
@@ -406,7 +471,7 @@ def derived_balances_as_of(
     plausível** — o relatório não quebraria, mentiria um número.
     """
     accounts = list_accounts(db, include_archived=include_archived)
-    return _balances_for(db, accounts, until=as_of)
+    return _balances_for(db, accounts, until=resolve_until(as_of))
 
 
 def active_balance_total(
@@ -423,6 +488,32 @@ def active_balance_total(
 
     Aplicação (`kind='investment'`) fica de fora por default porque dinheiro aplicado não é caixa
     disponível para pagar a conta de amanhã (design §6.1). Contas arquivadas nunca entram.
+
+    ⚠️ **ASSIMETRIA DELIBERADA (Story 8.10 AC6): aqui `until=None` continua significando "SEM LIMITE
+    SUPERIOR".** As duas funções acima passaram a normalizar `None` para hoje; esta **não**. Ela não
+    delega para nenhuma delas — vai direto em `_balances_for` —, então a mudança não a alcança por
+    acidente: a assimetria foi **escolhida**, e os três motivos ficam escritos aqui porque quem
+    reencontrar isto na Onda 2b/3 vai achar que foi esquecimento.
+
+    1. O item 2.5 do epic nomeia **apenas** `derived_balance` e `derived_balances_as_of`. O epic diz
+       que nenhum item da §5 pode cair fora — não que se pode acrescentar.
+    2. **É esta função que semeia a Projeção**, e o `until=today` que o único chamador passa é o que
+       impede a **dupla contagem do dia D** que a 8.14 AC6 resolve do outro lado (ratificação
+       §C-7.3). Trocar o default aqui reintroduziria a dupla contagem **pela porta oposta**, num
+       arquivo que a 8.14 declara não tocar.
+    3. O único chamador de produção — `financial_intelligence/projection.py::_saldo_inicial` — **já
+       passa `until=today` explicitamente**, com a docstring dizendo *"a MESMA âncora do resto da
+       projeção"*. Ou seja: a Projeção **já estava segura** antes da 8.10, e continua.
+
+    ⚠️ **Consequência para quem chamar isto daqui em diante: PASSE `until` EXPLÍCITO.** Chamar sem
+    `until` soma movimento com data futura em silêncio — e é exatamente esse silêncio que a 8.10
+    removeu das outras duas. O teste de contrato `test_active_balance_total_so_e_chamada_com_until_
+    explicito` (em `tests/test_bank_corte_de_data.py`) **falha** se um chamador novo de produção
+    omitir o argumento, para que a decisão volte a ser tomada por alguém em vez de herdada.
+
+    **Dívida nomeada, registrada pela 8.10 para o gate da onda:** a assimetria é o corte
+    conservador, não o estado final. Uniformizar as três (normalizando também esta) é decisão de
+    Onda 2b/3, e exige revisitar o §C-7.3 junto — não é limpeza que se faça de passagem.
     """
     excluded = set(exclude_kinds)
     accounts = [a for a in list_accounts(db) if a.kind not in excluded]

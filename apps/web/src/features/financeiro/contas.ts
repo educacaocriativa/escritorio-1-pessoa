@@ -303,6 +303,33 @@ export function hojeISO(): string {
   return `${d.getFullYear()}-${mm}-${dd}`;
 }
 
+// ── Story 8.10 — a data em que o saldo foi apurado ───────────────────────────────────────────
+
+/**
+ * O prefixo da data de apuração do saldo **derivado**. Constante para o teste de colisão poder
+ * afirmar sobre ele sem repetir a string.
+ *
+ * ⚠️ **Não confundir com "Saldo declarado em"**, que é o checkpoint. São as duas pontas exatas da
+ * comparação da Conferência: aqui é *o que o e1p calculou*; lá é *o que o banco diz*. A distinção
+ * de vocabulário é a mesma que o UX-001 instituiu — e é por isso que os dois prefixos são
+ * diferentes na origem, e não só por acaso de redação.
+ */
+export const SALDO_APURADO_PREFIXO = "Saldo em";
+
+/**
+ * `"2026-07-30"` → `"Saldo em 30/07"`. PURA.
+ *
+ * Existe porque, desde a Story 8.10, o saldo derivado tem **um corte de data** (hoje) em vez de
+ * "todo o histórico" — e um saldo sem a data em que foi apurado é um número que não dá para
+ * conferir. Dia/mês, sem ano: é sempre um saldo corrente, e o ano seria ruído numa linha que fica
+ * ao lado do número.
+ */
+export function saldoApuradoEm(iso: string): string {
+  const [, mes, dia] = iso.slice(0, 10).split("-");
+  if (!dia || !mes) return `${SALDO_APURADO_PREFIXO} ${iso}`;
+  return `${SALDO_APURADO_PREFIXO} ${dia}/${mes}`;
+}
+
 /** "2026-07-30" → "30/07/2026". Fatiamento de string: nunca `new Date(...)` (bug de fuso). */
 export function formatDateBR(iso: string): string {
   const [y, m, d] = iso.slice(0, 10).split("-");

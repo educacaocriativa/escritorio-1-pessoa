@@ -601,7 +601,14 @@ def test_checkpoint_e_saldo_derivado_casam_na_mesma_data(client: TestClient, hea
         "o par (checkpoint, saldo derivado) na MESMA data não fecha — se as janelas não "
         "coincidirem, a 8.5 reporta divergência onde não há"
     )
-    # E o saldo sem teto inclui o dia seguinte: a diferença é a janela, não o dado.
+    # E o saldo CORRENTE (sem `until`) inclui o dia seguinte, porque `D+1` já passou: a diferença
+    # entre os dois números é a janela, não o dado.
+    #
+    # ⚠️ [Story 8.10] Esta linha dizia "o saldo sem teto" — o default de `derived_balance` era
+    # literalmente "sem limite superior". Hoje ele é **hoje**, e o número aqui só continua o mesmo
+    # porque `D+1` (16/07/2026) é passado. Se você está lendo isto porque a linha caiu, confira
+    # primeiro se as datas fixas deste teste não alcançaram o futuro; o corte em si é testado em
+    # `test_bank_corte_de_data.py`.
     assert service.derived_balance(db, bank_account_id=account["id"]) == 1_750_00
 
 

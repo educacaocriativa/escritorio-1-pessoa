@@ -120,6 +120,12 @@ def list_accounts(
 
     Este é o consumidor legítimo de `derived_balances_as_of` (design §3.1.1): tela de lista, data
     comum. A conferência (Story 8.5) **não** pode usar essa função — ver a docstring dela.
+
+    ⚠️ **Esta frase já estava escrita aqui antes de ser verdade.** Até a Story 8.10, `as_of=None`
+    significava "sem limite superior" e a rota devolvia o saldo de *todo o histórico*, futuro
+    incluído — a docstring dizia "HOJE" e o código não fazia isso. Hoje a chamada abaixo continua
+    idêntica e passou a cumprir o que estava escrito, porque **o default mudou de significado**.
+    Não "conserte" isto passando `SEM_CORTE`: esta tela é a superfície corrente por excelência.
     """
     accounts = service.list_accounts(db, include_archived=include_archived)
     # Duas leituras baratas (as contas + os saldos em lote) em vez de 1 + N: a partir da Story 8.3
@@ -193,17 +199,27 @@ def account_balance(
     _user: CurrentUser = Depends(_guard),
     db: Session = Depends(get_tenant_db),
 ) -> BankBalanceOut:
-    """Saldo derivado desta conta até `until` (inclusivo; `None` = todo o histórico).
+    """Saldo derivado desta conta até `until` (inclusivo). **Sem `until` = até HOJE** (Story 8.10).
 
     `until` volta no payload: um saldo sem a data em que foi apurado é um número que não dá para
-    conferir — e conferir é o produto (design §5.1).
+    conferir — e conferir é o produto (design §5.1). Desde a 8.10 esse campo **nunca mais vem
+    `null`**, porque não existe mais resposta desta rota sem data de corte.
+
+    ⚠️ **O que volta é a data EFETIVAMENTE usada, não o `until` cru da query.** As duas coisas
+    divergem exatamente no caso em que o campo importa — a chamada sem `until` —, e devolver o cru
+    ali faria o payload dizer *"não sei em que data isto foi apurado"* sobre um número que foi
+    apurado numa data muito específica. É o defeito que o campo existe para impedir.
+
+    O corte é resolvido **uma vez** e passado explicitamente para o saldo, de modo que o número e a
+    data do mesmo payload venham do mesmo relógio (ver `service.resolve_until`).
     """
+    corte = service.resolve_until(until)
     try:
-        saldo = service.derived_balance(db, bank_account_id=account_id, until=until)
+        saldo = service.derived_balance(db, bank_account_id=account_id, until=corte)
     except service.BankError as e:
         raise _err(e) from e
     return BankBalanceOut(
-        saldo_derivado_cents=saldo, saldo_derivado_origem=ORIGEM_BANCO, until=until
+        saldo_derivado_cents=saldo, saldo_derivado_origem=ORIGEM_BANCO, until=corte
     )
 
 

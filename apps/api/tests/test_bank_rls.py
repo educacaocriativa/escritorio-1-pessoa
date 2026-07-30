@@ -832,3 +832,92 @@ def test_paid_before_isolamento_cross_tenant(app_url: str) -> None:
             "FAIL-CLOSED falhou: sem `app.current_tenant_id` o agregado devolveu números. Num "
             "agregado o vazamento não aparece como linha estranha — aparece como um TOTAL."
         )
+
+
+# ── Story 8.10 — o corte de data sob RLS ─────────────────────────────────────────────────────
+
+
+def test_corte_de_data_sob_rls_cross_tenant(app_url: str) -> None:
+    """O corte de `until=None` → **hoje** (Story 8.10) vale no Postgres real, e não vaza.
+
+    Vale rodar aqui, e não só no SQLite, por dois motivos concretos:
+
+    1. **A mudança altera a cláusula `WHERE` efetiva de uma query que roda sob RLS.** Uma condição a
+       mais no `WHERE` de uma policy `FORCE` é exatamente o tipo de coisa que passa no SQLite e cai
+       no Postgres — e o sintoma seria um saldo errado, não um erro.
+    2. **`SEM_CORTE` é `date.max`.** No SQLite a comparação de `DATE` é textual (`'9999-12-31'`
+       ordena bem por acidente do formato ISO); no Postgres é uma comparação de `date` de verdade,
+       no limite superior do tipo. Se `date.max` estourasse o binding em algum dialeto, seria aqui.
+
+    O cenário é montado **direto pelo model** porque `_validate_posted_at` recusa `posted_at` futuro
+    pela porta manual — e continua recusando (quem afrouxa isso para o caminho de ORIGEM é a
+    8.12/8.14). Ver a mesma justificativa em `tests/test_bank_corte_de_data.py`.
+    """
+    from datetime import timedelta
+
+    from app.modules.bank import service as bank_service
+    from app.modules.bank.models import BankTransaction
+
+    hoje = bank_service._today()
+    tenant_a = str(uuid4())
+    tenant_b = str(uuid4())
+    acc_a = _seed_account(app_url, tenant_a, name="A corte", opening=100_000, number="7710-1")
+    acc_b = _seed_account(app_url, tenant_b, name="B corte", opening=500_000, number="7710-2")
+
+    # Movimento PASSADO em cada um (pela porta normal) + um AGENDADO só no tenant A.
+    _lancar(app_url, tenant_a, acc_a, amount_cents=20_000, posted_at=hoje - timedelta(days=2))
+    _lancar(app_url, tenant_b, acc_b, amount_cents=-5_000, posted_at=hoje - timedelta(days=2))
+
+    with _session_for(app_url, tenant_a) as sa:
+        sa.add(
+            BankTransaction(
+                tenant_id=tenant_a,
+                bank_account_id=acc_a,
+                posted_at=hoje + timedelta(days=10),
+                amount_cents=-90_000,
+                raw_description="Agendado (como a 8.14 fara)",
+                dedup_hash=f"agendado-{acc_a}",
+                source="manual",
+                status="unmatched",
+            )
+        )
+        sa.commit()
+
+    # ── A: o agendado existe, e NÃO entra no saldo corrente ──────────────────────────────────
+    with _session_for(app_url, tenant_a) as sa:
+        assert len(bank_service.list_transactions(sa)) == 2, (
+            "o movimento agendado sumiu da LISTA — ele tem de continuar visível; o que a 8.10 faz "
+            "é tirá-lo do SALDO, não escondê-lo"
+        )
+        assert bank_service.derived_balance(sa, bank_account_id=acc_a) == 120_000
+        assert bank_service.derived_balances_as_of(sa) == {acc_a: 120_000}
+        # E a saída de emergência funciona no limite superior do tipo `date` do Postgres.
+        assert (
+            bank_service.derived_balance(
+                sa, bank_account_id=acc_a, until=bank_service.SEM_CORTE
+            )
+            == 30_000
+        )
+        assert bank_service.derived_balances_as_of(sa, as_of=bank_service.SEM_CORTE) == {
+            acc_a: 30_000
+        }
+
+    # ── B: nada do agendado de A o alcança, por nenhum dos dois cortes ───────────────────────
+    with _session_for(app_url, tenant_b) as sb:
+        assert bank_service.derived_balance(sb, bank_account_id=acc_b) == 495_000
+        assert bank_service.derived_balances_as_of(sb) == {acc_b: 495_000}
+        assert bank_service.derived_balances_as_of(sb, as_of=bank_service.SEM_CORTE) == {
+            acc_b: 495_000
+        }, (
+            "o movimento AGENDADO do tenant A entrou no histórico de B. `SEM_CORTE` amplia a "
+            "janela de DATAS, nunca o escopo de tenant — se ampliou, a RLS foi contornada pela "
+            "condição nova do WHERE"
+        )
+
+    # ── Sem GUC: fail-closed, inclusive com o corte mais permissivo que existe ───────────────
+    with _session_for(app_url, None) as sn:
+        assert bank_service.derived_balances_as_of(sn) == {}
+        assert bank_service.derived_balances_as_of(sn, as_of=bank_service.SEM_CORTE) == {}, (
+            "FAIL-CLOSED falhou: sem `app.current_tenant_id`, pedir o histórico inteiro devolveu "
+            "saldo. O estado seguro é 'não vejo nada', nunca 'vejo tudo'."
+        )

@@ -138,9 +138,20 @@ def test_todas_as_superficies_de_saldo_declaram_a_origem(client: TestClient, hea
 
 
 def test_balance_devolve_a_data_de_corte(client: TestClient, headers):
+    """⚠️ **[Story 8.10 — @dev] Este teste MUDOU DE EXPECTATIVA, e a mudança é a CORREÇÃO.**
+
+    Enquanto valia a Story 8.2, ele afirmava `until is None` na chamada sem query — o payload se
+    calava sobre a data de apuração justamente na chamada mais comum: `until=None` significava
+    *"todo o histórico"* e não havia data a informar. A 8.10 trocou o **significado do default** por
+    **hoje** (fail-closed contra o movimento agendado da 8.14), e com isso a rota passou a ter uma
+    data para declarar — sempre. Mesmo padrão com que a 8.1 atualizou os testes de runway da 5.7 e a
+    8.8 os de projeção: a expectativa é reescrita, o teste não é apagado.
+
+    Se algum dia este campo voltar a vir `null` nesta rota, é a 8.10 que quebrou.
+    """
     acc = _create(client, headers)
     sem_corte = client.get(f"/bank/accounts/{acc['id']}/balance", headers=headers).json()
-    assert sem_corte["until"] is None
+    assert sem_corte["until"] == service._today().isoformat()
 
     com_corte = client.get(
         f"/bank/accounts/{acc['id']}/balance", params={"until": "2026-07-15"}, headers=headers
@@ -382,6 +393,10 @@ def test_derived_balances_as_of_traz_todas_as_contas_numa_data_comum(
     saldos = service.derived_balances_as_of(db, as_of=date(2026, 7, 31))
     assert saldos == {a["id"]: 10_000, b["id"]: -2_500}, "arquivada fica de fora por default"
 
+    # ⚠️ [Story 8.10] `as_of=None` significa **hoje**, não "sem limite superior". Aqui o número é o
+    # mesmo (não há movimento nenhum), e o que este caso continua afirmando é o que sempre afirmou:
+    # `include_archived` é sobre QUAIS CONTAS entram, nunca sobre a janela de datas. O corte de data
+    # tem arquivo próprio: `test_bank_corte_de_data.py`.
     com_arquivadas = service.derived_balances_as_of(db, as_of=None, include_archived=True)
     assert com_arquivadas[arq["id"]] == 777
 

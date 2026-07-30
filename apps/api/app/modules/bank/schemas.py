@@ -158,9 +158,20 @@ class BankAccountOut(BaseModel):
 class BankBalanceOut(BaseModel):
     """Resposta de `GET /bank/accounts/{id}/balance`.
 
-    `until` é a data de corte usada (inclusiva) — `None` significa "sem corte" (todo o histórico).
-    Ela é devolvida no payload porque a Story 8.5 compara saldos **na mesma data**, e um saldo sem
-    a data em que foi apurado é um número que não dá para conferir.
+    `until` é a data de corte **efetivamente usada** (inclusiva), devolvida no payload porque a
+    Story 8.5 compara saldos **na mesma data** e um saldo sem a data em que foi apurado é um número
+    que não dá para conferir.
+
+    ⚠️ **Desde a Story 8.10 este campo nunca vem `null` nesta rota.** Antes, chamar sem `?until=`
+    significava "todo o histórico" e o payload vinha com `until: null` — ou seja, o campo se
+    calava justamente na chamada mais comum. Agora o default é **hoje** e a rota devolve a data
+    que usou, sempre.
+
+    **O tipo continua `date | None` de propósito.** Não é frouxidão: é que o `None` deixou de ser
+    alcançável *por esta rota*, não do vocabulário do schema — apertar para `date` transformaria
+    uma decisão de rota num contrato de tipo, e o dia em que alguma superfície precisar dizer
+    honestamente "não houve corte" (`SEM_CORTE`) a mudança voltaria como quebra de contrato. Quem
+    garante o invariante é o teste, não o tipo: ver `test_bank_corte_de_data.py`.
     """
 
     saldo_derivado_cents: int

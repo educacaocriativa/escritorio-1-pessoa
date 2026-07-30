@@ -32,6 +32,7 @@ import {
   type PayablesPaidBefore,
   type ResumoSaldo,
   resumoSaldos,
+  saldoApuradoEm,
   signedAmountView,
   statusLabel,
 } from "./contas";
@@ -258,8 +259,8 @@ function TotaisCard({ resumo }: { resumo: ResumoSaldo[] }) {
         ))}
       </div>
       <p className="mt-4 text-xs text-neutral-400">
-        Somas das contas ativas. A lista abaixo mostra conta por conta — o total nunca aparece
-        sozinho.
+        Somas das contas ativas, apuradas em {formatDateBR(hojeISO())}. A lista abaixo mostra conta
+        por conta — o total nunca aparece sozinho.
       </p>
     </div>
   );
@@ -328,6 +329,10 @@ function AccountCard({
           </p>
           {/* Procedência COLADA ao número (Regra dos Planos §1.3c) — nenhum saldo sem origem. */}
           <p className="text-xs text-neutral-400">{origemLabel(account.saldo_derivado_origem)}</p>
+          {/* Story 8.10 — a DATA em que este número foi apurado, colada nele pelo mesmo motivo que
+              a origem: um saldo sem a data em que foi apurado é um número que não dá para conferir.
+              Até a 8.10 não havia data a mostrar, porque o saldo era "todo o histórico". */}
+          <p className="text-xs text-neutral-400">{saldoApuradoEm(hojeISO())}</p>
           <p className="mt-1 text-xs text-neutral-500">
             {checkpoint
               ? `Saldo declarado em ${formatDateBR(checkpoint.reference_date)}: ${formatBRL(checkpoint.balance_cents)}`
