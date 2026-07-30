@@ -1,5 +1,6 @@
 """Testes do provider Evolution API (WhatsApp não-oficial/Baileys) — Onda 1 da feature de
-WhatsApp por Evolution (ver docs/superpowers/specs/2026-07-30-whatsapp-evolution-multi-tenant-design.md).
+WhatsApp por Evolution (ver
+docs/superpowers/specs/2026-07-30-whatsapp-evolution-multi-tenant-design.md).
 
 Mesma convenção de tests/test_whatsapp.py (provider Meta): a chamada real (`httpx.post`) é
 sempre mockada — este ambiente não tem uma instância Evolution real. Validação contra uma
