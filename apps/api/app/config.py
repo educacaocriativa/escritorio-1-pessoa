@@ -31,6 +31,13 @@ class Settings(BaseSettings):
     # Integrações (vazio = stub/log; preencher quando conectar)
     whatsapp_token: str = ""
     whatsapp_phone_id: str = ""
+    # Evolution API (WhatsApp não-oficial, Baileys) — transporte alternativo ao Meta Cloud API
+    # (ver docs/superpowers/specs/2026-07-30-whatsapp-evolution-multi-tenant-design.md). A API
+    # key é GLOBAL (controla a instância de TODOS os tenants) — diferente do Meta, cujas
+    # credenciais são por tenant. Vazio = Evolution desligada (graceful degradation, mesmo
+    # espírito de whatsapp_token/phone_id).
+    evolution_api_url: str = "http://evolution:8080"
+    evolution_api_key: str = ""
     # E-mail transacional (SMTP genérico; cobre também o endpoint SMTP do Amazon SES).
     # SMTP_HOST vazio = e-mail vira log (dev/graceful degradation); preencher p/ entrega real.
     smtp_host: str = ""
