@@ -31,7 +31,7 @@ import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy.orm import Session
 
-from app.core.money_planes import ORIGEM_BANCO
+from app.core.money_planes import ORIGEM_BANCO, ORIGEM_MISTO
 from app.modules.bank import service
 from app.modules.bank.models import (
     KIND_CHECKING,
@@ -683,13 +683,30 @@ def test_checkpoint_nao_altera_dre(client: TestClient, headers, db: Session):
 
 
 def test_checkpoint_nao_altera_projecao_de_caixa(client: TestClient, headers, db: Session):
-    """IV4: `saldo_inicial_origem` continua `plataforma`. Passar a usar o banco é a Story 8.8."""
+    """IV4: declarar um saldo NÃO move a projeção — nem um centavo, em nenhuma origem.
+
+    ⚠️ **[Story 8.8 — @dev] A asserção final mudou (`plataforma` → `misto`), o teste ficou MAIS
+    forte.** Antes, com a conta cadastrada, a projeção nem olhava para o banco, então "o checkpoint
+    não a alterou" era quase tautologia. Agora a projeção **soma o saldo derivado** desta conta — e
+    o teste passa a provar, no ponto onde importa, o aviso (c) de `BankBalanceCheckpoint`: o
+    checkpoint é a verdade EXTERNA e **nunca corrige o saldo derivado**. Se algum dia alguém fizer o
+    checkpoint ajustar o derivado (por um "movimento de ajuste" automático, a boa intenção mais
+    provável aqui), este `assert` cai — e o produto teria perdido a divergência, que é o que ele
+    vende.
+    """
     account = _account(client, headers)
     hoje = date(2026, 7, 15)
     antes = asdict(projection_service.cash_projection(db, today=hoje))
+    assert antes["saldo_inicial_origem"] == ORIGEM_MISTO, "pré-condição: a conta já existe"
 
     _declarar(client, headers, account["id"], balance_cents=99_999_999)
 
     depois = asdict(projection_service.cash_projection(db, today=hoje))
-    assert depois == antes
-    assert depois["saldo_inicial_origem"] == "plataforma"
+    assert depois == antes, (
+        "A projeção mudou depois de um saldo DECLARADO. O checkpoint é a verdade externa e nunca "
+        "corrige o saldo derivado — se corrigisse, a divergência iria a zero por construção."
+    )
+    assert depois["saldo_inicial_origem"] == ORIGEM_MISTO
+    assert depois["saldo_inicial_banco_cents"] != 99_999_999, (
+        "o saldo DECLARADO virou a parcela bancária da projeção — ela deve vir do DERIVADO"
+    )

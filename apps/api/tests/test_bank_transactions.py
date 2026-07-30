@@ -29,7 +29,7 @@ import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy.orm import Session
 
-from app.core.money_planes import ORIGEM_PLATAFORMA
+from app.core.money_planes import ORIGEM_MISTO
 from app.modules.bank import service
 from app.modules.bank.models import (
     KIND_CHECKING,
@@ -735,23 +735,41 @@ def test_movimento_bancario_nao_toca_payables_receivables_nem_carteira(
     assert db.query(PlatformEarning).count() == 0
 
 
-# ── IV5 — Projeção de Caixa inalterada NESTA story ───────────────────────────────────────────
+# ── IV5 — Projeção de Caixa: o movimento move a semente, e SÓ ela ────────────────────────────
+#
+# ⚠️ **[Story 8.8 — @dev] Este teste MUDOU DE EXPECTATIVA, e isso é a CORREÇÃO, não uma regressão.**
+# Enquanto valia só a Story 8.3 ele afirmava que lançar movimento bancário **não** alterava a
+# projeção, com a própria docstring nomeando a Story 8.8 como a autorizada a mudar isso. A 8.8
+# chegou: o saldo derivado agora é a parcela "no banco" do saldo inicial, então o movimento
+# **deve** movê-la. O que o teste passa a guardar é que ele move **exatamente isso** — a semente —
+# e nada mais (AC8). Mesmo tratamento dado ao par equivalente em `test_bank_accounts.py`.
 
 
-def test_movimento_bancario_nao_altera_projecao(client: TestClient, headers, db: Session):
-    """IV5 — passar a usar o saldo bancário é a **Story 8.8**, e não pode acontecer por acidente."""
+def test_movimento_bancario_move_a_projecao_so_pela_semente(
+    client: TestClient, headers, db: Session
+):
+    """**[Story 8.8, AC1/AC8]** O movimento entra pelo saldo derivado, não por outra porta."""
     _seed_movimento_financeiro(client, headers)
     acc = _account(client, headers)
     hoje = date(2026, 7, 20)
     antes = asdict(projection_service.cash_projection(db, today=hoje))
+    assert antes["saldo_inicial_origem"] == ORIGEM_MISTO, "pré-condição: a conta já existe"
 
     _lancar(client, headers, acc["id"], amount_cents=5_000_000, posted_at=date(2026, 7, 15))
 
     depois = asdict(projection_service.cash_projection(db, today=hoje))
-    assert depois == antes, (
-        "A Projeção de Caixa mudou depois de lançar um movimento bancário. Isso é a Story 8.8."
+    assert depois["saldo_inicial_banco_cents"] == antes["saldo_inicial_banco_cents"] + 5_000_000
+    # O plano 1 não se mexeu: movimento bancário não cria `Transaction` (Regra dos Planos §1.3a).
+    assert depois["saldo_inicial_plataforma_cents"] == antes["saldo_inicial_plataforma_cents"]
+    assert depois["saldo_inicial_origem"] == ORIGEM_MISTO
+    # AC8 — fora da semente, nada mudou.
+    assert depois["overdue_inflow_cents"] == antes["overdue_inflow_cents"]
+    assert depois["overdue_outflow_cents"] == antes["overdue_outflow_cents"]
+    assert (
+        depois["runway"]["burn_rate_cents_per_day"] == antes["runway"]["burn_rate_cents_per_day"]
     )
-    assert depois["saldo_inicial_origem"] == ORIGEM_PLATAFORMA
+    for w_antes, w_depois in zip(antes["windows"], depois["windows"], strict=True):
+        assert w_depois["saldo_projetado_cents"] == w_antes["saldo_projetado_cents"] + 5_000_000
 
     pela_rota = client.get("/financial-intelligence/projection", headers=headers).json()
-    assert pela_rota["saldo_inicial_origem"] == ORIGEM_PLATAFORMA
+    assert pela_rota["saldo_inicial_origem"] == ORIGEM_MISTO

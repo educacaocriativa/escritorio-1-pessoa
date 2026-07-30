@@ -221,6 +221,10 @@ def _projection_out(r: CashProjection) -> ProjectionOut:
         today=r.today,
         saldo_inicial_cents=r.saldo_inicial_cents,
         saldo_inicial_origem=r.saldo_inicial_origem,
+        # Story 8.8: a composição viaja junto do total, sempre — nenhuma superfície recebe o total
+        # sozinho (AC2). Mapeamento direto, sem recomputar a soma aqui.
+        saldo_inicial_banco_cents=r.saldo_inicial_banco_cents,
+        saldo_inicial_plataforma_cents=r.saldo_inicial_plataforma_cents,
         overdue_inflow_cents=r.overdue_inflow_cents,
         overdue_outflow_cents=r.overdue_outflow_cents,
         windows=[
@@ -253,7 +257,13 @@ def projection(
 
     Story 8.1: a resposta declara a procedência do saldo inicial (`saldo_inicial_origem`) e
     sinaliza as inferências caladas por falta de lastro (`runway.days_suprimido` e
-    `windows[].alert_suprimido`) — a supressão vem pronta do serviço, esta rota só repassa."""
+    `windows[].alert_suprimido`) — a supressão vem pronta do serviço, esta rota só repassa.
+
+    Story 8.8: com conta bancária cadastrada a origem passa a ser `misto` e o saldo inicial vem
+    acompanhado das duas parcelas que o compõem (`saldo_inicial_banco_cents` +
+    `saldo_inicial_plataforma_cents`) — **somar sim, esconder a composição nunca**. Sem conta, o
+    fallback da 8.1 permanece intacto. Mudança **aditiva**: nenhum campo anterior saiu, mudou de
+    nome ou de tipo (IV4 — este endpoint já está em produção)."""
     report = projection_service.cash_projection(db)
     return _projection_out(report)
 

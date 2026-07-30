@@ -146,11 +146,27 @@ class ProjectionOut(BaseModel):
 
     **`saldo_inicial_cents` + `saldo_inicial_origem` (Story 8.1, AC1).** Regra dos Planos §1.3c:
     nenhum saldo trafega sem procedência. `saldo_inicial_origem` tem valor em
-    `app.core.money_planes.ORIGENS` (`plataforma`|`banco`|`misto`|`indisponivel`) e, na Onda 0, é
-    SEMPRE `plataforma` — o disponível da Carteira e1p (plano 1) usado onde deveria estar o saldo da
-    conta bancária (plano 3). **É bug conhecido** (design §1.1), corrigido pela Story 8.8; esta
-    versão apenas o rotula e cala as inferências que dependiam dele (`RunwayOut.days_suprimido`,
-    `ProjectionWindowOut.alert_suprimido`). O consumidor DEVE exibir a origem junto do número.
+    `app.core.money_planes.ORIGENS` (`plataforma`|`banco`|`misto`|`indisponivel`). O consumidor DEVE
+    exibir a origem junto do número.
+
+    **Story 8.8 — `misto` e as duas parcelas.** Havendo ao menos uma conta bancária ativa que não
+    seja aplicação, a origem passa a ser `misto` e `saldo_inicial_cents` é a soma de:
+      - `saldo_inicial_banco_cents` — Σ do saldo derivado das contas **ativas**, **exceto**
+        aplicações (`kind='investment'`), até `today`. ⚠️ **Não é** "o total de todas as suas
+        contas": a tela "Contas & Saldos" (Story 8.7) soma TODAS e por isso é outro número, também
+        legítimo — nunca rotule os dois igual;
+      - `saldo_inicial_plataforma_cents` — `available_cents` da Carteira e1p (plano 1). `pending`
+        fica de fora: ainda não liberou.
+    **Invariante de contrato:** `saldo_inicial_cents == saldo_inicial_banco_cents +
+    saldo_inicial_plataforma_cents`, em TODOS os caminhos — inclusive no fallback `plataforma`,
+    onde a parcela bancária é 0. Os dois campos são **obrigatórios e sempre presentes**: somar plano
+    3 + plano 1 só é autorizado (§6.1) acompanhado de origem declarada **e** da composição visível.
+    Quem consome DEVE exibir as duas parcelas separadas — **somar sim; esconder a composição,
+    nunca**. Exibir apenas o total é o bug do §1.1 numa forma nova.
+
+    Sem conta bancária cadastrada, o comportamento da Story 8.1 permanece como **fallback**:
+    origem `plataforma`, parcela bancária 0 e as inferências caladas (`RunwayOut.days_suprimido`,
+    `ProjectionWindowOut.alert_suprimido`).
 
     `overdue_inflow_cents`/`overdue_outflow_cents`: parcela de itens em aberto JÁ VENCIDOS
     (`due_date < hoje`) que a projeção conta como caixa esperado imediato — já embutida em todas as
@@ -160,6 +176,10 @@ class ProjectionOut(BaseModel):
     today: date
     saldo_inicial_cents: int
     saldo_inicial_origem: str
+    # Story 8.8 (AC2) — a composição de `saldo_inicial_cents`. Adição estritamente ADITIVA ao
+    # contrato: nada foi removido, renomeado ou teve o tipo trocado (IV4 — endpoint em produção).
+    saldo_inicial_banco_cents: int
+    saldo_inicial_plataforma_cents: int
     overdue_inflow_cents: int
     overdue_outflow_cents: int
     windows: list[ProjectionWindowOut]

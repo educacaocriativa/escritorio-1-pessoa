@@ -12,7 +12,10 @@ Cobre (Tasks 3-5,7 / AC1-7 / IV1,IV5):
 - saldo derivado: `derived_balance`, `derived_balances_as_of` (data comum) e `active_balance_total`
   (exclui `investment`);
 - todo saldo exposto declara `saldo_derivado_origem == ORIGEM_BANCO` (AC6);
-- **IV1** DRE intacta e **IV5** Projeção de Caixa intacta depois de cadastrar conta com saldo.
+- **IV1** DRE intacta depois de cadastrar conta com saldo (verdade permanente: `bank_*` nunca entra
+  na DRE) e **IV5** Projeção de Caixa — ⚠️ **atualizado pela Story 8.8**: cadastrar conta agora
+  MUDA a projeção (origem `misto` + parcela bancária), e o que se afere é que ela muda **só na
+  semente**. Ver o bloco de comentário acima daqueles dois testes.
 
 RLS/isolamento cross-tenant NÃO é exercido aqui (SQLite — ver `conftest.py`): é validado no
 Postgres real em `test_bank_rls.py` (`rls_e2e`). A Regra dos Planos tem arquivo próprio:
@@ -27,7 +30,7 @@ import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy.orm import Session
 
-from app.core.money_planes import ORIGEM_BANCO, ORIGEM_PLATAFORMA, ORIGENS
+from app.core.money_planes import ORIGEM_BANCO, ORIGEM_MISTO, ORIGEM_PLATAFORMA, ORIGENS
 from app.modules.bank import service
 from app.modules.bank.models import (
     KIND_CASH,
@@ -514,35 +517,73 @@ def test_conta_bancaria_nao_altera_dre(client: TestClient, headers, db: Session)
     )
 
 
-# ── IV5 — Projeção de Caixa inalterada NESTA story ────────────────────────────────────────────
+# ── IV5 — Projeção de Caixa: a mudança é da Story 8.8, e SÓ na semente ────────────────────────
+#
+# ⚠️ **[Story 8.8 — @dev] Estes dois testes MUDARAM DE EXPECTATIVA, e isso é a CORREÇÃO, não uma
+# regressão.** Enquanto valia só a Story 8.2, eles afirmavam que cadastrar conta bancária **não**
+# alterava a Projeção — a guarda contra o acoplamento acidental, com a própria docstring nomeando a
+# Story 8.8 como a autorizada a mudar isso ("*não pode acontecer por efeito colateral de um
+# cadastro*"). A 8.8 chegou: agora o cadastro **deve** mudar a projeção, e o que estes testes
+# passam a guardar é que ele muda **exatamente na semente e em nada mais** (AC8) — mesmo padrão com
+# que a Story 8.1 atualizou os testes de runway da 5.7. Se algum dia o cadastro voltar a ser
+# inócuo, é a 8.8 que quebrou.
 
 
-def test_conta_bancaria_nao_altera_projecao(client: TestClient, headers, db: Session):
-    """IV5 — o acoplamento acidental mais provável desta onda.
+def test_conta_bancaria_muda_a_projecao_so_na_semente(client: TestClient, headers, db: Session):
+    """**[Story 8.8, AC1/AC8]** Cadastrar conta troca a origem para `misto` e soma a parcela
+    bancária ao saldo inicial — e **nada mais** se move.
 
-    A Projeção continua partindo do `available_cents` da Carteira, com
-    `saldo_inicial_origem='plataforma'` (Story 8.1). Trocar isso pelo saldo bancário é a **Story
-    8.8**, que precisa decidir a precedência (`banco`/`misto`) e restaurar as duas supressões —
-    não pode acontecer por efeito colateral de um cadastro.
+    O valor deste teste está no `assert` de campo a campo: `overdue_*`, `burn_rate` e o formato das
+    janelas ficam idênticos, e cada `saldo_projetado_cents` anda **exatamente** o valor da parcela
+    bancária. É a prova de que a story mexeu na semente, não na fórmula.
     """
     _seed_movimento_financeiro(client, headers)
     hoje = date(2026, 7, 20)
     antes = asdict(projection_service.cash_projection(db, today=hoje))
+    assert antes["saldo_inicial_origem"] == ORIGEM_PLATAFORMA, "pré-condição: sem conta ainda"
+    assert antes["saldo_inicial_banco_cents"] == 0
 
     _create(client, headers, opening_balance_cents=5_000_000)
 
     depois = asdict(projection_service.cash_projection(db, today=hoje))
-    assert depois == antes, (
-        "A Projeção de Caixa mudou depois de cadastrar uma conta bancária. Isso é a Story 8.8, "
-        "não esta — e acontecer por acidente é pior do que não acontecer."
-    )
-    assert depois["saldo_inicial_origem"] == ORIGEM_PLATAFORMA
+    assert depois["saldo_inicial_origem"] == ORIGEM_MISTO
+    assert depois["saldo_inicial_banco_cents"] == 5_000_000
+    # A parcela de plataforma é a MESMA de antes (o cadastro não toca no plano 1)...
+    assert depois["saldo_inicial_plataforma_cents"] == antes["saldo_inicial_plataforma_cents"]
+    # ...e a invariante da soma vale nos dois estados.
+    for estado in (antes, depois):
+        assert estado["saldo_inicial_cents"] == (
+            estado["saldo_inicial_banco_cents"] + estado["saldo_inicial_plataforma_cents"]
+        )
+
+    # AC8 — fora da semente, a projeção não mudou em NADA.
+    assert depois["overdue_inflow_cents"] == antes["overdue_inflow_cents"]
+    assert depois["overdue_outflow_cents"] == antes["overdue_outflow_cents"]
+    assert (
+        depois["runway"]["burn_rate_cents_per_day"] == antes["runway"]["burn_rate_cents_per_day"]
+    ), "a fórmula de queima deriva de contas em aberto, não do saldo inicial — não pode ter mudado"
+    for w_antes, w_depois in zip(antes["windows"], depois["windows"], strict=True):
+        assert w_depois["days"] == w_antes["days"]
+        assert w_depois["saldo_projetado_cents"] == w_antes["saldo_projetado_cents"] + 5_000_000, (
+            "cada janela deve andar EXATAMENTE a parcela bancária — se andou outro valor, a story "
+            "mexeu na fórmula e não só na semente"
+        )
 
 
-def test_projecao_pela_rota_tambem_inalterada(client: TestClient, headers):
-    """O mesmo, pela superfície HTTP que o front consome (a 8.1 mexeu justamente aqui)."""
+def test_projecao_pela_rota_tambem_muda(client: TestClient, headers):
+    """O mesmo, pela superfície HTTP que o front consome (a 8.1 e a 8.8 mexeram justamente aqui).
+
+    Também é o teste de **compatibilidade** do endpoint em produção (8.8 IV4): a resposta ganhou
+    dois campos e nenhum dos anteriores desapareceu.
+    """
     antes = client.get("/financial-intelligence/projection", headers=headers).json()
+    assert antes["saldo_inicial_origem"] == ORIGEM_PLATAFORMA
+
     _create(client, headers, opening_balance_cents=5_000_000)
+
     depois = client.get("/financial-intelligence/projection", headers=headers).json()
-    assert depois == antes
-    assert depois["saldo_inicial_origem"] == ORIGEM_PLATAFORMA
+    assert depois["saldo_inicial_origem"] == ORIGEM_MISTO
+    assert depois["saldo_inicial_cents"] == antes["saldo_inicial_cents"] + 5_000_000
+    # IV4 — mudança estritamente ADITIVA: todo campo que existia antes continua existindo.
+    assert set(antes) <= set(depois)
+    assert {"saldo_inicial_banco_cents", "saldo_inicial_plataforma_cents"} <= set(depois)

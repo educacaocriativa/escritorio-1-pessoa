@@ -21,11 +21,22 @@ vi.mock("../../lib/api", () => ({
   apiErrorMessage: () => "Erro inesperado",
 }));
 
-/** Estado REAL da Onda 0: origem `plataforma`, com queima e com janelas negativas. */
+/**
+ * Estado da Onda 0 / fallback da Story 8.8: origem `plataforma`, com queima e janelas negativas.
+ *
+ * ⚠️ **[Story 8.8]** Os dois campos de parcela são obrigatórios no tipo `Projection` desde a Onda 1
+ * — no fallback a bancária é 0 e a de plataforma é o total. É a única alteração que esta story fez
+ * neste arquivo: **nenhuma expectativa foi enfraquecida**. Os dois testes que a Story 8.1 deixou
+ * aqui prevendo a 8.8 ("o ícone volta a colorir" / "a tela volta a afirmar") passam com o
+ * componente inalterado na parte de supressão — é essa a prova de que a restauração é por
+ * construção, e não por conserto de frontend.
+ */
 const projecaoSuprimida: Projection = {
   today: "2026-07-29",
   saldo_inicial_cents: 90000,
   saldo_inicial_origem: "plataforma",
+  saldo_inicial_banco_cents: 0,
+  saldo_inicial_plataforma_cents: 90000,
   overdue_inflow_cents: 0,
   overdue_outflow_cents: 0,
   windows: [
@@ -144,5 +155,76 @@ describe("ProjecaoCaixaPage — Story 8.1 (AC5): a tela declara a origem e não 
     expect(screen.getAllByText("Caixa fica negativo nesta janela").length).toBe(3);
     expect(screen.getByText(/conta bancária \+ Carteira e1p/)).toBeInTheDocument();
     expect(screen.queryByText(/Indisponível/)).toBeNull();
+  });
+});
+
+/**
+ * **Story 8.8 (AC5)** — "somar sim; esconder a composição, nunca". É o único AC desta story que
+ * vive só na tela: a API já entrega as duas parcelas, e o que precisa ser aferido é que elas
+ * **aparecem**, rotuladas, ao lado do total.
+ */
+const projecaoMista: Projection = {
+  ...projecaoSuprimida,
+  saldo_inicial_origem: "misto",
+  saldo_inicial_cents: 840000,
+  saldo_inicial_banco_cents: 750000,
+  saldo_inicial_plataforma_cents: 90000,
+  runway: { days: 43, days_suprimido: false, burn_rate_cents_per_day: 1000 },
+  windows: projecaoSuprimida.windows.map((w) => ({
+    ...w,
+    alert: false,
+    alert_suprimido: false,
+  })),
+};
+
+describe("ProjecaoCaixaPage — Story 8.8 (AC5): a soma entre planos nunca aparece sozinha", () => {
+  it("sob 'misto' mostra o TOTAL e as duas parcelas rotuladas", async () => {
+    vi.mocked(api.get).mockResolvedValue({ data: projecaoMista } as never);
+    render(<ProjecaoCaixaPage />);
+
+    await waitFor(() => expect(screen.getByText("Saldo inicial de hoje")).toBeInTheDocument());
+    // O total...
+    expect(screen.getByText(/8\.400,00/)).toBeInTheDocument();
+    // ...e a composição, com os rótulos do vocabulário canônico da §1.2.
+    expect(screen.getByText("no banco")).toBeInTheDocument();
+    expect(screen.getByText(/7\.500,00/)).toBeInTheDocument();
+    expect(screen.getByText(/na plataforma \(a liberar\/sacar\)/)).toBeInTheDocument();
+    expect(screen.getByText(/900,00/)).toBeInTheDocument();
+  });
+
+  it("a apresentação da página não afirma mais que o saldo vem da Carteira", async () => {
+    // A frase fixa "Partindo do disponível atual da Carteira" era verdade só no fallback — deixá-la
+    // seria a mesma classe de mentira que a Story 8.1 tirou do `_NOTE_CAIXA` no backend.
+    vi.mocked(api.get).mockResolvedValue({ data: projecaoMista } as never);
+    const { container } = render(<ProjecaoCaixaPage />);
+
+    await waitFor(() => expect(screen.getByText("no banco")).toBeInTheDocument());
+    expect(container.textContent).not.toContain("Partindo do disponível atual da Carteira");
+  });
+
+  it("no fallback NÃO repete o total como parcela única (ruído, não informação)", async () => {
+    vi.mocked(api.get).mockResolvedValue({ data: projecaoSuprimida } as never);
+    render(<ProjecaoCaixaPage />);
+
+    await waitFor(() => expect(screen.getByText("Saldo inicial de hoje")).toBeInTheDocument());
+    expect(screen.queryByText("no banco")).toBeNull();
+    expect(screen.queryByText(/na plataforma \(a liberar\/sacar\)/)).toBeNull();
+    // ...mas a procedência continua dita, colada ao número (Story 8.1, AC1).
+    expect(screen.getAllByText(/disponível na Carteira e1p/).length).toBeGreaterThan(0);
+  });
+
+  it("parcela ZERADA continua na tela — 'sacou tudo' mostra R$ 0,00, não a ausência", async () => {
+    vi.mocked(api.get).mockResolvedValue({
+      data: {
+        ...projecaoMista,
+        saldo_inicial_cents: 750000,
+        saldo_inicial_plataforma_cents: 0,
+      } satisfies Projection,
+    } as never);
+    render(<ProjecaoCaixaPage />);
+
+    await waitFor(() => expect(screen.getByText("no banco")).toBeInTheDocument());
+    expect(screen.getByText(/na plataforma \(a liberar\/sacar\)/)).toBeInTheDocument();
+    expect(screen.getByText(/^R\$\s*0,00$/)).toBeInTheDocument();
   });
 });

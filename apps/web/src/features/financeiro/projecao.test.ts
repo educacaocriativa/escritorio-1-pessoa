@@ -3,7 +3,10 @@ import {
   formatBRL,
   ORIGEM_LABEL,
   origemLabel,
+  parcelasSaldoInicial,
   type Projection,
+  ROTULO_BANCO,
+  ROTULO_PLATAFORMA,
   type Runway,
   runwayLabel,
   toPolylinePoints,
@@ -30,6 +33,8 @@ const projection = (over: Partial<Projection> = {}): Projection => ({
   today: "2026-07-11",
   saldo_inicial_cents: 90000,
   saldo_inicial_origem: "plataforma",
+  saldo_inicial_banco_cents: 0,
+  saldo_inicial_plataforma_cents: 90000,
   overdue_inflow_cents: 0,
   overdue_outflow_cents: 0,
   windows: [
@@ -135,6 +140,102 @@ describe("ORIGEM_LABEL / origemLabel (Story 8.1 AC1)", () => {
 
   it("é tolerante a um valor novo do backend (mostra o valor cru em vez de sumir)", () => {
     expect(origemLabel("valor-que-ainda-nao-existe")).toBe("valor-que-ainda-nao-existe");
+  });
+});
+
+describe("parcelasSaldoInicial (Story 8.8 AC5)", () => {
+  const misto = (over: Partial<Projection> = {}) =>
+    projection({
+      saldo_inicial_origem: "misto",
+      saldo_inicial_cents: 840000,
+      saldo_inicial_banco_cents: 750000,
+      saldo_inicial_plataforma_cents: 90000,
+      ...over,
+    });
+
+  it("sob 'misto' devolve as DUAS parcelas rotuladas, banco primeiro", () => {
+    expect(parcelasSaldoInicial(misto())).toEqual([
+      { rotulo: ROTULO_BANCO, cents: 750000 },
+      { rotulo: ROTULO_PLATAFORMA, cents: 90000 },
+    ]);
+  });
+
+  it("usa o vocabulário canônico da §1.2 — 'no banco' e 'na plataforma'", () => {
+    // Os rótulos são o contrato com o usuário: eles são o que impede a soma entre planos de virar
+    // um número anônimo. Sinônimos improvisados ("carteira", "disponível") reabririam a ambiguidade.
+    expect(ROTULO_BANCO).toBe("no banco");
+    expect(ROTULO_PLATAFORMA).toContain("na plataforma");
+    expect(ROTULO_PLATAFORMA).toContain("sacar");
+  });
+
+  it("no fallback 'plataforma' devolve só a parcela de plataforma", () => {
+    expect(parcelasSaldoInicial(projection())).toEqual([
+      { rotulo: ROTULO_PLATAFORMA, cents: 90000 },
+    ]);
+  });
+
+  it("sob 'misto' a parcela ZERADA continua sendo exibida — não some do rol", () => {
+    // O caso de quem sacou tudo: a plataforma é 0 e o usuário precisa ver que ela é 0, não que ela
+    // não existe. Se a parcela sumisse, a UI teria dois formatos e "esconder a composição" voltaria
+    // pela porta dos fundos.
+    const sacouTudo = misto({
+      saldo_inicial_cents: 750000,
+      saldo_inicial_plataforma_cents: 0,
+    });
+    const parcelas = parcelasSaldoInicial(sacouTudo);
+    expect(parcelas).toHaveLength(2);
+    expect(parcelas[1]).toEqual({ rotulo: ROTULO_PLATAFORMA, cents: 0 });
+  });
+
+  it("a soma das parcelas é SEMPRE o total (a invariante do AC2, também na tela)", () => {
+    const casos = [
+      projection(), // fallback
+      misto(), // misto normal
+      misto({ saldo_inicial_cents: 750000, saldo_inicial_plataforma_cents: 0 }), // sacou tudo
+      // cheque especial: parcela bancária negativa somando com a plataforma
+      misto({
+        saldo_inicial_cents: -160000,
+        saldo_inicial_banco_cents: -250000,
+        saldo_inicial_plataforma_cents: 90000,
+      }),
+      // conta nova zerada: origem já é `misto`, as duas parcelas aparecem mesmo com total 0
+      misto({
+        saldo_inicial_cents: 0,
+        saldo_inicial_banco_cents: 0,
+        saldo_inicial_plataforma_cents: 0,
+      }),
+      // origem que o backend ainda não emite: a função continua total e a soma continua fechando
+      projection({
+        saldo_inicial_origem: "banco",
+        saldo_inicial_cents: 500000,
+        saldo_inicial_banco_cents: 500000,
+        saldo_inicial_plataforma_cents: 0,
+      }),
+    ];
+    for (const p of casos) {
+      const soma = parcelasSaldoInicial(p).reduce((acc, x) => acc + x.cents, 0);
+      expect(soma).toBe(p.saldo_inicial_cents);
+    }
+  });
+
+  it("é pura: não muda a projeção recebida", () => {
+    const p = misto();
+    const copia = structuredClone(p);
+    parcelasSaldoInicial(p);
+    expect(p).toEqual(copia);
+  });
+});
+
+describe("runwayLabel NÃO mudou na Story 8.8 (a restauração é do backend)", () => {
+  it("os três ramos da 8.1 seguem intactos — nenhuma regra de supressão nova no frontend", () => {
+    // A 8.8 restaura o runway trocando a ORIGEM no backend; se alguém tivesse acrescentado aqui um
+    // `exibeRunwayEmDias` (ou qualquer condicional de origem), passaria a existir uma segunda regra
+    // para manter em sincronia com a do backend — e ela divergiria no primeiro dia esquecido.
+    const comOrigemMista = runway({ days: 43, days_suprimido: false });
+    expect(runwayLabel(comOrigemMista)).toBe("1 mês e 13 dias");
+    // O mesmo runway, se o backend disser que está suprimido, continua indisponível — a tela
+    // obedece ao flag, não à origem.
+    expect(runwayLabel(runway({ days: null, days_suprimido: true }))).toContain("Indisponível");
   });
 });
 
