@@ -242,9 +242,12 @@ def test_disconnect_logs_out_and_clears_provider(db, monkeypatch: pytest.MonkeyP
     db.commit()
 
     calls: list[str] = []
-    monkeypatch.setattr(
-        httpx, "delete", lambda url, **_k: calls.append(url) or type("R", (), {"status_code": 200})()
-    )
+
+    def _fake_delete(url: str, **_k: object) -> object:
+        calls.append(url)
+        return type("R", (), {"status_code": 200})()
+
+    monkeypatch.setattr(httpx, "delete", _fake_delete)
     session_service.disconnect(db, tenant_id=TENANT_ID)
     assert any("/instance/logout/e1p-" + TENANT_ID in c for c in calls)
     db.expire_all()
