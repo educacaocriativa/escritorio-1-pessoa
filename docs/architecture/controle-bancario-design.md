@@ -12,6 +12,23 @@
 > **Parecer de ratificação (2026-07-29):**
 > [`controle-bancario-design-ratificacao.md`](controle-bancario-design-ratificacao.md) — julga sete
 > desvios levantados pelo @sm e registra o que mudou neste documento e por quê.
+>
+> ---
+>
+> ⚠️ **SUPERSEDE PARCIAL (2026-07-30) — leia antes de usar a §8 (faseamento).**
+> [`controle-bancario-onda2-design.md`](controle-bancario-onda2-design.md) corrige uma **falha de
+> escopo deste documento**: aqui só foi modelado o fluxo **extrato → sistema** (importar e casar).
+> A direção **sistema → banco** — a baixa de Contas a Pagar, o recebimento fora do trilho, o
+> rendimento e o payout gerando o movimento bancário — **não foi modelada**, embora seja a que já
+> tem os dados. Consequência: a §6.7 rebaixou `payables.bank_account_id` a "otimização de match,
+> onda posterior" quando ele é a **origem do movimento**, e o razão bancário nasce vazio.
+> **O que continua valendo integralmente:** §1 (Regra dos Planos e os dois eixos), §2 (modelo), §3
+> (saldo derivado), §5 (conferência), §7 (rastreabilidade tributária).
+> **O que está SUPERSEDIDO:** a §6.7 (a coluna é obrigatória, não opcional), a §3.4(b) e a §6.6
+> (mudam de onda) e **a ordem das ondas da §8** — ver a §10 do documento novo.
+>
+> ---
+>
 > **ADR associado:** [`docs/decisions/0003-controle-bancario-nativo.md`](../decisions/0003-controle-bancario-nativo.md)
 > **Estudo antecedente:** [`docs/research/2026-07-29-conta-bancaria-conciliacao-brainstorm.md`](../research/2026-07-29-conta-bancaria-conciliacao-brainstorm.md)
 
@@ -1442,6 +1459,18 @@ não-usuário, coletado por via indireta. Consequências operacionais:
 
 ## 8. Faseamento — ondas com valor próprio
 
+> ⚠️ **A ORDEM DESTA SEÇÃO ESTÁ SUPERSEDIDA (2026-07-30).** A ordem corrente está em
+> [`controle-bancario-onda2-design.md`](controle-bancario-onda2-design.md) §10. Resumo do que mudou:
+> uma **Onda 2 nova** (a origem do movimento: `payable`→banco, recebimento fora do trilho, data de
+> baixa editável, manual curado, transferência entre contas próprias) entra logo após a Onda 1; a
+> Onda 2 antiga vira **2b** (só a parte de aplicação/`principal_cents`, que carrega o único
+> backfill); o payout (era 6) sobe para **3**, porque passa a ser o mesmo mecanismo; a importação
+> (era 3) desce para **4**. Critério de ordenação: **dependência externa crescente** — 2, 2b e 3 não
+> dependem de nada fora do repositório; a importação depende da verificação de OFX real (D6) e do
+> gate §3.1. E a Onda 2 é **pré-requisito da métrica do gate**: medida antes dela, a divergência
+> mede a ausência da porta, não o furo. As **estimativas e o conteúdo** de cada onda abaixo
+> continuam válidos; só a ordem e o corte da 2 mudaram.
+>
 > Cada onda entrega valor sozinha e pode parar ali sem deixar o produto pela metade.
 > Estimativa em **ondas de trabalho**, calibrada contra módulos já entregues (não em horas — não há
 > velocity confiável). **Migrations: ver §2 — este design não fixa número de revision; a coluna

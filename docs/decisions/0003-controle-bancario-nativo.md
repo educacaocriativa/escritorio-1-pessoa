@@ -1,10 +1,11 @@
 # ADR 0003 — Controle bancário nativo, sem agregador Open Finance
 
-- **Status:** Aceito
+- **Status:** Aceito · **Adendo 4 em 2026-07-30** (a origem do movimento + reordenação das ondas)
 - **Data:** 2026-07-29
 - **Autor:** Aria (@architect) — formalização da decisão de produto tomada pelo fundador
 - **Relacionado:** [ADR 0001](0001-stack-e-infra.md), [ADR 0002](0002-gateway-pagamento.md),
   [`docs/architecture/controle-bancario-design.md`](../architecture/controle-bancario-design.md),
+  [`docs/architecture/controle-bancario-onda2-design.md`](../architecture/controle-bancario-onda2-design.md) (Adendo 4),
   [`docs/research/2026-07-29-conta-bancaria-conciliacao-brainstorm.md`](../research/2026-07-29-conta-bancaria-conciliacao-brainstorm.md)
 
 ## Contexto
@@ -253,6 +254,111 @@ número depende do head real no momento da implementação — encadear num revi
 da Story 5.7** (que hoje afirmam um número de dias) e faz `runway.days` ser `None` em todo cenário com
 queima até a Onda 1. Isso é correção de bug, não regressão (alternativa F acima), e a cobertura do
 cálculo se desloca para `burn_rate_cents_per_day`, que continua exposto e continua correto.
+
+## Adendo 4 (2026-07-30) — A origem do movimento, e a reordenação das ondas
+
+> Origem: o fundador identificou, com as Ondas 0 e 1 já em produção (`7dba286`), uma **falha de
+> escopo do design**. Documento completo:
+> [`docs/architecture/controle-bancario-onda2-design.md`](../architecture/controle-bancario-onda2-design.md).
+> **Nenhuma decisão deste ADR é revertida.** A restrição "sem agregador" (F1/alternativa B) continua
+> intacta, o bloqueio da baixa de `Charge` continua intacto, o saldo derivado continua derivado, a
+> Regra dos Planos continua normativa. O que muda é **a fonte do movimento** e **a ordem das ondas**.
+
+**O que estava errado.** O design modelou **uma** direção do fluxo — *extrato → sistema* (importar
+OFX e casar linhas contra `payables`/`charges`) — e nunca modelou a direção oposta, *sistema →
+banco*. Quando o dono dá baixa numa conta a pagar, o e1p **já sabe** valor, data e fornecedor; falta
+só de qual conta o dinheiro saiu, e virar aquilo um `bank_transaction`. Isso não depende de OFX nem
+de banco nenhum. Confirmado por grep: `payables` não tem **nenhuma** referência a `bank`, e
+`bank_transactions.SOURCES` não tem `payable`.
+
+Consequência medida em produção: o tenant tem **45 `payables` pagas, 0 `charges` e saldo derivado
+R$ 0,00**. Declarar o saldo produziria uma divergência gigante que diz *"você não digitou nada"* —
+não *"faltam estes lançamentos"* —, e o único conserto disponível seria redigitar 45 contas como
+movimento bancário: digitação dupla, exatamente o peso que o produto promete não impor.
+
+**Decisão acrescentada (item 11 da Decisão):**
+
+> **REGRA DA ORIGEM.** Todo evento do e1p que significa *"dinheiro entrou ou saiu de uma conta real
+> do dono"* gera **exatamente um** `bank_transaction`, na mesma transação, **nascido conciliado**,
+> com `origin_id` apontando para o lançamento de origem (1:1, garantido por índice único parcial).
+> Corrigir a conta ou a data **move** o movimento; estornar o lançamento **apaga** o movimento.
+> **Lançamento manual e importação existem para o resíduo** — o que nenhum evento do sistema
+> conhece.
+>
+> A Regra da Origem alimenta `saldo_sistema`, **nunca** `saldo_banco`. O checkpoint continua sendo a
+> única fonte do lado externo e continua não sendo corrigido por nada (Consequência: a divergência
+> diminuir porque o sistema passou a **saber mais** é o objetivo; diminuir porque um lado foi
+> ajustado contra o outro continua proibido).
+
+**Decisões do fundador que este adendo formaliza:** conta bancária **obrigatória** na baixa de Contas
+a Pagar e no recebimento; lançamento manual reduzido ao que só existe no banco (tarifa, IOF,
+transferência para aplicação); **data da baixa editável, com default no vencimento e futuro
+permitido** (`paid_at` hoje é cravado em `now()`, `payables/service.py:258`); backfill das 45 contas
+feito à mão pelo fundador, por estorno e repagamento conta a conta, sem migração automática de dado.
+
+**Requisito novo, que o Epic 8 não conhecia: agendamento de pagamento.** *"no futuro também permitir,
+pq posso estar agendando"* — o dono agenda o débito no app do banco e quer marcar a conta como
+resolvida hoje, com a data em que o dinheiro vai sair. Duas consequências arquiteturais:
+
+1. **`payables` ganha o estado `scheduled`**, distinto de `open` e de `paid`. `paid` com data futura
+   **afirma o que não aconteceu** — o oposto do princípio da Onda 0 (*"suprima a afirmação, nunca o
+   número"*) — e exige o predicado autocontraditório `status='paid' AND paid_at > today` replicado em
+   cinco lugares. Verificado: a coluna é `String(12)` (sem migration de tipo) e a DRE filtra
+   `status != canceled` nas 4 agregações (impacto zero). O estado é **derivado da data**, não
+   escolhido: `paid_on` futuro ⇒ `scheduled`; hoje ou passado ⇒ `paid`.
+2. **A guarda contra data futura muda de lugar, não desaparece.** De *"recuse `posted_at` futuro"*
+   para **"nenhuma superfície de saldo corrente inclui o futuro"**: `until=None` passa a significar
+   **hoje** (fail-closed) nas funções de saldo derivado. A varredura encontrou o defeito concentrado
+   em `bank/router.py` (6 chamadas); a Projeção (`projection.py:329`, já com `until=today`) e a
+   Conferência (`reconciliation.py:358`, `until` = `reference_date` do checkpoint) **já estavam
+   corretas**.
+
+**Efeito colateral positivo:** um agendamento que **falha** (saldo insuficiente, banco recusou) vira
+divergência no ciclo seguinte — o movimento entra no saldo derivado quando a data chega, o banco diz
+outra coisa, e a conferência acusa. É uma classe de furo que hoje ninguém pegaria. Como
+`divergencia > 0` também é o sintoma de *"recebi e não registrei"*, o Diagnóstico ganha uma regra
+determinística que **nomeia o agendamento vencido suspeito** em vez de só apresentar o número.
+
+**A assimetria do recebimento, resolvida sem violar a Regra dos Planos.** Cobrança paga **pelo
+trilho** (Asaas) cai na carteira da e1p com split retido e **não** encosta na conta do dono; cobrança
+paga **fora do trilho** (Pix direto) cai na conta do dono e a e1p **não** retém split. Os dois viram
+caminhos separados, amarrados por uma invariante estrutural: **para toda `Charge` paga, exatamente um
+de `transaction_id` e `bank_account_id` é não-nulo** — nunca os dois, nunca nenhum. Não existe coluna
+de rótulo da rota: a rota é derivada dos dois ponteiros, para não haver uma terceira fonte de verdade
+(lição do Adendo 1). O caminho fora do trilho **nunca** cria `Transaction` nem `PlatformEarning`, e
+isso é verificado por espião no `core` da carteira, no mesmo padrão da garantia IV1 da Story 5.6.
+
+**Reordenação das ondas — o critério é dependência externa crescente.**
+
+| Nova | Era | Entrega | Dependência externa |
+|---|---|---|---|
+| 2 | *(nova)* | A origem do movimento (`payable`→banco, recebimento fora do trilho, data de baixa, manual curado, transferência entre contas próprias) | **nenhuma** |
+| 2b | 2 | Aplicação como conta, `principal_cents` derivado, `register_yield`→movimento | nenhuma (mas o **único backfill** do épico) |
+| 3 | 6 | Payout da Carteira fecha o circuito | nenhuma |
+| 4 | 3 | Importação OFX/CSV | **@analyst D6** + gate §3.1 + manutenção perpétua |
+| 5 | 4 | Sugestão de vínculo + baixa de `Payable` pelo extrato | Onda 4 |
+| 6 | 5 | Baixa de Receber pelo extrato | dívida `platform_earnings → transaction` (inalterada) |
+
+**Por que a ordem antiga estava errada, e é o achado mais grave deste adendo:** o epic §3.1 define a
+divergência da Onda 1 como **o instrumento do gate** que libera ou mata as ondas caras. Medida
+**antes** da Onda 2, essa divergência é enorme por construção — porque mede a **ausência de uma
+porta**, não a incompletude da disciplina do dono. Ela teria argumentado, com número na mão, para
+**liberar a onda mais cara do épico**. A feature que faltava teria pedido a construção da feature
+mais cara. Formalmente, portanto: **a leitura do gate do epic §3.1 só é válida a partir do primeiro
+ciclo completo posterior à Onda 2.**
+
+**Dois conflitos do epic §11.4 ficam resolvidos:** **C2** (`register_yield`) em favor do design, agora
+por princípio (é a Regra da Origem, não um caso julgado à parte), viajando com a Onda 2b; **C3**
+(porta de entrada do arquivo) em favor do **REQ-12** — `POST /bank/accounts/{id}/imports` fica
+revogado como porta primária; se a importação for liberada, o arquivo entra pela bandeja/anexo que já
+existe.
+
+**Custo acrescentado à conta desta decisão, sem eufemismo:** `bank_accounts` passa a ser
+**pré-requisito** de um fluxo central que hoje funciona sozinho — um tenant sem conta cadastrada não
+consegue dar baixa em conta a pagar (409 acionável, com cadastro embutido). É a consequência direta
+de *"obrigatória"*, e a alternativa é o "opcional com default" que o fundador recusou porque
+*"opcional significa que alguém pula, e a conferência volta a medir o que você esqueceu de
+preencher"*.
 
 ## Revisão futura
 
