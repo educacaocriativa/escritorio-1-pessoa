@@ -442,17 +442,39 @@ function AccountDetail({
     setPage(0);
   }, [account.id, range.start, range.end]);
 
+  // ⚠️ **As três ações abaixo mexem no saldo calculado, então falhar em silêncio é pior aqui do
+  // que numa tela de cadastro** (REL-001, gate da Onda 0+1). Sem o `catch`, a promise rejeitada
+  // não rodava `load()` e NADA mudava na tela: o usuário concluía que o clique não pegou — ou,
+  // pior, que pegou. "Ignorar" tira dinheiro do saldo derivado; achar que ignorou quando não
+  // ignorou é conferir depois um número que não bate, sem ter como saber por quê. Mesmo padrão do
+  // resto do arquivo (`AccountModal.save()`): `setError(apiErrorMessage(err))`, e a mensagem é
+  // renderizada na seção logo abaixo do cabeçalho.
+
   async function ignorar(tx: BankTransaction, reason: string) {
-    await api.post(`/bank/transactions/${tx.id}/ignore`, { reason });
+    setError(null);
+    // Fecha o modal ANTES de saber o desfecho: a mensagem de erro vive na seção, ATRÁS do overlay
+    // do modal — mantê-lo aberto numa falha mostraria exatamente o nada de antes. O motivo digitado
+    // se perde, e esse é o preço menor: ele é opcional e curto, a informação de que a ação não
+    // aconteceu não é.
     setIgnorando(null);
-    load();
-    onChanged();
+    try {
+      await api.post(`/bank/transactions/${tx.id}/ignore`, { reason });
+      load();
+      onChanged();
+    } catch (err) {
+      setError(apiErrorMessage(err));
+    }
   }
 
   async function desfazerIgnorar(tx: BankTransaction) {
-    await api.post(`/bank/transactions/${tx.id}/unignore`);
-    load();
-    onChanged();
+    setError(null);
+    try {
+      await api.post(`/bank/transactions/${tx.id}/unignore`);
+      load();
+      onChanged();
+    } catch (err) {
+      setError(apiErrorMessage(err));
+    }
   }
 
   async function removerDeclaracao(cp: BankBalanceCheckpoint) {
@@ -464,9 +486,14 @@ function AccountDetail({
     ) {
       return;
     }
-    await api.delete(`/bank/checkpoints/${cp.id}`);
-    load();
-    onChanged();
+    setError(null);
+    try {
+      await api.delete(`/bank/checkpoints/${cp.id}`);
+      load();
+      onChanged();
+    } catch (err) {
+      setError(apiErrorMessage(err));
+    }
   }
 
   return (

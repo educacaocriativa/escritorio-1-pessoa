@@ -1,10 +1,11 @@
 import { render, screen, waitFor } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { MemoryRouter } from "react-router-dom";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { api } from "../../lib/api";
 import { PageActionsProvider } from "../../store/pageActions";
 import ContasSaldosPage from "./ContasSaldosPage";
-import type { BankAccount, BankBalanceCheckpoint } from "./contas";
+import type { BankAccount, BankBalanceCheckpoint, BankTransaction } from "./contas";
 import { DISPONIVEL_CAIXA_LABEL, TOTAL_EM_CONTAS_LABEL } from "./contas";
 import { ROTULO_BANCO } from "./projecao";
 
@@ -58,12 +59,37 @@ const checkpoint: BankBalanceCheckpoint = {
   created_at: "2026-07-28T12:00:00Z",
 };
 
+function movimento(over: Partial<BankTransaction> = {}): BankTransaction {
+  return {
+    id: "tx-1",
+    bank_account_id: "acc-1",
+    posted_at: "2026-07-10",
+    amount_cents: -80_000,
+    raw_description: "Aluguel",
+    user_description: "",
+    description: "Aluguel",
+    counterparty_name: "",
+    counterparty_document: "",
+    operation_nature: null,
+    source: "manual",
+    status: "unmatched",
+    ignored_reason: "",
+    created_at: "2026-07-10T12:00:00Z",
+    updated_at: "2026-07-10T12:00:00Z",
+    ...over,
+  };
+}
+
 /** Mock de `api.get` que responde por URL (a página faz contas + checkpoints em paralelo). */
-function mockApi(accounts: BankAccount[], checkpoints: BankBalanceCheckpoint[] = []) {
+function mockApi(
+  accounts: BankAccount[],
+  checkpoints: BankBalanceCheckpoint[] = [],
+  txs: BankTransaction[] = [],
+) {
   vi.mocked(api.get).mockImplementation((url: string) => {
     if (url === "/bank/accounts") return Promise.resolve({ data: accounts } as never);
     if (url.includes("/checkpoints")) return Promise.resolve({ data: checkpoints } as never);
-    if (url === "/bank/transactions") return Promise.resolve({ data: [] } as never);
+    if (url === "/bank/transactions") return Promise.resolve({ data: txs } as never);
     return Promise.resolve({ data: [] } as never);
   });
 }
@@ -203,6 +229,105 @@ describe("AC1/AC2/AC3 — as portas e as ações por conta", () => {
     expect(screen.getByRole("button", { name: "Cadastrar primeira conta" })).toBeInTheDocument();
     // Sem conta não há total nenhum a exibir — nem um R$ 0,00 com cara de fato.
     expect(screen.queryByText(TOTAL_EM_CONTAS_LABEL)).toBeNull();
+  });
+});
+
+describe("REL-001 — as ações que mexem no saldo não podem falhar em silêncio", () => {
+  /**
+   * ⚠️ `ignorar`, `desfazerIgnorar` e `removerDeclaracao` chamavam a API **sem `try/catch`**: numa
+   * falha (422/409/rede) a promise rejeitava, `load()` não rodava e a tela não mudava em NADA. O
+   * usuário concluía que o clique não pegou — ou, pior, que pegou. "Ignorar" tira dinheiro do saldo
+   * derivado, então achar que ignorou quando não ignorou é conferir depois um número que não bate,
+   * sem ter como saber por quê. Achado do CodeRabbit, adotado pelo gate da Onda 0+1 (2026-07-30).
+   *
+   * Cada ação tem o par: a **falha** mostra a mensagem, e o **sucesso** recarrega a lista sem
+   * deixar erro na tela — sem o segundo, um `catch` que engolisse tudo passaria no primeiro.
+   */
+  beforeEach(() => {
+    vi.mocked(api.post).mockReset();
+    vi.mocked(api.delete).mockReset();
+  });
+
+  /**
+   * Quantas vezes o **detalhe da conta** recarregou.
+   *
+   * ⚠️ Conta só `/bank/transactions`, e não `api.get` inteiro: `onChanged()` é o `load()` da PÁGINA
+   * (contas + último saldo de cada uma) e sobe o contador geral sozinho. Um teste que olhasse o
+   * total passaria mesmo com o `load()` do detalhe removido — foi o que um mutante mostrou aqui.
+   */
+  function recargasDoDetalhe() {
+    return vi.mocked(api.get).mock.calls.filter(([url]) => url === "/bank/transactions").length;
+  }
+
+  /** Abre o detalhe da conta (é lá que vivem os três botões). */
+  async function abrirMovimentos() {
+    const user = userEvent.setup();
+    renderPage();
+    await user.click(await screen.findByText("Ver movimentos"));
+    await waitFor(() => expect(screen.getByText(/Movimentos — Itaú PJ/)).toBeInTheDocument());
+    return user;
+  }
+
+  it("ignorar: a falha aparece na tela em vez de não acontecer nada", async () => {
+    mockApi([conta()], [], [movimento()]);
+    vi.mocked(api.post).mockRejectedValue(new Error("boom"));
+    const user = await abrirMovimentos();
+
+    await user.click(screen.getByRole("button", { name: "Ignorar" }));
+    await user.click(screen.getByRole("button", { name: "Ignorar movimento" }));
+
+    expect(await screen.findByText("Erro inesperado")).toBeInTheDocument();
+    // O movimento continua listado como estava — a tela não finge que a ação aconteceu.
+    expect(screen.getByText("Aluguel")).toBeInTheDocument();
+  });
+
+  it("ignorar: no sucesso recarrega a lista e não deixa erro na tela", async () => {
+    mockApi([conta()], [], [movimento()]);
+    vi.mocked(api.post).mockResolvedValue({ data: {} } as never);
+    const user = await abrirMovimentos();
+    const antes = recargasDoDetalhe();
+
+    await user.click(screen.getByRole("button", { name: "Ignorar" }));
+    await user.click(screen.getByRole("button", { name: "Ignorar movimento" }));
+
+    await waitFor(() => expect(recargasDoDetalhe()).toBeGreaterThan(antes));
+    expect(screen.queryByText("Erro inesperado")).toBeNull();
+  });
+
+  it("desfazer ignorar: a falha aparece na tela", async () => {
+    mockApi([conta()], [], [movimento({ status: "ignored", ignored_reason: "duplicado" })]);
+    vi.mocked(api.post).mockRejectedValue(new Error("boom"));
+    const user = await abrirMovimentos();
+
+    await user.click(screen.getByRole("button", { name: "Desfazer ignorar" }));
+
+    expect(await screen.findByText("Erro inesperado")).toBeInTheDocument();
+  });
+
+  it("remover declaração: a falha aparece na tela", async () => {
+    mockApi([conta()], [checkpoint], []);
+    vi.spyOn(window, "confirm").mockReturnValue(true);
+    vi.mocked(api.delete).mockRejectedValue(new Error("boom"));
+    const user = await abrirMovimentos();
+
+    await user.click(screen.getByRole("button", { name: /Remover declaração/ }));
+
+    expect(await screen.findByText("Erro inesperado")).toBeInTheDocument();
+    // A linha do saldo declarado continua lá: nada foi removido, e a tela diz isso.
+    expect(screen.getByRole("button", { name: /Remover declaração/ })).toBeInTheDocument();
+  });
+
+  it("remover declaração: no sucesso recarrega a lista e não deixa erro na tela", async () => {
+    mockApi([conta()], [checkpoint], []);
+    vi.spyOn(window, "confirm").mockReturnValue(true);
+    vi.mocked(api.delete).mockResolvedValue({ data: {} } as never);
+    const user = await abrirMovimentos();
+    const antes = recargasDoDetalhe();
+
+    await user.click(screen.getByRole("button", { name: /Remover declaração/ }));
+
+    await waitFor(() => expect(recargasDoDetalhe()).toBeGreaterThan(antes));
+    expect(screen.queryByText("Erro inesperado")).toBeNull();
   });
 });
 
