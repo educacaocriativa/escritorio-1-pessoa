@@ -257,6 +257,14 @@ A Onda 1 mede a divergência com o razão bancário **vazio**, porque nada no si
 
 **Regra de método que fica** (vale para qualquer métrica que decida escopo): antes de usar um número como gate, pergunte **o que ele mede quando o sistema está incompleto**. Se a resposta for "mede a própria incompletude", ele não é gate — é termômetro do que ainda não foi construído, e vai sempre pedir mais construção.
 
+**⚠️ REGRA — INSTANCIAÇÃO OBRIGATÓRIA** (derivada no mesmo dia, depois de a mesma seção quebrar duas vezes de formas opostas — primeiro medindo a própria incompletude, depois virando insatisfazível):
+
+> Todo conjunto definido por **descrição** num documento de arquitetura nasce com **pelo menos um membro E um não-membro escritos, no mesmo parágrafo**. Sem o membro, o conjunto é vazio e você descobre tarde. Sem o não-membro, a condição é trivial e não decide nada. **Em critério de decisão é obrigatória.**
+
+Por que o critério de decisão é onde mais se erra: todo o resto do design tem **consumidor mecânico** que protesta — a função é chamada na página seguinte, o índice é criado por uma migration, a invariante ganha teste no CI. **O critério de decisão é o único artefato cujo consumidor é um humano num ciclo futuro** — e humano não levanta `TypeError`. Quem lê *"toda cobrança recebida precisa ter conta informada"* assente, porque a frase é razoável; e ela é razoável **e** insatisfazível, sem nada entre as duas que dispare. Não erra por ser difícil: erra por ser a única seção sem ninguém para contradizê-la.
+
+Custo de aplicar, medido nos quatro casos reais que teria pego: 2 a 5 segundos cada. Nenhum exigia mais análise — todos exigiam **um exemplo**.
+
 **Ondas** (renumeradas — a numeração antiga em qualquer doc anterior a 30/07/2026 aponta para outro conteúdo): `0 ✅ → 1 ✅ → 2 (origem do movimento) → 2b (aplicação) → 3 (payout) → 4 (import OFX) → 5 (match) → 6 (baixa de Contas a Receber, **bloqueada** pelo vínculo ausente `platform_earnings → transaction`, mesmo pré-requisito do estorno de cobranças descartado acima)`. Critério da ordem: **dependência externa crescente** — 2, 2b e 3 não dependem de nada fora do repositório.
 
 **A Regra da Origem** (Onda 2, `docs/architecture/controle-bancario-onda2-design.md`): todo evento que o sistema já emite e que move dinheiro no banco **escreve o movimento bancário**; a porta manual e a importação existem para o **resíduo**, e só o resíduo justifica o custo delas. Antes de desenhar a porta de entrada de um plano de dados novo, enumere os eventos que o sistema já emite e ligue-os primeiro — foi não fazer isso que produziu o erro do gate acima.

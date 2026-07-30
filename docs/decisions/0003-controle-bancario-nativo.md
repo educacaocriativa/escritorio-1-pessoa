@@ -1,6 +1,8 @@
 # ADR 0003 — Controle bancário nativo, sem agregador Open Finance
 
-- **Status:** Aceito · **Adendo 4 em 2026-07-30** (a origem do movimento + reordenação das ondas)
+- **Status:** Aceito · **Adendo 4 em 2026-07-30** (a origem do movimento + reordenação das ondas) ·
+  **Adendo 5 em 2026-07-30** (ratificação da Onda 2: a pré-condição do gate era insatisfazível;
+  `origin_id` é chave de origem; `bank_audit` não existe)
 - **Data:** 2026-07-29
 - **Autor:** Aria (@architect) — formalização da decisão de produto tomada pelo fundador
 - **Relacionado:** [ADR 0001](0001-stack-e-infra.md), [ADR 0002](0002-gateway-pagamento.md),
@@ -184,6 +186,9 @@ arquivo original retido em `attachments` sob `core/storage`. A purga dinâmica d
 para que a conferência varra "o que não bateu" por índice parcial. Escrito por um único ponto
 (`_refresh_status`, na mesma transação da mutação do vínculo) e auditável por
 `python -m app.scripts.bank_audit`.
+⚠️ **Correção 2026-07-30 (Adendo 5):** `_refresh_status` e `app/scripts/bank_audit.py` **não
+existem** — os dois são entrega da **onda de conciliação (Onda 5)**, não ativos das Ondas 0/1. Esta
+consequência os descreve no presente, e a afirmação foi propagada ao design-mãe §2.2 e ao epic.
 
 **5. Uma migration com backfill sobre dado existente** (a de `investment_accounts`). É a única, e
 está exposta à armadilha documentada na migration 0046: sob `FORCE ROW LEVEL SECURITY`, um `UPDATE`
@@ -359,6 +364,72 @@ consegue dar baixa em conta a pagar (409 acionável, com cadastro embutido). É 
 de *"obrigatória"*, e a alternativa é o "opcional com default" que o fundador recusou porque
 *"opcional significa que alguém pula, e a conferência volta a medir o que você esqueceu de
 preencher"*.
+
+## Adendo 5 (2026-07-30) — Ratificação da Onda 2 contra as 11 stories
+
+> Origem: três @sm expandiram a Onda 2 em 11 stories (8.9–8.19) e encontraram **7 conflitos** no
+> design. Parecer completo:
+> [`docs/architecture/controle-bancario-onda2-ratificacao.md`](../architecture/controle-bancario-onda2-ratificacao.md).
+> **Nenhuma decisão deste ADR é revertida.** O Adendo 4 continua inteiro: a Regra da Origem, a
+> Invariante do Trilho, o estado `scheduled`, a reordenação das ondas, a restrição "sem agregador".
+> O que muda são **três precisões** e uma **correção de fato**.
+
+**(1) A pré-condição do gate era insatisfazível — corrigida.** O Adendo 4 e o epic §3.1.2 escrevem a
+pré-condição como *"toda `Payable` paga e toda `Charge` recebida precisam ter conta bancária
+informada"*. Pela Invariante do Trilho — do próprio Adendo 4 — uma `Charge` paga pelo trilho tem
+`transaction_id` e **nunca** terá `bank_account_id`, e o trilho é o caminho normal do produto. Lida
+ao pé da letra, **a pré-condição nunca é satisfeita e o gate deste ADR nunca abre**.
+
+A redação nova (design da Onda 2 §9.3) é um predicado executável com **quatro** termos: baixa sem
+conta (zera na Onda 2), recebimento fora do trilho sem conta (Onda 2), **rendimento de aplicação sem
+perna bancária (Onda 2b)** e **payout liquidado sem perna bancária (Onda 3, hoje vazio porque payout
+real não existe)**. `Charge` do trilho fica fora **por construção**: o dinheiro dela está na Carteira,
+não numa conta do dono — é a Regra dos Planos, não uma lacuna de preenchimento.
+
+**Consequência de roadmap:** o gate **não** abre "depois da Onda 2" em geral. Abre depois da Onda 2
+para um tenant cujos únicos eventos que movem conta real sejam baixa de Contas a Pagar e recebimento
+fora do trilho. Quem registra rendimento precisa da **Onda 2b** — o que dá ao F-D7 uma razão mais
+forte do que "é barata": ela é **pré-requisito da métrica primária do épico**, não um incremento dela.
+
+**(2) `origin_id` é a CHAVE DE ORIGEM, não o id do lançamento.** O design pedia, na mesma peça, duas
+pernas de transferência com o mesmo `origin_id` **e** um índice único sobre
+`(tenant_id, source, origin_id)`. As duas seções foram escritas com conceitos diferentes do mesmo
+campo, e para `payable`/`charge` os dois coincidem — por isso nada protestou. Forma canônica:
+`f"{transfer.id}:out"` / `":in"`, pareadas pelo `transfer_id` que já existe, com a coluna declarada
+**`VARCHAR(64)`**. A unidade de sincronização de uma transferência é **a perna**, não a
+transferência. A largura tem folga deliberada: em Postgres `VARCHAR(n)` não reserva espaço, e o custo
+de errar para menos é `ALTER COLUMN` sob `FORCE RLS` — a armadilha da 0046, que este ADR já nomeia.
+
+**(3) `bank_audit` e `_refresh_status` NÃO EXISTEM.** Corrigido na Consequência 4 e no design-mãe
+§2.2. Os dois são entrega da **Onda 5**. O epic os lista entre os *"ativos entregues pelas Ondas 0 e
+1 — não recriar"*, o que é falso e já induziu uma story a mandar o @dev acrescentar código a um
+arquivo inexistente — o mesmo modo de falha que a entrada de CPF/CNPJ do `CLAUDE.md` produziu na
+Story 8.2. **Uma lista de ativos é um conjunto de afirmações verificáveis; nenhuma delas foi
+verificada.** Onde a condição só é alcançável por bug (o cache `payables.bank_transaction_id`), a
+garantia é **teste**, não script.
+
+**(4) O efeito "agendamento que falha vira divergência" existe; o adjetivo não.** O worker que este
+ADR institui (`scheduled → paid` na data) esvazia a população que o design mandava o Diagnóstico
+procurar. A classe de furo continua sendo pega — o débito registrado e não executado entra no saldo
+derivado, o checkpoint diz outra coisa, a conferência acusa. O que se perde é a capacidade de dizer
+*"agendamento"*: depois da promoção, nada distingue *"agendei e o banco não executou"* de *"paguei e
+o banco não compensou"*. O sinal passa a nomear **o débito**, não o agendamento, e o valor dele — que
+está em apontar **qual** débito casa com a divergência — fica intacto. É *"suprima a afirmação, nunca
+o número"* aplicado a mim mesma.
+
+**Regra de método que este adendo institui, e ela não é sobre este épico:**
+
+> **INSTANCIAÇÃO OBRIGATÓRIA.** Todo conjunto definido por descrição num documento de arquitetura —
+> uma pré-condição com "toda X", uma população de regra, uma lista de ativos, um critério de gate —
+> nasce com **pelo menos um membro escrito e pelo menos um não-membro escrito, no mesmo parágrafo**.
+> Sem o membro, o conjunto é vazio e isso se descobre agora. Sem o não-membro, a condição é trivial e
+> não decide nada.
+>
+> **Em critério de decisão a regra é obrigatória**, porque ele é o único artefato do design **sem
+> consumidor mecânico**: uma função é chamada na página seguinte, um índice é criado por uma
+> migration, uma invariante ganha teste no CI — e todos protestam. O critério de gate só tem
+> consumidor no dia em que alguém decide com ele na mão, e nesse dia a decisão já está sendo tomada.
+> Foi por isso que a §3.1 errou **duas vezes no mesmo dia**, de duas formas diferentes.
 
 ## Revisão futura
 

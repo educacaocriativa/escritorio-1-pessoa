@@ -11,7 +11,12 @@
 > **Documento-mãe:** [`controle-bancario-design.md`](controle-bancario-design.md) (ratificado) +
 > [`controle-bancario-design-ratificacao.md`](controle-bancario-design-ratificacao.md).
 > **ADR:** [`0003-controle-bancario-nativo.md`](../decisions/0003-controle-bancario-nativo.md) —
-> ganha o **Adendo 4** por causa deste documento.
+> ganha o **Adendo 4** por causa deste documento, e o **Adendo 5** pela ratificação abaixo.
+> **Ratificação (2026-07-30):**
+> [`controle-bancario-onda2-ratificacao.md`](controle-bancario-onda2-ratificacao.md) — julga os 7
+> conflitos que três @sm encontraram ao expandir esta onda em 11 stories (8.9–8.19). **As seções
+> §1.1(5), §3.2, §3.3, §4.2.0, §4.2.3.1, §7(b), §8, §9.2.1, §9.2.2, §9.3 e o F-D12 foram corrigidos
+> por ela** e estão marcados no corpo.
 > **Em produção:** `7dba286` (PR #61), migrations 0058/0059/0060, `e1p.doroeventos.com.br`.
 
 ---
@@ -105,6 +110,55 @@ inversa, e ela é enunciável como procedimento:
 
 Aplicado agora, o inventário fica assim (§1.2). Aplicado antes, a Onda 1 teria nascido com o razão
 cheio e a Onda 3 nunca teria sido a onda seguinte.
+
+**(5) A quinta, escrita depois de os @sm expandirem esta onda em 11 stories, e é a que mais me
+serve: eu descrevo conjuntos e nunca escrevo um membro.**
+
+Num único dia, quatro falhas minhas são o **mesmo defeito**:
+
+| Onde | O conjunto que eu descrevi | O membro que teria derrubado tudo | Custo |
+|---|---|---|---|
+| **§9.3** | *"toda `Payable` paga e toda `Charge` recebida precisam ter conta bancária informada"* | uma `Charge` paga pelo webhook do Asaas — tem `transaction_id`, nunca terá conta | 5s |
+| **§9.2.1** | *"payables em `scheduled` cuja data já passou"* | um payable no dia seguinte à varredura que eu especifiquei duas seções antes | 5s |
+| **epic, "Ativos a reusar"** | *"`bank_audit`, entregue pelas Ondas 0 e 1, não recriar"* | `ls apps/api/app/scripts/` | 2s |
+| **§3.1 do epic (versão da manhã)** | *"se a divergência for pequena, as ondas de import são over-engineering"* | a divergência do tenant do fundador **hoje**: razão vazio, número enorme | 5s |
+
+Não é falta de rigor: os predicados estão bem escritos, as justificativas estão certas, os trade-offs
+estão medidos. É que **eu paro no ponto em que a descrição está boa, e a descrição fica boa antes de
+o conjunto estar certo.**
+
+**Por que isso se concentra no critério de decisão.** Todo o resto deste design tem **consumidor
+mecânico**: uma função é chamada na página seguinte, um índice é criado por uma migration, uma
+invariante ganha teste no CI, um contrato de schema é consumido por um schema de saída. Esses
+consumidores **protestam** — errei o `origin_id` na §8 e a §3.2 protestou, através de um @sm, antes de
+virar código.
+
+O critério de decisão é **o único artefato do design cujo consumidor é um humano num ciclo futuro**.
+Não há quem o chame enquanto eu o escrevo, e humanos não levantam `TypeError`: quem lê *"toda `Charge`
+recebida precisa ter conta bancária informada"* assente, porque a frase é razoável. Ela é razoável
+**e** insatisfazível, e não existe nada entre as duas coisas que dispare. A §3.1/§9.3 não erra mais
+porque seja mais difícil — **erra mais porque é a única seção sem ninguém para contradizê-la.**
+
+> **REGRA DE MÉTODO — INSTANCIAÇÃO OBRIGATÓRIA.**
+>
+> Todo conjunto definido por descrição num documento de arquitetura — uma pré-condição com "toda X",
+> uma população de regra, uma lista de ativos, um critério de gate — **nasce com pelo menos um membro
+> escrito e pelo menos um não-membro escrito, no mesmo parágrafo.**
+>
+> - Sem conseguir escrever o **membro**, o conjunto é vazio — e eu descobri agora, não daqui a três
+>   ciclos de conferência.
+> - Sem conseguir escrever o **não-membro**, a condição é trivial: não separa nada e não decide nada.
+>
+> **Corolário:** em critério de decisão a regra é **obrigatória**, não recomendada. É o único
+> artefato sem consumidor mecânico; todos os outros têm quem os contradiga na página seguinte, e este
+> não tem ninguém até o dia em que alguém precisa decidir com ele na mão — e nesse dia a decisão já
+> está sendo tomada.
+>
+> **Teste da regra contra o dia de hoje:** ela teria pego as quatro. Nenhuma exigia mais análise;
+> todas exigiam **um exemplo**.
+
+A §9.3 reescrita traz o par membro/não-membro dentro do bloco normativo — não como ilustração, como
+parte da definição.
 
 ### 1.2 A varredura pedida: o que MAIS na Onda 1 pede o que o sistema já sabe
 
@@ -271,14 +325,46 @@ muda. É a mitigação que a §1.1(3) me obriga a escrever em vez de deixar impl
 
 ```sql
 -- ILUSTRATIVO
-ALTER TABLE bank_transactions ADD COLUMN origin_id VARCHAR(36) NULL;   -- id do lançamento de origem
+ALTER TABLE bank_transactions ADD COLUMN origin_id VARCHAR(64) NULL;   -- CHAVE DE ORIGEM (ver abaixo)
 
--- ÚNICO PARCIAL: "um lançamento de origem gera no máximo UM movimento".
+-- ÚNICO PARCIAL: "uma unidade de sincronização gera no máximo UM movimento".
 -- tenant_id primeiro (índice único é global e não respeita RLS — mesmo motivo de todos os outros).
 CREATE UNIQUE INDEX uq_bank_transactions_origin
     ON bank_transactions (tenant_id, source, origin_id)
     WHERE origin_id IS NOT NULL;
 ```
+
+> ⚠️ **CORRIGIDO EM 2026-07-30 (ratificação, C-3):** a largura era `VARCHAR(36)` e o conceito era
+> *"id do lançamento de origem"*. As duas coisas colidiam com a §8 (transferência = duas pernas). O
+> conflito não era entre as seções; era que eu escrevi as duas com **conceitos diferentes de
+> `origin_id`** e nunca percebi, porque para `payable` e `charge` os dois coincidem.
+
+> **`origin_id` é a CHAVE DE ORIGEM, não "o id do lançamento" (normativo).**
+>
+> Para origens de **perna única** (`payable`, `charge`, `yield`, `payout`) ela **é** exatamente o id
+> do lançamento. Para origens de **múltiplas pernas**, ela é `f"{id}:{perna}"`, com `perna` num
+> vocabulário fechado por `source` (hoje: `out`/`in`, só para `transfer` — §8).
+>
+> O que `origin_id` garante é a **unicidade da unidade de sincronização** — e a unidade de
+> sincronização de uma transferência é **a perna**, não a transferência. O pareamento entre pernas é
+> trabalho de `transfer_id` (`bank/models.py:278`), que existe exatamente para isso.
+
+**Largura `VARCHAR(64)`, e a razão é assimetria de custo:** `uuid4` (36) + `":out"` (4) = 40, e o
+vocabulário de perna pode crescer. Em Postgres, `VARCHAR(n)` é armazenamento **variável** — 64 e 36
+custam o mesmo em disco, e o `n` é uma restrição, não uma reserva. O custo de errar para menos é
+`ALTER COLUMN` sobre tabela com dado sob `FORCE ROW LEVEL SECURITY`: a armadilha da 0046, que o ADR
+0003 nomeia como o único ponto desse tipo do épico. **Teste normativo:**
+`test_origin_id_cabe_na_coluna` — para cada forma de chave construída no repositório,
+`len(chave) <= <largura declarada no model>`. Uma origem de várias pernas nova reprova em CI, não no
+`ALTER COLUMN`.
+
+Formas de discriminação **rejeitadas**, com o motivo:
+
+| Alternativa | Veredito |
+|---|---|
+| Coluna `leg` no índice `(tenant, source, origin_id, leg)` | **Rejeitada.** `leg` seria `NULL` para toda origem de perna única, e no Postgres **`NULL` é distinto de `NULL` em índice único por padrão** — `(t,'payable',id,NULL)` deixaria de colidir consigo mesma e o índice perderia a garantia para **todas** as outras origens, em silêncio. Exigiria `NULLS NOT DISTINCT` (PG15+) ou uma sentinela |
+| Incluir `bank_account_id` no índice | **Rejeitada.** As pernas deixariam de colidir, e o mesmo `payable` passaria a poder gerar movimento em duas contas — destrói a invariante 1:1 que o índice existe para garantir |
+| `origin_id = transfer.id` nas duas + índice relaxado | **Rejeitada.** Destrói a idempotência na origem onde ela mais importa: um retry move o dinheiro duas vezes |
 
 **É este índice — e não o `dedup_hash` — a garantia de idempotência que o requisito do fundador
 pede.** Preencher a conta duas vezes, reprocessar a mesma baixa, um retry de request: o banco recusa
@@ -310,9 +396,34 @@ CREATE INDEX ix_payables_bank_account ON payables (tenant_id, bank_account_id);
 **Regra de autoridade, para não haver duas verdades:** `payables.bank_account_id` é a **decisão do
 usuário** e é autoritativa. `bank_transactions.bank_account_id` é **derivada** dela pelo sincronizador
 (§3.5) e nunca é escrita por outro caminho. `payables.bank_transaction_id` é **cache de leitura**: se
-divergir do movimento com `origin_id = payable.id`, quem manda é o `origin_id`, e o
-`python -m app.scripts.bank_audit` reporta a divergência sem corrigir em silêncio (mesma disciplina
-do `status` materializado, design-mãe §2.2).
+divergir do movimento com `origin_id = payable.id`, **quem manda é o `origin_id`**.
+
+> ⚠️ **CORRIGIDO EM 2026-07-30 (ratificação, C-4).** Esta seção citava
+> `python -m app.scripts.bank_audit` como quem reporta a divergência. **Esse script NÃO EXISTE** —
+> `grep` em `apps/api` devolve zero, e `app/scripts/` tem só `migrate_attachments_to_s3.py` e
+> `scan_orphan_storage.py`. A citação vinha do design-mãe §2.2 e foi propagada ao ADR e ao epic (que
+> chegou a listá-lo entre os *"ativos entregues pelas Ondas 0 e 1 — não recriar"*). Nenhuma story
+> pode citá-lo como existente.
+
+**O que fica no lugar, e por que um teste basta aqui:**
+
+> A divergência entre o cache e o `origin_id` só é alcançável **por bug**. `sync_origin_movement`
+> (§3.5) é o **único** escritor do movimento e devolve a linha na mesma chamada e na mesma transação;
+> o chamador grava o cache com o que recebeu. Não há segundo caminho, não há concorrência, não há
+> materialização assíncrona.
+>
+> **Condição alcançável só por bug se prova com teste, não com script.** Um script que ninguém tem
+> gatilho para rodar não é garantia; é intenção documentada.
+>
+> Obrigação da Onda 2: `test_cache_de_movimento_nunca_diverge_do_origin_id`, exercitando os **cinco**
+> caminhos de mutação — baixar, trocar conta, trocar data, estornar, repagar — e afirmando em cada um
+> que `payable.bank_transaction_id` aponta para o movimento com `origin_id = payable.id`, ou que os
+> dois são `NULL`.
+
+O **script** volta a ser necessário na **Onda 5**, e aí como pré-requisito dela: é lá que existe
+`_refresh_status` (hoje também inexistente — `bank/service.py:826` o descreve como trabalho da onda
+de conciliação) e é lá que a divergência passa a ser alcançável **sem bug**, por matcher concorrente
+e vínculo parcial.
 
 **Sem FK dura**, padrão do projeto (`charges.client_id`, `payables.cost_center_id`).
 
@@ -442,6 +553,42 @@ data**. A guarda muda de forma:
 > **Para:** **nenhuma superfície de saldo corrente inclui o futuro.** Um movimento agendado é
 > registrado com verdade — o dinheiro *vai* sair no dia 15 — e simplesmente **não conta até lá**.
 
+#### 4.2.0 Onde fica o corte da guarda — e por que o externo continua recusando o futuro
+
+> **ACRESCENTADO EM 2026-07-30 (ratificação, C-6).** O design enunciava a mudança de *forma* da
+> guarda e não dizia **onde** fica o corte. Sem isso, nenhuma story libera o futuro e o agendamento
+> leva 422. A atribuição está correta e é rastreável: a **8.10** declara que não mexe, a **8.11**
+> declara que não mexe, a **8.12** põe teto em hoje `[CORTE DO @PM]`, e a **8.14** libera. Ratificado.
+
+> **O corte é por `source`, e por `source` apenas (normativo).**
+>
+> - `source ∈ SOURCES_EXTERNA` (`manual`, `ofx`, `csv`) → **continua recusando** `posted_at` futuro,
+>   com a mensagem inalterada;
+> - `source ∈ SOURCES_SISTEMA` (o caminho de `sync_origin_movement`) → **aceita** futuro;
+> - o **piso** (`posted_at > opening_date`) vale para os dois, sem exceção.
+>
+> ⚠️ **Não existe um booleano `permite_futuro` decidido pelo chamador.** Um booleano é o parâmetro
+> que alguém passa `True` no caminho manual, um dia, por conveniência — e nenhum gate de AST o pega,
+> porque não há import envolvido. O eixo já existe e é `source`; **toda regra desta onda é escrita
+> contra `SOURCES_SISTEMA`/`SOURCES_EXTERNA`** (§3.1). Um eixo, uma pergunta.
+
+**Por que a guarda não está sendo enfraquecida — está sendo devolvida ao próprio escopo.** A
+justificativa dela está escrita no código (`bank/service.py:614-616`): *"extrato bancário é fato
+passado. Data futura é erro de digitação"*. **Isso descreve transcrição.** Uma justificativa sobre
+transcrição não pode governar origem — é exatamente o defeito que a §1.1(2) deste documento nomeia
+(herdei um limite traçado por outro motivo e o generalizei).
+
+**E o movimento externo continua recusando o futuro na Onda 4 — normativo, para não ser reaberto:**
+
+> **O e1p pode afirmar o futuro do que ele mesmo agendou; não pode afirmar o futuro do que outro
+> atestou.**
+>
+> Um OFX descreve o que já aconteceu. `posted_at` futuro num arquivo importado é erro de parser ou
+> arquivo corrompido — não é fato. Se um dia aparecer um caso legítimo (débito pré-autorizado exibido
+> no extrato), o tratamento honesto é **recusar e mandar um humano olhar**, nunca aceitar em silêncio
+> uma afirmação sobre o futuro vinda de uma fonte que não pode conhecê-lo. E a proteção contra erro
+> de ano na digitação manual fica, e continua valendo a pena.
+
 #### 4.2.1 A varredura: o que quebra de fato com `posted_at` futuro
 
 Verifiquei todos os consumidores. **Duas surpresas boas e um defeito concentrado.**
@@ -541,6 +688,54 @@ Com `paid` + futuro, a correção é o predicado contraditório acima, cinco vez
 `posted_at` = data agendada, e o saldo é **função da data** — ele entra sozinho quando o dia chega,
 sem job nenhum. O worker só move o `status` do `Payable`, para a Fila e o resumo pararem de mostrá-lo
 como agendado.
+
+#### 4.2.3.1 O recorte que impede a contagem dupla no dia D — e o acoplamento invisível que o sustenta
+
+> **ACRESCENTADO EM 2026-07-30 (ratificação, C-7).** Achado do @sm da Story 8.14, e ele não estava em
+> nenhum documento desta onda. **Ratificado.**
+
+As duas afirmações acima — *"o saldo derivado não precisa do worker"* e *"`_window_sums` soma
+`status IN ('open','scheduled')`"* — estão as duas certas e, **juntas**, produzem uma subtração
+dupla. No dia D, entre a meia-noite e a varredura: o movimento já tem `posted_at <= hoje`, logo já
+entra em `active_balance_total(until=today)` (`_movements_sums` usa `posted_at <= until`,
+**inclusivo** — `bank/service.py:302-304`); e o `Payable` ainda está `scheduled`, logo contaria de
+novo nos fluxos de saída.
+
+> **Recorte (normativo):** a população das agendadas em `_window_sums` é
+> `status == 'scheduled'` **AND** `paid_at::date > today`. **A data manda, não o status
+> materializado** — o mesmo princípio que faz `payment_queue` calcular seus baldes na leitura,
+> *"sem precisar de job/cron"* (`payables/service.py:361-363`).
+
+| Caso | `saldo_inicial` | `_window_sums` | Total |
+|---|---|---|---|
+| D > hoje | fora (movimento futuro) | **dentro** | 1× |
+| D == hoje, antes da varredura | **dentro** | fora (predicado falso) | 1× |
+| D == hoje, depois da varredura | **dentro** | fora (status é `paid`) | 1× |
+| D < hoje, worker parado há dias | **dentro** | fora (predicado falso) | 1× |
+
+**E a propriedade que isto compra vale mais do que o conserto:** com esse recorte, **a corretude da
+Projeção deixa de depender da frequência do worker**. O worker vira o que o F-D11 diz que ele é —
+cosmética de status para a Fila e o resumo — e não um componente do qual a aritmética depende. Se ele
+parar uma semana, a Projeção continua certa.
+
+O mesmo recorte vale, espelhado, para `Charge` no lado das entradas (§5, recebimento agendado). Um
+predicado só, parametrizado, usado pelos dois — nunca um `if` por tipo dentro da função genérica, que
+é o começo de duas funções fingindo ser uma.
+
+> ⚠️ **O acoplamento invisível, escrito porque ele é a única forma de o recorte perder dinheiro.**
+> O recorte tira a agendada de `_window_sums` quando a data chegou, **confiando** que o movimento
+> está no `saldo_inicial`. Isso só é verdade porque:
+>
+> 1. **`_saldo_inicial` passa `until=today`** (`projection.py:327-331`). Trocado por `None` ou por
+>    `SEM_CORTE`, a agendada futura passa a contar nos dois lugares e a dupla contagem volta, pelo
+>    lado oposto. ⚠️ A Story **8.19** edita `_saldo_inicial` (a decisão de origem, não o `until`) —
+>    **ela não pode alterar esse argumento**, e a Story 8.14 deve afirmá-lo por teste.
+> 2. **Todo movimento de origem está dentro da janela do saldo derivado da sua conta**
+>    (`posted_at > opening_date`). Se não estivesse, `_movements_sums` o excluiria (o `>` é estrito) e
+>    o predicado do recorte também — **o dinheiro sumiria por completo da Projeção**. Hoje é
+>    impossível dos dois lados: `apply_paid` valida o piso (422, §4.3) e `_validate_opening_date_move`
+>    impede avançar a `opening_date` por cima de movimento (a correção do BANK-001). Garantia **por
+>    construção**, e invisível — por isso está escrita.
 
 Isso segue um precedente escrito do próprio projeto: `payment_queue` calcula os baldes **na leitura**,
 *"nunca gravados — assim o balde de um item nunca fica desatualizado com a passagem do tempo, sem
@@ -899,6 +1094,62 @@ O usuário repete a requisição com `confirmar_avulso=true` para insistir. Fals
 coisa de exatamente R$ 380 em 3 dias): um clique, raro. Verdadeiro positivo: evita a divergência
 dobrada que *parece* um achado. Vale a troca.
 
+**Como isso convive com o gate `bank ↛ payables` da §3.5 — normativo.**
+
+> ⚠️ **ACRESCENTADO EM 2026-07-30 (ratificação, C-5).** Esta seção pedia que `create_transaction`
+> (módulo `bank`) consultasse `Payable`, e a §3.5 da mesma peça institui o gate estrutural que
+> proíbe `bank` de importar `payables`. As duas não cabem juntas por import direto. Achado do @sm da
+> Story 8.17, com a forma proposta por ele — **ratificada, com dois ajustes**.
+
+**Primeiro, a regra que decide todas as alternativas:**
+
+> **Evadir um gate é pior do que quebrá-lo às claras.** Quebrado às claras, alguém vê no diff.
+> Evadido, o gate fica verde e a proibição está morta — que é literalmente o achado **TEST-001** do
+> gate das Ondas 0–1. **Import lazy** dentro da função e **SQL cru** sobre a tabela `payables`
+> passariam no gate de AST e violariam exatamente o que ele protege: os dois estão **reprovados por
+> definição** nesta onda, e não por estilo.
+
+**A forma: porta de saída registrada na composição.** `bank` declara um `Protocol` que ele próprio
+possui e um registrador; a implementação concreta vive em `payables` (que **pode** importar `bank`);
+a ligação é feita em `app/main.py`. Direção final: `main → bank`, `main → payables`,
+`payables → bank`. **`bank` não sabe que `payables` existe** — o gate fica verde porque a dependência
+sumiu, não porque foi escondida.
+
+**Ajuste 1 — a porta devolve um DTO de `bank`, nunca uma entidade de `payables`.**
+
+```python
+# bank/service.py — CONTRATO
+@dataclass(frozen=True)
+class DuplicataCandidato:
+    referencia_id: str      # id opaco; `bank` não sabe de que entidade é id
+    descricao: str
+    valor_cents: int
+    data: date
+```
+
+Um `Protocol` cuja assinatura devolvesse `Payable | None` obrigaria `bank` a **importar o tipo** —
+e um `if TYPE_CHECKING: from app.modules.payables.models import Payable` continua sendo um import de
+`payables` dentro de `bank`, que a varredura de **texto cru** do gate pega, com razão. O campo se
+chama `referencia_id` e não `payable_id` de propósito: `bank` não pode nomear um conceito de
+`payables` nem no nome de um campo. O vocabulário de `payables` aparece só no payload HTTP
+(`{"acao": "baixar_payable", "payable_id": ...}`), montado com o valor opaco.
+
+**Ajuste 2 — fail-closed no BOOT, não no request.** Se o probe não estiver registrado, a alternativa
+"silenciosamente não valida" é a guarda desligada em produção sem ninguém saber, e a consequência é o
+pior modo de falha desta onda. Mas **um erro de fiação é condição de startup, não de request**: um
+500 numa ação legítima do dono (lançar uma tarifa de R$ 2,90) é o pior lugar para descobrir que o
+`main.py` não ligou um `Protocol`.
+
+> **A aplicação não sobe sem o probe registrado.** Precedente do próprio projeto: a guarda de boot
+> contra `JWT_SECRET` fraco em produção. A verificação de request-time **fica**, como segunda guarda
+> — inalcançável se a de boot funcionar. É a mesma disciplina dupla que o `update_transaction` do
+> módulo `bank` documenta *"de propósito"*.
+
+**O que NÃO muda:** a guarda vale só em `create_transaction`, nunca em `update_transaction` (editar é
+correção, não criação — ampliar é Art. IV); o probe **recebe** o `db` do request e nunca abre sessão
+própria (abrir sessão própria é escapar da GUC do tenant); a janela de ±3 dias e o valor exato
+continuam os mesmos do enriquecimento.
+
 ⚠️ A janela de **±3 dias** e o valor **exato** são deliberadamente **os mesmos** do enriquecimento da
 §4.5 do design-mãe — um número, não dois. `[SUPOSIÇÃO minha, parametrizável]`.
 
@@ -926,8 +1177,44 @@ produto recusa. A guarda (b) é a granularidade certa; proibir saída manual ser
 
 **Por que puxar a transferência para cá:** o fundador a citou no mesmo recorte do manual (*"taxas e
 transferência para aplicações"*); ela é a **segunda porta manual legítima** e o item (c) da lista
-curada da §7 aponta para ela; e ela usa o mesmo `sync_origin_movement`
-(`source='transfer'`, duas linhas com `origin_id = transfer.id`).
+curada da §7 aponta para ela; e ela usa o mesmo `sync_origin_movement` (`source='transfer'`), **duas
+chamadas, uma por perna**.
+
+**A forma canônica das duas pernas (normativa).**
+
+> ⚠️ **CORRIGIDO EM 2026-07-30 (ratificação, C-3).** Esta seção dizia *"duas linhas com o mesmo
+> `origin_id`"*, o que **viola** o índice único `(tenant_id, source, origin_id)` da §3.2 — e
+> `sync_origin_movement` recebe **uma** conta e devolve **um** movimento, então nem sabe criar duas
+> pernas. Achado do @sm da Story 8.18, com a forma proposta por ele — **ratificada**. A §3.2 agora
+> define `origin_id` como **chave de origem**, e com isso o sufixo deixa de ser gambiarra: é a chave
+> dizendo a verdade sobre o que ela identifica.
+
+| Perna | Conta | `amount_cents` | `origin_id` | `transfer_id` |
+|---|---|---|---|---|
+| saída | `from_account_id` | **−** valor | `f"{transfer.id}:out"` | `transfer.id` |
+| entrada | `to_account_id` | **+** valor | `f"{transfer.id}:in"` | `transfer.id` |
+
+- **duas chamadas** a `sync_origin_movement`, na mesma transação do `bank_transfer`;
+- o pareamento é o `transfer_id`, coluna que **já existe** (`bank/models.py:278`) e existe para isso;
+- `dedup_hash = sha256(f"{source}|{origin_id}")` dá hashes distintos por perna **de graça**;
+- `origin_id` é `VARCHAR(64)` (§3.2) — a chave sufixada tem 40 caracteres, e a folga é deliberada.
+
+> ⚠️ **O 422 de `posted_at` futuro da transferência é validado em `create_transfer`, NUNCA em
+> `_validate_posted_at`.** A partir da §4.2.0, a guarda do módulo `bank` **aceita** futuro para
+> `source ∈ SOURCES_SISTEMA`, e `transfer` está lá dentro. Uma guarda posta no lugar errado seria
+> silenciosamente inócua.
+>
+> **Transferência agendada está fora de escopo, e é decisão, não lacuna:** não existe estado de
+> promoção, nem superfície, nem teste para uma quarta semântica de agendamento — `scheduled` é estado
+> de `Payable`/`Charge`, não de movimento bancário. Inventá-la aqui é Art. IV.
+
+**Desfazer uma transferência: as duas pernas somem juntas.** `DELETE` do `bank_transfer` **e** das
+duas pernas, na mesma transação, com a **mesma guarda de linha puramente sintética** do estorno
+(§4.5). Isto **não é escopo novo** — é a §4.5 aplicada onde ela já valia: sem o DELETE, a única
+correção de uma transferência errada seria lançar a transferência inversa, ou seja, exatamente a
+**contrapartida que a §4.5 rejeita nominalmente** (*"o extrato do dono tem uma linha; criar duas
+inventa um crédito que nunca existiu"*). Corrigir (editar conta/data/valor) fica fora: apagar e
+recriar aqui é barato — duas linhas sintéticas, nenhum evento de Agenda envolvido.
 
 **Por que deixar a aplicação fora:** a Onda 2 original carrega **o único backfill sobre dado
 existente de todo o épico**, exposto à armadilha do `FORCE RLS` (a lição da 0046, que o SQLite dos
@@ -993,20 +1280,79 @@ ou o fornecedor cobrar.
 *"recebi algo e não registrei"*. Entregar só o número faz o dono caçar a coisa errada — o mesmo modo
 de falha do BANK-001, com outra causa.
 
-**Desambiguação barata, e ela é determinística:** se existem `payables` em `scheduled` cuja data já
-passou, o Diagnóstico nomeia o suspeito em vez de só apresentar o número:
+> ⚠️ **CORRIGIDA EM 2026-07-30 (ratificação, C-2).** A população original desta regra —
+> *"payables em `scheduled` cuja data já passou"* — é **código morto**: o worker da §4.2.3 (F-D11)
+> promove `scheduled → paid` assim que o dia chega, então essa população existe entre a meia-noite e
+> a varredura e é quase sempre vazia. Achado do @sm da Story 8.16. **O efeito continua existindo; o
+> adjetivo "agendamento" não sobrevive ao worker** — ver a §9.2.2 e a ratificação §C-2.
 
-> 🟡 *O débito de R$ 5.000,00 agendado para 15/08 (Aluguel) pode não ter saído: o saldo que você
+**Desambiguação barata, e ela é determinística:** o Diagnóstico **nomeia o débito suspeito** em vez
+de só apresentar o número.
+
+> 🟡 *O débito de R$ 5.000,00 de 15/08 (Aluguel) **pode não ter saído** da conta: o saldo que você
 > declarou está R$ 5.000,00 acima do que o e1p calculou.*
 
-Uma regra no `engine.py` — que continua **puro**, porque o dado chega montado de fora, igual à
-completude. **Recomendo incluir na onda:** sem ela, o "efeito feature" que o coordenador identificou
-não se materializa — vira só mais um número de divergência, e números sem pista treinam o dono a
-ignorar a tela.
+**A população (normativa), montada com dado que já existe, sem coluna nova e sem reabrir F-D11:**
 
-Nota de precisão: a regra compara **ordem de grandeza**, não igualdade exata (o dono pode ter dois
-fatos concorrentes no mesmo ciclo), e diz *"pode não ter saído"*, nunca *"não saiu"* — o e1p continua
-sem ver o extrato. É a mesma disciplina de afirmação do resto do épico.
+1. `Payable` com `status == 'scheduled'` **e** `paid_at::date <= hoje` — a janela entre a data e a
+   varredura. Rara, e é a mais precisa quando existe;
+2. **união com** `Payable` com `status == 'paid'`, `bank_account_id IS NOT NULL` e `paid_at::date`
+   dentro da janela conferida e `<= reference_date` do checkpoint — ou seja, débitos que **já contam**
+   no `saldo_sistema` daquela data e que, portanto, **podem** explicar o saldo declarado estar acima.
+
+**O critério de casamento (normativo), que é o que evita a segunda população virar ruído:**
+
+> `|valor_cents − divergencia_cents| <= max(5000, divergencia_cents // 10)` — **R$ 50 ou 10%, o que
+> for maior**. Constante nomeada, ao lado de `_COMPLETENESS_STALE_DAYS`.
+>
+> É a **mesma forma** da banda de tolerância (`max(R$ 50, 0,5%)`) e um **percentual diferente de
+> propósito**: a banda absorve resíduo estrutural; este critério responde *"este débito explica esta
+> divergência?"*, que é pergunta mais estrita. Uma forma, dois usos, e a diferença escrita.
+>
+> Um intervalo largo (o `[0,5×, 2×]` proposto na Story 8.16) nomearia um débito de R$ 5.000 diante de
+> uma divergência de R$ 2.500. **Nomear um débito inocente é pior do que ficar calado:** *"pode não
+> ter saído"* sobre um débito que obviamente saiu treina o dono a ignorar a tela, e o silêncio apenas
+> devolve o número que ele já tem hoje.
+
+Cardinalidade e silêncio: **1 sinal por conta**, o suspeito de maior valor; **zero sinal** quando
+nada casa; **zero sinal** quando a divergência é **negativa** (banco abaixo do sistema é o sintoma
+oposto — falta lançamento de saída — e nomear um débito ali manda o dono para o lado errado).
+
+Uma regra no `engine.py` — que continua **puro**, porque o dado chega montado de fora, igual à
+completude. **Incluir na onda:** sem ela, o "efeito feature" vira só mais um número de divergência, e
+números sem pista treinam o dono a ignorar a tela.
+
+Nota de precisão: a regra diz *"pode não ter saído"*, nunca *"não saiu"* — o e1p continua sem ver o
+extrato. É a mesma disciplina de afirmação do resto do épico.
+
+#### 9.2.2 O que sobrou do "efeito agendamento", dito sem eufemismo
+
+**O efeito existe. O adjetivo não.** A distinção importa porque eu vendi o adjetivo.
+
+O que continua existindo, exatamente como prometido: um débito que o e1p registrou e que o banco
+**não executou** entra no saldo derivado na data (sem worker nenhum — o saldo é função da data), o
+checkpoint declara um saldo **maior**, e `divergencia > 0` no ciclo seguinte. É uma classe de furo que
+hoje ninguém pegaria, e ela é pega.
+
+O que **não** existe é o e1p saber dizer *"o **agendamento** de 15/08"*. Depois da varredura o
+`Payable` está `paid`, e nada no dado distingue *"eu agendei e o banco não executou"* de *"eu paguei
+no caixa e o banco não compensou"*. Escrevi "agendamento" porque estava com o `scheduled` na cabeça e
+não perguntei o que sobra dele depois do worker que eu mesma especifiquei duas seções antes.
+
+**Isso não custa valor ao sinal**, e a razão é a que o épico inteiro já usa: o valor está em apontar
+**qual débito** casa com a divergência, não no adjetivo. O dono que vai conferir um débito de
+R$ 5.000 de 15/08 no app do banco não precisa que a gente lhe diga que ele o agendou — ele sabe.
+E *"suprima a afirmação, nunca o número"* decide o resto: não posso afirmar "agendado"; posso
+apontar o débito e a divergência.
+
+**Consequência de nomenclatura (normativa), porque um nome que diz uma coisa carregando outra é o
+defeito D-3, e eu já o cometi duas vezes neste épico:**
+
+| De | Para |
+|---|---|
+| `AgendamentoSuspeitoInput` | `DebitoSuspeitoInput` |
+| `source="agendamento"` | `source="debito_nao_confirmado"` |
+| rótulo de tela "Agendamentos" | **"Saídas"** |
 
 Consequência para a banda de tolerância: ela deixa de ser "ignore ruído" e passa a ter um trabalho
 nomeado — **absorver as classes (1) e (3)**. `max(R$ 50, 0,5%)` continua parecendo a ordem de
@@ -1016,16 +1362,59 @@ ser lidos com essa decomposição na mão.
 
 ### 9.3 A nova pré-condição do gate — e a linha que eu não cruzo
 
-> **A leitura do gate do epic §3.1 só é válida a partir do primeiro ciclo completo posterior à Onda
-> 2.** Formalmente: na janela conferida, **toda `Payable` paga e toda `Charge` recebida precisam ter
-> conta bancária informada**. Se não tiverem, a divergência contém um termo que o próprio sistema
-> sabe explicar, e o número não decide nada.
+> ⚠️ **REESCRITA EM 2026-07-30 (ratificação, C-1).** A redação anterior — *"toda `Payable` paga e
+> toda `Charge` recebida precisam ter conta bancária informada"* — era **insatisfazível**: pela
+> Invariante do Trilho (§3.4), uma `Charge` paga pelo trilho tem `transaction_id` e **nunca** terá
+> `bank_account_id`, e o trilho é o caminho normal do produto. Lida ao pé da letra, a pré-condição
+> fechava o gate para sempre. O achado é do @sm da Story 8.16; a correção e o que faltava nela estão
+> em [`controle-bancario-onda2-ratificacao.md`](controle-bancario-onda2-ratificacao.md) §C-1.
+> A redação antiga fica registrada aqui **como o erro, não como instrução**.
 
-Como isso aparece: o relatório de conferência ganha uma **nota** no bloco 4 (*"o sistema declara o
-que não sabe"*, que já existe exatamente para isto):
+> **PRÉ-CONDIÇÃO DO GATE (normativa).**
+>
+> A leitura do gate do epic §3.1 é válida num ciclo de conferência **se e somente se**, na janela
+> conferida, **não existe evento conhecido pelo e1p que moveu dinheiro numa conta real do dono sem
+> ter gerado o `bank_transaction` correspondente.**
+>
+> Operacionalmente, quatro termos. Cada um tem o predicado que o decide e a onda que o zera:
+>
+> | # | População | Predicado | Zera na |
+> |---|---|---|---|
+> | **P1** | Baixa de Contas a Pagar sem conta informada | `Payable`, `status ∈ {paid, scheduled}`, `paid_at::date` na janela, `bank_account_id IS NULL` | **Onda 2** — vai a zero **por construção** assim que o legado for corrigido, porque a coluna passa a ser obrigatória em `apply_paid` (§4.1) |
+> | **P2** | Recebimento fora do trilho sem conta informada | `Charge`, `status ∈ {paid, scheduled}`, `paid_at::date` na janela, `transaction_id IS NULL`, `bank_account_id IS NULL`, **e** `_not_investment_yield()` | **Onda 2** (§5) |
+> | **P3** | Rendimento de aplicação sem perna bancária | `Charge` com `external_ref LIKE 'investment:%'`, `paid_at::date` na janela | **Onda 2b** (`register_yield` → `source='yield'`) |
+> | **P4** | Payout da Carteira liquidado sem perna bancária | payout com liquidação real na janela | **Onda 3**. ⚠️ **Hoje é vazio por construção**: `request_payout` só marca `withdrawn` (`wallet/service.py:227`) — nenhum dinheiro sai de conta real |
+>
+> **Fora da população, por construção e não por omissão:** `Charge` do trilho
+> (`transaction_id IS NOT NULL`). O dinheiro dela está na **Carteira**, não numa conta do dono, e ela
+> **não deve** gerar `bank_transaction` até o payout. Incluí-la é a leitura que torna a pré-condição
+> insatisfazível — e a exclusão é a **Regra dos Planos**, não uma lacuna de preenchimento.
+>
+> **Membro** (para que o conjunto não seja só descrito — §1.1(5)): um `Payable` pago em 12/07 com
+> `bank_account_id IS NULL`, uma das 45 legadas → **P1, conta**.
+> **Não-membro:** uma `Charge` paga pelo webhook do Asaas em 12/07 → tem `transaction_id` → **não
+> conta**.
+
+**Consequência de roadmap, dita em voz alta porque muda a leitura do épico:** o gate **não** abre
+"depois da Onda 2" em geral. Ele abre depois da Onda 2 **para um tenant cujos únicos eventos que
+movem conta real na janela sejam baixa de Contas a Pagar e recebimento fora do trilho**. Um tenant
+que registra rendimento precisa da **Onda 2b**; quando o payout virar real, precisa da **Onda 3**.
+P3 e P4 sempre foram termos da divergência — o que estava errado é que eu escrevia a pré-condição
+como se a Onda 2 a satisfizesse sozinha. → **F-D12** (§12).
+
+`_not_investment_yield()` **não é reescrito** em lugar nenhum: é importado de
+`receivables/service.py:82-90`, onde já existe. Duas cópias divergem — e já divergiram uma vez, entre
+dois @sm que não conversam (a Story 8.15 lembrou dele na Invariante do Trilho; a 8.16 esqueceu dele
+na pré-condição, e o efeito era o gate nunca abrir para quem usa Investimentos).
+
+Como isso aparece: o relatório de conferência ganha **uma nota por termo não-zero** no bloco 4 (*"o
+sistema declara o que não sabe"*, que já existe exatamente para isto), cada uma nomeando a onda que
+a fecha:
 
 > *"7 lançamentos deste período não informam de qual conta saíram (R$ 3.120,00). A divergência
 > abaixo inclui esse valor."*
+> *"3 rendimentos de aplicação deste período (R$ 480,00) ainda não geram movimento bancário. A
+> divergência abaixo inclui esse valor."*
 
 ⚠️ **A nota ANOTA; ela NUNCA SUBTRAI.** Descontar o termo conhecido da divergência seria o checkpoint
 corrigindo o derivado com outra roupa: a divergência iria a zero por construção sempre que o sistema
@@ -1123,6 +1512,7 @@ torna essa leitura confiável.
 
 | # | Pergunta | Recomendação minha | Impacto se ele discordar |
 |---|---|---|---|
+| **F-D12** | **NOVA (ratificação, C-1) — você registra rendimento de aplicação no e1p hoje?** A pré-condição do gate (§9.3) tem 4 termos; a Onda 2 zera dois. O rendimento (P3) só zera na **Onda 2b** | **Perguntar antes de planejar** — é uma consulta ao banco, não uma decisão de produto. **Se não registra:** o gate abre no primeiro ciclo pós-Onda 2, como planejado. **Se registra:** a leitura do gate espera a Onda 2b, e o F-D7 (2b logo depois da 2) ganha razão mais forte do que "é barata": **ela vira pré-requisito da métrica primária do épico** | Se ele planejar a leitura do gate para logo depois da Onda 2 sem responder isto, a conferência vai dizer corretamente que o número ainda não decide, e o ciclo é perdido |
 | **F-D2** | **Conta obrigatória bloqueia quem não tem conta cadastrada.** Aceita que `bank_accounts` vire pré-requisito de Contas a Pagar? | **Sim, aceitar.** É a consequência direta de "obrigatória", e a alternativa é o "opcional" que ele já recusou | Se não, volta o opcional e o razão volta a nascer incompleto |
 | **F-D4** | **Desfazer recebimento fora do trilho entra nesta onda?** | **Não agora.** A rota de correção (§5.4) cobre o erro provável (conta/data). O desfazer é seguro (a dívida `platform_earnings` não o alcança) e pode entrar depois | Se sim: +1 rota, +2 testes, escopo pequeno |
 | **F-D9** | **NOVA — estado `scheduled` próprio, ou `paid` com data futura?** | **Estado próprio, e entra JUNTO.** `paid` com data futura afirma o que não aconteceu, exige um predicado autocontraditório (*"pago no futuro"*) replicado em 5 lugares, e **faz o dinheiro agendado sumir da Projeção** (§4.2.2 — verificado no código). Custo medido: ~1/3 de onda, **sem migration de tipo**, **zero impacto na DRE** | Se for `paid`+futuro: é preciso consertar `_window_sums` do mesmo jeito, e separar depois exige migration com backfill sob FORCE RLS |

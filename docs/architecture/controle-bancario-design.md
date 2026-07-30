@@ -327,8 +327,17 @@ CREATE UNIQUE INDEX uq_bank_transactions_dedup
   bateu" num índice parcial. Recalcular por `NOT EXISTS` a cada leitura é correto mas transforma o
   índice em inútil. Mitigação de consistência: `status` **só** é escrito pela função
   `_refresh_status(bank_transaction_id)` do service de conciliação, chamada em toda mutação de
-  vínculo, na mesma transação — e existe um comando de auditoria (`python -m app.scripts.bank_audit`)
-  que recalcula e reporta divergência sem corrigir em silêncio.
+  vínculo, na mesma transação — e um comando de auditoria (`python -m app.scripts.bank_audit`) que
+  recalcula e reporta divergência sem corrigir em silêncio.
+  > ⚠️ **CORREÇÃO 2026-07-30 (ratificação da Onda 2, C-4): `app/scripts/bank_audit.py` NÃO EXISTE, e
+  > `_refresh_status` também não.** Os dois são artefatos da **onda de conciliação (Onda 5 na
+  > numeração nova)**, e este parágrafo os descreve no presente como se já existissem — a afirmação
+  > foi propagada ao ADR 0003 (Consequência 4) e ao epic, que chegou a listar `bank_audit` entre os
+  > *"ativos entregues pelas Ondas 0 e 1 — **não recriar**"*. **Nenhuma story pode citá-lo como
+  > existente.** O script é **pré-requisito da Onda 5**, e é lá que ele passa a ser necessário: é
+  > quando a divergência vira alcançável **sem bug** (matcher concorrente, vínculo parcial). Onde a
+  > condição só é alcançável por bug — como o cache `payables.bank_transaction_id` da Onda 2 —, a
+  > garantia é **teste**, não script: ver `controle-bancario-onda2-design.md` §3.3.
 - **`transfer_id` sem FK dura**, coerente com o resto do projeto.
 
 ### 2.3 `bank_reconciliations` — o vínculo (tabela de ligação, não coluna)
@@ -378,7 +387,8 @@ contrapartida" na conferência — ou seja, o furo falso mais comum seria criado
 ```
 
 Não vira `CHECK` porque depende de agregação sobre outra tabela. Vira: guarda no service +
-teste + o `bank_audit` da §2.2. Igual à decisão do projeto de não usar FK dura: **a integridade
+teste + o `bank_audit` da §2.2 (⚠️ **que não existe ainda** — é pré-requisito da onda de conciliação;
+ver a correção na §2.2). Igual à decisão do projeto de não usar FK dura: **a integridade
 mora no service, sob RLS.** Se a soma for menor que o total, o movimento fica `partial` — e
 `partial` é um estado legítimo e visível (o furo é o resto).
 
@@ -1323,7 +1333,8 @@ de aporte ou resgate. É o ponto cego total que o R3 aponta.
 **Invariante verificável pós-migração:** para toda conta,
 `saldo_derivado(bank_account) == principal_cents + accrued_yield_cents` **antes** de qualquer resgate.
 Um script `python -m app.scripts.bank_audit --investments` reporta divergências sem corrigir em
-silêncio.
+silêncio. ⚠️ **O script não existe** (ver §2.2): quem o escrever, escreve-o **junto** desta onda —
+ele não é reuso de um ativo entregue, é entrega dela.
 
 ⚠️ Este é o **único** backfill deste design que toca dado existente — logo é o único exposto à
 armadilha do FORCE RLS (§2). Ele roda sob a mesma disciplina da migration 0046.
@@ -1524,7 +1535,8 @@ não-usuário, coletado por via indireta. Consequências operacionais:
   2. Resgate: mesmo, invertido, e **nenhuma receita** aparece em lugar nenhum.
   3. Rendimento lançado: aparece na DRE (grupo FINANCEIRO) **e** aumenta o saldo da aplicação.
   4. Contas de investimento pré-existentes migradas: `saldo_derivado == principal + accrued_yield`.
-  5. `bank_audit --investments` reporta zero divergência.
+  5. `bank_audit --investments` reporta zero divergência (⚠️ o script é **entrega desta onda**, não
+     ativo existente — §2.2).
 - **Esforço:** ~1,5 onda. **Atende integralmente o R3.**
 
 ### Onda 3 — Importação de extrato (parser plugável, sem match automático)
