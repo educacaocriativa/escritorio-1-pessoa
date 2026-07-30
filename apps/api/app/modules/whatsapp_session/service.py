@@ -200,3 +200,36 @@ def disconnect(db: Session, *, tenant_id: str) -> None:
     if row is not None:
         row.last_status = STATUS_DISCONNECTED
     db.commit()
+
+
+def check_connections(db: Session, *, tenant_id: str) -> int:
+    """Chamado pelo worker (4ª etapa do sweep). Para tenants JÁ conectados por Evolution
+    (`whatsapp_provider == "evolution"`), confere se a sessão caiu (Evolution não reporta mais
+    "open") e, se sim, avisa o dono por e-mail (canal que não depende do que acabou de quebrar)
+    e marca `last_status`. NÃO cuida da transição connecting->connected (isso é `confirm()`,
+    chamado pelo frontend) — só monitora quedas de quem já estava de pé. Devolve quantas quedas
+    detectou (0 ou 1, já que é por-tenant; o worker soma entre tenants)."""
+    from app.core.email import send_email
+
+    profile = settings_service.get_profile(db, tenant_id)
+    if profile.whatsapp_provider != "evolution":
+        return 0
+    instance = _instance_name(tenant_id)
+    row = db.get(PublicWhatsappInstance, instance)
+    if row is None or row.last_status != STATUS_CONNECTED:
+        return 0
+    evo_status = _fetch_evolution_status(instance)
+    if evo_status == "open":
+        return 0
+    row.last_status = STATUS_DISCONNECTED
+    db.commit()
+    if profile.email:
+        send_email(
+            to=profile.email,
+            subject="WhatsApp desconectado no e1p",
+            body=(
+                "O WhatsApp da sua conta caiu e precisa ser reconectado. "
+                "Acesse Configurações > WhatsApp e escaneie o QR Code novamente."
+            ),
+        )
+    return 1

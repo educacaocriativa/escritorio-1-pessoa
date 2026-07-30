@@ -34,6 +34,7 @@ from app.modules.auth.models import Tenant
 from app.modules.funnels import engine as funnels_engine
 from app.modules.notifications import service as notifications_service
 from app.modules.whatsapp_inbox import service as whatsapp_inbox_service
+from app.modules.whatsapp_session import service as whatsapp_session_service
 from app.seed import PLATFORM_SLUG
 
 logging.basicConfig(level=logging.INFO)
@@ -67,6 +68,7 @@ def run_sweep(
         "funnel_resumed": 0,
         "notifications_processed": 0,
         "whatsapp_media_processed": 0,
+        "whatsapp_connections_dropped": 0,
         "errors": [],
     }
 
@@ -111,12 +113,25 @@ def run_sweep(
                 {"tenant_id": tenant_id, "stage": "whatsapp_media", "error": str(exc)}
             )
 
+        # Etapa 4 — monitora quedas de sessão Evolution (sessão SEPARADA das outras três).
+        try:
+            with tenant_session_factory(tenant_id) as db:
+                dropped = whatsapp_session_service.check_connections(db, tenant_id=tenant_id)
+            result["whatsapp_connections_dropped"] += dropped
+        except Exception as exc:  # noqa: BLE001 — idem: isola a falha por tenant (IV2)
+            logger.exception("[worker] checagem de conexão whatsapp falhou tenant=%s", tenant_id)
+            result["errors"].append(
+                {"tenant_id": tenant_id, "stage": "whatsapp_connections", "error": str(exc)}
+            )
+
     logger.info(
-        "[worker] sweep: tenants=%s funil_resumido=%s notificacoes=%s midia_whatsapp=%s erros=%s",
+        "[worker] sweep: tenants=%s funil_resumido=%s notificacoes=%s midia_whatsapp=%s "
+        "conexoes_whatsapp_caidas=%s erros=%s",
         result["tenants_checked"],
         result["funnel_resumed"],
         result["notifications_processed"],
         result["whatsapp_media_processed"],
+        result["whatsapp_connections_dropped"],
         len(result["errors"]),
     )
     return result

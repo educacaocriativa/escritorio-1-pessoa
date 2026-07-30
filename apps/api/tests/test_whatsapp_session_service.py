@@ -252,3 +252,84 @@ def test_disconnect_logs_out_and_clears_provider(db, monkeypatch: pytest.MonkeyP
     assert any("/instance/logout/e1p-" + TENANT_ID in c for c in calls)
     db.expire_all()
     assert settings_service.get_profile(db, TENANT_ID).whatsapp_provider is None
+
+
+def test_check_connections_emails_owner_on_drop(db, monkeypatch: pytest.MonkeyPatch) -> None:
+    from app.core import email as email_module
+
+    profile = settings_service.get_profile(db, TENANT_ID)
+    profile.whatsapp_provider = "evolution"
+    profile.email = "dono@example.com"
+    db.add(PublicWhatsappInstance(
+        instance_name="e1p-" + TENANT_ID, tenant_id=TENANT_ID, webhook_secret="s",
+        last_status="connected",
+    ))
+    db.commit()
+
+    def _fake_get(url: str, **kwargs: object) -> object:
+        params = kwargs.get("params") or {}
+
+        class _R:
+            status_code = 200
+
+            def raise_for_status(self) -> None:
+                return None
+
+            def json(self) -> list:
+                return [{
+                    "instance": {"instanceName": params.get("instanceName"), "status": "close"}
+                }]
+
+        return _R()
+
+    monkeypatch.setattr(httpx, "get", _fake_get)
+    sent: list[dict] = []
+    monkeypatch.setattr(email_module, "send_email", lambda **kw: sent.append(kw) or "sent")
+
+    dropped = session_service.check_connections(db, tenant_id=TENANT_ID)
+    assert dropped == 1
+    assert sent[0]["to"] == "dono@example.com"
+    db.expire_all()
+    row = db.get(PublicWhatsappInstance, "e1p-" + TENANT_ID)
+    assert row.last_status == "disconnected"
+
+
+def test_check_connections_noop_when_still_connected(db, monkeypatch: pytest.MonkeyPatch) -> None:
+    from app.core import email as email_module
+
+    profile = settings_service.get_profile(db, TENANT_ID)
+    profile.whatsapp_provider = "evolution"
+    db.add(PublicWhatsappInstance(
+        instance_name="e1p-" + TENANT_ID, tenant_id=TENANT_ID, webhook_secret="s",
+        last_status="connected",
+    ))
+    db.commit()
+
+    def _fake_get(url: str, **kwargs: object) -> object:
+        params = kwargs.get("params") or {}
+
+        class _R:
+            status_code = 200
+
+            def raise_for_status(self) -> None:
+                return None
+
+            def json(self) -> list:
+                return [{
+                    "instance": {"instanceName": params.get("instanceName"), "status": "open"}
+                }]
+
+        return _R()
+
+    monkeypatch.setattr(httpx, "get", _fake_get)
+    sent: list[dict] = []
+    monkeypatch.setattr(email_module, "send_email", lambda **kw: sent.append(kw) or "sent")
+
+    dropped = session_service.check_connections(db, tenant_id=TENANT_ID)
+    assert dropped == 0
+    assert sent == []
+
+
+def test_check_connections_ignores_tenants_not_on_evolution(db) -> None:
+    # profile.whatsapp_provider != "evolution" (nunca conectou) — nada a checar.
+    assert session_service.check_connections(db, tenant_id=TENANT_ID) == 0
