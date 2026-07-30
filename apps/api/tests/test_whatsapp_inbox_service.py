@@ -464,8 +464,8 @@ def test_send_reply_text_within_window(db, monkeypatch: pytest.MonkeyPatch):
     )
     assert msg.direction == DIRECTION_OUT
     assert msg.status == "sent"
-    assert captured["token"] == "tok"
-    assert captured["phone_id"] == "phone-123"
+    assert captured["profile"].whatsapp_token == "tok"
+    assert captured["profile"].whatsapp_phone_id == "phone-123"
 
 
 def test_send_reply_text_raises_outside_window(db):

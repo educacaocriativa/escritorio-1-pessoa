@@ -273,10 +273,8 @@ def process_pending_media(db: Session, *, tenant_id: str) -> int:
         # antes garante que já temos os valores em mãos, sem tocar a Session no `except`.
         msg_id = msg.id
         try:
-            url = whatsapp.fetch_media_url(
-                token=profile.whatsapp_token or "", media_id=msg.meta_media_id or ""
-            )
-            data = whatsapp.download_media(token=profile.whatsapp_token or "", url=url)
+            url = whatsapp.fetch_media_url(profile=profile, media_id=msg.meta_media_id or "")
+            data = whatsapp.download_media(profile=profile, url=url)
             mime_type = {
                 "image": "image/jpeg", "audio": "audio/ogg",
                 "document": "application/octet-stream", "video": "video/mp4",
@@ -469,10 +467,7 @@ def send_reply_text(
     if client is None:
         raise WhatsappInboxError("Cliente não encontrado", 404)
     profile = settings_service.get_profile(db, tenant_id)
-    status = whatsapp.send_text(
-        to=client.phone or "", text=text, token=profile.whatsapp_token,
-        phone_id=profile.whatsapp_phone_id,
-    )
+    status = whatsapp.send_text(to=client.phone or "", text=text, profile=profile)
     msg = WhatsappMessage(
         tenant_id=tenant_id, client_id=client_id, direction=DIRECTION_OUT, kind=KIND_TEXT,
         text_body=text, status=status,
@@ -507,14 +502,12 @@ def send_reply_media(
     profile = settings_service.get_profile(db, tenant_id)
     try:
         media_id = whatsapp.upload_media(
-            phone_id=profile.whatsapp_phone_id or "", token=profile.whatsapp_token or "",
-            file_bytes=file_bytes, filename=filename, mime_type=mime_type,
+            profile=profile, file_bytes=file_bytes, filename=filename, mime_type=mime_type,
         )
     except whatsapp.WhatsappApiError as exc:
         raise WhatsappInboxError(f"Falha ao subir mídia: {exc}", 502) from exc
     status = whatsapp.send_media(
-        to=client.phone or "", token=profile.whatsapp_token or "",
-        phone_id=profile.whatsapp_phone_id or "", kind=kind, media_id=media_id, caption=caption,
+        to=client.phone or "", profile=profile, kind=kind, media_id=media_id, caption=caption,
     )
     msg = WhatsappMessage(
         tenant_id=tenant_id, client_id=client_id, direction=DIRECTION_OUT, kind=kind,
@@ -553,8 +546,7 @@ def send_reply_template(
         raise WhatsappInboxError("Template não encontrado ou ainda não aprovado pela Meta", 422)
     profile = settings_service.get_profile(db, tenant_id)
     status = whatsapp.send_template(
-        to=client.phone or "", token=profile.whatsapp_token or "",
-        phone_id=profile.whatsapp_phone_id or "", template_name=template.name,
+        to=client.phone or "", profile=profile, template_name=template.name,
         language=template.language, variables=variables,
     )
     rendered = template.body_text
