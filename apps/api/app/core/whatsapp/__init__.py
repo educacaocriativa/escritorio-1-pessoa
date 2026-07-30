@@ -24,7 +24,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-from app.core.whatsapp.providers import meta
+from app.core.whatsapp.providers import evolution, meta
 from app.core.whatsapp.providers.meta import WhatsappApiError
 
 if TYPE_CHECKING:
@@ -46,11 +46,11 @@ __all__ = [
 
 
 def _resolve(profile: TenantProfile | None):
-    """Escolhe o provider pelo transporte do tenant.
-
-    PONTO DE EXTENSÃO (Onda 2): quando `TenantProfile.whatsapp_provider` existir, este função
-    passa a ser `meta if profile is None or profile.whatsapp_provider != "evolution" else
-    evolution`. Até lá só `meta` existe — não há branch para escrever."""
+    """Escolhe o provider pelo transporte do tenant. `None` (perfil ausente) ou qualquer valor
+    diferente de "evolution" cai em `meta` — inclusive `None`/"meta" (estado de hoje, ou tenant
+    que nunca conectou por QR)."""
+    if profile is not None and profile.whatsapp_provider == "evolution":
+        return evolution
     return meta
 
 

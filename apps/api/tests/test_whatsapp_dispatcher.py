@@ -16,11 +16,17 @@ from app.core import whatsapp
 
 
 class _FakeProfile:
-    """Dublê mínimo de TenantProfile — só os 2 campos que o despachante lê."""
+    """Dublê mínimo de TenantProfile — só os campos que o despachante lê. `whatsapp_provider`
+    default None: estes testes (Onda 0) exercitam o caminho Meta via `profile=`, então o
+    default precisa continuar resolvendo pra `meta` depois que `_resolve` (Onda 2) passou a
+    ler esse campo de verdade."""
 
-    def __init__(self, token: str | None, phone_id: str | None) -> None:
+    def __init__(
+        self, token: str | None, phone_id: str | None, whatsapp_provider: str | None = None
+    ) -> None:
         self.whatsapp_token = token
         self.whatsapp_phone_id = phone_id
+        self.whatsapp_provider = whatsapp_provider
 
 
 def test_send_text_with_profile_equivalent_to_explicit_credentials(
@@ -133,6 +139,29 @@ def test_fetch_media_url_and_download_media_with_profile(
     assert url == "https://example.com/f"
     data = whatsapp.download_media(profile=profile, url=url)
     assert data == b"file-bytes"
+
+
+def test_resolve_picks_evolution_when_profile_provider_is_evolution() -> None:
+    from app.core.whatsapp.providers import evolution
+
+    class _P:
+        whatsapp_provider = "evolution"
+
+    assert whatsapp._resolve(_P()) is evolution
+
+
+def test_resolve_picks_meta_when_profile_provider_is_meta_or_none() -> None:
+    from app.core.whatsapp.providers import meta
+
+    class _Meta:
+        whatsapp_provider = "meta"
+
+    class _None:
+        whatsapp_provider = None
+
+    assert whatsapp._resolve(_Meta()) is meta
+    assert whatsapp._resolve(_None()) is meta
+    assert whatsapp._resolve(None) is meta
 
 
 def test_no_direct_provider_imports() -> None:
