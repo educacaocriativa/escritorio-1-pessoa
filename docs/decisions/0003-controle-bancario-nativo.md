@@ -79,7 +79,10 @@ oposto literal da Regra de Ouro nº 4.)
 
 **Regra dos Planos (normativa e testável):** nenhum cálculo de saldo bancário lê `transactions` e
 vice-versa; `app.modules.bank` pode importar `app.modules.wallet`, nunca o contrário; todo campo de
-saldo trafega com um campo irmão `*_origem` declarando a procedência.
+saldo trafega com um campo irmão `*_origem` declarando **de qual plano de dinheiro** ele vem
+(`plataforma` | `banco` | `misto` | `indisponivel`). A procedência da **evidência externa** de um
+saldo atestado por terceiro é um **segundo eixo**, com campo e vocabulário próprios (`*_fonte`) —
+ver Adendo 1 e design §1.3.1.
 
 ## Alternativas consideradas e rejeitadas
 
@@ -208,6 +211,48 @@ da operação e documento fiscal nascem nullable. É barato guardar cedo e impos
 o dado histórico não volta.
 
 **10. Zero custo recorrente novo.** Coerente com a Regra de Ouro nº 4 e com os ADRs 0001 e 0002.
+
+## Adendos de ratificação (2026-07-29)
+
+> Origem: dois @sm expandiram o Epic 8 em 8 stories e escalaram sete desvios do design para
+> ratificação. Parecer completo:
+> [`docs/architecture/controle-bancario-design-ratificacao.md`](../architecture/controle-bancario-design-ratificacao.md).
+> Nenhum desvio alterou uma decisão deste ADR; três alteraram o **grão** de como ela é implementada, e
+> por isso ficam registrados aqui — um ADR que descreve um design que mudou é pior do que nenhum.
+
+**Adendo 1 — A procedência de um saldo tem DOIS eixos, não um.** O texto original da Regra dos Planos
+tratava `*_origem` como um campo único, e o design listava três vocabulários incompatíveis para ele em
+três seções. A causa era conceitual: *"de qual plano de dinheiro este número vem"* (`plataforma` |
+`banco` | `misto` | `indisponivel`) e *"por qual porta este saldo externo entrou no e1p"* (`manual` |
+`ofx`, os valores da coluna `bank_balance_checkpoints.origin`) são perguntas diferentes. Dois campos
+(`*_origem` e `*_fonte`), dois vocabulários, em dois lugares (`core/money_planes.py` e
+`bank/models.py`). Os valores `declarado` e `extrato` ficam **revogados** como `*_origem`: eram o eixo
+B disfarçado, e mantê-los obrigava uma tradução silenciosa (`origin='manual'` → `origem='declarado'`)
+que só existia para satisfazer um documento incoerente. **Sem impacto na decisão**; impacto no
+contrato de API, resolvido antes de qualquer implementação.
+
+**Adendo 2 — A Onda 0 suprime também o `alert` de janela negativa, não só o runway em dias.** A
+Consequência positiva 7 deste ADR (*"a Projeção e o Runway passam a ser verdadeiros já na Onda 0/1"*)
+era otimista: a Onda 0 **não** conserta o número (isso é a Onda 1), ela cala as afirmações que
+dependiam dele. E eram **duas** afirmações, não uma — o 🔴 *"projeção de caixa negativa em N dias"*
+nasce do mesmo `saldo_inicial` contaminado. Como `request_payout` só marca `withdrawn` (não existe
+saque real) e `payables` não toca a Carteira, `available_cents` só cresce para todo tenant real, o que
+faz desse `alert` uma **máquina de falso negativo**: silêncio exatamente quando deveria alertar. Fica
+suprimido na Onda 0 (`alert=False` + `alert_suprimido`), com `saldo_projetado_cents` **ainda exposto e
+exibido** — suprime-se a afirmação, nunca o número. Restaurado na Onda 1, sobre saldo com lastro.
+Design §6.1.2.
+
+**Adendo 3 — Nenhum número de revision de migration é fixado por design.** O design prescrevia "uma
+migration por onda" e mapeava `Onda 1 → 0058`. Errado em ambos: a granularidade real é **uma migration
+por story que cria tabela** (a Onda 1 cria três tabelas em três stories, logo três revisions), e o
+número depende do head real no momento da implementação — encadear num revision antigo produz
+`multiple heads` e quebra `alembic upgrade head`. A coluna "Migration" do faseamento vale como
+**ordem**, não como identificador. Design §2.
+
+**Custo aceito e adicionado à conta desta decisão:** a Onda 0 obriga a **atualizar os testes de runway
+da Story 5.7** (que hoje afirmam um número de dias) e faz `runway.days` ser `None` em todo cenário com
+queima até a Onda 1. Isso é correção de bug, não regressão (alternativa F acima), e a cobertura do
+cálculo se desloca para `burn_rate_cents_per_day`, que continua exposto e continua correto.
 
 ## Revisão futura
 

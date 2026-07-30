@@ -1,10 +1,17 @@
 # Controle Bancário e Conferência de Saldo — Design Arquitetural
 
 > **Autor:** Aria (@architect)
-> **Data:** 2026-07-29
-> **Status:** Proposto — aguarda ratificação do fundador nos pontos da §10
+> **Data:** 2026-07-29 · **Revisado:** 2026-07-29 (ratificação dos desvios do Epic 8 — ver abaixo)
+> **Status:** Ratificado. Onda 0 + Onda 1 liberadas pelo fundador (epic §9 F2); §10 traz as pendências
+> que **não** bloqueiam essas duas ondas.
 > **Tipo:** Design de arquitetura. **NÃO é** implementação, story nem migration. Os blocos de schema
-> abaixo são **ilustrativos** (documentam intenção, não são código para colar).
+> são **ilustrativos** (documentam intenção, não são código para colar) — **exceto** os que estão
+> marcados `CONTRATO`: §1.3.1 (vocabulários de procedência), §3.1.1 (assinaturas de saldo derivado),
+> §5.3 (`CompletenessInput`) e §6.1 (`CashProjection`/`Runway`/`ProjectionWindow`), que foram fixados
+> na ratificação porque duas stories em paralelo precisam concordar sobre eles.
+> **Parecer de ratificação (2026-07-29):**
+> [`controle-bancario-design-ratificacao.md`](controle-bancario-design-ratificacao.md) — julga sete
+> desvios levantados pelo @sm e registra o que mudou neste documento e por quê.
 > **ADR associado:** [`docs/decisions/0003-controle-bancario-nativo.md`](../decisions/0003-controle-bancario-nativo.md)
 > **Estudo antecedente:** [`docs/research/2026-07-29-conta-bancaria-conciliacao-brainstorm.md`](../research/2026-07-29-conta-bancaria-conciliacao-brainstorm.md)
 
@@ -109,9 +116,39 @@ Caixa total:                      os dois somados, SEMPRE com os rótulos visív
 > **(b)** A dependência entre os módulos é **unidirecional**: `app.modules.bank` **pode** importar
 > `app.modules.wallet`; `app.modules.wallet` **nunca** importa `app.modules.bank`. O ponto de
 > contato (§1.2) vive no lado `bank`.
-> **(c)** Todo campo de API que carrega um valor monetário de saldo declara sua origem num campo
-> irmão `*_origem` com valor em `{"plataforma", "banco", "declarado", "indisponivel"}`. Nenhum
-> número de saldo trafega sem procedência.
+> **(c)** Todo campo de API que carrega um valor monetário de saldo declara **de qual plano de
+> dinheiro** ele vem, num campo irmão `*_origem` com valor em
+> `{"plataforma", "banco", "misto", "indisponivel"}`. Nenhum número de saldo trafega sem procedência.
+
+#### 1.3.1 Os DOIS eixos de procedência — correção de incoerência do próprio design
+
+> **Ratificado em 2026-07-29** (ver `controle-bancario-design-ratificacao.md`, D-3). A primeira versão
+> deste documento listava três vocabulários **incompatíveis** para `*_origem` em três seções: §1.3c
+> (`{plataforma, banco, declarado, indisponivel}`), §6.1 (`{plataforma, banco, misto, indisponivel}`)
+> e §5.1 (`{declarado, extrato, indisponivel}`) — mais um quarto, `manual|ofx`, já cravado na coluna
+> `bank_balance_checkpoints.origin` da §2.4. Não era descuido de redação: eram **dois conceitos
+> distintos achatados num só campo**. Cinco valores num único campo escondiam a confusão; dois campos
+> a resolvem.
+
+| | **Eixo A — plano** | **Eixo B — porta de entrada** |
+|---|---|---|
+| **Pergunta que responde** | *"De qual plano de dinheiro (§1.1) este número vem?"* | *"Por qual porta este saldo **externo** entrou no e1p?"* |
+| **Sufixo canônico do campo** | `*_origem` | `*_fonte` |
+| **Vocabulário** | `plataforma` \| `banco` \| `misto` \| `indisponivel` | os valores da coluna `bank_balance_checkpoints.origin`: `manual` \| `ofx` |
+| **Onde vive o vocabulário** | `app/core/money_planes.py` (`ORIGEM_*`, `ORIGENS`) | `app/modules/bank/models.py` (`ORIGIN_MANUAL`, `ORIGIN_OFX`, `ORIGINS`) — ao lado da coluna que ele descreve |
+| **Por que em `core/`** | é consumido por `financial_intelligence` **e** por `bank`, e nenhum dos dois pode importar o outro nessa direção | não precisa: só `bank` (e quem lê o relatório dele) conhece checkpoint |
+| **Obrigatório em** | todo campo de saldo, sem exceção (§1.3c) | só em saldo **atestado por terceiro** (hoje: o checkpoint) |
+
+**`declarado` e `extrato` estão REVOGADOS como valores de `*_origem`.** Eles eram os valores do eixo B
+vestidos de eixo A: `declarado` ≡ `manual`, `extrato` ≡ `ofx`. Manter as duas grafias para a mesma
+coisa obrigaria uma camada de tradução (`origin='manual'` → `origem='declarado'`) que existe apenas
+para satisfazer um documento incoerente — e toda tradução silenciosa entre dois vocabulários do mesmo
+conceito é uma fábrica de bug de manutenção. **`ORIGENS` tem quatro valores, não cinco.**
+
+**Consequência para a conferência (§5.1):** `saldo_banco` e `saldo_sistema` são **ambos** do plano 3 —
+o eixo A é degenerado (`banco` nos dois) e não informa nada ali. O que distingue os dois números é o
+**método de estabelecimento** (atestado pelo banco × derivado pelo e1p), e isso já está nos **nomes**
+dos campos. O eixo B é que carrega informação nova, e por isso ganha campo próprio.
 
 **Como isso vira teste** (não é convenção, é gate):
 
@@ -123,6 +160,11 @@ Caixa total:                      os dois somados, SEMPRE com os rótulos visív
 3. `test_wallet_summary_ignora_bank` — o recíproco.
 4. `test_projecao_declara_origem_do_saldo_inicial` — `CashProjection` sempre traz
    `saldo_inicial_origem` preenchido (Onda 0, §6.1).
+5. `test_todo_saldo_declara_origem` — teste de **contrato**, não de cenário: varre os schemas de saída
+   que expõem saldo e exige, para cada campo de saldo, o irmão `*_origem` com valor em `ORIGENS`.
+   É este teste que torna o item (c) auditável **sem exceções** — e é por isso que o `*_origem` da
+   conferência é mantido mesmo sendo degenerado ali (§1.3.1): uma exceção "porque não informa nada
+   neste caso" transforma um invariante mecânico num julgamento caso a caso, e aí ele para de valer.
 
 Sem (1) o resto degrada por acidente: basta uma story futura importar o módulo errado para
 recriar o §1.1 numa forma nova.
@@ -139,8 +181,18 @@ Convenções aplicadas em todas as tabelas abaixo, sem exceção:
 - **Sem FK dura** entre tabelas de negócio — referência solta, integridade por RLS + validação no
   service (padrão do projeto: `charges.client_id`, `payables.contract_id`, `cost_center_id`).
 - Dinheiro em `BigInteger` (centavos).
-- Head atual das migrations é **0057** (`device_tokens`). As migrations deste design encadeiam a
-  partir de 0058, linearmente, uma por onda (ver §8).
+- **Numeração de migration: este design NÃO fixa número de revision.** Head na data do design:
+  `0057_device_tokens.py` (reconfirmado 2026-07-29). A única lei é **encadear linearmente após o head
+  REAL no momento da implementação** — a lição já escrita na docstring da `0049_investments.py`:
+  encadear num revision antigo cria múltiplos heads e `alembic upgrade head` falha.
+  > **Ratificado em 2026-07-29** (D-6): a versão anterior deste documento prescrevia *"uma migration
+  > por onda"* e a §8 mapeava `Onda 1 → 0058`, `Onda 2 → 0059`, etc. **Errado nos dois pontos.** A
+  > granularidade real é **uma migration por story que cria tabela** — a Onda 1 sozinha cria três
+  > tabelas em três stories (`bank_accounts`, `bank_transactions`, `bank_balance_checkpoints`) e
+  > portanto consome **três** revisions. A coluna "Migration" da §8 vale como **ordem de dependência**,
+  > nunca como identificador. Um design que carimba número de revision fica desatualizado no primeiro
+  > merge de qualquer outra frente de trabalho, e o custo de acreditar nele é um `multiple heads` em
+  > produção.
 
 > ⚠️ **Armadilha conhecida do backfill sob FORCE RLS** (documentada em `migrations/versions/0046_ledger_classification.py`):
 > a migration roda como o papel dono non-superuser `e1p_app` **sem** a GUC `app.current_tenant_id`,
@@ -479,6 +531,42 @@ estimou 8–20 saídas/mês `[ESTIMATIVA]`; some entradas e chegue a ~40 movimen
 ~5.000 em dez anos, por conta, por tenant. `SUM` sobre 5.000 linhas indexadas é ruído. **Materializar
 saldo aqui seria otimizar o eixo errado e pagar com a única propriedade que o produto está vendendo:
 que o número é conferível.**
+
+#### 3.1.1 Assinaturas canônicas do saldo derivado — e a que a conferência NÃO pode usar
+
+> **Ratificado em 2026-07-29** (D-4). Existem **duas** funções de saldo derivado, com propósitos
+> distintos, e confundi-las reintroduz exatamente o erro que a §5.1 manda recusar.
+
+```python
+# app/modules/bank/service.py — CANÔNICO
+def derived_balance(db, *, bank_account_id: str, until: date | None = None) -> int: ...
+#   UMA conta, UMA data. `until` é DATE (nunca datetime) e é INCLUSIVO. É a única implementação
+#   da fórmula da §3.1 no repositório inteiro — uma segunda torna a Regra dos Planos §1.3a
+#   inauditável (o `dedup-checker` deve reprovar).
+
+def derived_balances_as_of(
+    db, *, as_of: date | None = None, include_archived: bool = False
+) -> dict[str, int]: ...
+#   TODAS as contas, UMA data comum — para TELA DE LISTA ("Contas & Saldos", §5.4), onde o usuário
+#   quer o saldo de hoje de tudo. PROIBIDO na conferência (ver abaixo).
+```
+
+**A conferência (§5.1) usa laço de `derived_balance` por conta, com o `until` de cada conta.** Não é
+concessão de performance: é correção. A conferência tem **uma data de referência por conta** — o
+`reference_date` do checkpoint daquela conta —, e um `as_of` comum compararia o saldo do banco de uma
+data com o saldo do sistema de outra, que é *o* erro clássico desta classe de relatório e que a §5.1
+manda o service **recusar**. Escala real: uma empresa de 1 pessoa com um punhado de contas; N queries
+sob índice `(tenant_id, bank_account_id, posted_at)` é ruído (mesmo argumento do saldo derivado acima).
+
+**Por que não trocar a assinatura por um mapa `{conta: data}`:** porque o ganho da versão em lote é
+fazer **uma** passada no banco, e com uma data por conta isso degenera em N queries (ou num `CASE`
+por conta que é menos legível que o laço). O mapa custaria complexidade para entregar zero — e
+convidaria o chamador a construí-lo a partir de uma data única, que é o bug de novo. **A função em
+lote existe para o caso em que a data É uma só; a conferência não é esse caso.**
+
+⚠️ **Nome, não só assinatura:** a função em lote **não** se chama `derived_balances` (diferença de um
+`s` final em relação à correta, para um erro cujo sintoma é uma divergência falsa e silenciosa). O
+`as_of` no nome e no parâmetro declara que há **uma** data para todas as contas.
 
 Mitigação do único caso que dói (extrato de 10 anos, tela de saldo diário): `opening_balance_cents`
 já funciona como ponto de corte, e se um dia doer, a resposta é um **checkpoint de corte** (mover o
@@ -830,12 +918,15 @@ class ConferenciaConta:
     periodo: tuple[date, date]
 
     # ── bloco 1: o saldo bate? ────────────────────────────────────────────
-    saldo_banco_cents: int | None      # checkpoint mais recente <= end (manual ou LEDGERBAL)
-    saldo_banco_origem: str            # "declarado" | "extrato" | "indisponivel"
+    # ⚠️ Vocabulário corrigido em 2026-07-29 (§1.3.1 — dois eixos, dois campos).
+    saldo_banco_cents: int | None       # checkpoint utilizável na janela; None = não sei
+    saldo_banco_origem: str            # EIXO A (plano): ORIGEM_BANCO | ORIGEM_INDISPONIVEL
+    saldo_banco_fonte: str | None      # EIXO B (porta): ORIGIN_MANUAL | ORIGIN_OFX; None se indisp.
     saldo_banco_data: date | None
-    saldo_sistema_cents: int           # derivado (§3.1) na MESMA data
-    divergencia_cents: int             # banco − sistema  (+ = tem dinheiro que o sistema não conhece)
-    dentro_da_tolerancia: bool
+    saldo_sistema_cents: int | None    # derivado (§3.1) na MESMA data; None quando não há o que comparar
+    saldo_sistema_origem: str          # EIXO A: sempre ORIGEM_BANCO (derivado dos movimentos)
+    divergencia_cents: int | None      # banco − sistema  (+ = tem dinheiro que o sistema não conhece)
+    dentro_da_tolerancia: bool | None
     tolerancia_cents: int
 
     # ── bloco 2: extrato SEM contrapartida no sistema (o furo clássico) ───
@@ -862,6 +953,41 @@ em vez de mostrar um número falso).
 tenant]**, herdada da ideia I-15 do estudo. Dentro da banda → verde e **silêncio**. O e1p não é
 ferramenta contábil; não precisa fechar em zero, e alertar sobre R$ 3,50 num mês de R$ 25.000 treina
 o usuário a ignorar o alerta.
+
+#### 5.1.1 Onde a banda MORA, se for persistida (REQ-16)
+
+> **Resposta arquitetural dada em 2026-07-29** (D-7). A decisão de **escopo** (persistir na Onda 1 ou
+> não) é do @po/fundador; a de **lugar** é minha, e é esta.
+
+**Forma na Onda 1 (recomendada): função pura parametrizada, sem persistir.**
+`tolerance_cents(saldo_cents, *, floor_cents=TOLERANCE_FLOOR_CENTS, pct=TOLERANCE_PCT) -> int`.
+Razão que não é preguiça de escopo: **a Onda 1 é um instrumento de medição** (epic §3.1 — o número
+dela é o gate que libera ou mata as Ondas 3 e 4, 4,5 ondas de trabalho). Se cada tenant pode mover a
+banda, a régua muda junto com o que ela mede e a leitura do gate perde sentido. Uma banda **fixa e
+conhecida** é uma propriedade do experimento, não uma limitação dele.
+
+**Quando persistir: `tenant_profiles`, duas colunas, por tenant — não por conta.**
+
+| Opção | Veredito |
+|---|---|
+| **`tenant_profiles` (`app/modules/settings/models.py`)** — 1 linha por tenant, RLS, criada sob demanda com defaults, e **já carrega configuração operacional** (`timezone`, `default_entry_funnel_id`, credenciais de WhatsApp), não só brand kit | **ESCOLHIDA.** Reusa a tabela de configuração que existe, com o padrão de default-on-demand já testado. Custo: 2 colunas numa migration aditiva, zero backfill |
+| Tabela `bank_settings` nova, 1:1 com tenant | **Rejeitada.** É `tenant_profiles` com outro nome, para dois escalares. Uma tabela por conjunto de preferências é como se chega a quinze tabelas de uma linha |
+| Coluna em `bank_accounts` (banda **por conta**) | **Rejeitada agora, não descartada.** O componente percentual da fórmula **já** adapta a banda ao tamanho de cada conta — que é justamente o que faz um único ajuste servir para a corrente de R$ 80k e para a "Caixinha" de R$ 300. Uma banda por conta só se justifica quando aparecer evidência de uma conta com regime de ruído próprio; então entra como coluna **nullable** de override em `bank_accounts`, lida com fallback no default do tenant. Fazer isso antes é inventar requisito (Art. IV) |
+| Arquivo YAML / env var | **Rejeitada.** É configuração de **negócio por tenant**, não de infraestrutura; um SaaS multi-tenant não configura tenant por deploy |
+
+**Forma das colunas — sem float no banco:**
+`bank_tolerance_floor_cents BIGINT NOT NULL DEFAULT 5000` e
+`bank_tolerance_bps INTEGER NOT NULL DEFAULT 50` (basis points: 50 bps = 0,5%). O percentual entra como
+**inteiro em pontos-base**, não como `float`/`NUMERIC`: mantém a disciplina "dinheiro e taxas de
+dinheiro em inteiro" do projeto, e o cálculo fica `round(abs(saldo) * bps / 10_000)` — determinístico,
+sem arredondamento de binário flutuante persistido. A função pura continua sendo o único lugar da
+fórmula; o que muda é de onde vêm os dois parâmetros (uma linha em `diagnostics`/`reconciliation`).
+
+**Dono da migration:** **não** a story do `bank_accounts`. `tenant_profiles` não é tabela do módulo
+`bank`, e enfiar `ALTER TABLE tenant_profiles` na migration que cria `bank_accounts` mistura dois
+domínios num revision e torna o `downgrade` mais arriscado do que precisa. Se o REQ-16 exigir
+persistência, ela é **story própria** com revision própria (§2 — revisions encadeiam após o head real;
+não há "vaga de 0058" a disputar).
 
 **Bloco 2 — o furo clássico (despesa esquecida).** Movimentos com `status in ('unmatched','partial')`
 no período, ordenados por valor absoluto decrescente (o que dói primeiro). Cada item traz ações
@@ -895,25 +1021,83 @@ tabela de 43 linhas.**
 `financial_intelligence/engine.py` é puro, sem I/O, e recebe um `EngineInput` de dataclasses. A
 conferência entra ali como **regra determinística de primeira classe** — não como uma tela paralela:
 
+> ⚠️ **Forma CANÔNICA, fixada em 2026-07-29 (D-4 do parecer de ratificação).** A versão anterior deste
+> bloco mostrava um `CompletenessInput` **plano**, que **não consegue nomear qual conta está fora da
+> banda** — e nomear a conta é exigência da decisão do fundador F3 (várias contas PJ) e do epic §3.2.
+> Um plano com decomposição por conta não é refinamento cosmético: sem ele, três contas divergindo
+> +R$ 1.200, −R$ 900 e +R$ 40 produzem o diagnóstico "+R$ 340, parece saudável" e o produto perde
+> exatamente a capacidade que está vendendo. **O bloco abaixo não é mais ilustrativo — é o contrato.**
+
 ```python
-# engine.py — ILUSTRATIVO (entrada nova)
+# engine.py — CONTRATO (não colar cegamente: respeitar o estilo do arquivo)
 @dataclass(frozen=True)
-class CompletenessInput:
-    divergencia_cents: int | None       # None = nunca conferido
+class CompletenessAccountInput:
+    """UMA conta bancária, já conferida (ou não) pelo serviço de conferência (§5.1).
+
+    `account_name` pode conter PII → anonimizado pelo narrador na SAÍDA para o Claude, NUNCA aqui
+      (exatamente o caminho que `MarginTrend.project_name` já percorre).
+    `divergencia_cents = None` significa NÃO AVALIÁVEL (sem saldo declarado utilizável na janela) —
+      jamais "zero". Confundir os dois faz o motor afirmar que está batendo o que não foi conferido.
+    `dias_desde_ultima_conferencia = None` = nunca confirmado.
+    """
+    account_name: str
+    divergencia_cents: int | None
     tolerancia_cents: int
     dias_desde_ultima_conferencia: int | None
-    movimentos_sem_contrapartida: int
 
-# regra nova (mesma forma das regras de margem/runway já existentes):
-#   divergencia is None ou dias > 45         → 🟡  "não sei se os números estão completos"
-#   |divergencia| > tolerância               → 🔴  "faltam R$ X em lançamentos"
-#   movimentos_sem_contrapartida > 0         → 🟡  "N movimentos sem conta correspondente"
-#   dentro da tolerância e recente           → 🟢  "está tudo batendo"
+
+@dataclass(frozen=True)
+class CompletenessInput:
+    """Completude POR CONTA. `contas == []` = nenhuma conta bancária cadastrada (estado de todos os
+    tenants hoje). `movimentos_sem_contrapartida` nasce 0 por construção na Onda 1 (não existe
+    conciliação) e a regra só acorda na Onda 3 — PROIBIDO aproximar por "movimentos unmatched":
+    esse número alimenta o gate de decisão do epic §3.1, e um número inventado ali custa ~4,5 ondas.
+    """
+    contas: list[CompletenessAccountInput]
+    movimentos_sem_contrapartida: int = 0
+
+# EngineInput ganha `completeness: CompletenessInput | None = None` — ÚLTIMO campo, COM default, para
+# que as chamadas e os testes da Story 5.8 continuem válidos sem edição (None → zero sinais).
 ```
 
+**A `dias_desde_ultima_conferencia` mora na CONTA, não no relatório.** Colapsar para o máximo entre as
+contas ("a mais desatualizada manda") é honesto mas **perde qual conta é** — e cai na mesma armadilha
+do consolidado que o F3 proíbe. Uma conta conferida ontem e outra nunca conferida não são "45 dias":
+são duas afirmações diferentes sobre duas contas.
+
+**Regra de completude — forma canônica** (`source="completude"`, limiar
+`_COMPLETENESS_STALE_DAYS = 45` ao lado de `_RUNWAY_RED_DAYS`/`_MARGIN_DROP_*`):
+
+| Condição | Nível | Cardinalidade | Explicação |
+|---|---|---|---|
+| `data is None` | — | — | nenhum sinal (compatibilidade retroativa com a 5.8) |
+| `contas == []` | 🟡 | 1 por relatório | *"Nenhuma conta bancária cadastrada — não sei se os seus lançamentos estão completos"* |
+| conta com `divergencia is None` **ou** `dias is None` **ou** `dias > 45` | 🟡 | **1 por conta** | nomeia a conta e **qual** dos casos: *"nunca confirmado"* / *"confirmado há N dias"* / *"sem saldo declarado na janela"* |
+| conta com `divergencia is not None` e `abs(divergencia) > tolerancia` | 🔴 | **1 por conta** | nomeia a conta, o valor e a tolerância aplicada. Quando `divergencia < 0`, diz que **provavelmente faltam lançamentos de saída** (REQ-14 — o achado de maior valor) |
+| `movimentos_sem_contrapartida > 0` | 🟡 | 1 por relatório | *"N movimentos sem conta correspondente"* — **dormente até a Onda 3** |
+| todas as contas avaliáveis **e** dentro da banda **e** frescas (`dias <= 45`) | 🟢 | 1 por relatório | *"Está tudo batendo"* + a maior divergência absoluta e sua tolerância |
+
+Duas notas que evitam retrabalho:
+1. **As duas regras 🟡 de "não sei" foram fundidas numa só, por conta.** Ter uma regra para "sem
+   checkpoint" e outra para "checkpoint velho" produz, num tenant com 3 contas nenhuma conferida, seis
+   sinais 🟡 dizendo a mesma coisa — ruído que treina o usuário a ignorar a tela, o mesmo vício que a
+   banda de tolerância existe para evitar. **Uma conta gera no máximo um 🟡 de "não sei".** (Um 🔴 de
+   fora-da-banda **pode** coexistir com um 🟡 de desatualização na mesma conta: são afirmações
+   diferentes — *"está fora da banda em R$ X"* e *"e essa medição é de 60 dias atrás"*.)
+2. **Um 🟢 exige que TODAS as contas sejam avaliáveis.** Qualquer conta não conferida impede o verde: o
+   sistema não afirma que está batendo aquilo que não conferiu.
+
+**O motor decide por `abs(divergencia) > tolerancia`, não pelo `dentro_da_tolerancia` da §5.1** —
+não porque o booleano esteja errado, mas para não haver **duas verdades** sobre a mesma comparação
+(o booleano é para a UI; o motor é auto-suficiente e o teste unitário fica trivial). A borda
+`abs(divergencia) == tolerancia` é **dentro** (silêncio) nos dois lugares, e isso precisa de teste
+para ninguém invertê-lo em manutenção.
+
 `diagnostics.py` (a camada fina de I/O) ganha a chamada ao serviço de conferência e adapta para
-`CompletenessInput`. **Nada muda na arquitetura** — é exatamente o ponto de extensão que a Story 5.8
-projetou.
+`CompletenessInput` — **uma `CompletenessAccountInput` por `ConferenciaConta`**, `movimentos_sem_contrapartida=0`
+literal. **Nada muda na arquitetura** — é exatamente o ponto de extensão que a Story 5.8 projetou, e
+`engine.py` continua **estritamente puro** (sem `Session`, sem query, sem `core.ai`, sem tocar `bank`):
+a decomposição por conta chega **já montada** de fora, o que é precisamente o que a pureza permite.
 
 **Por que 🔴 e não um aviso lateral:** se a completude estiver quebrada, os outros sinais (margem,
 runway, rentabilidade) estão calculados sobre dados incompletos. O sinal de completude tem
@@ -944,22 +1128,136 @@ lacuna de feature**, e a correção **não depende de nada** deste design.
 **Onda 0 (zero tabelas novas, zero migration):**
 
 ```python
-# ILUSTRATIVO — projection.py
+# CONTRATO — projection.py  (ratificado 2026-07-29: D-1 e D-5)
 @dataclass
 class CashProjection:
     ...
     saldo_inicial_cents: int
-    saldo_inicial_origem: str    # NOVO: "plataforma" | "banco" | "misto" | "indisponivel"
+    saldo_inicial_origem: str        # "plataforma" | "banco" | "misto" | "indisponivel" (§1.3.1, eixo A)
+
+@dataclass
+class Runway:
+    days: int | None
+    days_suprimido: bool             # True ⇒ days IS None, sempre (invariante testável)
+    burn_rate_cents_per_day: int     # NÃO é suprimido — deriva de contas em aberto, não do saldo
+
+@dataclass
+class ProjectionWindow:
+    days: int
+    saldo_projetado_cents: int       # continua exposto — o número é mostrado, a AFIRMAÇÃO é calada
+    alert: bool
+    alert_suprimido: bool            # True ⇒ alert IS False, sempre (invariante testável)
 ```
 
 - `saldo_inicial_origem = "plataforma"` e uma `note` nova, explícita:
   *"O saldo inicial vem do disponível na Carteira e1p, não da sua conta bancária. Enquanto você não
   cadastrar sua conta, a projeção e o runway são aproximações."*
-- **O runway deixa de ser exibido em dias** quando `origem == "plataforma"` — vira uma faixa
-  qualitativa ou some. Projetar "faltam 43 dias" sobre um saldo cuja origem é errada é a pior
-  combinação possível: precisão espúria sobre premissa falsa.
 - O campo `notes: list[str]` já existe **exatamente para isso** (`_NOTE_CAIXA`, `_NOTE_OVERDUE`) —
   é o padrão da casa, não invenção.
+
+#### 6.1.1 A supressão é NA ORIGEM (backend), porque há DUAS superfícies — não uma
+
+> **Ratificado em 2026-07-29 (D-1).** A versão anterior desta seção dizia que *"o runway deixa de ser
+> **exibido** em dias"*, e a leitura natural era "na tela". **Isso era lacuna do design, não licença
+> para suprimir só na tela.** Existem duas superfícies que hoje afirmam runway em dias sobre o
+> `saldo_inicial` contaminado:
+>
+> 1. `ProjecaoCaixaPage.tsx` → `runwayLabel(runway.days)`;
+> 2. `/financeiro/diagnostico` → `diagnostics.collect_engine_input` (`diagnostics.py:90`) repassa
+>    `proj.runway.days` ao motor, e `engine._runway_signal` (`engine.py:128-137`) emite
+>    *"Runway de N dias"* / *"Runway < 60 dias"*.
+>
+> Eu só havia mapeado a (1). O critério de pronto desta seção, porém, é **surface-agnostic** — *"nenhum
+> usuário vê um runway em dias derivado de um saldo inicial cuja origem não está declarada na própria
+> tela"* —, e um critério surface-agnostic exige supressão surface-agnostic.
+
+**A regra normativa, então:**
+
+> **Quando `saldo_inicial_origem == "plataforma"` e há queima (`burn_rate > 0`), `projection.py` devolve
+> `runway.days = None` + `days_suprimido = True`.** A supressão acontece **na origem do dado**, não em
+> cada consumidor.
+
+Três razões, em ordem de peso:
+
+1. **Fail-closed.** Qualquer superfície criada depois (uma API pública, um resumo por e-mail, o
+   Cockpit) herda a supressão **sem precisar saber que ela existe**. Suprimir por consumidor é
+   fail-open: cada novo consumidor é uma nova chance de vazar, e N regras precisam ficar em sincronia.
+2. **`engine.py` e `diagnostics.py` ficam intocados.** `engine._runway_signal(None)` já devolve `[]` —
+   silêncio, não um 🟢 falso. O comportamento correto sai **por construção**, sem segunda regra. E
+   isso elimina colisão de merge com a story que adiciona a regra de completude (§5.3) exatamente
+   nesses dois arquivos.
+3. **É o mesmo dado, não duas verdades.** Um runway suprimido na tela e presente na API é um convite a
+   alguém "consertar" a tela de volta.
+
+**Custos aceitos, ditos sem eufemismo:**
+
+- Os testes de runway da Story 5.7 que hoje afirmam *"queima positiva → N dias"* **mudam de
+  expectativa**. Isso é a correção, não uma regressão: eles afirmavam um número derivado de premissa
+  errada. A cobertura do cálculo **não** se perde — ela se desloca para `burn_rate_cents_per_day`, que
+  continua exposto e continua correto (deriva de contas em aberto, não do saldo inicial).
+- Durante a Onda 0, `runway.days` é `None` em **todo** cenário com queima. Aceitável — e o preço de
+  não aceitar seria continuar afirmando dias que não sabemos.
+- **A armadilha que anula o benefício, e por isso é invariante e não recomendação:**
+  `_NOTE_RUNWAY_SEM_RISCO` **não pode** ser emitida no caso suprimido. Hoje a condição é
+  `if runway_days is None`; ela precisa passar a ser `if runway_days is None and not days_suprimido`.
+  Trocar *"faltam 43 dias"* (falso preciso) por *"sem risco"* (falso tranquilizador) é **pior** que o
+  bug original: o primeiro erra um número, o segundo dá permissão para gastar. **"Sem risco"** e
+  **"não sei"** nunca compartilham mensagem, nota ou rótulo de tela.
+- **Invariante de contrato:** `days_suprimido is True ⇒ days is None`. Nenhum consumidor deve precisar
+  tratar "suprimido, mas com número".
+
+#### 6.1.2 O `alert` de janela negativa TAMBÉM é suprimido na Onda 0
+
+> **Ratificado em 2026-07-29 (D-5), REVERTENDO a proposta de deixá-lo passar.** O 🔴 *"Projeção de caixa
+> negativa em N dias"* (`engine.py:140-148`, alimentado por `ProjectionWindow.alert`) deriva do **mesmo**
+> `saldo_inicial` contaminado. Deixá-lo passar enquanto o runway é suprimido é uma assimetria que não
+> se sustenta.
+
+O argumento a favor de deixá-lo passar era que `alert` é uma afirmação **direcional** ("vai ficar
+negativo"), não de **precisão numérica**, e que o vício de "precisão espúria" não se aplicaria. **O
+argumento não sobrevive ao código:** `saldo_projetado = saldo_inicial + entradas − saídas` e
+`alert = saldo_projetado < 0`. O termo contaminado é **aditivo** e o `alert` é um **cruzamento de
+limiar** sobre essa soma. Logo o erro no saldo inicial se traduz diretamente em erro de veredito, nas
+duas direções:
+
+| Perfil de uso | Efeito em `available_cents` | Efeito em `alert` |
+|---|---|---|
+| Nunca saca (**o caso real hoje**) | acumula todo o faturamento líquido histórico e **nunca diminui quando uma conta é paga** (`payables` não toca a Carteira) | `saldo_inicial` inflado, monotonicamente → **falso negativo**: silêncio sobre um aperto de caixa que existe |
+| Saca tudo | vai a zero enquanto o dinheiro está no banco | `saldo_inicial ≈ 0` → **falso positivo**: 🔴 "caixa negativo em 30 dias" para quem tem R$ 80k na conta |
+
+E o perfil de uso não é uma incógnita: **`request_payout` (`wallet/service.py:227`) só marca
+`withdrawn`** — não existe transferência real, ninguém "saca" de fato. Portanto, para todo tenant real,
+`available_cents` é a figura que só cresce, e o `alert` é sistematicamente uma **máquina de falso
+negativo**. Um sinal que se cala justamente quando deveria falar não é "direcionalmente aproximado":
+é ruído com selo de vermelho.
+
+**A regra, então — suprimir a AFIRMAÇÃO, nunca o NÚMERO:**
+
+> Quando `saldo_inicial_origem == "plataforma"`: `ProjectionWindow.alert = False` +
+> `alert_suprimido = True`, com nota própria. **`saldo_projetado_cents` continua exposto e continua
+> sendo exibido**, com o rótulo de origem ao lado.
+
+Por que isso não é "deixar a Projeção sem sinal nenhum", que era a objeção legítima:
+
+- O dono **continua vendo os três saldos projetados** (30/60/90) e a trajetória. O que desaparece é o
+  e1p **afirmando** *"seu caixa fica negativo"* — afirmação para a qual ele não tem lastro. Mostrar o
+  número com a premissa rotulada respeita o teto de simplicidade (§0: confirmar, não construir); gritar
+  vermelho sobre premissa falsa não.
+- No perfil real (nunca saca), o dono **já** não recebia esse 🔴 — o falso negativo é o estado atual.
+  Suprimir não remove informação que ele tinha; remove um alarme que só disparava quando estava errado.
+- O vazio é preenchido de propósito pelo sinal de completude (§5.3): 🟡 *"Nenhuma conta bancária
+  cadastrada — não sei se os seus lançamentos estão completos"*. **Essa é a mensagem certa para este
+  estado**, e ela é acionável (cadastre a conta) — o que *"caixa negativo em 30 dias"* derivado de um
+  número errado não é.
+
+**Mecanismo (idêntico ao do runway, e pela mesma razão):** com `alert=False`,
+`engine._projection_window_signals` não emite nada — o 🔴 desaparece do `/financeiro/diagnostico`
+**por construção**, sem editar `engine.py` nem `diagnostics.py`, preservando a ausência de colisão da
+§6.1.1. Na UI, `WindowCard` deixa de pintar vermelho e `TrajectoryChart` deixa de traçar em vermelho
+(`anyAlert`), mantendo os valores. **Invariante:** `alert_suprimido is True ⇒ alert is False`.
+
+**Restauração:** a partir da Onda 1 (saldo inicial `misto`/`banco`), `days_suprimido` e
+`alert_suprimido` voltam a `False` e os dois sinais voltam — agora sobre um número com lastro.
 
 **A partir da Onda 1** (com `bank_accounts` existindo), a precedência do saldo inicial passa a ser:
 
@@ -1146,17 +1444,28 @@ não-usuário, coletado por via indireta. Consequências operacionais:
 
 > Cada onda entrega valor sozinha e pode parar ali sem deixar o produto pela metade.
 > Estimativa em **ondas de trabalho**, calibrada contra módulos já entregues (não em horas — não há
-> velocity confiável). Migrations encadeiam linearmente a partir de **0058**.
+> velocity confiável). **Migrations: ver §2 — este design não fixa número de revision; a coluna
+> "Migration" das tabelas abaixo é ORDEM de dependência, não identificador.**
 
 ### Onda 0 — Saldo inicial honesto *(bug, independente de tudo)*
 
-- **Escopo:** `projection.py` ganha `saldo_inicial_origem` + note explícita; runway em dias suprimido
-  quando a origem é `"plataforma"`. Zero tabela, zero migration.
+- **Escopo:** `projection.py` ganha `saldo_inicial_origem` + note explícita; **na origem do dado
+  (backend)**, suprime o **runway em dias** (`days=None` + `days_suprimido`) **e** o **`alert` de janela
+  negativa** (`alert=False` + `alert_suprimido`) enquanto a origem for `"plataforma"` — as duas
+  supressões fecham, por construção, tanto a tela quanto o sinal do `/financeiro/diagnostico`
+  (§6.1.1, §6.1.2). `engine.py` e `diagnostics.py` **não são tocados**. Zero tabela, zero migration.
 - **Critério de aceite:**
   1. `GET /financial-intelligence/projection` devolve `saldo_inicial_origem="plataforma"` e a note.
-  2. `ProjecaoCaixaPage.tsx` exibe a origem junto ao número; não exibe runway em dias enquanto a
-     origem for `"plataforma"`.
+  2. `ProjecaoCaixaPage.tsx` exibe a origem junto ao número; não exibe runway em dias nem pinta
+     janela/trajetória de vermelho enquanto a origem for `"plataforma"` — **mas continua exibindo**
+     `saldo_projetado_cents` de cada janela e `burn_rate_cents_per_day`.
   3. Teste: `test_projecao_declara_origem_do_saldo_inicial`.
+  4. Teste: nenhum `Signal` de `source="projecao"` sai de `diagnostics.compute_signals` enquanto a
+     origem for `"plataforma"` — nem o de runway, nem o de janela negativa. É o critério de pronto
+     desta onda, e ele é sobre o **usuário**, não sobre um endpoint.
+  5. Teste: caso suprimido **não** produz a nota/mensagem de "sem risco" (`days_suprimido` ⇒ sem
+     `_NOTE_RUNWAY_SEM_RISCO`). É o teste de maior valor da onda inteira.
+  6. Invariantes: `days_suprimido ⇒ days is None`; `alert_suprimido ⇒ alert is False`.
 - **Esforço:** ~0,25 onda.
 
 ### Onda 1 — Contas, saldo e a conferência de um número
@@ -1241,15 +1550,19 @@ não-usuário, coletado por via indireta. Consequências operacionais:
 
 ### Resumo
 
-| Onda | Entrega | Migration | Esforço `[EST.]` | Depende de |
+> **A coluna "Migrations" conta QUANTAS revisions a onda consome, não QUAIS.** Ver §2: o número é
+> definido pelo head real no momento da implementação, uma migration por story que cria tabela.
+
+| Onda | Entrega | Migrations | Esforço `[EST.]` | Depende de |
 |---|---|---|---|---|
-| 0 | Saldo inicial honesto | — | 0,25 | nada |
-| 1 | Contas + saldo + conferência (1 número) | 0058 | 1,5 | 0 (recomendado) |
-| 2 | Transferências + aplicação + derivado | 0059 | 1,5 | 1 |
-| 3 | Importação OFX/CSV + órfãos | 0060 | 2,5 | 1 |
-| 4 | Sugestão + baixa de Pagar | 0061 | 2,0 | 3 |
-| 5 | Baixa de Receber | 0062+ | 1,0 + 1,0 | **dívida `platform_earnings`** |
-| 6 | Payout fecha o circuito | 0063 | 0,5 | 1 |
+| 0 | Saldo inicial honesto (runway **e** alert suprimidos) | — | 0,25 | nada |
+| 1 | Contas + saldo + conferência (1 número), por conta | **3** (`bank_accounts`, `bank_transactions`, `bank_balance_checkpoints`) | 1,5 | 0 (recomendado) |
+| 2 | Transferências + aplicação + derivado | 1–2 (`bank_transfers`; `investment_accounts.bank_account_id` + backfill) | 1,5 | 1 |
+| 3 | Importação OFX/CSV + órfãos | 1 (`bank_import_batches`) | 2,5 | 1 |
+| 4 | Sugestão + baixa de Pagar | 1 (`bank_reconciliations`) | 2,0 | 3 |
+| 5 | Baixa de Receber | 1+ (`platform_earnings → transaction`) | 1,0 + 1,0 | **dívida `platform_earnings`** |
+| 6 | Payout fecha o circuito | 0–1 (pode não precisar de DDL) | 0,5 | 1 |
+| — | Banda de tolerância persistida por tenant (§5.1.1), **se** o @po/fundador exigir | 1 (`tenant_profiles` +2 colunas) | ~0,25 | 1 |
 
 **Ordem recomendada:** 0 → 1 → 2 → 3 → 4 → 6, com 5 fora da fila até a dívida ser paga.
 **Ponto de parada legítimo:** depois da Onda 2. Se a divergência medida na Onda 1 for pequena e
@@ -1285,7 +1598,7 @@ Nada aqui bloqueia a Onda 0 ou a Onda 1.
 
 | # | Pergunta | Onda afetada | Default se ele não responder |
 |---|---|---|---|
-| **D1** | **Banda de tolerância:** `max(R$ 50, 0,5%)` é aceitável, ou ele quer fechar em zero? | 1 | Adotar o default e torná-lo configurável por tenant |
+| **D1** | **Banda de tolerância:** `max(R$ 50, 0,5%)` é aceitável, ou ele quer fechar em zero? | 1 | Adotar o default como **função pura parametrizada, sem persistir** na Onda 1 (a banda fixa é propriedade do experimento de medição do epic §3.1). Se a persistência por tenant for exigida, o lugar está decidido: `tenant_profiles`, duas colunas inteiras — **§5.1.1** |
 | **D2** | **Quantas contas bancárias, na prática?** Uma (corrente) ou várias (corrente + poupança + aplicação + PF)? | 1, 5 | Suportar N contas desde a Onda 1 (o modelo já suporta; é custo zero) |
 | **D3** | **Conta PF misturada com PJ:** o advogado usa a mesma conta para pessoal e escritório? Se sim, a divergência será ruído crônico | 1 | Perguntar na tela ("saldo da conta que você usa para o escritório") e tolerar divergência estável |
 | **D4** | **Pagar a dívida `platform_earnings → transaction` agora?** É pré-requisito absoluto da Onda 5 e destrava também o estorno de cobranças (capacidade já construída e descartada) | 5 | Não fazer; Onda 5 fica fora da fila |
@@ -1346,7 +1659,15 @@ Nada aqui bloqueia a Onda 0 ou a Onda 1.
 | Referências soltas sem FK dura | `charges.client_id`, `payables.contract_id`/`cost_center_id` |
 | Padrão de RLS em migration | `migrations/versions/0049_investments.py::_enable_rls` |
 | Armadilha do backfill sob FORCE RLS | `migrations/versions/0046_ledger_classification.py` |
-| Head atual das migrations = 0057 | `apps/api/migrations/versions/` |
+| Head das migrations na data do design = 0057 (reconfirmado 2026-07-29) | `apps/api/migrations/versions/` |
+| `engine._runway_signal` emite "Runway de N dias"; `diagnostics` repassa `proj.runway.days` | `engine.py:128-137`, `diagnostics.py:90` |
+| O 🔴 de janela negativa nasce de `ProjectionWindow.alert` | `engine.py:140-148`, `projection.py:83,189` |
+| `available_cents` nunca diminui ao pagar conta; `request_payout` só marca `withdrawn` (⇒ o `alert` é máquina de falso negativo) | `payables/models.py:4`, `wallet/service.py:227` |
+| `WindowCard`/`TrajectoryChart` pintam vermelho a partir de `alert`/`anyAlert` | `ProjecaoCaixaPage.tsx:112-137,153-154` |
+| `bank_balance_checkpoints.origin` já tem vocabulário `manual`\|`ofx` (⇒ `declarado`/`extrato` eram tradução redundante) | §2.4 deste design; Story 8.4 (constantes `ORIGIN_MANUAL`/`ORIGIN_OFX`) |
+| `tenant_profiles` é a tabela de configuração por tenant e já carrega config operacional (`timezone`, `default_entry_funnel_id`) | `apps/api/app/modules/settings/models.py` |
+| Conferência e sinal **por conta** (não consolidada) | decisão do fundador **F3** (2026-07-29), epic §3.2 |
+| Vocabulário de origem em dois eixos; supressão do `alert`; revisions não fixadas; forma de `CompletenessInput`; assinatura de saldo em lote; casa da banda de tolerância | `docs/architecture/controle-bancario-design-ratificacao.md` (2026-07-29) |
 | Bandeja de comprovantes e suas rotas | `payables/receipts_router.py`, `payables/receipts.py` |
 | Dívida de isolamento por usuário em `/attachments` | `CLAUDE.md` (seção do comprovante mobile) |
 | Motor de diagnóstico é puro, sem I/O | `financial_intelligence/engine.py` (docstring), PRD NFR3 |
