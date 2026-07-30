@@ -8,6 +8,7 @@ from app.modules.agenda.router import router as agenda_router
 from app.modules.attachments.router import public_router as attachments_public_router
 from app.modules.attachments.router import router as attachments_router
 from app.modules.auth.router import router as auth_router
+from app.modules.bank.router import router as bank_router
 from app.modules.chart_of_accounts.router import router as chart_of_accounts_router
 from app.modules.cockpit.router import router as cockpit_router
 from app.modules.contracts.router import public_router as contracts_public_router
@@ -55,6 +56,7 @@ ALL_ROUTERS: list[APIRouter] = [
     payables_receipts_router,
     chart_of_accounts_router,
     cost_centers_router,
+    bank_router,
     financial_intelligence_router,
     investments_router,
     products_router,

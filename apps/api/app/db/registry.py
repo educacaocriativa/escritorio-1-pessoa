@@ -9,6 +9,7 @@ from app.db.base import Base
 from app.modules.agenda.models import AgendaEvent  # noqa: F401
 from app.modules.attachments.models import Attachment, PublicImage  # noqa: F401
 from app.modules.auth.models import Tenant, User  # noqa: F401
+from app.modules.bank.models import BankAccount  # noqa: F401
 from app.modules.chart_of_accounts.models import ChartAccount  # noqa: F401
 from app.modules.contracts.models import (  # noqa: F401
     Contract,
