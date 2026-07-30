@@ -38,6 +38,9 @@ class Settings(BaseSettings):
     # espírito de whatsapp_token/phone_id).
     evolution_api_url: str = "http://evolution:8080"
     evolution_api_key: str = ""
+    # URL pela qual a PRÓPRIA API é alcançável de DENTRO da rede Docker — usada para configurar
+    # o webhook da Evolution (que aponta pra cá). Nome de serviço do compose, não localhost.
+    internal_api_base_url: str = "http://api:8000"
     # E-mail transacional (SMTP genérico; cobre também o endpoint SMTP do Amazon SES).
     # SMTP_HOST vazio = e-mail vira log (dev/graceful degradation); preencher p/ entrega real.
     smtp_host: str = ""
