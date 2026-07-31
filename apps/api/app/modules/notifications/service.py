@@ -172,6 +172,11 @@ def process_pending(db: Session, *, tenant_id: str, limit: int = 50) -> int:
     profile = settings_service.get_profile(db, tenant_id)
     processed = 0
     for notification in pending:
+        if notification.expires_at is not None and notification.expires_at < datetime.now(UTC):
+            notification.status = "expired"
+            notification.attempts += 1
+            processed += 1
+            continue
         try:
             if notification.channel == "email":
                 status = email.send_email(

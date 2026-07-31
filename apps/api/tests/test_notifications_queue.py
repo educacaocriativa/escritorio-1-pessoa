@@ -4,7 +4,12 @@ Cobre: enfileiramento (status=pending), entrega marca sent/logged conforme o ret
 isolamento de falha (uma notificação que lança NÃO impede as demais — IV2), respeito ao `limit`,
 e roteamento por canal (email → email.send_email; senão → whatsapp.send_text). SQLite em memória
 (fixture `db`), providers mockados via monkeypatch (não bate em rede real).
+
+Onda 3 acrescenta: validade (`expires_at`) — vencida nunca tenta entregar — e retry com backoff
+exponencial limitado pela validade (ver classes de teste no final do arquivo).
 """
+from datetime import UTC, datetime, timedelta
+
 from sqlalchemy import select
 
 from app.core import email, whatsapp
@@ -173,4 +178,30 @@ def test_process_pending_uses_send_template_when_fields_set(db, monkeypatch):
     assert processed == 1
     assert calls["template"] == 1
     assert calls["text"] == 0
+    assert db.scalar(select(Notification)).status == "sent"
+
+
+def test_process_pending_expires_past_due_without_attempting_delivery(db, monkeypatch):
+    n = _pending(db)
+    n.expires_at = datetime.now(UTC) - timedelta(minutes=1)
+    db.commit()
+
+    def _boom(**_k):
+        raise AssertionError("não deveria tentar entregar notificação vencida")
+
+    monkeypatch.setattr(whatsapp, "send_text", _boom)
+    processed = service.process_pending(db, tenant_id=TENANT)
+    assert processed == 1  # "processada" = decidida (expirada), não necessariamente entregue
+    assert db.scalar(select(Notification)).status == "expired"
+
+
+def test_process_pending_delivers_when_not_yet_expired(db, monkeypatch):
+    n = _pending(db)
+    n.expires_at = datetime.now(UTC) + timedelta(hours=1)
+    db.commit()
+    monkeypatch.setattr(
+        whatsapp, "send_text",
+        lambda *, to, text, profile=None, token=None, phone_id=None: "sent",
+    )
+    service.process_pending(db, tenant_id=TENANT)
     assert db.scalar(select(Notification)).status == "sent"
