@@ -9,6 +9,8 @@ Story 4.3).
 from __future__ import annotations
 
 import logging
+from datetime import UTC, datetime, timedelta
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -72,6 +74,30 @@ def _render_template_preview(body_text: str, variables: list[str]) -> str:
     return rendered
 
 
+# Validade por propósito (spec §7): dinheiro-com-data expira no fim do dia do tenant;
+# operacional expira em 1h. Ausente da tabela (ou purpose=None) = nunca expira (compat).
+_MONEY_PURPOSES = frozenset({"charge_reminder", "contract_send", "quote_send"})
+_ONE_HOUR_PURPOSES = frozenset({"client_moved", "staff_invite", "funnel_node"})
+
+
+def _compute_expires_at(db: Session, *, tenant_id: str, purpose: str | None) -> datetime | None:
+    if purpose is None:
+        return None
+    now = datetime.now(UTC)
+    if purpose in _ONE_HOUR_PURPOSES:
+        return now + timedelta(hours=1)
+    if purpose in _MONEY_PURPOSES:
+        profile = settings_service.get_profile(db, tenant_id)
+        try:
+            tz = ZoneInfo(profile.timezone)
+        except (ZoneInfoNotFoundError, ValueError):
+            tz = ZoneInfo("America/Sao_Paulo")
+        local_now = now.astimezone(tz)
+        end_of_day_local = local_now.replace(hour=23, minute=59, second=59, microsecond=0)
+        return end_of_day_local.astimezone(UTC)
+    return None  # propósito desconhecido — não inventa validade
+
+
 def enqueue(
     db: Session,
     *,
@@ -80,6 +106,7 @@ def enqueue(
     recipient: str,
     message: str,
     client_id: str | None = None,
+    purpose: str | None = None,
     whatsapp_template_name: str | None = None,
     whatsapp_template_language: str | None = None,
     whatsapp_template_variables: list | None = None,
@@ -97,6 +124,10 @@ def enqueue(
     `whatsapp_template_*` (opcionais): template resolvido no ENFILEIRAMENTO (quando o propósito
     tem um vínculo aprovado) — o worker (`process_pending`) usa esses campos pra decidir entre
     `send_template` e `send_text`, sem precisar recalcular o vínculo depois.
+
+    `purpose` (Onda 3): resolve a validade (`expires_at`) — dinheiro-com-data expira no fim do
+    dia do tenant, operacional em 1h. `None` (chamadores anteriores à Onda 3) nunca expira,
+    preservando o comportamento de hoje.
     """
     if not recipient or not recipient.strip():
         raise NotificationError("destinatário (recipient) vazio ou inválido")
@@ -108,6 +139,8 @@ def enqueue(
         client_id=client_id,
         status="pending",
         attempts=0,
+        purpose=purpose,
+        expires_at=_compute_expires_at(db, tenant_id=tenant_id, purpose=purpose),
         whatsapp_template_name=whatsapp_template_name,
         whatsapp_template_language=whatsapp_template_language,
         whatsapp_template_variables=whatsapp_template_variables,
