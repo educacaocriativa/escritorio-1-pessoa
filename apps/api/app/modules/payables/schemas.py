@@ -64,6 +64,38 @@ class PayableUpdate(BaseModel):
         return v
 
 
+class PayablePayIn(BaseModel):
+    """Corpo **obrigatório** de `POST /payables/bills/{id}/pay` (Story 8.12, AC11).
+
+    ⚠️ **É uma quebra de contrato deliberada e declarada.** A rota aceitava chamada sem corpo; a
+    partir daqui uma chamada sem ele responde **422** do FastAPI. Os **dois** consumidores de
+    frontend hoje em produção — `PagarPage.tsx` e `FilaPagamentosPage.tsx` — são consertados na
+    Story **8.13**. **8.12 e 8.13 formam um par de release:** mergear esta e soltar para produção
+    sem aquela deixa as duas telas quebradas.
+
+    `bank_account_id` **sem `min_length`**, de propósito: com um mínimo, um tenant sem conta
+    nenhuma receberia o 422 do Pydantic antes de o service poder devolver o **409 acionável** do
+    AC2 — e é o 409 que diz à UI o que fazer.
+    """
+
+    bank_account_id: str
+    # `None` ⇒ `due_date` (AC3, fundador F10). Teto em hoje **nesta story** — ver
+    # `service._valida_data_de_baixa`.
+    paid_on: date | None = None
+
+
+class PayablePaymentUpdate(BaseModel):
+    """Corpo de `PATCH /payables/bills/{id}/payment` — corrigir conta e/ou data do pagamento (AC7).
+
+    Schema **novo**, rota **nova**: `PayableUpdate` não ganha campo nenhum (ver a nota em
+    `service.update_payment`). Os dois campos são opcionais e `None` significa *"não altera"* —
+    mesmo contrato de PATCH do resto do módulo.
+    """
+
+    bank_account_id: str | None = None
+    paid_on: date | None = None
+
+
 class PayablesPaidBeforeOut(BaseModel):
     """Agregado read-only: "quantas contas eu já paguei ANTES deste dia?" (Story 8.11, AC5/AC6).
 
@@ -113,6 +145,12 @@ class PayableOut(BaseModel):
     recurrence_group: str | None
     payment_code: str
     attachment_url: str
+    # Story 8.12 AC12 — o vínculo com o razão bancário. `bank_account_id` é a decisão AUTORITATIVA
+    # do usuário ("de qual conta saiu?"); `bank_transaction_id` é **cache de leitura** do movimento
+    # gerado. Divergiram? Quem manda é o `origin_id` do movimento (`payables/models.py`).
+    # Nascem `None` em toda conta não paga — e em toda conta paga antes desta story.
+    bank_account_id: str | None = None
+    bank_transaction_id: str | None = None
     created_at: datetime
 
 

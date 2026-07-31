@@ -645,8 +645,11 @@ def test_cache_de_movimento_nunca_diverge_do_origin_id(
 
     ⚠️ **Nesta story os cinco caminhos são exercitados chamando `sync_origin_movement` direto e
     escrevendo o cache à mão**, porque nenhum chamador de produção existe ainda. **A Story 8.12
-    ESTENDE este teste** para os caminhos reais (`apply_paid`, `reverse_payable`), mantendo as
-    mesmas asserções.
+    ESTENDEU este teste** para os caminhos reais, em
+    `test_cache_de_movimento_nunca_diverge_do_origin_id_pelos_caminhos_reais` (logo abaixo), com as
+    **mesmas** asserções (`_cache_coerente`) sobre as **mesmas** cinco mutações. Os dois convivem de
+    propósito: este prova o contrato do sincronizador isolado — que continua valendo para a 8.15 e
+    a 8.18, cujos chamadores ainda não existem —, e o de baixo prova o fluxo real de ponta a ponta.
     """
     itau = _account(client, headers, name="Itaú PJ")
     nubank = _account(client, headers, name="Nubank PJ", number="99-9")
@@ -708,29 +711,126 @@ def test_cache_de_movimento_nunca_diverge_do_origin_id(
     assert db.query(BankTransaction).count() == 1
 
 
-# ── Fronteira de escopo: 8.9 entrega o CONTRATO, a 8.12 entrega o chamador ───────────────────
+def test_cache_de_movimento_nunca_diverge_do_origin_id_pelos_caminhos_reais(
+    client: TestClient, headers, tenant_id, db
+):
+    """**A extensão da Story 8.12: os mesmos CINCO caminhos, agora pelas ROTAS de produção.**
 
+    O teste acima monta as mutações à mão porque, na 8.9, chamador nenhum existia. A partir desta
+    story eles existem e são alcançáveis por HTTP — `POST /bills/{id}/pay`,
+    `PATCH /bills/{id}/payment` (conta e data) e `POST /bills/{id}/reverse` —, e é **este** teste
+    que prova que o cache (`payable.bank_transaction_id`) nunca diverge do movimento cujo
+    `origin_id` é o `payable.id` no fluxo que o usuário realmente percorre.
 
-def test_nenhum_chamador_de_producao_ainda():
-    """**A fronteira 8.9 ↔ 8.12, escrita como asserção em vez de como parágrafo.**
-
-    A Story 8.9 entrega o contrato e **nada mais**: `sync_origin_movement` não é chamada de nenhum
-    fluxo de negócio. Esse recorte é o critério de corte (iii) do epic §6 (*"migration e backend de
-    contrato vêm antes de qualquer chamador"*), e é o que sustenta a IV2 desta story: sem chamador,
-    a resposta de `GET /financial-intelligence/projection` é byte a byte a mesma.
-
-    ⚠️ **Para a Story 8.12 (e só para ela):** este teste vai falhar quando você ligar `apply_paid`
-    ao sincronizador, e **isso é o comportamento correto**. Atualize-o com a lista de chamadores
-    legítimos (mesmo padrão de allowlist do `test_tenancy_guard.py`) — **nunca o apague**. Um gate
-    apagado deixa de avisar quando o SEGUNDO caminho de escrita aparecer, que é justamente o que
-    torna a Regra da Origem inauditável.
+    ⚠️ Ele substitui, junto com o irmão de cima, o `app/scripts/bank_audit.py` que **não existe** e
+    não deve ser criado (ratificação §C-4): condição alcançável só por bug se prova com teste, não
+    com script que ninguém tem gatilho para rodar.
     """
-    permitido = APP_DIR / "modules" / "bank" / "origin.py"
-    chamadores: list[str] = []
+    itau = _account(client, headers, name="Itaú PJ")
+    nubank = _account(client, headers, name="Nubank PJ", number="99-9")
+    quando = OPENING + timedelta(days=5)
+
+    criada = client.post(
+        "/payables/bills",
+        json={"description": "Aluguel", "category": "Aluguel", "supplier": "Imobiliária Central",
+              "amount_cents": 120_00, "due_date": quando.isoformat()},
+        headers=headers,
+    )
+    assert criada.status_code == 201, criada.text
+    bill_id = criada.json()["id"]
+    payable = db.get(Payable, bill_id)
+    _cache_coerente(db, payable)  # (0) antes da baixa: os dois NULL
+
+    def _refrescar() -> None:
+        db.expire_all()
+
+    # (1) BAIXAR
+    resp = client.post(
+        f"/payables/bills/{bill_id}/pay",
+        json={"bank_account_id": itau["id"], "paid_on": quando.isoformat()},
+        headers=headers,
+    )
+    assert resp.status_code == 200, resp.text
+    _refrescar()
+    _cache_coerente(db, payable)
+    primeiro_movimento = payable.bank_transaction_id
+    assert primeiro_movimento is not None
+    assert payable.bank_account_id == itau["id"]
+
+    # (2) TROCAR A CONTA — move, nunca duplica
+    assert client.patch(
+        f"/payables/bills/{bill_id}/payment",
+        json={"bank_account_id": nubank["id"]},
+        headers=headers,
+    ).status_code == 200
+    _refrescar()
+    _cache_coerente(db, payable)
+    assert payable.bank_transaction_id == primeiro_movimento
+    assert payable.bank_account_id == nubank["id"]
+
+    # (3) TROCAR A DATA
+    assert client.patch(
+        f"/payables/bills/{bill_id}/payment",
+        json={"paid_on": (quando + timedelta(days=2)).isoformat()},
+        headers=headers,
+    ).status_code == 200
+    _refrescar()
+    _cache_coerente(db, payable)
+    assert payable.bank_transaction_id == primeiro_movimento
+
+    # (4) ESTORNAR — os dois viram NULL juntos
+    assert client.post(f"/payables/bills/{bill_id}/reverse", headers=headers).status_code == 200
+    _refrescar()
+    _cache_coerente(db, payable)
+    assert payable.bank_transaction_id is None and payable.bank_account_id is None
+
+    # (5) REPAGAR — sem o DELETE do estorno, `uq_bank_transactions_origin` recusaria esta linha
+    assert client.post(
+        f"/payables/bills/{bill_id}/pay",
+        json={"bank_account_id": itau["id"], "paid_on": quando.isoformat()},
+        headers=headers,
+    ).status_code == 200
+    _refrescar()
+    _cache_coerente(db, payable)
+    assert payable.bank_transaction_id is not None
+    assert db.query(BankTransaction).count() == 1
+
+
+# ── Quem pode chamar o sincronizador: a ALLOWLIST (8.9 → 8.12) ───────────────────────────────
+
+# ⚠️ **Sucessor direto de `test_nenhum_chamador_de_producao_ainda` (Story 8.9).** Aquele gate
+# afirmava "zero chamadores de produção" e a própria docstring dele mandava, verbatim: *"este teste
+# vai falhar quando você ligar `apply_paid` ao sincronizador, e isso é o comportamento correto.
+# Atualize-o com a lista de chamadores legítimos — **nunca o apague**"*. É o que a 8.12 fez: o gate
+# **não foi removido**, ele passou de "nenhum" para "só estes, e por este motivo", que é uma
+# condição ESTRITAMENTE mais forte do que "nenhum" seria depois de existir um chamador legítimo.
+_CHAMADORES_PERMITIDOS: dict[str, str] = {
+    "modules/bank/origin.py": (
+        "o próprio sincronizador — dono do contrato e ÚNICO escritor de `SOURCES_SISTEMA`."
+    ),
+    "modules/payables/service.py": (
+        "**Story 8.12** — a baixa de Contas a Pagar é o PRIMEIRO chamador de produção da Regra da "
+        "Origem. `apply_paid`/`update_payment`/`reverse_payable` chamam o sincronizador (por "
+        "`_sincroniza_movimento`, um ponto só dentro do módulo) na MESMA transação do lançamento. "
+        "A direção de import `payables → bank` é permitida (Regra dos Planos §1.3d); a volta é "
+        "proibida e `test_bank_nao_importa_payables` a reprova."
+    ),
+}
+
+
+def _mencoes_ao_sincronizador() -> dict[str, list[str]]:
+    """`{arquivo: ["arquivo:linha → nome", ...]}` para toda menção AST aos símbolos do módulo.
+
+    Varre por **nome** (`ast.Name`/`ast.Attribute`) e não por import: um `getattr(origin, ...)` ou
+    um alias continuam aparecendo, e a pergunta que este gate faz é *"quem toca nisto?"*, não
+    *"quem importa isto?"*.
+    """
+    achados: dict[str, list[str]] = {}
     for path in sorted(APP_DIR.rglob("*.py")):
-        if "__pycache__" in path.parts or path == permitido:
+        if "__pycache__" in path.parts:
             continue
         tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+        rel = path.relative_to(APP_DIR).as_posix()
         for node in ast.walk(tree):
             nome = None
             if isinstance(node, ast.Name):
@@ -738,12 +838,48 @@ def test_nenhum_chamador_de_producao_ainda():
             elif isinstance(node, ast.Attribute):
                 nome = node.attr
             if nome in ("sync_origin_movement", "origin_dedup_hash"):
-                chamadores.append(f"{path.relative_to(APP_DIR)}:{node.lineno} → {nome}")
+                achados.setdefault(rel, []).append(f"{rel}:{node.lineno} → {nome}")
+    return achados
 
-    assert not chamadores, (
-        "A Story 8.9 entrega o CONTRATO, sem nenhum chamador de produção — e apareceu um: "
-        f"{chamadores}. Se você é a Story 8.12 (ou a 8.15/8.18), atualize este teste com a "
-        "allowlist e a justificativa; se não, você entrou no escopo de outra story."
+
+def test_chamadores_do_sincronizador_estao_na_allowlist():
+    """**O gate que impede o SEGUNDO caminho de escrita do razão bancário.**
+
+    A Regra da Origem só é auditável enquanto `sync_origin_movement` for o **único** escritor de
+    `source ∈ SOURCES_SISTEMA`. Um chamador novo não é proibido — é uma **decisão**, e esta
+    allowlist é o lugar onde ela fica escrita (mesmo padrão do `test_tenancy_guard.py`). Quem
+    chegar aqui pela 8.15 (recebimento fora do trilho) ou pela 8.18 (transferência) acrescenta a
+    entrada **com a justificativa**, e é isso que faz a revisão acontecer.
+    """
+    fora_da_lista = [
+        ocorrencia
+        for arquivo, ocorrencias in _mencoes_ao_sincronizador().items()
+        if arquivo not in _CHAMADORES_PERMITIDOS
+        for ocorrencia in ocorrencias
+    ]
+    assert not fora_da_lista, (
+        "Apareceu um chamador do sincronizador da Regra da Origem fora da allowlist: "
+        f"{fora_da_lista}. Se é legítimo (uma story nova ligando o seu fluxo ao razão bancário), "
+        "acrescente o arquivo a `_CHAMADORES_PERMITIDOS` **com a justificativa**; se não é, você "
+        "está abrindo um segundo caminho de escrita e tornando a Regra da Origem inauditável."
+    )
+
+
+def test_allowlist_do_sincronizador_nao_tem_entrada_morta():
+    """A outra metade do gate: **a allowlist não pode permitir o que ninguém mais faz.**
+
+    Sem esta asserção, a lista só cresceria — e uma permissão que sobrevive ao chamador que a
+    justificava é exatamente o buraco por onde o próximo caminho de escrita entra sem revisão. É
+    também o teste que **cai se a 8.12 for revertida em silêncio**: se `payables/service.py`
+    deixar de chamar o sincronizador, o razão bancário volta a nascer vazio e nenhum outro teste
+    de comportamento apontaria o motivo.
+    """
+    mencionam = set(_mencoes_ao_sincronizador())
+    mortas = sorted(set(_CHAMADORES_PERMITIDOS) - mencionam)
+    assert not mortas, (
+        f"Entradas da allowlist sem nenhum uso correspondente: {mortas}. Ou o chamador sumiu (e a "
+        "permissão tem de sumir junto), ou o caminho de escrita foi movido para outro arquivo — e "
+        "nesse caso a allowlist precisa dizer o arquivo novo."
     )
 
 

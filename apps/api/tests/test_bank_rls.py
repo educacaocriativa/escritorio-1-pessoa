@@ -1153,3 +1153,137 @@ def test_sync_origin_movement_isolamento_cross_tenant(app_url: str) -> None:
             "FAIL-CLOSED falhou: sem `app.current_tenant_id` o sincronizador alcançou (e apagou) "
             "o movimento de um tenant. O estado seguro é não ver nada."
         )
+
+
+# ── Story 8.12 — a BAIXA de Contas a Pagar escrevendo o razão bancário (AC13) ─────────────────
+#
+# > **[@dev 8.12] Desvio documentado das File Locations da Story 8.12.** A story previa um arquivo
+# > novo, `tests/test_payables_bank_origin_rls.py`. Ele exigiria um **segundo** `PostgresContainer`
+# > (a fixture `app_url` tem escopo de MÓDULO) e, com ele, um segundo `alembic upgrade head` —
+# > minutos de CI para exercitar exatamente as mesmas tabelas já preparadas aqui. A instrução no
+# > topo deste arquivo é explícita (*"acrescente casos AQUI em vez de criar mais um arquivo de
+# > testcontainer"*); a 8.5 e a 8.9 seguiram-na e registraram o mesmo desvio. Somos os quartos.
+#
+# Diferença em relação ao bloco da 8.9 acima: lá o sincronizador era chamado **direto**; aqui quem
+# o chama é o **fluxo de negócio real** (`payables.service.apply_paid`), que é o que a 8.12 liga.
+
+
+def _seed_payable(app_url: str, tenant_id: str, *, amount_cents: int, due: date) -> str:
+    from app.modules.payables.models import Payable
+
+    with _session_for(app_url, tenant_id) as session:
+        p = Payable(
+            tenant_id=tenant_id,
+            description="Aluguel",
+            category="Estrutura",
+            supplier="Imobiliária Central",
+            amount_cents=amount_cents,
+            due_date=due,
+            competence_date=due,
+        )
+        session.add(p)
+        session.commit()
+        return p.id
+
+
+def test_baixa_de_payable_isolamento_cross_tenant(app_url: str) -> None:
+    """**AC13 — a baixa de A nunca alcança a conta bancária de B; o movimento nasce no dono certo.**
+
+    O modo de falha aqui é o mais grave da onda: a baixa **escreve** no razão bancário. Um
+    vazamento não apareceria como "vi uma linha que não é minha" — apareceria como **uma despesa
+    minha saindo da conta do vizinho**, e portanto como divergência inventada no único número que
+    este produto vende como confiável.
+    """
+    from app.modules.bank import service as bank_service
+    from app.modules.bank.models import SOURCE_PAYABLE, STATUS_MATCHED, BankTransaction
+    from app.modules.payables import service as payables_service
+    from app.modules.payables.models import Payable
+
+    tenant_a = str(uuid4())
+    tenant_b = str(uuid4())
+    acc_a = _seed_account(app_url, tenant_a, name="Baixa A", opening=100_000, number="6444-1")
+    acc_b = _seed_account(app_url, tenant_b, name="Baixa B", opening=100_000, number="6444-2")
+    due = date(2026, 7, 10)
+    bill_a = _seed_payable(app_url, tenant_a, amount_cents=120_00, due=due)
+
+    # ── (1) A tenta pagar a conta DELE debitando a conta bancária de B → 404, nunca 409 ──────
+    with _session_for(app_url, tenant_a) as sa:
+        with pytest.raises(payables_service.PayableError) as exc:
+            payables_service.apply_paid(
+                sa, payable_id=bill_a, tenant_id=tenant_a, actor="a",
+                bank_account_id=acc_b, paid_on=due,
+            )
+        assert exc.value.status_code == 404, (
+            "cross-tenant deve ser 404 fail-closed. 409 (o erro acionável de 'cadastre uma conta') "
+            "confirmaria que a conta do vizinho existe."
+        )
+        sa.rollback()
+
+    # ── (2) A baixa legítima: o movimento nasce no tenant certo, conciliado e negativo ───────
+    with _session_for(app_url, tenant_a) as sa:
+        payables_service.mark_paid(
+            sa, payable_id=bill_a, tenant_id=tenant_a, actor="a",
+            bank_account_id=acc_a, paid_on=due,
+        )
+
+    with _session_for(app_url, tenant_a) as sa:
+        tx = sa.query(BankTransaction).filter(BankTransaction.origin_id == bill_a).one()
+        assert tx.tenant_id == tenant_a
+        assert tx.bank_account_id == acc_a
+        assert tx.amount_cents == -120_00 and tx.status == STATUS_MATCHED
+        saldo_a = bank_service.derived_balance(sa, bank_account_id=acc_a, until=due)
+        assert saldo_a == 100_000 - 120_00
+
+    # ── (3) B não enxerga nem o lançamento nem o movimento de A ──────────────────────────────
+    with _session_for(app_url, tenant_b) as sb:
+        assert sb.get(Payable, bill_a) is None, "B leu a conta a pagar de A"
+        assert sb.query(BankTransaction).filter(BankTransaction.origin_id == bill_a).count() == 0
+        assert bank_service.derived_balance(sb, bank_account_id=acc_b, until=due) == 100_000, (
+            "o saldo de B se moveu por causa de uma baixa de A"
+        )
+
+    # ── (4) O índice único parcial, exercitado pelo CAMINHO REAL: baixar de novo ─────────────
+    with _session_for(app_url, tenant_a) as sa:
+        payables_service.mark_paid(
+            sa, payable_id=bill_a, tenant_id=tenant_a, actor="a",
+            bank_account_id=acc_a, paid_on=due,
+        )
+        assert (
+            sa.query(BankTransaction).filter(BankTransaction.origin_id == bill_a).count() == 1
+        ), "a segunda baixa criou um segundo movimento — a idempotência do AC6 não sobreviveu"
+
+    # ── (5) O mesmo `origin_id` nos DOIS tenants convive (índice único é GLOBAL) ─────────────
+    #     Improvável por `uuid4`, mas é o cenário que `tenant_id` na frente da constraint protege:
+    #     sem ele, B levaria um erro de integridade por causa de um dado que não pode nem ver.
+    with _session_for(app_url, tenant_b) as sb:
+        sb.add(
+            BankTransaction(
+                tenant_id=tenant_b,
+                bank_account_id=acc_b,
+                posted_at=due,
+                amount_cents=-1_00,
+                raw_description="mesma chave de origem, outro dono",
+                dedup_hash="hash-do-b",
+                source=SOURCE_PAYABLE,
+                origin_id=bill_a,
+                status=STATUS_MATCHED,
+            )
+        )
+        sb.commit()
+
+    # ── (6) O estorno de A apaga SÓ o movimento de A ─────────────────────────────────────────
+    with _session_for(app_url, tenant_a) as sa:
+        payables_service.reverse_payable(
+            sa, payable_id=bill_a, tenant_id=tenant_a, actor="a"
+        )
+
+    with _session_for(app_url, tenant_a) as sa:
+        assert sa.query(BankTransaction).filter(BankTransaction.origin_id == bill_a).count() == 0
+        p = sa.get(Payable, bill_a)
+        assert p.bank_account_id is None and p.bank_transaction_id is None
+
+    with _session_for(app_url, tenant_b) as sb:
+        assert sb.query(BankTransaction).filter(BankTransaction.origin_id == bill_a).count() == 1, (
+            "o estorno de A apagou o movimento homônimo de B — o extrato do vizinho perdeu uma "
+            "linha por causa de um evento que não é dele"
+        )

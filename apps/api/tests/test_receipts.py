@@ -1,6 +1,12 @@
-"""Testes da bandeja de comprovantes (Contas a Pagar)."""
+"""Testes da bandeja de comprovantes (Contas a Pagar).
+
+⚠️ **Adaptado pela Story 8.12, não reescrito** (IV1). A baixa passou a gerar o movimento bancário e
+a exigir a conta de onde o dinheiro saiu; a bandeja usa a conta **primária** como substituto
+declarado até a Story 8.13 acrescentar o campo. Nenhum teste foi apagado — inclusive o que a própria
+suíte chama de *"guarda de regressão do refactor apply_paid/mark_paid"*.
+"""
 import io
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, date, datetime, timedelta
 
 import pytest
 from fastapi.testclient import TestClient
@@ -17,11 +23,46 @@ REGISTER = {
 
 PNG = b"\x89PNG\r\n\x1a\n" + b"0" * 64
 
+# Abertura bem no passado: o piso da baixa é `paid_on > opening_date`, e as contas deste arquivo
+# são pagas com `paid_on` = hoje.
+ABERTURA = date(2026, 1, 1)
+
 
 @pytest.fixture()
 def headers(client: TestClient) -> dict[str, str]:
     token = client.post("/auth/register", json=REGISTER).json()["access_token"]
     return {"Authorization": f"Bearer {token}"}
+
+
+@pytest.fixture(autouse=True)
+def conta_primaria(client: TestClient, headers) -> str:
+    """A conta bancária PRIMÁRIA do tenant. **Autouse desde a Story 8.12, e por um motivo.**
+
+    A bandeja não tem (ainda) campo para informar a conta — quem o acrescenta é a Story 8.13. Até
+    lá, `receipts._conta_da_bandeja` usa a **primária** como substituto declarado
+    (`[SUPOSIÇÃO DO @SM]` + `TODO(8.13)`), e sem ela toda baixa por comprovante devolveria o 409
+    acionável. Autouse porque o tenant REAL que usa esta porta tem conta cadastrada — o cenário
+    "sem conta nenhuma" é exercido de propósito, e só, em
+    `test_bandeja_sem_conta_primaria_devolve_409_acionavel`.
+    """
+    resp = client.post(
+        "/bank/accounts",
+        json={
+            "name": "Itaú PJ",
+            "kind": "checking",
+            "opening_balance_cents": 500_000,
+            "opening_date": ABERTURA.isoformat(),
+        },
+        headers=headers,
+    )
+    assert resp.status_code == 201, resp.text
+    return resp.json()["id"]
+
+
+def _pay(client: TestClient, headers, bill_id: str, conta: str, paid_on: str | None = None):
+    """`POST /bills/{id}/pay` com o corpo obrigatório da Story 8.12 (AC11)."""
+    body = {"bank_account_id": conta, "paid_on": paid_on or datetime.now(UTC).date().isoformat()}
+    return client.post(f"/payables/bills/{bill_id}/pay", json=body, headers=headers)
 
 
 def _upload(client: TestClient, headers, *, name="comprovante.png", ctype="image/png", data=PNG):
@@ -114,10 +155,12 @@ def test_candidates_lista_abertas_por_vencimento(client: TestClient, headers):
     assert [i["description"] for i in itens] == ["Antes", "Depois"]
 
 
-def test_candidates_inclui_pagas_recentes_depois_das_abertas(client: TestClient, headers):
+def test_candidates_inclui_pagas_recentes_depois_das_abertas(
+    client: TestClient, headers, conta_primaria
+):
     aberta = _bill(client, headers, description="Aberta", due_date="2099-02-02")
     paga = _bill(client, headers, description="Paga", due_date="2099-02-03")
-    client.post(f"/payables/bills/{paga['id']}/pay", headers=headers)
+    _pay(client, headers, paga["id"], conta_primaria)
     itens = client.get("/payables/receipts/candidates", headers=headers).json()
     assert [i["description"] for i in itens] == ["Aberta", "Paga"]
     assert itens[0]["id"] == aberta["id"]
@@ -141,18 +184,20 @@ def test_candidates_busca_por_descricao_e_fornecedor(client: TestClient, headers
     assert [i["description"] for i in por_fornecedor] == ["Energia"]
 
 
-def test_candidates_respeita_janela_de_30_dias(client: TestClient, headers, db: Session):
+def test_candidates_respeita_janela_de_30_dias(
+    client: TestClient, headers, db: Session, conta_primaria
+):
     """Verifica que contas pagas há mais de 30 dias são excluídas,
     e contas pagas dentro de 30 dias são incluídas."""
     from app.modules.payables.models import Payable
 
     # Criar e pagar uma conta
     paga_antiga = _bill(client, headers, description="Paga há 40 dias", due_date="2099-01-01")
-    client.post(f"/payables/bills/{paga_antiga['id']}/pay", headers=headers)
+    _pay(client, headers, paga_antiga["id"], conta_primaria)
 
     # Criar e pagar outra conta
     paga_recente = _bill(client, headers, description="Paga há 29 dias", due_date="2099-01-02")
-    client.post(f"/payables/bills/{paga_recente['id']}/pay", headers=headers)
+    _pay(client, headers, paga_recente["id"], conta_primaria)
 
     # Manipular diretamente os paid_at via db para ter controle preciso
     cutoff = datetime.now(UTC) - timedelta(days=30)
@@ -216,9 +261,9 @@ def test_link_sem_mark_paid_nao_muda_status(client: TestClient, headers):
     assert resp.json()["paid_at"] is None
 
 
-def test_link_em_conta_ja_paga_nao_altera_paid_at(client: TestClient, headers):
+def test_link_em_conta_ja_paga_nao_altera_paid_at(client: TestClient, headers, conta_primaria):
     b = _bill(client, headers)
-    paga = client.post(f"/payables/bills/{b['id']}/pay", headers=headers).json()
+    paga = _pay(client, headers, b["id"], conta_primaria).json()
     rid = _upload(client, headers).json()["id"]
 
     resp = _link(client, headers, rid, b["id"], mark_paid=True)
@@ -249,10 +294,10 @@ def test_link_em_conta_inexistente_da_404(client: TestClient, headers):
     assert _link(client, headers, rid, "nao-existe").status_code == 404
 
 
-def test_mark_paid_continua_funcionando_apos_refactor(client: TestClient, headers):
+def test_mark_paid_continua_funcionando_apos_refactor(client: TestClient, headers, conta_primaria):
     """Guarda de regressão do refactor apply_paid/mark_paid: a rota antiga não muda."""
     b = _bill(client, headers)
-    paga = client.post(f"/payables/bills/{b['id']}/pay", headers=headers).json()
+    paga = _pay(client, headers, b["id"], conta_primaria).json()
     assert paga["status"] == "paid" and paga["paid_at"] is not None
     eventos = [
         e for e in client.get("/agenda/events?limit=500", headers=headers).json()

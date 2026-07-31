@@ -30,7 +30,14 @@ def _out(a: Attachment) -> ReceiptOut:
 
 
 def _err(e: Exception, status_code: int) -> HTTPException:
-    return HTTPException(status_code=status_code, detail=str(e))
+    """`detail` estruturado quando o erro é ACIONÁVEL; string em todo o resto.
+
+    A bandeja é a **mesma** superfície de baixa do `POST /bills/{id}/pay`, então ela devolve o
+    **mesmo** 409 `{"acao": "cadastrar_conta", "mensagem": ...}` (Story 8.12 AC2/AC10) quando o
+    tenant não tem conta primária. Dois formatos de erro para a mesma situação obrigariam a UI da
+    8.13 a tratar cada porta de um jeito.
+    """
+    return HTTPException(status_code=status_code, detail=getattr(e, "detail", None) or str(e))
 
 
 @router.post("", response_model=ReceiptOut, status_code=201)
