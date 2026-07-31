@@ -154,15 +154,23 @@ def process_pending(db: Session, *, tenant_id: str, limit: int = 50) -> int:
     """Processa a fila de notificações `pending` do tenant. Retorna quantas foram processadas.
 
     Chamado pelo worker (`app.worker.run_sweep`). Uma falha ao entregar UMA notificação NÃO
-    interrompe as demais (IV2): cada envio é isolado em try/except e o erro fica registrado em
-    `status="failed"`/`last_error`. Só reprocessa linhas `pending` — uma vez entregue (sent/logged)
-    ou falha, a notificação sai do conjunto processável (idempotente; sem retry automático nesta
-    story — `attempts`/`last_error` ficam para uma dívida futura de retry-with-backoff).
+    interrompe as demais (IV2): cada envio é isolado em try/except.
+
+    Onda 3 — validade e retry: uma notificação com `expires_at` vencido nunca tenta entregar,
+    vira `expired` direto. Uma falha de entrega REAGENDA (`next_attempt_at`, backoff
+    exponencial `2**attempts` minutos, capado em 60min) em vez de marcar `failed` terminal —
+    mas nunca além da própria validade: se o backoff estouraria `expires_at`, expira em vez de
+    reagendar pra depois do próprio prazo.
     """
+    now = datetime.now(UTC)
     pending = list(
         db.scalars(
             select(Notification)
-            .where(Notification.status == "pending")
+            .where(
+                Notification.status == "pending",
+                (Notification.next_attempt_at.is_(None))
+                | (Notification.next_attempt_at <= now),
+            )
             .order_by(Notification.created_at)
             .limit(limit)
         ).all()
@@ -172,7 +180,7 @@ def process_pending(db: Session, *, tenant_id: str, limit: int = 50) -> int:
     profile = settings_service.get_profile(db, tenant_id)
     processed = 0
     for notification in pending:
-        if notification.expires_at is not None and notification.expires_at < datetime.now(UTC):
+        if notification.expires_at is not None and notification.expires_at < now:
             notification.status = "expired"
             notification.attempts += 1
             processed += 1
@@ -203,8 +211,14 @@ def process_pending(db: Session, *, tenant_id: str, limit: int = 50) -> int:
             logger.exception(
                 "[notifications:process_pending] falha ao enviar id=%s", notification.id
             )
-            notification.status = "failed"
             notification.last_error = str(exc)[:500]
+            backoff_minutes = min(2**notification.attempts, 60)
+            candidate_next = now + timedelta(minutes=backoff_minutes)
+            if notification.expires_at is not None and candidate_next > notification.expires_at:
+                notification.status = "expired"  # o backoff estouraria a validade — expira já
+            else:
+                notification.status = "pending"  # continua pending — tenta de novo depois
+                notification.next_attempt_at = candidate_next
         notification.attempts += 1
         processed += 1
     db.commit()

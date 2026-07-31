@@ -62,6 +62,9 @@ def test_process_pending_logged_without_provider(db):
 
 def test_failure_is_isolated_and_recorded(db, monkeypatch):
     # A 1ª notificação (msg "boom") faz o provedor lançar; a 2ª deve ser processada mesmo assim.
+    # Onda 3: sem expires_at, a falha REAGENDA (pending + next_attempt_at) em vez de "failed"
+    # terminal — ver test_failed_delivery_reschedules_with_backoff_within_validity para o caso
+    # com validade, e test_backoff_never_schedules_past_expiry para o caso que expira.
     _pending(db, message="boom")
     _pending(db, message="ok")
 
@@ -76,9 +79,10 @@ def test_failure_is_isolated_and_recorded(db, monkeypatch):
 
     failed = db.scalar(select(Notification).where(Notification.message == "boom"))
     ok = db.scalar(select(Notification).where(Notification.message == "ok"))
-    assert failed.status == "failed"
+    assert failed.status == "pending"  # reagendada (backoff), não mais terminal
     assert "provedor caiu" in failed.last_error
     assert failed.attempts == 1
+    assert failed.next_attempt_at is not None
     assert ok.status == "sent"
 
 
@@ -205,3 +209,57 @@ def test_process_pending_delivers_when_not_yet_expired(db, monkeypatch):
     )
     service.process_pending(db, tenant_id=TENANT)
     assert db.scalar(select(Notification)).status == "sent"
+
+
+def test_failed_delivery_reschedules_with_backoff_within_validity(db, monkeypatch):
+    n = _pending(db, message="boom")
+    n.expires_at = datetime.now(UTC) + timedelta(hours=2)
+    db.commit()
+
+    def _flaky(*, to, text, profile=None, token=None, phone_id=None):
+        raise RuntimeError("provedor caiu")
+
+    monkeypatch.setattr(whatsapp, "send_text", _flaky)
+    service.process_pending(db, tenant_id=TENANT)
+    db.refresh(n)
+    assert n.status == "pending"  # NÃO "failed" terminal — ainda dentro da validade
+    assert n.attempts == 1
+    assert n.next_attempt_at is not None
+    # SQLite devolve datetime naive mesmo para uma coluna timezone=True — normaliza pra UTC
+    # antes de comparar (mesmo padrão já usado em whatsapp_inbox.is_within_session_window).
+    next_attempt = n.next_attempt_at
+    if next_attempt.tzinfo is None:
+        next_attempt = next_attempt.replace(tzinfo=UTC)
+    assert next_attempt > datetime.now(UTC)
+
+
+def test_process_pending_skips_notification_before_next_attempt_at(db, monkeypatch):
+    n = _pending(db)
+    n.next_attempt_at = datetime.now(UTC) + timedelta(minutes=10)
+    db.commit()
+
+    def _boom(**_k):
+        raise AssertionError("não deveria tentar antes de next_attempt_at")
+
+    monkeypatch.setattr(whatsapp, "send_text", _boom)
+    processed = service.process_pending(db, tenant_id=TENANT)
+    assert processed == 0
+    db.refresh(n)
+    assert n.status == "pending"
+
+
+def test_backoff_never_schedules_past_expiry(db, monkeypatch):
+    n = _pending(db, message="boom")
+    n.expires_at = datetime.now(UTC) + timedelta(minutes=5)  # validade curta
+    n.attempts = 5  # backoff 2**5=32min já estouraria a validade de 5min
+    db.commit()
+
+    def _flaky(*, to, text, profile=None, token=None, phone_id=None):
+        raise RuntimeError("falha")
+
+    monkeypatch.setattr(whatsapp, "send_text", _flaky)
+    service.process_pending(db, tenant_id=TENANT)
+    db.refresh(n)
+    # o backoff bateria além da validade — a notificação expira em vez de reagendar pra depois
+    # do próprio prazo de validade.
+    assert n.status == "expired"
