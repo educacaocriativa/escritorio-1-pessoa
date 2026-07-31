@@ -252,6 +252,7 @@ def on_client_moved(*, tenant_id: str, client_id: str, to_stage: str, **_: objec
                 recipient=recipient,
                 message=message,
                 client_id=client_id,
+                purpose=PURPOSE_CLIENT_MOVED,
                 whatsapp_template_name=whatsapp_template_name,
                 whatsapp_template_language=whatsapp_template_language,
                 whatsapp_template_variables=whatsapp_template_variables,
