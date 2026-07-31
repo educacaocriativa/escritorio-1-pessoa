@@ -42,7 +42,7 @@ aba ter sido fechada antes da confirmação.
 ## File Structure
 
 ```
-apps/api/migrations/versions/0058_whatsapp_provider_session.py  → NOVO
+apps/api/migrations/versions/0061_whatsapp_provider_session.py  → NOVO
 apps/api/app/config.py                                          → MODIFICADO (1 setting nova)
 apps/api/app/modules/settings/models.py                          → MODIFICADO (whatsapp_provider ORM)
 apps/api/app/modules/whatsapp_session/__init__.py                → NOVO (vazio)
@@ -66,10 +66,10 @@ packages/shared-types/src/index.ts                                → MODIFICADO
 
 ---
 
-### Task 1: Migration 0058 — `whatsapp_provider` + `public_whatsapp_instances`
+### Task 1: Migration 0061 — `whatsapp_provider` + `public_whatsapp_instances`
 
 **Files:**
-- Create: `apps/api/migrations/versions/0058_whatsapp_provider_session.py`
+- Create: `apps/api/migrations/versions/0061_whatsapp_provider_session.py`
 
 **Interfaces:**
 - Produces: coluna `tenant_profiles.whatsapp_provider` (`String(16)`, nullable, sem default —
@@ -82,8 +82,8 @@ packages/shared-types/src/index.ts                                → MODIFICADO
 ```python
 """tenant_profiles.whatsapp_provider + public_whatsapp_instances (Onda 2 — onboarding por QR)
 
-Revision ID: 0058
-Revises: 0057
+Revision ID: 0061
+Revises: 0060
 Create Date: 2026-07-30
 
 - `tenant_profiles.whatsapp_provider`: "meta" | "evolution" | None. None = nenhum transporte
@@ -97,8 +97,8 @@ from collections.abc import Sequence
 import sqlalchemy as sa
 from alembic import op
 
-revision: str = "0058"
-down_revision: str | None = "0057"
+revision: str = "0061"
+down_revision: str | None = "0060"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 
@@ -135,15 +135,15 @@ def downgrade() -> None:
 
 Run (verificação de sintaxe apenas — não exige Postgres de pé):
 ```bash
-./.venv/Scripts/python.exe -c "import importlib; importlib.import_module('migrations.versions.0058_whatsapp_provider_session')"
+./.venv/Scripts/python.exe -c "import importlib; importlib.import_module('migrations.versions.0061_whatsapp_provider_session')"
 ```
 Expected: sem erro de import/sintaxe.
 
 - [ ] **Step 3: Commit**
 
 ```bash
-git add apps/api/migrations/versions/0058_whatsapp_provider_session.py
-git commit -m "feat: migration 0058 — tenant_profiles.whatsapp_provider + public_whatsapp_instances"
+git add apps/api/migrations/versions/0061_whatsapp_provider_session.py
+git commit -m "feat: migration 0061 — tenant_profiles.whatsapp_provider + public_whatsapp_instances"
 ```
 
 ---
