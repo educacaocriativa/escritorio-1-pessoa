@@ -12,7 +12,7 @@ import logging
 from datetime import UTC, datetime, timedelta
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.core import email, events, whatsapp
@@ -22,6 +22,7 @@ from app.modules.crm.models import Client, PipelineStage
 from app.modules.crm.service import EVENT_CLIENT_MOVED
 from app.modules.notifications.models import Notification
 from app.modules.settings import service as settings_service
+from app.modules.whatsapp_session.models import PublicWhatsappInstance
 from app.modules.whatsapp_templates.models import (
     PURPOSE_CLIENT_MOVED,
     STATUS_APPROVED,
@@ -150,6 +151,43 @@ def enqueue(
     return notification
 
 
+# Freio anti-ban (spec §7) — só para o transporte Evolution. Fixo no código, não configurável
+# pelo tenant (mesma razão da banda de conferência do Epic 8: quem ajusta o próprio limite
+# ajusta até ele parar de proteger).
+_EVOLUTION_MAX_PER_SWEEP = 5
+_EVOLUTION_WARMUP_CAPS = [
+    (3, 20),   # dias 1-3 desde a conexão: 20/dia
+    (7, 50),   # dias 4-7: 50/dia
+]
+_EVOLUTION_STEADY_CAP = 150  # dia 8+
+
+
+def _evolution_daily_cap(instance: PublicWhatsappInstance) -> int:
+    # SQLite devolve datetime naive mesmo para uma coluna timezone=True — normaliza pra UTC
+    # antes de subtrair (mesmo padrão de whatsapp_inbox.is_within_session_window).
+    connected_at = instance.created_at
+    if connected_at.tzinfo is None:
+        connected_at = connected_at.replace(tzinfo=UTC)
+    days_connected = (datetime.now(UTC) - connected_at).days
+    for max_days, cap in _EVOLUTION_WARMUP_CAPS:
+        if days_connected <= max_days:
+            return cap
+    return _EVOLUTION_STEADY_CAP
+
+
+def _evolution_sent_today(db: Session, *, tenant_id: str) -> int:
+    """Conta quantas notificações whatsapp JÁ FORAM entregues hoje (status != pending/expired)
+    — usado só pro teto diário Evolution."""
+    today_start = datetime.now(UTC).replace(hour=0, minute=0, second=0, microsecond=0)
+    return db.scalar(
+        select(func.count()).select_from(Notification).where(
+            Notification.channel == "whatsapp",
+            Notification.status.in_(("sent", "logged")),
+            Notification.updated_at >= today_start,
+        )
+    ) or 0
+
+
 def process_pending(db: Session, *, tenant_id: str, limit: int = 50) -> int:
     """Processa a fila de notificações `pending` do tenant. Retorna quantas foram processadas.
 
@@ -161,8 +199,23 @@ def process_pending(db: Session, *, tenant_id: str, limit: int = 50) -> int:
     exponencial `2**attempts` minutos, capado em 60min) em vez de marcar `failed` terminal —
     mas nunca além da própria validade: se o backoff estouraria `expires_at`, expira em vez de
     reagendar pra depois do próprio prazo.
+
+    Onda 3 — freio anti-ban: só para tenants no transporte Evolution. No máximo
+    `_EVOLUTION_MAX_PER_SWEEP` por sweep, e um teto DIÁRIO com aquecimento (mais baixo nos
+    primeiros dias de conexão). Responder quem escreveu primeiro (inbox, síncrono) não passa
+    por aqui — o freio vive só neste caminho da fila.
     """
     now = datetime.now(UTC)
+    profile = settings_service.get_profile(db, tenant_id)
+    max_this_sweep = limit
+    if profile.whatsapp_provider == "evolution":
+        instance = db.get(PublicWhatsappInstance, f"e1p-{tenant_id}")
+        if instance is not None:
+            daily_cap = _evolution_daily_cap(instance)
+            already_sent = _evolution_sent_today(db, tenant_id=tenant_id)
+            remaining_today = max(0, daily_cap - already_sent)
+            max_this_sweep = min(limit, _EVOLUTION_MAX_PER_SWEEP, remaining_today)
+
     pending = list(
         db.scalars(
             select(Notification)
@@ -172,12 +225,11 @@ def process_pending(db: Session, *, tenant_id: str, limit: int = 50) -> int:
                 | (Notification.next_attempt_at <= now),
             )
             .order_by(Notification.created_at)
-            .limit(limit)
+            .limit(max_this_sweep)
         ).all()
     )
-    # Carregado uma vez por sweep (não por notificação) — a função já é tenant-scoped (param
-    # `tenant_id`), então o token/phone_id do provedor é o mesmo para todo o lote.
-    profile = settings_service.get_profile(db, tenant_id)
+    # `profile` já foi carregado acima (mesmo lote, mesmo tenant) — reaproveitado aqui pro
+    # send_text/send_template de cada notificação.
     processed = 0
     for notification in pending:
         if notification.expires_at is not None and notification.expires_at < now:
