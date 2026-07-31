@@ -262,17 +262,23 @@ def _temp_password() -> str:
 def _send_invite(
     *, name: str, email: str, phone: str, temp: str, delivery: str, company: str, tenant_id: str
 ) -> str:
-    """Entrega a senha temporária por e-mail ou WhatsApp. Devolve o status do envio.
+    """Entrega a senha temporária por e-mail ou WhatsApp. Devolve o status do envio ("queued"
+    para WhatsApp desde a Onda 3 — a entrega real é do worker).
 
     O convite é enviado em nome do TENANT sendo criado/atendido (`tenant_id`), nunca da
-    plataforma: por WhatsApp, usamos as credenciais e o vínculo de template daquele escritório
-    (Configurações). Como a `db` do Master aqui é a sessão GLOBAL sem tenant (ver `get_db`),
-    abrimos uma `tenant_session` dedicada só para essa leitura — mesmo padrão de `delete_account`
-    nesta mesma classe de serviço, já que ler `TenantProfile`/`WhatsappTemplate` (RLS) exige a GUC
-    de tenant setada na conexão.
+    plataforma: por WhatsApp, usamos o vínculo de template daquele escritório (Configurações).
+    Como a `db` do Master aqui é a sessão GLOBAL sem tenant (ver `get_db`), abrimos uma
+    `tenant_session` dedicada — mesmo padrão de `delete_account` nesta mesma classe de serviço,
+    já que ler/escrever `TenantProfile`/`WhatsappTemplate`/`Notification` (RLS) exige a GUC de
+    tenant setada na conexão.
+
+    Nota histórica (Onda 0 → Onda 3): este call site já teve uma exceção deliberada por causa de
+    um `TenantProfile` detached fora da `tenant_session` — migrar para `enqueue()` (que só
+    precisa de strings simples, não do objeto `profile`) resolveu essa razão de ser: o envio
+    inteiro agora cabe DENTRO do mesmo bloco `with`, sem extrair nada antes dele fechar.
     """
-    from app.core import whatsapp
     from app.core.email import send_email
+    from app.modules.notifications import service as notifications_service
 
     msg = (
         f"Olá, {name}! Seu acesso à plataforma ({company}) foi criado.\n"
@@ -292,20 +298,20 @@ def _send_invite(
             profile = settings_service.get_profile(tdb, tenant_id)
             template_id = (profile.whatsapp_template_bindings or {}).get(PURPOSE_STAFF_INVITE)
             template = tdb.get(WhatsappTemplate, template_id) if template_id else None
-            # Exceção deliberada (Onda 0 da spec de WhatsApp/Evolution): este call site NÃO
-            # migra para `whatsapp.send_template(profile=...)`/`send_text(profile=...)` como os
-            # outros 8 pontos do domínio. `profile` só existe DENTRO deste bloco `with
-            # tenant_session`; extrair token/phone_id como strings simples ANTES do bloco fechar
-            # é o que evita usar um `TenantProfile` (instância SQLAlchemy) já detached fora dele.
-            # O despachante aceita token=/phone_id= diretamente por causa exatamente deste caso.
-            token, phone_id = profile.whatsapp_token, profile.whatsapp_phone_id
-        if template is not None and template.status == STATUS_APPROVED:
-            return whatsapp.send_template(
-                to=phone, token=token or "", phone_id=phone_id or "",
-                template_name=template.name, language=template.language,
-                variables=[name, company, email, temp],  # ordem = PURPOSE_VARIABLE_SPECS
-            )
-        return whatsapp.send_text(to=phone, text=msg, token=token, phone_id=phone_id)
+            if template is not None and template.status == STATUS_APPROVED:
+                notifications_service.enqueue(
+                    tdb, tenant_id=tenant_id, channel="whatsapp", recipient=phone, message=msg,
+                    purpose=PURPOSE_STAFF_INVITE, whatsapp_template_name=template.name,
+                    whatsapp_template_language=template.language,
+                    whatsapp_template_variables=[name, company, email, temp],
+                )
+            else:
+                notifications_service.enqueue(
+                    tdb, tenant_id=tenant_id, channel="whatsapp", recipient=phone, message=msg,
+                    purpose=PURPOSE_STAFF_INVITE,
+                )
+            tdb.commit()
+        return "queued"
     return send_email(to=email, subject="Seu acesso à plataforma", body=msg)
 
 

@@ -9,7 +9,7 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.config import settings
-from app.core import audit, whatsapp
+from app.core import audit
 from app.modules.auth.models import Tenant
 from app.modules.contracts.models import (
     STATUS_CANCELLED,
@@ -22,7 +22,7 @@ from app.modules.contracts.models import (
 )
 from app.modules.contracts.schemas import Clause, ContractCreate, ContractUpdate, TemplateCreate
 from app.modules.crm.models import Client
-from app.modules.notifications.models import Notification
+from app.modules.notifications import service as notifications_service
 from app.modules.settings import service as settings_service
 from app.modules.whatsapp_templates.models import (
     PURPOSE_CONTRACT_SEND,
@@ -287,21 +287,19 @@ def send_contract(db: Session, *, contract_id: str, tenant_id: str, actor: str) 
     if template is not None and template.status == STATUS_APPROVED:
         client_name = client.name if client else "cliente"
         variables = [client_name, c.title, link]
-        status = whatsapp.send_template(
-            to=client.phone if client and client.phone else "",
-            profile=profile,
-            template_name=template.name, language=template.language, variables=variables,
-        )
         msg = _render_template_preview(template.body_text, variables)
+        notifications_service.enqueue(
+            db, tenant_id=tenant_id, channel="whatsapp", recipient=recipient,
+            client_id=c.client_id, message=msg, purpose=PURPOSE_CONTRACT_SEND,
+            whatsapp_template_name=template.name, whatsapp_template_language=template.language,
+            whatsapp_template_variables=variables,
+        )
     else:
         msg = f"Olá! Segue o contrato '{c.title}' para sua assinatura: {link}".strip()
-        status = whatsapp.send_text(to=recipient, text=msg, profile=profile)
-    db.add(
-        Notification(
-            tenant_id=tenant_id, channel="whatsapp", recipient=recipient,
-            client_id=c.client_id, message=msg, status=status,
+        notifications_service.enqueue(
+            db, tenant_id=tenant_id, channel="whatsapp", recipient=recipient,
+            client_id=c.client_id, message=msg, purpose=PURPOSE_CONTRACT_SEND,
         )
-    )
     c.status = STATUS_SENT
     _publish(db, c, _company_name(db, tenant_id))
     audit.record(db, tenant_id=tenant_id, actor=actor, action="contract.send", target=c.id)

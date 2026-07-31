@@ -9,10 +9,10 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.config import settings
-from app.core import ai, audit, whatsapp
+from app.core import ai, audit
 from app.core.security import hash_password, verify_password
 from app.modules.crm.models import Client
-from app.modules.notifications.models import Notification
+from app.modules.notifications import service as notifications_service
 from app.modules.quotes.models import (
     STATUS_APPROVED,
     STATUS_DRAFT,
@@ -214,21 +214,19 @@ def send_quote(db: Session, *, quote_id: str, tenant_id: str, actor: str) -> Quo
     if template is not None and template.status == TEMPLATE_STATUS_APPROVED:
         client_name = q.client_name or (client.name if client else None) or "cliente"
         variables = [client_name, q.title, valor, link]
-        phone_to = q.client_whatsapp or (client.phone if client and client.phone else None) or ""
-        status = whatsapp.send_template(
-            to=phone_to, profile=profile,
-            template_name=template.name, language=template.language, variables=variables,
-        )
         msg = _render_template_preview(template.body_text, variables)
+        notifications_service.enqueue(
+            db, tenant_id=tenant_id, channel="whatsapp", recipient=recipient,
+            client_id=q.client_id, message=msg, purpose=PURPOSE_QUOTE_SEND,
+            whatsapp_template_name=template.name, whatsapp_template_language=template.language,
+            whatsapp_template_variables=variables,
+        )
     else:
         msg = f"Olá! Segue sua proposta de {q.title}: {valor}. Veja em: {link}".strip()
-        status = whatsapp.send_text(to=recipient, text=msg, profile=profile)
-    db.add(
-        Notification(
-            tenant_id=tenant_id, channel="whatsapp", recipient=recipient,
-            client_id=q.client_id, message=msg, status=status,
+        notifications_service.enqueue(
+            db, tenant_id=tenant_id, channel="whatsapp", recipient=recipient,
+            client_id=q.client_id, message=msg, purpose=PURPOSE_QUOTE_SEND,
         )
-    )
     q.status = STATUS_SENT
     _publish(db, q)
     audit.record(db, tenant_id=tenant_id, actor=actor, action="quote.send", target=q.id)

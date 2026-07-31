@@ -4,15 +4,16 @@ from datetime import UTC, date, datetime
 
 import pytest
 from fastapi.testclient import TestClient
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.core import whatsapp
 from app.core.audit import PlatformAuditEntry
 from app.core.security import hash_password
 from app.modules.agenda.models import AgendaEvent
 from app.modules.auth.models import Tenant, User
 from app.modules.bank.models import BankAccount, BankBalanceCheckpoint, BankTransaction
 from app.modules.crm.models import Client
+from app.modules.notifications.models import Notification
 from app.modules.platform import service as platform_service
 from app.modules.settings.models import TenantProfile
 from app.modules.whatsapp_templates.models import (
@@ -211,40 +212,45 @@ def test_staff_whatsapp_delivery(client: TestClient, admin_headers, _tenant_sess
         json=_staff_body(email="zap@escw.com", delivery="whatsapp"),
         headers=admin_headers,
     ).json()
-    assert invite["delivery"] == "whatsapp" and invite["delivery_status"] in ("sent", "logged")
+    # entrega real fica pro worker desde a Onda 3 (fila com validade/freio) — o request só
+    # enfileira.
+    assert invite["delivery"] == "whatsapp" and invite["delivery_status"] == "queued"
 
 
 # ── WhatsApp por template (staff_invite) — Story convite via template ───────────────────────
 def test_staff_whatsapp_no_binding_uses_tenant_credentials(
-    client: TestClient, admin_headers, db: Session, _tenant_session_to_test_db, monkeypatch
+    client: TestClient, admin_headers, db: Session, _tenant_session_to_test_db
 ):
-    """Sem template vinculado: mantém o texto livre, mas usando as credenciais do TENANT."""
+    """Sem template vinculado: mantém o texto livre, ENFILEIRADO (Onda 3) — a resolução das
+    credenciais do tenant acontece depois, na entrega real feita pelo worker."""
     tid = _tenant_id(client, admin_headers, slug="escwcred", email="escwcred@example.com")
     db.add(TenantProfile(tenant_id=tid, whatsapp_token="tok-123", whatsapp_phone_id="phone-456"))
     db.commit()
-
-    captured = {}
-
-    def _fake_send_text(*, to, text, token=None, phone_id=None):
-        captured.update(to=to, token=token, phone_id=phone_id)
-        return "sent"
-
-    monkeypatch.setattr(whatsapp, "send_text", _fake_send_text)
 
     invite = client.post(
         f"/admin/accounts/{tid}/users",
         json=_staff_body(email="credzap@escwcred.com", delivery="whatsapp"),
         headers=admin_headers,
     ).json()
-    assert invite["delivery_status"] == "sent"
-    assert captured["token"] == "tok-123" and captured["phone_id"] == "phone-456"
+    assert invite["delivery_status"] == "queued"
+
+    notif = db.scalar(
+        select(Notification).where(
+            Notification.tenant_id == tid, Notification.channel == "whatsapp"
+        )
+    )
+    assert notif is not None
+    assert notif.status == "pending"
+    assert notif.purpose == PURPOSE_STAFF_INVITE
+    assert notif.whatsapp_template_name is None  # sem vínculo = texto livre, sem template
 
 
 def test_staff_whatsapp_bound_approved_template_sends_variables_in_order(
-    client: TestClient, admin_headers, db: Session, _tenant_session_to_test_db, monkeypatch
+    client: TestClient, admin_headers, db: Session, _tenant_session_to_test_db
 ):
-    """Template vinculado + aprovado: usa send_template com as variáveis na ordem do spec
-    (Nome, Empresa, E-mail de login, Senha temporária)."""
+    """Template vinculado + aprovado: a notificação enfileirada carrega o template, com as
+    variáveis na ordem do spec (Nome, Empresa, E-mail de login, Senha temporária) — a entrega
+    real (send_template) acontece depois, no worker (Onda 3)."""
     tid = _tenant_id(client, admin_headers, slug="esctpl", email="esctpl@example.com")
     tpl = WhatsappTemplate(
         tenant_id=tid,
@@ -266,33 +272,28 @@ def test_staff_whatsapp_bound_approved_template_sends_variables_in_order(
     ))
     db.commit()
 
-    captured = {}
-
-    def _fake_send_template(*, to, token, phone_id, template_name, language, variables):
-        captured.update(
-            to=to, token=token, phone_id=phone_id, template_name=template_name,
-            language=language, variables=variables,
-        )
-        return "sent"
-
-    monkeypatch.setattr(whatsapp, "send_template", _fake_send_template)
-
     body = _staff_body(email="tplzap@esctpl.com", delivery="whatsapp", name="Contadora Nova")
     invite = client.post(f"/admin/accounts/{tid}/users", json=body, headers=admin_headers).json()
 
-    assert invite["delivery_status"] == "sent"
-    assert captured["template_name"] == "convite_funcionario"
-    assert captured["language"] == "pt_BR"
-    assert captured["token"] == "tok-1" and captured["phone_id"] == "phone-1"
-    assert captured["variables"] == [
+    assert invite["delivery_status"] == "queued"
+    notif = db.scalar(
+        select(Notification).where(
+            Notification.tenant_id == tid, Notification.channel == "whatsapp"
+        )
+    )
+    assert notif is not None
+    assert notif.purpose == PURPOSE_STAFF_INVITE
+    assert notif.whatsapp_template_name == "convite_funcionario"
+    assert notif.whatsapp_template_language == "pt_BR"
+    assert notif.whatsapp_template_variables == [
         "Contadora Nova", "Cliente Pagante", "tplzap@esctpl.com", invite["temp_password"],
     ]
 
 
 def test_staff_whatsapp_bound_unapproved_template_falls_back_to_text(
-    client: TestClient, admin_headers, db: Session, _tenant_session_to_test_db, monkeypatch
+    client: TestClient, admin_headers, db: Session, _tenant_session_to_test_db
 ):
-    """Template vinculado mas ainda não aprovado pela Meta: cai no texto livre (send_text)."""
+    """Template vinculado mas ainda não aprovado pela Meta: cai no texto livre (sem template)."""
     tid = _tenant_id(client, admin_headers, slug="esctplpend", email="esctplpend@example.com")
     tpl = WhatsappTemplate(
         tenant_id=tid,
@@ -314,24 +315,17 @@ def test_staff_whatsapp_bound_unapproved_template_falls_back_to_text(
     ))
     db.commit()
 
-    calls = {"template": False, "text": False}
-
-    def _fake_send_template(**kwargs):
-        calls["template"] = True
-        return "sent"
-
-    def _fake_send_text(*, to, text, token=None, phone_id=None):
-        calls["text"] = True
-        return "sent"
-
-    monkeypatch.setattr(whatsapp, "send_template", _fake_send_template)
-    monkeypatch.setattr(whatsapp, "send_text", _fake_send_text)
-
     body = _staff_body(email="pendzap@esctplpend.com", delivery="whatsapp")
     invite = client.post(f"/admin/accounts/{tid}/users", json=body, headers=admin_headers).json()
 
-    assert invite["delivery_status"] == "sent"
-    assert calls["text"] is True and calls["template"] is False
+    assert invite["delivery_status"] == "queued"
+    notif = db.scalar(
+        select(Notification).where(
+            Notification.tenant_id == tid, Notification.channel == "whatsapp"
+        )
+    )
+    assert notif is not None
+    assert notif.whatsapp_template_name is None  # não usou o template ainda pendente
 
 
 def test_first_access_password_change(client: TestClient, admin_headers):
