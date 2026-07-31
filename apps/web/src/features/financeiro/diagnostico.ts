@@ -76,9 +76,39 @@ export function sourceLabel(source: string): string {
       return "Projeção de caixa";
     case "investimento":
       return "Investimentos";
+    case "completude":
+      return "Completude dos lançamentos";
     default:
       return source;
   }
+}
+
+/**
+ * Story 8.6 — o PIOR nível entre os sinais de completude (`🔴 > 🟡 > 🟢`), ou `null` se não houver
+ * nenhum. Puro. Existe separado de `completudeCaveat` só para a página escolher a cor da ressalva
+ * sem reimplementar a varredura (e para que essa escolha seja testável).
+ */
+export function completudeLevel(signals: Signal[]): SignalLevel | null {
+  const niveis = signals.filter((s) => s.source === "completude").map((s) => s.level);
+  if (niveis.includes("vermelho")) return "vermelho";
+  if (niveis.includes("amarelo")) return "amarelo";
+  return niveis.includes("verde") ? "verde" : null;
+}
+
+/**
+ * Story 8.6 — a **ressalva de precedência semântica**: quando o sistema não sabe se os lançamentos
+ * estão completos (🔴 ou 🟡 de completude), tudo o que vem abaixo — margem, runway, rentabilidade —
+ * está calculado sobre base possivelmente furada, e isso precisa ser dito ANTES dos números.
+ *
+ * Devolve `null` quando não há sinal de completude ou quando ele é 🟢: um "está tudo batendo" não
+ * gera ressalva nenhuma (a ressalva existe para desconfiar, não para decorar a tela). Puro.
+ */
+export function completudeCaveat(signals: Signal[]): string | null {
+  const level = completudeLevel(signals);
+  if (level !== "vermelho" && level !== "amarelo") return null;
+  return level === "vermelho"
+    ? "Há divergência acima da tolerância entre o banco e o e1p: os sinais abaixo estão calculados sobre lançamentos possivelmente incompletos."
+    : "Ainda não dá para afirmar que os seus lançamentos estão completos: os sinais abaixo estão calculados sobre lançamentos possivelmente incompletos.";
 }
 
 /** Primeiro/último dia do mês "YYYY-MM" (bordas de data de calendário, sem depender de fuso). */

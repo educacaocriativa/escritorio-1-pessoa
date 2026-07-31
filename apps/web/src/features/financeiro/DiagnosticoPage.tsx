@@ -1,7 +1,10 @@
 import { ChevronLeft, ChevronRight, Sparkles } from "lucide-react";
 import { useCallback, useEffect, useMemo, useState } from "react";
+import { Link } from "react-router-dom";
 import { api, apiErrorMessage } from "../../lib/api";
 import {
+  completudeCaveat,
+  completudeLevel,
   countByLevel,
   currentMonth,
   type Diagnostics,
@@ -54,6 +57,11 @@ export default function DiagnosticoPage() {
     [data],
   );
 
+  // Story 8.6 — a ressalva de completude (precedência semântica): quando o sistema não sabe se os
+  // lançamentos estão completos, isso é dito ANTES dos sinais, não junto com eles.
+  const caveat = useMemo(() => (data ? completudeCaveat(data.signals) : null), [data]);
+  const caveatLevel = useMemo(() => (data ? completudeLevel(data.signals) : null), [data]);
+
   return (
     <div className="space-y-6">
       <div className="flex flex-wrap items-end justify-between gap-3">
@@ -99,6 +107,23 @@ export default function DiagnosticoPage() {
             <CountCard level="amarelo" count={counts.amarelo} />
             <CountCard level="verde" count={counts.verde} />
           </div>
+
+          {/* Ressalva de completude (Story 8.6) — ANTES da lista, porque é o que decide se dá
+              para confiar nos números de baixo. Bloco discreto: âmbar quando 🟡, vermelho quando
+              🔴. A porta para a conferência fica no CARTÃO do sinal de completude (Story 8.7,
+              abaixo), não aqui: a ressalva é um aviso de leitura, o sinal é o que se investiga. */}
+          {caveat && (
+            <p
+              role="note"
+              className={`rounded-2xl p-4 text-sm ${
+                caveatLevel === "vermelho"
+                  ? "bg-red-50 text-red-800 ring-1 ring-red-200"
+                  : "bg-amber-50 text-amber-800 ring-1 ring-amber-200"
+              }`}
+            >
+              {caveat}
+            </p>
+          )}
 
           {/* Sinais determinísticos — SEMPRE presentes (mesmo sem IA). */}
           <section className="space-y-3">
@@ -152,6 +177,17 @@ function SignalCard({ signal }: { signal: Signal }) {
         {/* Explicação NUMÉRICA — sempre visível, é a base sólida do diagnóstico. */}
         <p className="mt-1 text-sm text-neutral-700">{signal.explanation}</p>
         <p className="mt-1 text-xs text-neutral-400">{sourceLabel(signal.source)}</p>
+        {/* Story 8.7 — a 1ª das duas portas de entrada da conferência (a 2ª é o "Conferir" por
+            conta em Contas & Saldos). O sinal diz QUE há divergência; o link leva a ONDE ela
+            está. A conferência não é item de menu de propósito — ela é resposta a este sinal. */}
+        {signal.source === "completude" && (
+          <Link
+            to="/financeiro/conferencia"
+            className="mt-2 inline-block text-xs font-medium text-primary-600 underline"
+          >
+            Ver a conferência
+          </Link>
+        )}
       </div>
     </li>
   );

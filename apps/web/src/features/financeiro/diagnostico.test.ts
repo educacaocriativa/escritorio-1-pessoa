@@ -1,5 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
+  completudeCaveat,
+  completudeLevel,
   countByLevel,
   monthRange,
   type Signal,
@@ -43,6 +45,54 @@ describe("sourceLabel", () => {
     expect(sourceLabel("lucratividade")).toBe("Lucratividade por contrato");
     expect(sourceLabel("investimento")).toBe("Investimentos");
     expect(sourceLabel("desconhecido")).toBe("desconhecido");
+  });
+
+  it("rotula a origem 'completude' (Story 8.6)", () => {
+    expect(sourceLabel("completude")).toBe("Completude dos lançamentos");
+  });
+});
+
+/**
+ * Story 8.6 — a ressalva de precedência semântica. A regra que ela representa: se o sistema não
+ * sabe se os lançamentos estão completos, qualquer afirmação sobre margem/runway/rentabilidade é
+ * feita sobre base possivelmente furada, e o usuário precisa ler isso ANTES dos números.
+ */
+describe("completudeLevel", () => {
+  it("devolve o pior nível entre os sinais de completude", () => {
+    expect(
+      completudeLevel([sig("amarelo", "completude"), sig("vermelho", "completude")]),
+    ).toBe("vermelho");
+    expect(completudeLevel([sig("verde", "completude"), sig("amarelo", "completude")])).toBe(
+      "amarelo",
+    );
+    expect(completudeLevel([sig("verde", "completude")])).toBe("verde");
+  });
+
+  it("ignora sinais de outras origens", () => {
+    expect(completudeLevel([sig("vermelho", "projecao"), sig("amarelo", "lucratividade")])).toBe(
+      null,
+    );
+    expect(completudeLevel([])).toBe(null);
+  });
+});
+
+describe("completudeCaveat", () => {
+  it("avisa quando a completude está 🔴", () => {
+    const texto = completudeCaveat([sig("vermelho", "completude"), sig("verde", "projecao")]);
+    expect(texto).toContain("possivelmente incompletos");
+    expect(texto).toContain("divergência acima da tolerância");
+  });
+
+  it("avisa quando a completude está 🟡", () => {
+    const texto = completudeCaveat([sig("amarelo", "completude")]);
+    expect(texto).toContain("possivelmente incompletos");
+  });
+
+  it("cala quando a completude está 🟢 ou ausente", () => {
+    expect(completudeCaveat([sig("verde", "completude")])).toBe(null);
+    // Um 🔴 de OUTRA origem não gera a ressalva: ela é sobre confiar nos dados, não sobre gravidade.
+    expect(completudeCaveat([sig("vermelho", "projecao")])).toBe(null);
+    expect(completudeCaveat([])).toBe(null);
   });
 });
 

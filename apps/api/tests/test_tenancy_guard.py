@@ -45,8 +45,31 @@ ALLOWLIST = {
 
 
 def _module_routers() -> list[pathlib.Path]:
-    routers = sorted(MODULES_DIR.glob("*/router.py"))
-    assert routers, f"Nenhum router.py encontrado em {MODULES_DIR} — teste desatualizado?"
+    """Todo arquivo de ROTA de um módulo — não só o que se chama exatamente `router.py`.
+
+    ⚠️ **Corrigido no re-gate do Epic 8 (2026-07-30).** O glob era `*/router.py`, que não casava
+    com `app/modules/payables/receipts_router.py` — um router **real e montado**
+    (`app/modules/__init__.py:31`), invisível para esta guarda. A docstring do módulo sempre disse
+    `**/router.py`; era a implementação que discordava dela.
+
+    Provado por mutação: com `from app.db.session import get_db` dentro de `receipts_router.py`,
+    esta suíte passava (`2 passed`). Hoje **não há violação** — aquele arquivo usa `get_tenant_db`
+    e `get_receipt_db` (que abre `tenant_session(user.tenant_id)`) —, então ampliar o alcance é
+    grátis: verificado que nenhum módulo fora da ALLOWLIST cita `get_db`, inclusive se a varredura
+    cobrisse **todo** `.py` de `app/modules/`.
+
+    O ponto cego que **permanece**: a guarda só olha arquivos de rota. Um `service.py` que abrisse
+    sessão global continuaria passando. Registrado como follow-up no gate — hoje ninguém o faz, e
+    ampliar para todo `.py` traria falso positivo de docstring (a guarda é substring, não sabe
+    distinguir código de prosa: `platform/service.py:269` e `whatsapp_inbox/service.py:86` citam
+    `get_db` em texto, e só não trombam porque os dois módulos estão na ALLOWLIST).
+    """
+    routers = sorted(
+        p
+        for p in MODULES_DIR.rglob("*.py")
+        if "router" in p.name and "__pycache__" not in p.parts
+    )
+    assert routers, f"Nenhum arquivo de rota encontrado em {MODULES_DIR} — teste desatualizado?"
     return routers
 
 

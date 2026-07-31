@@ -41,7 +41,7 @@ PRD completo (com Requirements FR/NFR/CR, constraints técnicas e premissas do P
 ## Iniciativas pós-go-live
 
 > Estas iniciativas **não** fazem parte do PRD de go-live (`docs/prd.md`) — são **features novas de produto**
-> e/ou robustez de plataforma, com PRD próprio. Numeração de epics continua a sequência (5, 6...).
+> e/ou robustez de plataforma, com PRD próprio. Numeração de epics continua a sequência (5, 6, 7, 8...).
 
 ### Inteligência Financeira & Robustez de Plataforma
 Porte (design, não código) de recursos financeiros analíticos e de plataforma do produto irmão do fundador
@@ -58,3 +58,36 @@ PRD: [`prd-inteligencia-financeira.md`](./prd-inteligencia-financeira.md).
 
 **Sequenciamento recomendado:** Epic 5 (interno: 5.1 → 5.2 → 5.3–5.7 → 5.8 → 5.9); Epic 6 é independente e
 pode correr em paralelo. Cobre os 9 recursos pedidos pelo fundador sem omissão (rastreabilidade na §4.2 do PRD).
+
+### Cobertura de Testes (caminho feliz / caminho infeliz)
+Fechamento dos 5 gaps **P1** do QA Gate de cobertura (`docs/qa/test-coverage-gate-2026-07-11.md`, 17 itens
+auditados por 3 agentes `@qa`, ratificado por @pm em 2026-07-11): caminhos infelizes das duas Regras de Ouro de
+segurança (RLS e anonimizador) realmente exercitados e não puláveis no CI, e desbloqueio + início da cobertura de
+testes do frontend (hoje zero). Não é domínio de negócio novo — é dívida de qualidade.
+
+| Epic | Arquivo | Classificação | Stories |
+|---|---|---|---|
+| Epic 7 — Cobertura de Testes (P1–P4) | [epic-7-cobertura-de-testes.md](./epic-7-cobertura-de-testes.md) | DÍVIDA DE QUALIDADE (pós-go-live) | 5 (P1) |
+
+**Sequenciamento recomendado:** independente dos Epics 5 e 6 (pode correr em paralelo). Interno: 7.1 → 7.2 → 7.3
+(desbloqueio) → 7.4/7.5. **Coordenar 7.1 com @devops/Epic 6** — as duas mexem no mesmo `.github/workflows/ci.yml`.
+
+### Controle Bancário e Conferência
+O **plano 3 do dinheiro** (o extrato real da conta do usuário) como entidade de primeira classe, com saldo
+**derivado** dos movimentos, e uma **conferência que localiza furos**: saldo do banco × saldo do sistema, **por
+conta**, resumido em uma frase. Nasce da assimetria estrutural entre receber (três testemunhas independentes:
+gateway, webhook, dinheiro entrando) e pagar (nenhuma). Sem agregador de Open Finance e sem custo recorrente novo.
+Design: [`../architecture/controle-bancario-design.md`](../architecture/controle-bancario-design.md);
+ADR: [`../decisions/0003-controle-bancario-nativo.md`](../decisions/0003-controle-bancario-nativo.md).
+
+| Epic | Arquivo | Classificação | Stories |
+|---|---|---|---|
+| Epic 8 — Controle Bancário e Conferência | [epic-8-controle-bancario.md](./epic-8-controle-bancario.md) | FEATURE NOVA (pós-go-live) | 8 (Ondas 0–1) |
+
+**Escopo liberado:** apenas **Onda 0 + Onda 1** (decisão do fundador, 2026-07-29). Ondas 2, 3, 4 e 6 são escopo
+**planejado, não liberado**; **Onda 5 está bloqueada** pelo pré-requisito `platform_earnings → transaction`.
+**Sequenciamento:** depende do Epic 5 (entregue) — estende `financial_intelligence` e `investments`; independente
+dos Epics 6 e 7. Interno: 8.1 (Onda 0) → 8.2 → 8.3 → 8.4 → 8.5 → 8.6 → 8.7 → 8.8.
+⚠️ As Ondas 3 e 4 **não são escopo automático**: a divergência medida na Onda 1 é o instrumento de decisão sobre
+liberá-las (§3.1 e §5.1 do epic). O epic também **supersede** o AC1 da Story 5.7 (saldo inicial da projeção) e,
+quando a Onda 2 for liberada, o AC1 da Story 5.6 (`principal_cents` vira derivado).
