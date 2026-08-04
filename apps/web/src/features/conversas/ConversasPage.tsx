@@ -2,10 +2,39 @@ import type {
   ConversationSummary, TimelineEntry, WhatsappTemplate,
 } from "@e1p/shared-types";
 import { Paperclip, Send } from "lucide-react";
-import { useCallback, useEffect, useRef, useState } from "react";
+import { Fragment, useCallback, useEffect, useRef, useState } from "react";
 import { api, apiErrorMessage } from "../../lib/api";
 
 const POLL_MS = 7000;
+
+// ── Datas ───────────────────────────────────────────────────────────────────
+// Tudo abaixo trabalha no fuso LOCAL do usuário de propósito: `created_at` é um INSTANTE
+// (timestamptz, ver TimestampMixin), não uma data de negócio — então a regra da Agenda
+// ("compare all-day por data de calendário UTC") não vale aqui; é o caso oposto. Agrupar por
+// `created_at.slice(0,10)` colocaria uma mensagem das 22h de Brasília no dia seguinte.
+
+const dayKey = (iso: string) => new Date(iso).toLocaleDateString("pt-BR");
+
+const hhmm = (iso: string) =>
+  new Date(iso).toLocaleTimeString("pt-BR", { hour: "2-digit", minute: "2-digit" });
+
+function dayLabel(iso: string): string {
+  const key = dayKey(iso);
+  const hoje = new Date();
+  const ontem = new Date(hoje);
+  ontem.setDate(hoje.getDate() - 1);
+  if (key === dayKey(hoje.toISOString())) return "Hoje";
+  if (key === dayKey(ontem.toISOString())) return "Ontem";
+  return new Date(iso).toLocaleDateString("pt-BR", {
+    weekday: "short", day: "2-digit", month: "2-digit", year: "numeric",
+  });
+}
+
+/** Carimbo da lista de conversas: horário se foi hoje, senão a data (critério do WhatsApp). */
+function listStamp(iso: string | null): string {
+  if (!iso) return "";
+  return dayKey(iso) === dayKey(new Date().toISOString()) ? hhmm(iso) : dayKey(iso);
+}
 
 export default function ConversasPage() {
   const [conversations, setConversations] = useState<ConversationSummary[]>([]);
@@ -39,9 +68,14 @@ export default function ConversasPage() {
                 selected === c.client_id ? "bg-primary-50" : ""
               }`}
             >
-              <div className="flex items-center justify-between">
-                <span className="text-sm font-semibold text-neutral-800">{c.client_name}</span>
-                {c.unread && <span className="h-2 w-2 rounded-full bg-primary-600" />}
+              <div className="flex items-center justify-between gap-2">
+                <span className="truncate text-sm font-semibold text-neutral-800">
+                  {c.client_name}
+                </span>
+                <span className="flex shrink-0 items-center gap-1.5 text-[11px] text-neutral-400">
+                  {listStamp(c.last_message_at)}
+                  {c.unread && <span className="h-2 w-2 rounded-full bg-primary-600" />}
+                </span>
               </div>
               <p className="mt-0.5 truncate text-xs text-neutral-400">
                 {c.last_message_preview}
@@ -52,7 +86,12 @@ export default function ConversasPage() {
       </div>
       <div className="flex-1 rounded-2xl bg-white shadow-sm">
         {selected ? (
-          <ConversationThread key={selected} clientId={selected} onSent={loadConversations} />
+          <ConversationThread
+            key={selected}
+            clientId={selected}
+            client={conversations.find((c) => c.client_id === selected) ?? null}
+            onSent={loadConversations}
+          />
         ) : (
           <div className="flex h-full items-center justify-center text-sm text-neutral-400">
             Selecione uma conversa
@@ -64,8 +103,8 @@ export default function ConversasPage() {
 }
 
 function ConversationThread({
-  clientId, onSent,
-}: { clientId: string; onSent: () => void }) {
+  clientId, client, onSent,
+}: { clientId: string; client: ConversationSummary | null; onSent: () => void }) {
   const [timeline, setTimeline] = useState<TimelineEntry[]>([]);
   const [withinWindow, setWithinWindow] = useState(true);
   const [approvedTemplates, setApprovedTemplates] = useState<WhatsappTemplate[]>([]);
@@ -164,53 +203,89 @@ function ConversationThread({
 
   return (
     <div className="flex h-full flex-col">
+      <div className="border-b border-neutral-100 px-4 py-3">
+        <p className="text-sm font-semibold text-neutral-800">
+          {client?.client_name ?? "Conversa"}
+        </p>
+        {client?.client_phone && (
+          <p className="text-xs text-neutral-400">{client.client_phone}</p>
+        )}
+      </div>
       <div className="flex-1 space-y-2 overflow-y-auto p-4">
-        {timeline.map((entry, i) => (
-          <div
-            key={i}
-            className={`max-w-md rounded-xl px-3 py-2 text-sm ${
-              entry.source === "automated"
-                ? "mx-auto bg-neutral-100 text-neutral-500"
-                : entry.direction === "out"
-                  ? "ml-auto bg-primary-600 text-white"
-                  : "bg-neutral-100 text-neutral-800"
-            }`}
-          >
-            {entry.source === "automated" && (
-              <p className="mb-0.5 text-xs font-semibold">🤖 {entry.purpose_label}</p>
-            )}
-            {entry.kind === "image" && entry.media_attachment_id && (
-              imageUrls[entry.media_attachment_id] ? (
-                <img
-                  src={imageUrls[entry.media_attachment_id]}
-                  onClick={() => openAttachment(entry.media_attachment_id!)}
-                  alt={entry.text_body || "Imagem"}
-                  className="mb-1 max-h-72 w-full cursor-pointer rounded-lg object-cover"
-                />
-              ) : (
-                <div className="mb-1 flex h-40 w-full items-center justify-center rounded-lg bg-black/10 text-xs">
-                  Carregando imagem...
+        {timeline.map((entry, i) => {
+          // Três tons, não dois: "automated" também é `direction="out"` (aviso que a plataforma
+          // mandou), mas vive centralizado em fundo claro — tratá-lo como "out" pintaria texto
+          // branco sobre cinza claro.
+          const tone =
+            entry.source === "automated" ? "auto"
+              : entry.direction === "out" ? "out"
+                : "in";
+          const showDay =
+            i === 0 || dayKey(entry.created_at) !== dayKey(timeline[i - 1].created_at);
+          return (
+            <Fragment key={i}>
+              {showDay && (
+                <div className="flex justify-center py-2">
+                  <span className="rounded-pill bg-neutral-100 px-3 py-1 text-[11px] font-medium text-neutral-500">
+                    {dayLabel(entry.created_at)}
+                  </span>
                 </div>
-              )
-            )}
-            {entry.kind !== "image" && entry.media_attachment_id && (
-              <button
-                onClick={() => openAttachment(entry.media_attachment_id!)}
-                className={`mb-1 flex items-center gap-1 text-xs font-semibold underline ${
-                  entry.direction === "out" ? "text-white" : "text-primary-600"
+              )}
+              <div
+                className={`max-w-md rounded-xl px-3 py-2 text-sm ${
+                  tone === "auto"
+                    ? "mx-auto bg-neutral-100 text-neutral-500"
+                    : tone === "out"
+                      ? "ml-auto bg-primary-600 text-white"
+                      : "mr-auto bg-neutral-100 text-neutral-800"
                 }`}
               >
-                <Paperclip size={12} />
-                Baixar anexo
-              </button>
-            )}
-            {(entry.text_body || !entry.media_attachment_id) && (
-              <p className="whitespace-pre-wrap">
-                {entry.text_body || `[${entry.kind}]`}
-              </p>
-            )}
-          </div>
-        ))}
+                {tone === "auto" && (
+                  <p className="mb-0.5 text-xs font-semibold">🤖 {entry.purpose_label}</p>
+                )}
+                {entry.kind === "image" && entry.media_attachment_id && (
+                  imageUrls[entry.media_attachment_id] ? (
+                    <img
+                      src={imageUrls[entry.media_attachment_id]}
+                      onClick={() => openAttachment(entry.media_attachment_id!)}
+                      alt={entry.text_body || "Imagem"}
+                      className="mb-1 max-h-72 w-full cursor-pointer rounded-lg object-cover"
+                    />
+                  ) : (
+                    <div className="mb-1 flex h-40 w-full items-center justify-center rounded-lg bg-black/10 text-xs">
+                      Carregando imagem...
+                    </div>
+                  )
+                )}
+                {entry.kind !== "image" && entry.media_attachment_id && (
+                  <button
+                    onClick={() => openAttachment(entry.media_attachment_id!)}
+                    className={`mb-1 flex items-center gap-1 text-xs font-semibold underline ${
+                      tone === "out" ? "text-white" : "text-primary-600"
+                    }`}
+                  >
+                    <Paperclip size={12} />
+                    Baixar anexo
+                  </button>
+                )}
+                {(entry.text_body || !entry.media_attachment_id) && (
+                  <p className="whitespace-pre-wrap">
+                    {entry.text_body || `[${entry.kind}]`}
+                  </p>
+                )}
+                {/* Autoria em TEXTO, não só por cor/lado: quem chega numa conversa espelhada do
+                    celular precisa conseguir dizer quem escreveu sem depender do layout. */}
+                <p
+                  className={`mt-1 text-[11px] ${
+                    tone === "out" ? "text-right text-white/70" : "text-neutral-400"
+                  }`}
+                >
+                  {tone === "out" ? "Você · " : ""}{hhmm(entry.created_at)}
+                </p>
+              </div>
+            </Fragment>
+          );
+        })}
       </div>
       {error && <div className="mx-4 mb-2 rounded-lg bg-red-50 px-3 py-2 text-sm text-danger">{error}</div>}
       <div className="border-t border-neutral-100 p-3">

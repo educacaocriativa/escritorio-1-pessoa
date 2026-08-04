@@ -151,6 +151,13 @@ def parse_inbound(payload: dict) -> list[InboundMessage]:
     lugar do telefone → `from_phone=None` — NUNCA adivinhado por heurística (ver bandeja "Não
     identificados", Onda 3).
 
+    `key.fromMe` distingue QUEM ESCREVEU: o Baileys espelha no mesmo evento `messages.upsert`
+    tanto o que o contato mandou quanto o que o DONO digitou no WhatsApp do próprio celular.
+    Sem ler este campo, as duas pontas da conversa entram como `direction="in"` e a tela de
+    Conversas fica sem autor — todas as bolhas iguais, do mesmo lado. Note que em mensagem
+    `fromMe` o `remoteJid` continua sendo o do CONTATO (é o destinatário), então `from_phone`
+    resolve o cliente certo nos dois casos; só a autoria muda.
+
     Mídia (imagem/áudio/documento/vídeo): a Evolution não tem endpoint de resolução separado
     (ver `fetch_media_url`/`download_media` acima) — os bytes só chegam se o webhook foi
     configurado com `webhook.base64=true` (ver `whatsapp_session/service.py::connect`), inline
@@ -169,6 +176,7 @@ def parse_inbound(payload: dict) -> list[InboundMessage]:
         from_phone = None
         if remote_jid.endswith("@s.whatsapp.net"):
             from_phone = remote_jid.split("@")[0]
+        from_me = bool(key.get("fromMe"))
         push_name = data.get("pushName", "")
         message = data.get("message", {})
 
@@ -179,7 +187,7 @@ def parse_inbound(payload: dict) -> list[InboundMessage]:
             ).get("text", "")
             return [InboundMessage(
                 wa_message_id=wa_message_id, from_phone=from_phone, kind="text",
-                text_body=text_body, media_ref=None, push_name=push_name,
+                text_body=text_body, media_ref=None, push_name=push_name, from_me=from_me,
             )]
 
         raw_b64 = message.get("base64")
@@ -188,7 +196,7 @@ def parse_inbound(payload: dict) -> list[InboundMessage]:
         return [InboundMessage(
             wa_message_id=wa_message_id, from_phone=from_phone, kind=media_kind,
             text_body=media_obj.get("caption", ""), media_ref=None, push_name=push_name,
-            media_bytes=media_bytes, media_mime_type=mime_type,
+            from_me=from_me, media_bytes=media_bytes, media_mime_type=mime_type,
             media_filename=media_obj.get("fileName") or media_obj.get("title"),
         )]
     except (AttributeError, TypeError, KeyError, ValueError):
