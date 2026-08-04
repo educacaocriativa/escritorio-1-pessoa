@@ -101,7 +101,7 @@ def test_confirm_then_profile_reflects_provider(client: TestClient, headers, mon
 
             def json(self) -> list:
                 return [{
-                    "instance": {"instanceName": params.get("instanceName"), "status": "open"}
+                    "name": params.get("instanceName"), "connectionStatus": "open"
                 }]
 
         return _R()
