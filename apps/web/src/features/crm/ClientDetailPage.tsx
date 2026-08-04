@@ -10,6 +10,10 @@ import { ArrowLeft, FileSignature, FileText, Gavel, Pencil, Receipt, Workflow } 
 import { useCallback, useEffect, useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
 import { api, apiErrorMessage } from "../../lib/api";
+import { rotaDaCobranca } from "../cobrancas/rota";
+import { hojeISO } from "../financeiro/contas";
+import { VOCAB_ENTRADA } from "../pagar/baixa";
+import { DialogDeBaixa } from "../pagar/EscolhaDaBaixa";
 
 const brl = (c: number) => (c / 100).toLocaleString("pt-BR", { style: "currency", currency: "BRL" });
 const dt = (s: string) => new Date(s + (s.length === 10 ? "T00:00" : "")).toLocaleDateString("pt-BR");
@@ -24,6 +28,8 @@ export default function ClientDetailPage() {
   const [legalDocs, setLegalDocs] = useState<LegalDocumentSummary[]>([]);
   const [journeys, setJourneys] = useState<FunnelRunSummary[]>([]);
   const [editing, setEditing] = useState(false);
+  // [8.15] A cobrança para a qual o dono está declarando "recebi direto na conta".
+  const [recebendo, setRecebendo] = useState<Charge | null>(null);
 
   const load = useCallback(async () => {
     const [c, ch, co, qu, ld, jr] = await Promise.all([
@@ -105,7 +111,13 @@ export default function ClientDetailPage() {
         ) : (
           <ul className="divide-y divide-neutral-100">
             {charges.map((c) => (
-              <ChargeRow key={c.id} c={c} onProtest={protest} onReschedule={reschedule} />
+              <ChargeRow
+                key={c.id}
+                c={c}
+                onProtest={protest}
+                onReschedule={reschedule}
+                onReceberForaDoTrilho={setRecebendo}
+              />
             ))}
           </ul>
         )}
@@ -187,6 +199,29 @@ export default function ClientDetailPage() {
         )}
       </Section>
 
+      {/* [8.15] A MESMA porta da tela de Cobranças, no MESMO componente — a Ficha 360° não ganha
+          um segundo fluxo de registro. */}
+      {recebendo && (
+        <DialogDeBaixa
+          titulo="Recebi direto na conta"
+          descricao={recebendo.description || client.name}
+          valor={`${brl(recebendo.amount_cents)} · vence ${dt(recebendo.due_date)}`}
+          dataPadrao={hojeISO()}
+          vocab={VOCAB_ENTRADA}
+          acao="Confirmar recebimento"
+          acaoEmCurso="Registrando…"
+          onClose={() => setRecebendo(null)}
+          onPago={async (corpo) => {
+            await api.post(`/receivables/charges/${recebendo.id}/settle-externally`, {
+              bank_account_id: corpo.bank_account_id,
+              received_on: corpo.paid_on,
+            });
+            setRecebendo(null);
+            load();
+          }}
+        />
+      )}
+
       {editing && <EditClientModal client={client} onClose={() => setEditing(false)} onSaved={() => { setEditing(false); load(); }} />}
     </div>
   );
@@ -196,10 +231,12 @@ function ChargeRow({
   c,
   onProtest,
   onReschedule,
+  onReceberForaDoTrilho,
 }: {
   c: Charge;
   onProtest: (id: string) => void;
   onReschedule: (id: string, due: string) => void;
+  onReceberForaDoTrilho: (c: Charge) => void;
 }) {
   const [due, setDue] = useState(c.due_date);
   const [showDate, setShowDate] = useState(false);
@@ -218,7 +255,17 @@ function ChargeRow({
       </div>
       <div className="flex items-center gap-2">
         {c.status === "paid" ? (
-          <span className="rounded-pill bg-accent-50 px-2 py-0.5 text-xs text-accent-700">Pago</span>
+          <>
+            <span className="rounded-pill bg-accent-50 px-2 py-0.5 text-xs text-accent-700">Pago</span>
+            {/* [8.15] A rota é DERIVADA dos dois ponteiros, nunca persistida (`rota.ts`). */}
+            {rotaDaCobranca(c) === "banco" && (
+              <span className="text-[11px] text-neutral-400">caiu direto na sua conta</span>
+            )}
+          </>
+        ) : c.status === "scheduled" ? (
+          <span className="rounded-pill bg-amber-50 px-2 py-0.5 text-xs text-amber-700">
+            Agendado
+          </span>
         ) : c.status === "canceled" ? (
           <span className="rounded-pill bg-neutral-100 px-2 py-0.5 text-xs text-neutral-500">Cancelada</span>
         ) : (
@@ -237,6 +284,13 @@ function ChargeRow({
                 <Gavel size={12} /> Protestar
               </button>
             )}
+            {/* ⚠️ **[8.15] O rótulo é o FATO, não "Marcar paga"** — ver a nota em `CobrancasPage`. */}
+            <button
+              onClick={() => onReceberForaDoTrilho(c)}
+              className="text-xs font-medium text-neutral-500 hover:text-accent-600"
+            >
+              Recebi direto na conta
+            </button>
             <span className="text-[11px] text-neutral-300">aguardando pgto</span>
           </>
         )}

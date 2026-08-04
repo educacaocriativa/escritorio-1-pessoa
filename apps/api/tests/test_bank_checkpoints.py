@@ -234,8 +234,14 @@ def test_data_igual_a_abertura_e_aceita(client: TestClient, headers):
     """A borda. Assimetria deliberada com o movimento, que exige `posted_at > opening_date`.
 
     `opening_balance_cents` é, por definição, o saldo ao FIM do dia de abertura — então
-    `derived_balance(until=opening_date)` devolve exatamente ele e a comparação da 8.5 é válida.
-    Recusar esta data cortaria o caso mais sadio que existe: conferir no dia em que se cadastrou.
+    `derived_balance(until=opening_date)` devolve exatamente ele.
+
+    ⚠️ **[Story 8.20] A conclusão desta docstring estava invertida** e dizia que "a comparação da
+    8.5 é válida". É o **oposto**: por devolver exatamente o saldo de abertura, a comparação naquela
+    data é **tautológica** e a conferência a trata como **não avaliável**
+    (`reconciliation._conferir_conta`). O que este teste prova — e continua provando, sem uma
+    asserção alterada — é que **a declaração é aceita**: ela é verdadeira, e recusá-la apagaria uma
+    afirmação legítima do dono. O degenerado é a comparação, não o ato de declarar.
     """
     account = _account(client, headers)
     cp = _declarar(
@@ -243,6 +249,36 @@ def test_data_igual_a_abertura_e_aceita(client: TestClient, headers):
     )
     assert cp["reference_date"] == OPENING.isoformat()
     assert _saldo(client, headers, account["id"], until=OPENING) == OPENING_CENTS
+
+
+def test_docstring_de_validate_reference_date_nao_afirma_que_a_comparacao_vale():
+    """**Story 8.20** — a docstring que fez o defeito sobreviver a 36 testes.
+
+    Ela afirmava, sobre `reference_date == opening_date`, que era *"o caso mais sadio que existe"* e
+    que *"a comparação vale"* — a **premissa** certa (`derived_balance(until=opening_date)` devolve
+    o saldo de abertura) com a **conclusão invertida**. Quem foi escrever o teste da conferência
+    leu que o caso era o mais sadio e foi testar outra coisa.
+
+    O padrão a não repetir: *"o valor é bem definido"* e *"o valor é informativo"* são afirmações
+    diferentes, e a primeira não implica a segunda. Uma docstring de validação (que responde
+    *"posso gravar?"*) opinando sobre o consumo do dado opina fora da própria jurisdição — e não
+    terá teste, porque o teste dela mora no outro módulo. Este aqui é esse teste.
+    """
+    doc = service._validate_reference_date.__doc__
+    if doc is None:
+        pytest.skip("docstrings removidas (python -OO) — nada a verificar")
+    assert "a comparação vale" not in doc, (
+        "a conclusão invertida voltou: nesta data a comparação NÃO vale, ela é tautológica"
+    )
+    assert "o caso mais sadio que existe" not in doc
+    assert "tautológica" in doc, (
+        "a docstring precisa dizer POR QUE a comparação não decide nada — sem isso a próxima "
+        "pessoa reintroduz a conclusão antiga a partir da mesma premissa"
+    )
+    assert "reconciliation" in doc, (
+        "falta o ponteiro para a outra ponta do mesmo fato: foi por viverem sem se conhecer que "
+        "uma pôde afirmar o contrário da outra"
+    )
 
 
 def test_saldo_negativo_e_aceito(client: TestClient, headers):
@@ -601,7 +637,14 @@ def test_checkpoint_e_saldo_derivado_casam_na_mesma_data(client: TestClient, hea
         "o par (checkpoint, saldo derivado) na MESMA data não fecha — se as janelas não "
         "coincidirem, a 8.5 reporta divergência onde não há"
     )
-    # E o saldo sem teto inclui o dia seguinte: a diferença é a janela, não o dado.
+    # E o saldo CORRENTE (sem `until`) inclui o dia seguinte, porque `D+1` já passou: a diferença
+    # entre os dois números é a janela, não o dado.
+    #
+    # ⚠️ [Story 8.10] Esta linha dizia "o saldo sem teto" — o default de `derived_balance` era
+    # literalmente "sem limite superior". Hoje ele é **hoje**, e o número aqui só continua o mesmo
+    # porque `D+1` (16/07/2026) é passado. Se você está lendo isto porque a linha caiu, confira
+    # primeiro se as datas fixas deste teste não alcançaram o futuro; o corte em si é testado em
+    # `test_bank_corte_de_data.py`.
     assert service.derived_balance(db, bank_account_id=account["id"]) == 1_750_00
 
 

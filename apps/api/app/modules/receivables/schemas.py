@@ -81,10 +81,53 @@ class ChargeOut(BaseModel):
     # Gateway real (Asaas) — somente-leitura; None quando a cobrança foi gerada pelo stub.
     gateway_provider: str | None = None
     gateway_status_raw: str | None = None
+    # ── A INVARIANTE DO TRILHO, exposta pelos DOIS PONTEIROS (Story 8.15, AC4) ────────────────
+    #
+    # `transaction_id` (acima) → **trilho**; `bank_account_id` → **fora do trilho**. Exatamente um
+    # deles é não-nulo numa cobrança liquidada.
+    #
+    # ⚠️ **NÃO existe campo de rota aqui, e a ausência é a decisão.** A rota é **DERIVADA**
+    # (`"trilho" if transaction_id else "banco"`) e a derivação mora no `.ts`
+    # (`features/cobrancas/rota.ts`), onde ela é consumida. Um rótulo persistido — ou serializado
+    # como se fosse fato — pode divergir dos ponteiros e vira a terceira fonte de verdade (D-3).
+    #
+    # ⚠️ Nenhuma superfície de `/admin/*` recebe estes campos (epic §2.1, decisão G-D7): não
+    # existe agregado de plataforma sobre a conta bancária do dono.
+    bank_account_id: str | None = None
+    bank_transaction_id: str | None = None
 
 
 class RescheduleRequest(BaseModel):
     due_date: date
+
+
+class ChargeSettleOffRailIn(BaseModel):
+    """Corpo de `POST /receivables/charges/{id}/settle-externally` (Story 8.15, AC1).
+
+    `bank_account_id` **sem `min_length`**, de propósito e pelo mesmo motivo de `PayablePayIn`: com
+    um mínimo, um tenant sem conta nenhuma receberia o 422 do Pydantic antes de o service poder
+    devolver o **409 acionável** — e é o 409 que diz à UI o que fazer.
+
+    **Não existe campo `status`.** O estado é derivado de `received_on` (`> hoje ⇒ scheduled`), e a
+    API não oferece a escolha.
+    """
+
+    bank_account_id: str
+    # `None` ⇒ **hoje** (o gesto é "caiu na minha conta", um fato observado agora). Sem teto: data
+    # futura é agendamento, não erro (AC5).
+    received_on: date | None = None
+
+
+class ChargePaymentUpdate(BaseModel):
+    """Corpo de `PATCH /receivables/charges/{id}/payment` — corrigir conta e/ou data (AC10).
+
+    Schema **novo**, rota **nova**: `ChargeUpdate` não ganha campo nenhum (ver a nota em
+    `service.update_off_rail_payment`). Os dois campos são opcionais e `None` significa *"não
+    altera"* — mesmo contrato de PATCH do resto do módulo.
+    """
+
+    bank_account_id: str | None = None
+    received_on: date | None = None
 
 
 class ChargeUpdate(BaseModel):
@@ -145,3 +188,8 @@ class ChargesSummary(BaseModel):
     paid_cents: int  # recebido
     open_count: int
     overdue_count: int
+    # [Story 8.15, AC7] Recebimento fora do trilho com data FUTURA (`status='scheduled'`).
+    # **Fora** de `open_cents` e **fora** de `paid_cents`: sem este campo a cobrança agendada
+    # sumiria dos três buckets. Os cinco campos acima mantêm a definição byte a byte (há teste de
+    # snapshot num cenário sem agendamento).
+    scheduled_cents: int = 0

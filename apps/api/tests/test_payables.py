@@ -1,4 +1,13 @@
-"""Testes de Contas a Pagar."""
+"""Testes de Contas a Pagar.
+
+⚠️ **Adaptado pela Story 8.12, não reescrito.** A baixa passou a exigir a conta bancária de onde o
+dinheiro saiu (`POST /bills/{id}/pay` com corpo obrigatório) e a data de caixa passou a ter teto em
+hoje. Os testes que davam baixa ganharam a fixture `conta` e o helper `_pay`; **nenhuma asserção de
+comportamento antigo foi enfraquecida ou apagada**. O que a 8.12 acrescenta de novo vive em
+`test_payables_bank_origin.py`.
+"""
+from datetime import UTC, date, datetime
+
 import pytest
 from fastapi.testclient import TestClient
 
@@ -11,11 +20,46 @@ REGISTER = {
     "password": "senha-bem-comprida",
 }
 
+# Abertura bem no passado: o piso da data de baixa é `paid_on > opening_date` e as contas destes
+# testes vencem em 2099 (pagas com `paid_on` = hoje).
+ABERTURA = date(2026, 1, 1)
+
 
 @pytest.fixture()
 def headers(client: TestClient) -> dict[str, str]:
     token = client.post("/auth/register", json=REGISTER).json()["access_token"]
     return {"Authorization": f"Bearer {token}"}
+
+
+@pytest.fixture()
+def conta(client: TestClient, headers) -> str:
+    """A conta bancária de onde o dinheiro sai. **Obrigatória na baixa desde a Story 8.12** (F7)."""
+    resp = client.post(
+        "/bank/accounts",
+        json={
+            "name": "Itaú PJ",
+            "kind": "checking",
+            "opening_balance_cents": 500_000,
+            "opening_date": ABERTURA.isoformat(),
+        },
+        headers=headers,
+    )
+    assert resp.status_code == 201, resp.text
+    return resp.json()["id"]
+
+
+def _hoje() -> str:
+    return datetime.now(UTC).date().isoformat()
+
+
+def _pay(client: TestClient, headers, bill_id: str, conta: str, paid_on: str | None = None):
+    """`POST /bills/{id}/pay` com o corpo que a Story 8.12 tornou obrigatório (AC11).
+
+    `paid_on` default = **hoje** aqui (e não o `due_date` do service): as contas deste arquivo
+    vencem em 2099, e o teto do AC3 recusaria a data futura.
+    """
+    body = {"bank_account_id": conta, "paid_on": paid_on or _hoje()}
+    return client.post(f"/payables/bills/{bill_id}/pay", json=body, headers=headers)
 
 
 def _bill(**over):
@@ -84,9 +128,9 @@ def test_edit_payable_moves_agenda(client: TestClient, headers):
     assert ev["amount_cents"] == 99900
 
 
-def test_cannot_edit_paid_payable(client: TestClient, headers):
+def test_cannot_edit_paid_payable(client: TestClient, headers, conta):
     b = client.post("/payables/bills", json=_bill(), headers=headers).json()
-    client.post(f"/payables/bills/{b['id']}/pay", headers=headers)
+    _pay(client, headers, b["id"], conta)
     resp = client.patch(f"/payables/bills/{b['id']}", json={"amount_cents": 5000}, headers=headers)
     assert resp.status_code == 409
 
@@ -120,19 +164,44 @@ def test_invalid_recurrence_rejected(client: TestClient, headers):
     assert resp.status_code == 422
 
 
-def test_mark_paid(client: TestClient, headers):
+def test_mark_paid(client: TestClient, headers, conta):
     b = client.post("/payables/bills", json=_bill(), headers=headers).json()
-    resp = client.post(f"/payables/bills/{b['id']}/pay", headers=headers)
+    resp = _pay(client, headers, b["id"], conta)
     assert resp.status_code == 200
     assert resp.json()["status"] == "paid"
     assert resp.json()["paid_at"]
 
 
-def test_paid_cannot_cancel(client: TestClient, headers):
+def test_paid_cannot_cancel(client: TestClient, headers, conta):
     b = client.post("/payables/bills", json=_bill(), headers=headers).json()
-    client.post(f"/payables/bills/{b['id']}/pay", headers=headers)
+    _pay(client, headers, b["id"], conta)
     resp = client.post(f"/payables/bills/{b['id']}/cancel", headers=headers)
     assert resp.status_code == 409
+
+
+def test_scheduled_cannot_cancel(client: TestClient, headers, conta):
+    """BANK-002 (QA gate da Onda 2): cancelar uma conta agendada sem recusar deixava o
+    bank_transaction de débito futuro órfão — divergência inventada na conferência, invisível
+    ao gate P1-P4 porque `canceled` sai da população de "sem conta informada". Espelha
+    test_receivables_off_rail.py::test_scheduled_cannot_cancel."""
+    b = client.post(
+        "/payables/bills",
+        json=_bill(amount_cents=12345, due_date="2099-01-01"),
+        headers=headers,
+    ).json()
+    pay_resp = _pay(client, headers, b["id"], conta, paid_on="2099-01-01")
+    assert pay_resp.json()["status"] == "scheduled"
+
+    resp = client.post(f"/payables/bills/{b['id']}/cancel", headers=headers)
+    assert resp.status_code == 409
+
+    movs = client.get(
+        "/bank/transactions", params={"bank_account_id": conta}, headers=headers
+    ).json()
+    assert any(m["amount_cents"] == -12345 and m["posted_at"] == "2099-01-01" for m in movs), (
+        "o débito futuro tem que continuar de pé — cancelar foi recusado, não silenciosamente "
+        "aceito com o débito órfão"
+    )
 
 
 def test_summary_open_and_overdue(client: TestClient, headers):
@@ -244,9 +313,9 @@ def test_unset_payable_chart_account(client: TestClient, headers):
     assert resp.json()["chart_account_id"] is None
 
 
-def test_reverse_paid_payable(client: TestClient, headers):
+def test_reverse_paid_payable(client: TestClient, headers, conta):
     b = client.post("/payables/bills", json=_bill(due_date="2026-08-05"), headers=headers).json()
-    client.post(f"/payables/bills/{b['id']}/pay", headers=headers)
+    _pay(client, headers, b["id"], conta)
 
     resp = client.post(f"/payables/bills/{b['id']}/reverse", headers=headers)
     assert resp.status_code == 200, resp.text

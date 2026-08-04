@@ -30,7 +30,14 @@ def _out(a: Attachment) -> ReceiptOut:
 
 
 def _err(e: Exception, status_code: int) -> HTTPException:
-    return HTTPException(status_code=status_code, detail=str(e))
+    """`detail` estruturado quando o erro é ACIONÁVEL; string em todo o resto.
+
+    A bandeja é a **mesma** superfície de baixa do `POST /bills/{id}/pay`, então ela devolve o
+    **mesmo** 409 `{"acao": "cadastrar_conta", "mensagem": ...}` (Story 8.12 AC2/AC10) quando o
+    tenant não tem conta primária. Dois formatos de erro para a mesma situação obrigariam a UI da
+    8.13 a tratar cada porta de um jeito.
+    """
+    return HTTPException(status_code=status_code, detail=getattr(e, "detail", None) or str(e))
 
 
 @router.post("", response_model=ReceiptOut, status_code=201)
@@ -92,6 +99,8 @@ def link_receipt(
         p = receipts.link_receipt(
             db, attachment_id=attachment_id, user_id=user.user_id, tenant_id=user.tenant_id,
             actor=user.user_id, bill_id=data.bill_id, mark_paid=data.mark_paid,
+            # Story 8.13: a conta e a data vêm da tela — o backend não elege mais a primária.
+            bank_account_id=data.bank_account_id, paid_on=data.paid_on,
         )
     except receipts.ReceiptError as e:
         raise _err(e, e.status_code) from e
@@ -115,6 +124,8 @@ def new_bill_from_receipt(
         p = receipts.new_bill_from_receipt(
             db, attachment_id=attachment_id, user_id=user.user_id, tenant_id=user.tenant_id,
             actor=user.user_id, data=create, mark_paid=data.mark_paid,
+            # Story 8.13: idem `link` — os dois campos atravessam até `apply_paid`.
+            bank_account_id=data.bank_account_id, paid_on=data.paid_on,
         )
     except receipts.ReceiptError as e:
         raise _err(e, e.status_code) from e

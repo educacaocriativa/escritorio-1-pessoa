@@ -33,6 +33,8 @@ from app.db.session import SessionLocal, tenant_session
 from app.modules.auth.models import Tenant
 from app.modules.funnels import engine as funnels_engine
 from app.modules.notifications import service as notifications_service
+from app.modules.payables import service as payables_service
+from app.modules.receivables import service as receivables_service
 from app.modules.whatsapp_inbox import service as whatsapp_inbox_service
 from app.modules.whatsapp_session import service as whatsapp_session_service
 from app.seed import PLATFORM_SLUG
@@ -59,15 +61,32 @@ def run_sweep(
     `conftest.py::_override_factory`): os testes passam factories apontando à sessão SQLite
     compartilhada, sem depender de Postgres real.
 
-    Uma falha em um tenant (ou numa das duas etapas) é logada e NÃO trava o sweep dos demais
-    (IV2) — o erro é acumulado na chave `errors` do resultado. Tick e fila abrem sessões
-    SEPARADAS por tenant, para que uma falha na primeira não impeça a segunda.
+    Uma falha em um tenant (ou numa das CINCO etapas) é logada e NÃO trava o sweep dos demais
+    (IV2) — o erro é acumulado na chave `errors` do resultado. Cada etapa abre sessão SEPARADA por
+    tenant, para que uma falha numa não impeça as seguintes.
+
+    ⚠️ **`now` é injetável e vale para TODAS as etapas.** A etapa 4 (Story 8.14) o converte para
+    data de calendário e o repassa como `today`: um contador preso ao relógio da máquina não é
+    testável, e um segundo relógio dentro do sweep faria as etapas discordarem sobre que dia é hoje.
     """
     result = {
         "tenants_checked": 0,
         "funnel_resumed": 0,
         "notifications_processed": 0,
         "whatsapp_media_processed": 0,
+        # Story 8.14 + 8.15 — quantos lançamentos `scheduled` viraram `paid` porque o dia chegou.
+        #
+        # ⚠️ **É a SOMA dos dois lados do dinheiro (contas a pagar + cobranças), e a escolha é
+        # deliberada** (a 8.15 deixou a decisão ao @dev, exigindo que ela ficasse registrada). O
+        # contador responde a **uma** pergunta — *"quantos lançamentos com dia marcado tiveram o
+        # dia chegado neste sweep?"* — e ela não se parte por módulo: são dois SELECTs da mesma
+        # regra, na mesma etapa, na mesma sessão de tenant. Dois contadores nomeados dariam três
+        # números para uma informação (os dois mais a soma, que qualquer leitor faria de cabeça) e
+        # quebrariam os consumidores existentes deste dicionário sem nada em troca — este número é
+        # observabilidade de sweep, não número de dinheiro. Quem precisar da separação a tem na
+        # trilha de auditoria (`payable.scheduled_promoted` × `receivable.scheduled_promoted`),
+        # que é o lugar onde a granularidade tem consumidor real.
+        "scheduled_promoted": 0,
         "whatsapp_connections_dropped": 0,
         "errors": [],
     }
@@ -113,7 +132,40 @@ def run_sweep(
                 {"tenant_id": tenant_id, "stage": "whatsapp_media", "error": str(exc)}
             )
 
-        # Etapa 4 — monitora quedas de sessão Evolution (sessão SEPARADA das outras três).
+        # Etapa 4 — promoção `scheduled → paid` das contas a pagar cujo dia chegou (Story 8.14
+        # AC10). Sessão SEPARADA das outras três, mesmo formato, mesmo isolamento de falha.
+        #
+        # ⚠️ **A CORRETUDE DOS NÚMEROS NÃO DEPENDE DESTA ETAPA — e isso é decisão de arquitetura,
+        # não sorte.** O movimento bancário já nasceu com `posted_at` = a data agendada, e tanto o
+        # saldo derivado quanto a Projeção de Caixa são função da **data**, não do status
+        # materializado (ver `payables.service.promote_scheduled` e `projection._window_sums`). Com
+        # o worker parado uma semana, nenhum número fica errado: só o rótulo "Agendada" da Fila e o
+        # `scheduled_cents` do resumo ficam velhos. Quem for tentado a fazer alguma soma depender
+        # daqui está prestes a transformar um enfeite em componente crítico.
+        #
+        # ⚠️ **[Story 8.15] A chamada de `receivables` entrou NESTA MESMA ETAPA**, não numa quinta:
+        # é a mesma pergunta ("já chegou o dia?") sobre os dois lados do dinheiro, e uma etapa
+        # própria seria a mesma regra em dois lugares — com dois isolamentos de falha, dois
+        # contadores e duas chances de uma receber a próxima correção e a outra não. As duas
+        # varreduras moram nos módulos que conhecem a regra (`payables`/`receivables`
+        # `promote_scheduled`, mesma assinatura); o worker só **orquestra**.
+        try:
+            with tenant_session_factory(tenant_id) as db:
+                hoje = now.date() if now else None
+                promovidas = payables_service.promote_scheduled(
+                    db, tenant_id=tenant_id, actor=actor, today=hoje
+                )
+                promovidas += receivables_service.promote_scheduled(
+                    db, tenant_id=tenant_id, actor=actor, today=hoje
+                )
+            result["scheduled_promoted"] += promovidas
+        except Exception as exc:  # noqa: BLE001 — idem: isola a falha por tenant (IV2)
+            logger.exception("[worker] promoção de agendadas falhou tenant=%s", tenant_id)
+            result["errors"].append(
+                {"tenant_id": tenant_id, "stage": "scheduled_promote", "error": str(exc)}
+            )
+
+        # Etapa 5 — monitora quedas de sessão Evolution (sessão SEPARADA das outras quatro).
         try:
             with tenant_session_factory(tenant_id) as db:
                 dropped = whatsapp_session_service.check_connections(db, tenant_id=tenant_id)
@@ -126,11 +178,12 @@ def run_sweep(
 
     logger.info(
         "[worker] sweep: tenants=%s funil_resumido=%s notificacoes=%s midia_whatsapp=%s "
-        "conexoes_whatsapp_caidas=%s erros=%s",
+        "agendadas_promovidas=%s conexoes_whatsapp_caidas=%s erros=%s",
         result["tenants_checked"],
         result["funnel_resumed"],
         result["notifications_processed"],
         result["whatsapp_media_processed"],
+        result["scheduled_promoted"],
         result["whatsapp_connections_dropped"],
         len(result["errors"]),
     )

@@ -247,3 +247,173 @@ def test_diagnostics_completude_cross_tenant_nao_vaza_nome_de_conta() -> None:
         b_text = " ".join(exp for _lvl, exp in b_signals)
         assert "Conta-DO-B" in b_text and "R$ 900,00" in b_text
         assert "Conta-DO-A" not in b_text, "RLS falhou: B viu a conta bancária do A"
+
+
+def _seed_onda2(
+    app_url: str,
+    tenant_id: str,
+    *,
+    conta: str,
+    fornecedor: str,
+    valor: int,
+    declarado_a_mais: int,
+) -> None:
+    """Story 8.16 (IV6) — o cenário das DUAS regras novas, com PII dos dois lados.
+
+    Monta, para um tenant:
+      - uma conta bancária com um débito de `valor` já lançado (o movimento existe, e portanto o
+        saldo derivado já o subtraiu);
+      - um `Payable` pago do mesmo tamanho, com o **nome do fornecedor** (PII) e a conta informada;
+      - um checkpoint declarando o saldo `valor` ACIMA do derivado → `divergencia = +valor`, que é
+        exatamente o que o débito suspeito explica;
+      - uma `Charge` recebida **direto na conta do dono**, que alimenta o *"N dos M"*.
+
+    Os dois vetores de vazamento desta story são o **nome do fornecedor** (na explicação do débito
+    suspeito) e o **nome da conta**. Se a RLS falhar, o sintoma não é "vi uma linha do vizinho": é o
+    diagnóstico de A **nomeando um débito de B** como suspeito de um furo medido contra a verdade
+    externa de B.
+
+    ⚠️ A baixa e o recebimento passam pelos **serviços reais** (`payables.mark_paid` e
+    `receivables.settle_off_rail`), e não por `INSERT` à mão: é assim que o `bank_transaction`
+    nasce com o `dedup_hash`/`source`/`origin_id` corretos, e é o caminho que a produção percorre.
+    Um seed que monta a linha do plano 3 na mão testaria um estado que o produto não produz.
+    """
+    from app.modules.bank.models import (
+        KIND_CHECKING,
+        ORIGIN_MANUAL,
+        BankAccount,
+        BankBalanceCheckpoint,
+    )
+    from app.modules.crm.models import Client
+    from app.modules.payables import service as payables_service
+    from app.modules.payables.models import Payable
+    from app.modules.receivables import service as receivables_service
+    from app.modules.receivables.models import Charge
+
+    debito_em = date(2026, 7, 10)
+    ator = f"dono-{tenant_id[:8]}@example.com"
+    engine = create_engine(app_url, poolclass=NullPool)
+    try:
+        with engine.connect() as conn:
+            conn.execute(
+                text("SELECT set_config('app.current_tenant_id', :tid, false)"),
+                {"tid": tenant_id},
+            )
+            conn.commit()  # ver a nota de `_seed_investment`: fixa a GUC e encerra a txn.
+            session = Session(bind=conn)
+            account = BankAccount(
+                tenant_id=tenant_id,
+                name=conta,
+                kind=KIND_CHECKING,
+                opening_balance_cents=1_000_000,
+                opening_date=START,
+            )
+            cliente = Client(tenant_id=tenant_id, name="Cliente Pix")
+            payable = Payable(
+                tenant_id=tenant_id,
+                description="Despesa do mes",
+                category="operacional",
+                supplier=fornecedor,
+                amount_cents=valor,
+                due_date=debito_em,
+            )
+            session.add_all([account, cliente, payable])
+            session.flush()
+            charge = Charge(
+                tenant_id=tenant_id,
+                client_id=cliente.id,
+                description="Consultoria",
+                amount_cents=140_000,
+                due_date=debito_em,
+                method="pix",
+                kind="service",
+            )
+            session.add(charge)
+            session.commit()
+
+            # O caminho REAL: a baixa gera o movimento bancário (Regra da Origem, Story 8.9/8.12) e
+            # o recebimento fora da cobrança do e1p também (Story 8.15).
+            payables_service.mark_paid(
+                session,
+                payable_id=payable.id,
+                tenant_id=tenant_id,
+                actor=ator,
+                bank_account_id=account.id,
+                paid_on=debito_em,
+            )
+            receivables_service.settle_off_rail(
+                session,
+                charge_id=charge.id,
+                tenant_id=tenant_id,
+                actor=ator,
+                bank_account_id=account.id,
+                received_on=debito_em,
+            )
+
+            session.add(
+                BankBalanceCheckpoint(
+                    tenant_id=tenant_id,
+                    bank_account_id=account.id,
+                    reference_date=date(2026, 7, 20),
+                    # O banco ainda nao executou o debito ⇒ o dono declara o saldo `valor` acima do
+                    # que o e1p calculou, e é isso que o débito suspeito explica.
+                    balance_cents=1_000_000 - valor + 140_000 + declarado_a_mais,
+                    origin=ORIGIN_MANUAL,
+                )
+            )
+            session.commit()
+            session.close()
+    finally:
+        engine.dispose()
+
+
+def test_iv6_debito_suspeito_e_recebimento_externo_nao_vazam_entre_tenants() -> None:
+    """Story 8.16 / IV6 — as duas regras novas, cross-tenant, no Postgres REAL.
+
+    O isolamento e RLS e so RLS (Regra de Ouro no 1): nem `diagnostics._debitos_suspeitos` nem
+    `diagnostics._off_rail` filtram `tenant_id` a mao. Este teste e o que prova que isso basta —
+    e o que pega o vazamento de PII pela porta nova: o **nome do fornecedor** viaja na explicacao
+    do sinal, exatamente como `MarginTrend.project_name` sempre viajou.
+    """
+    with PostgresContainer(
+        "postgres:16-alpine",
+        username=_ROOT_USER,
+        password=_ROOT_PASS,
+        dbname=_DB_NAME,
+        driver="psycopg",
+    ) as pg:
+        host = pg.get_container_host_ip()
+        port = pg.get_exposed_port(5432)
+        super_url = f"postgresql+psycopg://{_ROOT_USER}:{_ROOT_PASS}@{host}:{port}/{_DB_NAME}"
+        app_url = f"postgresql+psycopg://e1p_app:{_APP_PASS}@{host}:{port}/{_DB_NAME}"
+
+        _bootstrap_rls_role(super_url)
+        _run_migrations_as_app(app_url)
+
+        tenant_a = str(uuid4())
+        tenant_b = str(uuid4())
+        _seed_onda2(
+            app_url, tenant_a, conta="Conta-DO-A", fornecedor="Fornecedor-DO-A",
+            valor=500_000, declarado_a_mais=500_000,
+        )
+        _seed_onda2(
+            app_url, tenant_b, conta="Conta-DO-B", fornecedor="Fornecedor-DO-B",
+            valor=300_000, declarado_a_mais=300_000,
+        )
+
+        a_signals = _diagnose(app_url, tenant_a)
+        a_text = " ".join(exp for _lvl, exp in a_signals)
+        assert "Fornecedor-DO-A" in a_text, "o debito de A deveria nomear o fornecedor de A"
+        assert "pode nao ter saido" in a_text.replace("ã", "a").replace("í", "i")
+        assert "Fornecedor-DO-B" not in a_text, "RLS falhou: A viu o fornecedor do B"
+        assert "Conta-DO-B" not in a_text, "RLS falhou: A viu a conta bancaria do B"
+        assert "R$ 3.000,00" not in a_text, "RLS falhou: A viu a divergencia do B"
+        # E o "N dos M" de A conta so os recebimentos de A (1 de 1), nunca os dois tenants.
+        assert "1 dos 1 recebimentos" in a_text
+
+        b_signals = _diagnose(app_url, tenant_b)
+        b_text = " ".join(exp for _lvl, exp in b_signals)
+        assert "Fornecedor-DO-B" in b_text and "Conta-DO-B" in b_text
+        assert "Fornecedor-DO-A" not in b_text, "RLS falhou: B viu o fornecedor do A"
+        assert "R$ 5.000,00" not in b_text, "RLS falhou: B viu a divergencia do A"
+        assert "1 dos 1 recebimentos" in b_text

@@ -22,8 +22,13 @@ from sqlalchemy.orm import Session
 
 from app.core.money_planes import ORIGEM_BANCO
 from app.core.tenancy import CurrentUser, get_tenant_db, require_module
-from app.modules.bank import reconciliation, service
-from app.modules.bank.models import BankAccount, BankBalanceCheckpoint, BankTransaction
+from app.modules.bank import reconciliation, service, transfers
+from app.modules.bank.models import (
+    BankAccount,
+    BankBalanceCheckpoint,
+    BankTransaction,
+    BankTransfer,
+)
 from app.modules.bank.schemas import (
     BankAccountCreate,
     BankAccountOut,
@@ -32,6 +37,8 @@ from app.modules.bank.schemas import (
     BankTransactionCreate,
     BankTransactionOut,
     BankTransactionUpdate,
+    BankTransferCreate,
+    BankTransferOut,
     CheckpointCreate,
     CheckpointOut,
     ConferenciaContaOut,
@@ -45,7 +52,18 @@ router = APIRouter(prefix="/bank", tags=["bank"])
 _guard = require_module("bank")
 
 
-def _out(a: BankAccount, saldo_derivado_cents: int) -> BankAccountOut:
+def _out(
+    a: BankAccount,
+    saldo_derivado_cents: int,
+    agendado: service.AgendadoDaConta | None = None,
+) -> BankAccountOut:
+    """`BankAccount` → `BankAccountOut`, com o saldo corrente e o agendado (Story 8.14 AC13).
+
+    `agendado=None` significa *"esta conta não tem movimento futuro"* e vira `(0, 0)` — nunca
+    "não sei". O default existe só para a rota de **criação**, onde a conta acabou de nascer e
+    não pode ter movimento nenhum, muito menos futuro; todas as demais passam o valor real.
+    """
+    agendado = agendado or service.AgendadoDaConta(saida_cents=0, entrada_cents=0)
     return BankAccountOut(
         id=a.id,
         name=a.name,
@@ -64,8 +82,22 @@ def _out(a: BankAccount, saldo_derivado_cents: int) -> BankAccountOut:
         # Constante do vocabulário do eixo A (`app.core.money_planes`) — nunca a string "banco"
         # escrita à mão. Todo saldo declara o plano de onde vem (Regra dos Planos §1.3c).
         saldo_derivado_origem=ORIGEM_BANCO,
+        # Story 8.14 — o que já tem dia marcado e ainda não aconteceu. Os dois em MÓDULO, com o
+        # irmão de procedência: nenhum saldo trafega sem plano declarado (Regra dos Planos §1.3c).
+        agendado_saida_cents=agendado.saida_cents,
+        agendado_entrada_cents=agendado.entrada_cents,
+        agendado_origem=ORIGEM_BANCO,
         created_at=a.created_at,
     )
+
+
+def _agendado_de(db: Session, acc: BankAccount) -> service.AgendadoDaConta:
+    """O agendado de UMA conta — o helper das rotas de conta única (Story 8.14).
+
+    Existe para que as quatro rotas de CRUD chamem **a mesma** função em lote que a lista chama,
+    com uma conta só, em vez de nascer uma variante "para uma conta" que divergiria da outra.
+    """
+    return service.agendado_sums(db, accounts=[acc])[acc.id]
 
 
 def _tx_out(t: BankTransaction) -> BankTransactionOut:
@@ -82,6 +114,8 @@ def _tx_out(t: BankTransaction) -> BankTransactionOut:
         counterparty_document=t.counterparty_document,
         operation_nature=t.operation_nature,
         source=t.source,
+        # Story 8.18 — o pareamento das pernas irmãs. `None` em toda origem de perna única.
+        transfer_id=t.transfer_id,
         status=t.status,
         ignored_reason=t.ignored_reason,
         created_at=t.created_at,
@@ -107,7 +141,63 @@ def _cp_out(c: BankBalanceCheckpoint) -> CheckpointOut:
 
 
 def _err(e: service.BankError) -> HTTPException:
-    return HTTPException(status_code=e.status_code, detail=str(e))
+    """`detail` estruturado quando o erro é ACIONÁVEL; string em todo o resto.
+
+    Mesmo contrato de `payables.router._err` — **um** formato de erro acionável no repositório, não
+    dois: `{"detail": {"acao": ..., "mensagem": ...}}`, com `acao` e os dados **dentro** de
+    `detail`. Dois formatos obrigariam a UI a saber, por rota, onde procurar o `acao`.
+    """
+    return HTTPException(status_code=e.status_code, detail=e.detail or str(e))
+
+
+# ── O 409 acionável da guarda de contagem dupla (Story 8.17 AC5/AC8) ─────────────────────────
+#
+# ⚠️ **É AQUI que o id opaco vira vocabulário de negócio, e não no service.** `bank/service.py` não
+# pode nomear a entidade do outro módulo (nem em nome de campo — achado A-2 da ratificação §C-5.3);
+# a **rota** pode, porque o que ela monta é o payload HTTP que a tela consome. O
+# `DuplicataCandidato` entra opaco e sai traduzido.
+ACAO_BAIXAR_PAYABLE = "baixar_payable"
+
+
+def _brl(cents: int) -> str:
+    """Centavos → "R$ 1.234,56". Cópia deliberada da fórmula de `core/boleto._brl`.
+
+    **Não** importamos aquela: `core/boleto` carrega o `fpdf` no import, e puxar um gerador de PDF
+    para dentro do caminho de erro de um lançamento manual é peso sem motivo. A dívida de
+    consolidar as ~9 formatações de moeda do repositório está registrada (`contas.ts`) e não é
+    desta story.
+    """
+    return f"R$ {cents / 100:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
+
+
+def _erro_de_duplicata(e: service.DuplicataDePagamento) -> HTTPException:
+    """A **redação da escolha**, num lugar só (AC8: *"a mensagem é do backend"*).
+
+    A tela mostra esta frase como veio e oferece as duas ações — *"dar baixa nessa conta"* (o
+    movimento nasce sozinho, pela Regra da Origem) e *"é outro pagamento"* (reenvia com
+    `confirmar_avulso=true`) —, **sem** pré-selecionar nenhuma e **sem** perder o que foi digitado:
+    um 409 que apaga o formulário treina o usuário a marcar "é outro pagamento" sem ler.
+
+    ⚠️ A frase diz *"com vencimento em"* e não *"vencendo em"* de propósito: o candidato pode estar
+    **pago** (a janela de ±3 dias cobre os dois estados), e "vencendo" descreveria errado uma conta
+    que já foi paga.
+    """
+    c = e.candidato
+    quem = f" ({c.descricao})" if c.descricao else ""
+    mensagem = (
+        f"Existe uma conta a pagar de {_brl(c.valor_cents)} com vencimento em "
+        f"{c.data.strftime('%d/%m')}{quem}. Quer dar baixa nela — o movimento nasce sozinho — ou "
+        "este é outro pagamento?"
+    )
+    return HTTPException(
+        status_code=e.status_code,
+        detail={
+            "acao": ACAO_BAIXAR_PAYABLE,
+            # O id opaco do DTO, traduzido para o vocabulário de quem consome o payload.
+            "payable_id": c.referencia_id,
+            "mensagem": mensagem,
+        },
+    )
 
 
 @router.get("/accounts", response_model=list[BankAccountOut])
@@ -120,13 +210,25 @@ def list_accounts(
 
     Este é o consumidor legítimo de `derived_balances_as_of` (design §3.1.1): tela de lista, data
     comum. A conferência (Story 8.5) **não** pode usar essa função — ver a docstring dela.
+
+    ⚠️ **Esta frase já estava escrita aqui antes de ser verdade.** Até a Story 8.10, `as_of=None`
+    significava "sem limite superior" e a rota devolvia o saldo de *todo o histórico*, futuro
+    incluído — a docstring dizia "HOJE" e o código não fazia isso. Hoje a chamada abaixo continua
+    idêntica e passou a cumprir o que estava escrito, porque **o default mudou de significado**.
+    Não "conserte" isto passando `SEM_CORTE`: esta tela é a superfície corrente por excelência.
     """
     accounts = service.list_accounts(db, include_archived=include_archived)
     # Duas leituras baratas (as contas + os saldos em lote) em vez de 1 + N: a partir da Story 8.3
     # cada `derived_balance` avulso custaria um `SUM` próprio, e é esse N+1 que a função em lote
     # existe para evitar.
     balances = service.derived_balances_as_of(db, include_archived=include_archived)
-    return [_out(a, balances.get(a.id, a.opening_balance_cents)) for a in accounts]
+    # Story 8.14 — o agendado sai da MESMA lista, em duas agregacoes constantes (nunca uma por
+    # conta): `agendado_sums` existe pelo mesmo motivo que `derived_balances_as_of`.
+    agendados = service.agendado_sums(db, accounts=accounts)
+    return [
+        _out(a, balances.get(a.id, a.opening_balance_cents), agendados.get(a.id))
+        for a in accounts
+    ]
 
 
 @router.post("/accounts", response_model=BankAccountOut, status_code=201)
@@ -137,6 +239,8 @@ def create_account(
 ) -> BankAccountOut:
     try:
         acc = service.create_account(db, tenant_id=user.tenant_id, actor=user.user_id, data=data)
+        # Sem `agendado`: a conta nasce nesta chamada e nao pode ter movimento nenhum,
+        # muito menos futuro. E o unico caminho em que o `(0, 0)` do default e um FATO.
         return _out(acc, service.derived_balance(db, bank_account_id=acc.id))
     except service.BankError as e:
         raise _err(e) from e
@@ -150,7 +254,9 @@ def get_account(
 ) -> BankAccountOut:
     try:
         acc = service.get_account(db, account_id)
-        return _out(acc, service.derived_balance(db, bank_account_id=acc.id))
+        return _out(
+            acc, service.derived_balance(db, bank_account_id=acc.id), _agendado_de(db, acc)
+        )
     except service.BankError as e:
         raise _err(e) from e
 
@@ -166,7 +272,9 @@ def update_account(
         acc = service.update_account(
             db, account_id=account_id, tenant_id=user.tenant_id, actor=user.user_id, data=data
         )
-        return _out(acc, service.derived_balance(db, bank_account_id=acc.id))
+        return _out(
+            acc, service.derived_balance(db, bank_account_id=acc.id), _agendado_de(db, acc)
+        )
     except service.BankError as e:
         raise _err(e) from e
 
@@ -181,7 +289,9 @@ def archive_account(
         acc = service.archive_account(
             db, account_id=account_id, tenant_id=user.tenant_id, actor=user.user_id
         )
-        return _out(acc, service.derived_balance(db, bank_account_id=acc.id))
+        return _out(
+            acc, service.derived_balance(db, bank_account_id=acc.id), _agendado_de(db, acc)
+        )
     except service.BankError as e:
         raise _err(e) from e
 
@@ -193,17 +303,27 @@ def account_balance(
     _user: CurrentUser = Depends(_guard),
     db: Session = Depends(get_tenant_db),
 ) -> BankBalanceOut:
-    """Saldo derivado desta conta até `until` (inclusivo; `None` = todo o histórico).
+    """Saldo derivado desta conta até `until` (inclusivo). **Sem `until` = até HOJE** (Story 8.10).
 
     `until` volta no payload: um saldo sem a data em que foi apurado é um número que não dá para
-    conferir — e conferir é o produto (design §5.1).
+    conferir — e conferir é o produto (design §5.1). Desde a 8.10 esse campo **nunca mais vem
+    `null`**, porque não existe mais resposta desta rota sem data de corte.
+
+    ⚠️ **O que volta é a data EFETIVAMENTE usada, não o `until` cru da query.** As duas coisas
+    divergem exatamente no caso em que o campo importa — a chamada sem `until` —, e devolver o cru
+    ali faria o payload dizer *"não sei em que data isto foi apurado"* sobre um número que foi
+    apurado numa data muito específica. É o defeito que o campo existe para impedir.
+
+    O corte é resolvido **uma vez** e passado explicitamente para o saldo, de modo que o número e a
+    data do mesmo payload venham do mesmo relógio (ver `service.resolve_until`).
     """
+    corte = service.resolve_until(until)
     try:
-        saldo = service.derived_balance(db, bank_account_id=account_id, until=until)
+        saldo = service.derived_balance(db, bank_account_id=account_id, until=corte)
     except service.BankError as e:
         raise _err(e) from e
     return BankBalanceOut(
-        saldo_derivado_cents=saldo, saldo_derivado_origem=ORIGEM_BANCO, until=until
+        saldo_derivado_cents=saldo, saldo_derivado_origem=ORIGEM_BANCO, until=corte
     )
 
 
@@ -219,7 +339,11 @@ def create_transaction(
     user: CurrentUser = Depends(_guard),
     db: Session = Depends(get_tenant_db),
 ) -> BankTransactionOut:
-    """Lança um movimento MANUAL nesta conta. A conta vem do path; `source` é fixado no service."""
+    """Lança um movimento MANUAL nesta conta. A conta vem do path; `source` é fixado no service.
+
+    **409 acionável** quando a saída manual casa com uma conta a pagar em valor e janela (Story
+    8.17 AC5) — ver `_erro_de_duplicata`. Reenviar com `confirmar_avulso=true` passa.
+    """
     try:
         tx = service.create_transaction(
             db,
@@ -228,6 +352,11 @@ def create_transaction(
             actor=user.user_id,
             data=data,
         )
+    # ANTES do `except BankError` genérico: `DuplicataDePagamento` é subclasse dele, e a ordem
+    # invertida faria o 409 acionável sair como string solta (a UI voltaria a adivinhar por
+    # substring, que é como um contrato de erro deixa de ser contrato).
+    except service.DuplicataDePagamento as e:
+        raise _erro_de_duplicata(e) from e
     except service.BankError as e:
         raise _err(e) from e
     return _tx_out(tx)
@@ -330,6 +459,109 @@ def unignore_transaction(
     except service.BankError as e:
         raise _err(e) from e
     return _tx_out(tx)
+
+
+# ── Transferência entre contas próprias (Story 8.18) ─────────────────────────────────────────
+#
+# ⚠️ **O `DELETE` daqui é a SEGUNDA exceção do módulo** (a primeira é o checkpoint), e o porquê está
+# em `transfers.delete_transfer`: sem ele, a única correção de uma transferência errada seria a
+# contrapartida que o design §4.5 rejeita nominalmente. Ele não contradiz o "sem DELETE de
+# movimento" do topo deste arquivo — as pernas continuam não sendo apagáveis **por elas mesmas**;
+# quem as apaga é o lançamento que as gerou (Regra da Origem (c): o movimento é espelho).
+#
+# **Não existe `PATCH` de transferência**, e a ausência é decisão: corrigir é apagar e recriar, o
+# que é barato aqui (duas linhas puramente sintéticas, nenhum evento de Agenda envolvido).
+
+
+def _transfer_out(t: BankTransfer) -> BankTransferOut:
+    return BankTransferOut(
+        id=t.id,
+        from_account_id=t.from_account_id,
+        to_account_id=t.to_account_id,
+        amount_cents=t.amount_cents,
+        posted_at=t.posted_at,
+        kind=t.kind,
+        description=t.description,
+        created_at=t.created_at,
+        updated_at=t.updated_at,
+    )
+
+
+@router.post("/transfers", response_model=BankTransferOut, status_code=201)
+def create_transfer(
+    data: BankTransferCreate,
+    user: CurrentUser = Depends(_guard),
+    db: Session = Depends(get_tenant_db),
+) -> BankTransferOut:
+    """Registra que dinheiro foi de uma conta sua para outra.
+
+    Gera **as duas pernas**, num commit só.
+
+    **Não é receita nem despesa** (Regra da Neutralidade): a DRE, a Lucratividade e a Projeção não
+    se movem por causa dela. O que muda são os saldos derivados das duas contas — e, quando o
+    destino é uma conta de aplicação, o *"Disponível como caixa"* cai, porque o dinheiro deixou de
+    ser caixa.
+
+    As duas contas vêm no CORPO (e não no path) porque nenhuma das duas é "a conta desta rota": a
+    operação é sobre o par. `posted_at` futuro é **422** — ver `transfers._validate_nao_futura`.
+    """
+    try:
+        t = transfers.create_transfer(db, tenant_id=user.tenant_id, actor=user.user_id, data=data)
+    except service.BankError as e:
+        raise _err(e) from e
+    return _transfer_out(t)
+
+
+@router.get("/transfers", response_model=list[BankTransferOut])
+def list_transfers(
+    bank_account_id: str | None = Query(
+        default=None, description="Casa os DOIS lados: origem ou destino."
+    ),
+    start: date | None = Query(default=None),
+    end: date | None = Query(default=None),
+    limit: int = Query(default=100, ge=1, le=500),
+    offset: int = Query(default=0, ge=0),
+    _user: CurrentUser = Depends(_guard),
+    db: Session = Depends(get_tenant_db),
+) -> list[BankTransferOut]:
+    """Transferências do tenant, `posted_at` desc. `start`/`end` inclusivos nas duas pontas."""
+    rows = transfers.list_transfers(
+        db,
+        bank_account_id=bank_account_id or None,
+        start=start,
+        end=end,
+        limit=limit,
+        offset=offset,
+    )
+    return [_transfer_out(t) for t in rows]
+
+
+@router.get("/transfers/{transfer_id}", response_model=BankTransferOut)
+def get_transfer(
+    transfer_id: str,
+    _user: CurrentUser = Depends(_guard),
+    db: Session = Depends(get_tenant_db),
+) -> BankTransferOut:
+    try:
+        return _transfer_out(transfers.get_transfer(db, transfer_id))
+    except service.BankError as e:
+        raise _err(e) from e
+
+
+@router.delete("/transfers/{transfer_id}", status_code=204)
+def delete_transfer(
+    transfer_id: str,
+    user: CurrentUser = Depends(_guard),
+    db: Session = Depends(get_tenant_db),
+) -> Response:
+    """Desfaz a transferência: o lançamento **e as duas pernas** somem juntos. Ver o service."""
+    try:
+        transfers.delete_transfer(
+            db, transfer_id=transfer_id, tenant_id=user.tenant_id, actor=user.user_id
+        )
+    except service.BankError as e:
+        raise _err(e) from e
+    return Response(status_code=204)
 
 
 # ── Saldos declarados (Story 8.4) ────────────────────────────────────────────────────────────
@@ -477,6 +709,12 @@ def _conferencia_out(r: reconciliation.ConferenciaReport) -> ConferenciaReportOu
             for f in r.contas_fora_da_banda
         ],
         notes=r.notes,
+        # Story 8.16 — os termos da pré-condição do gate. ANOTAM, nunca subtraem: nenhum campo de
+        # divergência acima é recalculado por causa deles.
+        lancamentos_sem_conta_informada=r.lancamentos_sem_conta_informada,
+        valor_sem_conta_informada_cents=r.valor_sem_conta_informada_cents,
+        rendimentos_sem_perna_bancaria=r.rendimentos_sem_perna_bancaria,
+        valor_rendimentos_sem_perna_cents=r.valor_rendimentos_sem_perna_cents,
     )
 
 
@@ -501,12 +739,22 @@ def reconciliation_report(
     tudo o que aconteceu no meio — e por isso contas diferentes podem ter datas de referência
     diferentes no mesmo relatório.
 
-    **`indisponivel` é resposta legítima, não um erro.** Conta sem saldo informado no período vem
-    com `saldo_banco_origem='indisponivel'` e `divergencia_cents=null`: o e1p **diz que não sabe**
-    em vez de comparar contra zero, que inventaria uma divergência inteira com cara de fato.
+    **`indisponivel` é resposta legítima, não um erro, e tem DOIS motivos** (Story 8.20): a conta
+    não teve saldo informado no período, **ou** o saldo informado é da própria data de abertura da
+    conta, em que a comparação seria tautológica — os dois vêm com
+    `saldo_banco_origem='indisponivel'` e `divergencia_cents=null` (o discriminador é
+    `saldo_banco_data`, preenchido só no segundo, e a nota **da conta** diz qual é). O e1p **diz que
+    não sabe** em vez de comparar contra zero, que inventaria uma divergência inteira com cara de
+    fato.
 
     **O consolidado nunca vem sozinho:** `total_divergencia_cents` cobre só as contas avaliáveis e
     viaja sempre com `contas` e `contas_fora_da_banda` (epic §3.2).
+
+    **Os contadores da pré-condição do gate ANOTAM, nunca subtraem** (Story 8.16):
+    `lancamentos_sem_conta_informada` e `rendimentos_sem_perna_bancaria` dizem o que o e1p sabe que
+    ainda **não** virou movimento bancário no período, e `notes` traz a frase de cada termo não-zero
+    nomeando a onda que o fecha. Nenhum deles altera `divergencia_cents`, `tolerancia_cents`,
+    `dentro_da_tolerancia`, `total_divergencia_cents` ou `contas_fora_da_banda`.
 
     `end < start` → 422. `bank_account_id` inexistente ou de outro tenant → 404 fail-closed.
     """

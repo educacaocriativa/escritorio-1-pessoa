@@ -10,14 +10,25 @@ só precisa gravar um Attachment com esse owner_type.
 """
 from __future__ import annotations
 
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, date, datetime, timedelta
 
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.modules.attachments import service as attachments_service
 from app.modules.attachments.models import Attachment
-from app.modules.payables.models import STATUS_CANCELED, STATUS_OPEN, STATUS_PAID, Payable
+from app.modules.payables.models import (
+    STATUS_CANCELED,
+    STATUS_OPEN,
+    STATUS_PAID,
+    STATUS_SCHEDULED,
+    Payable,
+)
+
+# Os estados em que a baixa já aconteceu — o dinheiro saiu (`paid`) ou já tem dia marcado para sair
+# (`scheduled`, Story 8.14). Nos dois o comprovante do banco **já existe e o dono o tem na mão**.
+# `open` tem query própria (ordena por `due_date`); `canceled` nunca entra.
+_ESTADOS_LIQUIDADOS: tuple[str, ...] = (STATUS_PAID, STATUS_SCHEDULED)
 
 # owner_type do anexo enquanto ele está em staging (ainda sem conta definida).
 OWNER_INBOX = "receipt_inbox"
@@ -121,6 +132,16 @@ def list_candidates(db: Session, *, q: str = "", paid_window_days: int = 30) -> 
 
     A ordenação é feita em duas queries, não num ORDER BY composto, porque os dois grupos
     ordenam por colunas diferentes (due_date crescente vs paid_at decrescente).
+
+    ⚠️ **[Story 8.14] As AGENDADAS entram junto das pagas recentes** (AC11), pela mesma janela e a
+    mesma ordenação. *"O comprovante do agendamento existe e é o que o dono tem na mão"* — o app do
+    banco emite o comprovante do agendamento na hora, e é aquele PDF que ele compartilha pelo
+    celular. Deixar a agendada de fora obrigaria o dono a esperar o dia do débito para anexar um
+    arquivo que ele já tem — e, na prática, a nunca anexar.
+
+    A janela de `paid_window_days` continua sendo aplicada sobre `paid_at`, que numa agendada é a
+    data **futura** do débito: `paid_at >= cutoff` é verdadeiro para toda agendada, e isso está
+    certo — nenhuma agendada é "antiga demais" para receber comprovante.
     """
     term = q.strip().lower()
 
@@ -143,14 +164,20 @@ def list_candidates(db: Session, *, q: str = "", paid_window_days: int = 30) -> 
     pagas = list(
         db.scalars(
             _match(
-                select(Payable).where(Payable.status == STATUS_PAID, Payable.paid_at >= cutoff)
+                select(Payable).where(
+                    # [8.14] `IN (paid, scheduled)`, escrito contra a tupla e não contra dois
+                    # `==` encadeados: quando a 8.15/8.16 precisarem do mesmo recorte, é uma
+                    # entrada a mais e nenhuma regra muda.
+                    Payable.status.in_(_ESTADOS_LIQUIDADOS),
+                    Payable.paid_at >= cutoff,
+                )
             )
             .order_by(Payable.paid_at.desc())
             .limit(100)
         ).all()
     )
-    # Contas canceladas nunca entram: nenhum dos dois filtros (status aberta ou status paga)
-    # as inclui, portanto não precisamos de um `.where(status != cancelada)` explícito.
+    # Contas canceladas nunca entram: nenhum dos dois filtros (status aberta ou status
+    # paga/agendada) as inclui, portanto não precisamos de um `.where(status != cancelada)`.
     return (abertas + pagas)[:100]
 
 
@@ -162,11 +189,26 @@ def _attach_and_commit(
     tenant_id: str,
     actor: str,
     mark_paid: bool,
+    bank_account_id: str | None = None,
+    paid_on: date | None = None,
 ) -> Payable:
     """Move o anexo da bandeja para a conta e fecha a transação (com baixa, se pedido).
 
     Extraído porque `link_receipt` (conta existente) e `new_bill_from_receipt` (conta nova)
-    terminam exatamente igual — só a origem da conta difere.
+    terminam exatamente igual — só a origem da conta difere. **É o único call site de `apply_paid`
+    fora de `mark_paid`** (grep de 2026-07-30: o design da Onda 2 fala de três chamadores, mas a
+    chamada das duas funções públicas foi extraída para cá — duas assinaturas mudam, um call site).
+
+    A partir da Story 8.12 a baixa também **escreve o movimento bancário**, e por isso precisa dos
+    dois parâmetros novos. Os dois só são resolvidos quando a baixa vai mesmo acontecer: vincular
+    um comprovante **sem** dar baixa (`mark_paid=False`) continua não exigindo conta bancária
+    nenhuma.
+
+    ⚠️ **Story 8.13: os dois vêm do payload, sempre.** O substituto temporário da 8.12 (a conta
+    primária, escolhida pelo backend sob `TODO(8.13)`) foi **removido** — pré-preencher é papel da
+    tela, e a diferença importa: *"o que o pré-preenchimento evita é **construir**, não
+    **confirmar**"*. `paid_on=None` cai no default de `apply_paid` (`due_date`); a tela da bandeja
+    manda **hoje** explicitamente (ver `link_receipt`).
     """
     from app.core import audit
     from app.modules.payables import service as payables_service
@@ -175,10 +217,27 @@ def _attach_and_commit(
     att.owner_id = p.id
     att.label = LABEL_COMPROVANTE
 
-    # Conta já paga não é re-datada; `apply_paid` não commita, então a baixa e o vínculo
-    # caem na MESMA transação.
+    # Conta já paga não é re-datada; `apply_paid` não commita, então a baixa, o vínculo do anexo e
+    # o movimento bancário caem todos na MESMA transação.
     if mark_paid and p.status == STATUS_OPEN:
-        payables_service.apply_paid(db, payable_id=p.id, tenant_id=tenant_id, actor=actor)
+        if not bank_account_id:
+            # **Segunda barreira, e não a primeira.** A primeira é o validador condicional de
+            # `BaixaDoComprovante` (422 antes de tocar no banco). Esta existe porque
+            # `_attach_and_commit` é o ÚNICO ponto por onde as duas portas da bandeja dão baixa: um
+            # chamador interno futuro que esqueça a conta encontra um erro, não uma baixa sem
+            # movimento bancário — que é exatamente o estado que a Onda 2 existe para tornar
+            # impossível. Mesmo status da primeira barreira (422): o fato é o mesmo.
+            raise ReceiptError(
+                "Informe de qual conta bancária o dinheiro saiu para dar a baixa.", 422
+            )
+        payables_service.apply_paid(
+            db,
+            payable_id=p.id,
+            tenant_id=tenant_id,
+            actor=actor,
+            bank_account_id=bank_account_id,
+            paid_on=paid_on,
+        )
 
     audit.record(
         db, tenant_id=tenant_id, actor=actor, action="payable.receipt_linked", target=p.id
@@ -197,10 +256,26 @@ def link_receipt(
     actor: str,
     bill_id: str,
     mark_paid: bool,
+    bank_account_id: str | None = None,
+    paid_on: date | None = None,
 ) -> Payable:
     """Vincula o comprovante a uma conta existente e, se pedido, dá a baixa.
 
     Vincular é trocar owner_type/owner_id do Attachment: os bytes ficam onde estão.
+
+    `bank_account_id`/`paid_on` são **repassados** para a baixa (Story 8.12) e vêm do payload
+    (`ReceiptLinkIn`, Story 8.13) — sem substituto do backend.
+
+    ⚠️ **A data que a TELA da bandeja manda é HOJE, e isso é decisão de produto, não default de
+    função.** O comprovante chega pelo share sheet **no instante do pagamento** (*"a captura mais
+    barata do produto inteiro, fisicamente no instante do pagamento"*), então a data de caixa
+    honesta desta porta é o dia de hoje — e é também o que a bandeja já gravava antes da 8.13
+    (IV1: a porta não muda de comportamento). Herdar o default `due_date` de `apply_paid` mudaria o
+    fato de caixa em silêncio **e**, para conta com vencimento futuro — o caso mais comum na lista
+    de candidatas, ordenada por vencimento —, esbarraria no teto de hoje com um 422 numa porta que
+    hoje funciona. O que a 8.13 acrescenta é que esse "hoje" deixou de ser escolha invisível do
+    backend: ele é um campo **visível e editável** na barra fixa, ao lado do botão que comete a
+    ação. O usuário **confirma**, não constrói.
     """
     att = get_staged(db, attachment_id=attachment_id, user_id=user_id)
 
@@ -211,7 +286,8 @@ def link_receipt(
         raise ReceiptError("Conta cancelada não recebe comprovante", 409)
 
     return _attach_and_commit(
-        db, att, p, tenant_id=tenant_id, actor=actor, mark_paid=mark_paid
+        db, att, p, tenant_id=tenant_id, actor=actor, mark_paid=mark_paid,
+        bank_account_id=bank_account_id, paid_on=paid_on,
     )
 
 
@@ -224,19 +300,25 @@ def new_bill_from_receipt(
     actor: str,
     data,  # PayableCreate
     mark_paid: bool,
+    bank_account_id: str | None = None,
+    paid_on: date | None = None,
 ) -> Payable:
     """Cria a conta a partir do comprovante e já vincula o anexo — num commit só.
 
     Para o caso de ter pago algo que ainda não estava cadastrado no sistema.
+
+    `bank_account_id`/`paid_on` são **repassados** para a baixa (Story 8.12/8.13) — ver
+    `link_receipt`, inclusive a nota sobre a data que a tela manda.
     """
     from app.modules.payables import service as payables_service
 
     att = get_staged(db, attachment_id=attachment_id, user_id=user_id)
 
-    # build_payable não commita: a conta, o evento na Agenda, o vínculo do anexo e a baixa
-    # entram todos na mesma transação.
+    # build_payable não commita: a conta, o evento na Agenda, o vínculo do anexo, a baixa e o
+    # movimento bancário entram todos na mesma transação.
     p = payables_service.build_payable(db, tenant_id=tenant_id, actor=actor, data=data)
 
     return _attach_and_commit(
-        db, att, p, tenant_id=tenant_id, actor=actor, mark_paid=mark_paid
+        db, att, p, tenant_id=tenant_id, actor=actor, mark_paid=mark_paid,
+        bank_account_id=bank_account_id, paid_on=paid_on,
     )

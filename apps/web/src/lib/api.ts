@@ -58,6 +58,13 @@ export function apiErrorMessage(err: unknown): string {
     if (Array.isArray(detail)) {
       return detail.map((d) => d.msg).join("; ") || err.message;
     }
+    // Erro ACIONÁVEL (Story 8.12): `detail` é um objeto `{acao, mensagem}`. Sem este ramo o objeto
+    // sairia daqui tipado como `string` e a tela quebraria ao renderizá-lo ("Objects are not valid
+    // as a React child"). Quem quer AGIR sobre a ação usa `acaoCadastrarConta`
+    // (`features/pagar/baixa.ts`); aqui só interessa ter um texto exibível.
+    if (detail && typeof detail === "object") {
+      return detail.mensagem || err.message;
+    }
     return detail ?? err.message;
   }
   return "Erro inesperado";

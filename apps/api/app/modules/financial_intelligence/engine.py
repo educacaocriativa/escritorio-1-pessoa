@@ -25,10 +25,17 @@ mais uma função pura — **sem** uma linha de I/O aqui dentro. É essa a razã
 design acima: o motor pôde ganhar a regra de maior peso do Epic 8 sem deixar de ser testável sem
 banco. `CompletenessAccountInput.account_name` percorre o MESMO caminho de PII de
 `MarginTrend.project_name` (anonimizado pelo narrador na saída, nunca aqui).
+
+Story 8.16 usou o mesmo ponto de extensão duas vezes mais (`OffRailInput` e `DebitoSuspeitoInput`),
+e a segunda é a que mais teria puxado I/O para cá: o motor precisa saber **quando** um débito saiu
+para escrever "de 15/08" na frase. `data_debito` chega **pronta**, e o motor **não** compara com
+hoje — quem decide o que é suspeito é `diagnostics.py`. `DebitoSuspeitoInput.descricao` (nome de
+fornecedor) e `.bank_account_name` percorrem o MESMO caminho de PII acima.
 """
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import date
 
 # ── Níveis de sinal (🟢🟡🔴). Ordem de prioridade: vermelho > amarelo > verde. ──────────────
 VERDE = "verde"
@@ -48,6 +55,18 @@ _RUNWAY_YELLOW_DAYS = 120      # < 120 dias → 🟡
 # Completude dos lançamentos (Story 8.6): a partir de quantos dias um saldo confirmado deixa de
 # ser prova de que o sistema está completo. `> 45` → 🟡 "e essa medição é de N dias atrás".
 _COMPLETENESS_STALE_DAYS = 45
+# Casamento entre UM débito e a divergência POSITIVA da conta dele (Story 8.16, ratificação §C-2.3
+# ajuste 2): `|valor − divergencia| <= max(R$ 50; 10% da divergência)`.
+#
+# ⚠️ **É a MESMA FORMA da banda de tolerância da conferência (`max(R$ 50; 0,5%)`) e um percentual
+# DIFERENTE DE PROPÓSITO — não "harmonize" os dois números.** A banda responde *"esta diferença é
+# ruído estrutural?"* e por isso é generosa; este critério responde *"este débito explica esta
+# divergência?"*, que é pergunta muito mais estrita. O intervalo `[0,5×, 2×]` proposto no rascunho
+# foi **REJEITADO**: com fator 2, um débito de R$ 5.000 seria nomeado diante de uma divergência de
+# R$ 2.500 — e **nomear um débito inocente é pior do que ficar calado**, porque "pode não ter saído"
+# sobre um débito que obviamente saiu treina o dono a ignorar a tela.
+_DEBITO_MATCH_FLOOR_CENTS = 5_000  # R$ 50,00 — o piso, que domina em divergência pequena
+_DEBITO_MATCH_DIVISOR = 10  # 10% — o componente que domina em divergência grande
 
 
 @dataclass(frozen=True)
@@ -137,18 +156,75 @@ class CompletenessInput:
 
 
 @dataclass(frozen=True)
+class OffRailInput:
+    """Recebimentos que entraram **direto na conta do dono**, na janela do relatório (Story 8.16).
+
+    Os dois conjuntos, com membro e não-membro escritos (Regra da Instanciação Obrigatória):
+
+    `recebimentos_fora_do_trilho` (o **N**) — cobranças recebidas na janela **por fora** da cobrança
+      do e1p (o dono registrou em qual conta o dinheiro caiu).
+      • Membro: um Pix de R$ 1.400 registrado pelo dono em 12/07.
+      • Não-membro: uma cobrança paga pelo gateway em 12/07 — ela entrou pelo trilho e está no
+        DENOMINADOR, nunca no numerador.
+    `recebimentos_total` (o **M**) — todos os recebimentos da janela, pelas **duas** rotas.
+      • Membro: as duas do parágrafo acima.
+      • Não-membro: o lançamento sintético de rendimento de aplicação — **não é recebimento de
+        cliente**, e incluí-lo faria o *"N dos M"* mentir para quem usa Investimentos.
+      • Não-membro 2: cobrança em aberto ou cancelada na janela — não foi recebida.
+
+    Quem aplica esses recortes é `diagnostics.py`; aqui os números chegam **prontos**. O motor não
+    sabe o que é uma `Charge`, e é isso que o mantém testável sem banco.
+    """
+
+    recebimentos_fora_do_trilho: int
+    recebimentos_total: int
+    valor_fora_do_trilho_cents: int
+
+
+@dataclass(frozen=True)
+class DebitoSuspeitoInput:
+    """UM débito cuja **saída da conta pode não ter acontecido**. Já vem filtrado, de fora.
+
+    ⚠️ **`DebitoSuspeitoInput`, e não `AgendamentoSuspeitoInput`** (ratificação §C-2.3, ajuste 1):
+    *"o efeito existe; o adjetivo não"*. Depois que o worker promove `scheduled → paid`, **nada no
+    dado distingue** *"eu agendei e o banco não executou"* de *"eu paguei no caixa e o banco não
+    compensou"* — e um nome que diz uma coisa carregando outra é o defeito que este épico já cometeu
+    duas vezes. O valor do sinal está em apontar **qual** débito casa com a divergência, não no
+    adjetivo.
+
+    `descricao` (nome de fornecedor) e `bank_account_name` **podem conter PII** → são anonimizados
+      pelo NARRADOR na saída para o Claude, **nunca aqui** (o mesmo caminho de
+      `MarginTrend.project_name` e de `CompletenessAccountInput.account_name`).
+    `data_debito` é a data em que o débito deveria ter saído, e **chega pronta**: o motor não
+      calcula "já venceu", não compara com hoje e não importa relógio nenhum (IV1). Quem decide o
+      que entra nesta lista é `diagnostics.py`.
+    `bank_account_name` é o que liga este débito à conta cuja divergência ele pode explicar — o
+      casamento acontece contra `CompletenessAccountInput.account_name`, que é o único
+      identificador de conta que o motor conhece (ele não vê ids, por design).
+    """
+
+    descricao: str
+    valor_cents: int
+    data_debito: date
+    bank_account_name: str
+
+
+@dataclass(frozen=True)
 class EngineInput:
     """Snapshot de entrada do motor. Tudo já calculado pelas Stories anteriores; o motor só decide
     os sinais. Campos são listas/valores simples → o teste unitário monta à mão, sem I/O.
 
-    `completeness` é o ÚLTIMO campo e tem default `None` (Story 8.6): as chamadas e os testes da
-    Story 5.8 continuam válidos sem edição, e `None` produz **zero** sinal de completude."""
+    `completeness` (8.6), `off_rail` e `debitos_suspeitos` (8.16) são os ÚLTIMOS campos e têm
+    default `None`: as chamadas e os testes das Stories 5.8 e 8.6 continuam válidos **sem edição**,
+    e `None` produz **zero** sinal em cada uma das três regras."""
 
     margins: list[MarginTrend]
     runway_days: int | None
     projection_windows: list[ProjectionWindowInput]
     investments: list[InvestmentReturn]
     completeness: CompletenessInput | None = None
+    off_rail: OffRailInput | None = None
+    debitos_suspeitos: list[DebitoSuspeitoInput] | None = None
 
 
 def _pct_display(fraction: float) -> int:
@@ -188,12 +264,12 @@ def _completeness_signals(data: CompletenessInput | None) -> list[Signal]:
     | todas avaliáveis, dentro da banda e frescas | 🟢 | 1 |
 
     **Uma conta gera no máximo UM 🟡 de "não sei"** (ratificação D-2 Ajuste 2): as duas regras de
-    "não sei" do rascunho — *"sem saldo declarado na janela"* e *"não confirmado há N dias"* — são
-    **uma só**, cujo texto diz qual dos casos é. Num tenant com 3 contas nenhuma conferida, a versão
-    separada produziria **seis** sinais dizendo a mesma coisa: ruído que treina o usuário a ignorar
-    a tela — o mesmo vício que a banda de tolerância existe para evitar. Um 🔴 de fora-da-banda
-    **pode** coexistir com o 🟡 da mesma conta: são afirmações diferentes (*"está fora da banda em
-    R$ X"* e *"e essa medição é de 60 dias atrás"*).
+    "não sei" do rascunho — *"sem comparação avaliável no período"* e *"não confirmado há N dias"*
+    — são **uma só**, cujo texto diz qual dos casos é. Num tenant com 3 contas nenhuma conferida, a
+    versão separada produziria **seis** sinais dizendo a mesma coisa: ruído que treina o usuário a
+    ignorar a tela — o mesmo vício que a banda de tolerância existe para evitar. Um 🔴 de
+    fora-da-banda **pode** coexistir com o 🟡 da mesma conta: são afirmações diferentes (*"está
+    fora da banda em R$ X"* e *"e essa medição é de 60 dias atrás"*).
 
     O motor decide por `abs(divergencia) > tolerancia` e **não** pelo `dentro_da_tolerancia` que a
     conferência já calcula — não porque o booleano esteja errado, mas para não haver **duas
@@ -245,7 +321,14 @@ def _completeness_signals(data: CompletenessInput | None) -> list[Signal]:
         # 🟡 — "não sei", no MÁXIMO um por conta, dizendo QUAL dos casos é.
         motivos: list[str] = []
         if c.divergencia_cents is None:
-            motivos.append("sem saldo declarado na janela")
+            # Story 8.20: "sem comparação avaliável" e não "sem saldo declarado" — existem DOIS
+            # motivos para `divergencia_cents is None` (nenhum saldo declarado no período **ou**
+            # saldo declarado na própria data de abertura, cuja comparação é tautológica), e o motor
+            # é PURO: ele recebe só o número e não tem como saber qual. A frase nova é verdadeira
+            # nos dois; a precisão fica na nota por conta, na tela de Conferência, que é para onde
+            # este sinal leva. Distinguir aqui exigiria um campo novo em `CompletenessAccountInput`
+            # — é da Story 8.16, que já acrescenta campos ao motor.
+            motivos.append("sem comparação avaliável no período")
         if c.dias_desde_ultima_conferencia is None:
             motivos.append("nunca confirmado")
         elif c.dias_desde_ultima_conferencia > _COMPLETENESS_STALE_DAYS:
@@ -295,6 +378,122 @@ def _completeness_signals(data: CompletenessInput | None) -> list[Signal]:
                 f"na conta {pior.account_name}, dentro da tolerância de "
                 f"{_brl(pior.tolerancia_cents)}",
                 "completude",
+            )
+        )
+    return out
+
+
+def _off_rail_signals(data: OffRailInput | None) -> list[Signal]:
+    """Regra 0b — **recebimento fora da cobrança do e1p** (8.16, `source="recebimento_externo"`).
+
+    | Condição | Nível | Cardinalidade |
+    |---|---|---|
+    | `data is None` **ou** `recebimentos_fora_do_trilho == 0` | — | **0** (silêncio é o certo) |
+    | `recebimentos_fora_do_trilho > 0` | 🟡 | **1 por relatório** |
+
+    **Não 🔴**, porque nada está quebrado — o dinheiro entrou e está na DRE e no saldo. E **não um
+    aviso por cobrança**: é a mesma disciplina anti-ruído da banda de tolerância (*"uma tela que
+    grita por R$ 3 destrói a confiança no sinal"*) e do Ajuste 2 da ratificação D-2, que fundiu os
+    dois 🟡 de completude por conta.
+
+    ⚠️ **Nem uma palavra sobre split, taxa, receita da e1p ou "fora do trilho" como jargão.** Este
+    caso é, no estudo interno, vazamento de receita da plataforma — e mesmo assim **toda** a redação
+    é sobre o interesse do DONO: aquele cliente não recebe régua de cobrança e aquela cobrança não
+    fecha sozinha. A decisão G-D7 foi tomada quando o caso seria *inferido* de um crédito órfão;
+    agora o dono **declara**, e *"o dado fica limpo; para quem ele é não muda"*. A proibição de
+    construir superfície de plataforma sobre este dado é **normativa** e tem teste próprio
+    (`tests/test_admin_nao_expoe_recebimento_fora_do_trilho.py`).
+
+    **Não pode ser desligado pelo dono** (F-D5), pela mesma lógica do 🟡 *"nenhuma conta bancária
+    cadastrada"*: o sinal é verdadeiro e é sobre o interesse dele — *"o dono que mais precisa é o
+    que desliga"*.
+    """
+    if data is None or data.recebimentos_fora_do_trilho <= 0:
+        return []
+    return [
+        Signal(
+            AMARELO,
+            "Recebimentos que entraram direto na sua conta",
+            f"{data.recebimentos_fora_do_trilho} dos {data.recebimentos_total} recebimentos deste "
+            f"mês ({_brl(data.valor_fora_do_trilho_cents)}) entraram direto na sua conta, fora da "
+            "cobrança do e1p. Eles contam na sua DRE e no seu saldo, mas não geram boleto, "
+            "lembrete automático nem baixa sozinha.",
+            "recebimento_externo",
+        )
+    ]
+
+
+def _debito_explica(valor_cents: int, divergencia_cents: int) -> bool:
+    """`|valor − divergencia| <= max(R$ 50; 10% da divergência)` — o critério NORMATIVO.
+
+    Ver o bloco de `_DEBITO_MATCH_FLOOR_CENTS` para **por que o percentual difere** do da banda de
+    tolerância. Função separada (e não uma expressão inline) para que a borda tenha teste próprio:
+    R$ 5.000 × R$ 5.000 **casa**; R$ 5.000 × R$ 2.500 **não casa** — e era exatamente esse segundo
+    caso que o intervalo `[0,5×, 2×]` rejeitado deixava passar.
+    """
+    return abs(valor_cents - divergencia_cents) <= max(
+        _DEBITO_MATCH_FLOOR_CENTS, divergencia_cents // _DEBITO_MATCH_DIVISOR
+    )
+
+
+def _debito_suspeito_signals(
+    debitos: list[DebitoSuspeitoInput] | None, completeness: CompletenessInput | None
+) -> list[Signal]:
+    """Regra 0c — **a desambiguação do `divergencia > 0`** (8.16, `source="debito_nao_confirmado"`).
+
+    | Condição | Nível | Cardinalidade |
+    |---|---|---|
+    | lista vazia / `None` (ou sem completude) | — | 0 |
+    | conta com `divergencia > 0` que um débito explica | 🟡 | **1 por conta**, o de maior valor |
+
+    **Por que isto é obrigatório e não detalhe de UX:** `divergencia > 0` é sintoma **tanto** de
+    *"um débito que eu registrei não saiu do banco"* **quanto** de *"recebi algo e não registrei"*.
+    Entregar só o número faz o dono caçar a coisa errada, e *"números sem pista treinam o dono a
+    ignorar a tela"* — que é o risco "abandono da conferência" chegando por outra porta.
+
+    Três regras que **não** podem ser afrouxadas:
+
+    - **"pode não ter saído", nunca "não saiu".** O e1p continua sem ver o extrato; é a mesma
+      disciplina de *"suprimir a afirmação, nunca o número"* da Onda 0. O trecho é **verbatim**.
+    - **Só quando `divergencia > 0`.** Divergência negativa (o banco ABAIXO do sistema) é o sintoma
+      **oposto** — falta lançamento de saída — e nomear um débito ali mandaria o dono para o lado
+      errado. `None` (não avaliável) também não emite: não se explica o que não foi medido.
+    - **Nenhuma palavra da família "agendado"** (ratificação §C-2.3): depois do worker, nada no dado
+      distingue agendamento não executado de pagamento em caixa não compensado. Há varredura de
+      texto contra o radical no `tests/test_financial_intelligence_onda2_signals.py`.
+
+    O casamento é por `bank_account_name`: é o único identificador de conta que o motor conhece (ele
+    não vê ids, por design — ver `CompletenessAccountInput`). `max` é **estável**: no empate de
+    valor vence o primeiro da lista, então a saída é determinística.
+    """
+    if not debitos or completeness is None:
+        return []
+
+    out: list[Signal] = []
+    for c in completeness.contas:
+        # `> 0` e não `!= 0`: o sinal oposto pede a ação oposta. `None` cai fora por não ser número.
+        if c.divergencia_cents is None or c.divergencia_cents <= 0:
+            continue
+        candidatos = [
+            d
+            for d in debitos
+            if d.bank_account_name == c.account_name
+            and _debito_explica(d.valor_cents, c.divergencia_cents)
+        ]
+        if not candidatos:
+            # Sem débito compatível o produto **cala**: devolver o número sem pista é o que ele já
+            # faz hoje, e apontar um débito que não casa é pior do que calar.
+            continue
+        suspeito = max(candidatos, key=lambda d: d.valor_cents)
+        dia = f"{suspeito.data_debito.day:02d}/{suspeito.data_debito.month:02d}"
+        out.append(
+            Signal(
+                AMARELO,
+                "Um débito pode não ter saído da conta",
+                f"O débito de {_brl(suspeito.valor_cents)} de {dia} ({suspeito.descricao}) pode "
+                f"não ter saído da conta {c.account_name}: o saldo que você declarou está "
+                f"{_brl(c.divergencia_cents)} acima do que o e1p calculou.",
+                "debito_nao_confirmado",
             )
         )
     return out
@@ -366,8 +565,9 @@ def _investment_signals(investments: list[InvestmentReturn]) -> list[Signal]:
 
 
 def compute_signals(data: EngineInput) -> list[Signal]:
-    """Ponto de entrada PURO do motor. Avalia as 5 regras determinísticas na ordem documentada
-    (**completude** → margem → runway → janela → investimento), depois PRIORIZA por nível
+    """Ponto de entrada PURO do motor. Avalia as 7 regras determinísticas na ordem documentada
+    (**completude → recebimento externo → débito não confirmado** → margem → runway → janela →
+    investimento), depois PRIORIZA por nível
     (vermelho > amarelo > verde), mantendo, dentro do mesmo nível, a ordem de avaliação (sort
     ESTÁVEL — critério simples e determinístico, sem heurística subjetiva de "importância" que o
     motor não teria como aferir).
@@ -380,12 +580,22 @@ def compute_signals(data: EngineInput) -> list[Signal]:
     insira outra regra antes desta quebra a precedência **em silêncio**; o que impede isso é
     `test_sinal_de_completude_vem_antes_dos_demais_no_mesmo_nivel`.
 
+    **As duas regras da Story 8.16 entram LOGO DEPOIS da completude, e antes de margem/runway**, e
+    pelo mesmo motivo: as três falam do **que o sistema sabe do dinheiro que passou pela conta**
+    — quem lê um 🟡 de "recebimentos entraram direto na sua conta" está lendo por que a base dos
+    números seguintes pode estar incompleta. `_debito_suspeito_signals` vem imediatamente após a
+    completude também por uma razão de leitura: ele **explica** o 🔴 que a completude acabou de
+    emitir para a mesma conta, e ler a explicação antes do número seria estranho — mas os dois são
+    🟡 e 🔴 respectivamente, então o sort por nível já os coloca na ordem certa.
+
     DETERMINISMO (IV1): para o MESMO `data`, retorna SEMPRE a MESMA lista (mesma ordem, mesmos
     valores). Nenhuma dependência de relógio, aleatoriedade, I/O ou IA. É esta pureza que garante
     que a IA (que só entra depois, em ai_narrator.py) não pode ter influenciado nenhum sinal —
     inclusive na completude, cujo `dias_desde_ultima_conferencia` chega **calculado de fora**."""
     signals: list[Signal] = []
     signals.extend(_completeness_signals(data.completeness))
+    signals.extend(_off_rail_signals(data.off_rail))
+    signals.extend(_debito_suspeito_signals(data.debitos_suspeitos, data.completeness))
     signals.extend(_margin_signals(data.margins))
     signals.extend(_runway_signal(data.runway_days))
     signals.extend(_projection_window_signals(data.projection_windows))

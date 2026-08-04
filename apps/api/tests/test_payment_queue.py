@@ -51,6 +51,37 @@ def _create(client: TestClient, headers, **over):
     return resp.json()
 
 
+@pytest.fixture()
+def conta(client: TestClient, headers) -> str:
+    """A conta bancária da baixa — **obrigatória desde a Story 8.12** (AC1/AC11).
+
+    A Fila de Pagamentos NÃO ganhou endpoint próprio: ela reusa `POST /payables/bills/{id}/pay`,
+    então a mudança de contrato daquele endpoint alcança esta tela também (IV4). O backend da fila
+    (`service.payment_queue`) não foi editado.
+    """
+    resp = client.post(
+        "/bank/accounts",
+        json={
+            "name": "Itaú PJ",
+            "kind": "checking",
+            "opening_balance_cents": 500_000,
+            "opening_date": (_today() - timedelta(days=180)).isoformat(),
+        },
+        headers=headers,
+    )
+    assert resp.status_code == 201, resp.text
+    return resp.json()["id"]
+
+
+def _pay(client: TestClient, headers, bill_id: str, conta: str):
+    """A baixa pela fila, com o corpo obrigatório do AC11. `paid_on` = hoje."""
+    return client.post(
+        f"/payables/bills/{bill_id}/pay",
+        json={"bank_account_id": conta, "paid_on": _today().isoformat()},
+        headers=headers,
+    )
+
+
 def test_queue_requires_auth(client: TestClient):
     assert client.get("/payables/queue").status_code == 401
 
@@ -134,24 +165,24 @@ def test_queue_summary_counts_and_sums(client: TestClient, headers):
     assert s["proximos_30_dias_count"] == 0 and s["proximos_30_dias_cents"] == 0
 
 
-def test_queue_only_open_bills(client: TestClient, headers):
+def test_queue_only_open_bills(client: TestClient, headers, conta):
     """Fila só mostra contas EM ABERTO — pagas e canceladas não aparecem."""
     paid = _create(client, headers, due_date=_ymd(2), amount_cents=5000)
     canceled = _create(client, headers, due_date=_ymd(2), amount_cents=6000)
     _create(client, headers, due_date=_ymd(2), amount_cents=7000)  # segue em aberto
-    client.post(f"/payables/bills/{paid['id']}/pay", headers=headers)
+    _pay(client, headers, paid["id"], conta)
     client.post(f"/payables/bills/{canceled['id']}/cancel", headers=headers)
 
     q = client.get("/payables/queue", headers=headers).json()
     assert [p["amount_cents"] for p in q["proximos_7_dias"]] == [7000]
 
 
-def test_mark_paid_from_queue_reflects_same_payable(client: TestClient, headers):
+def test_mark_paid_from_queue_reflects_same_payable(client: TestClient, headers, conta):
     """Baixa em um clique pela fila reusa mark_paid — mesmo Payable de Contas a Pagar, sem duplicar.
     Após pagar, o item sai da fila e o MESMO registro aparece 'paid' em /bills/{id}."""
     bill = _create(client, headers, due_date=_ymd(1), amount_cents=8800)
     # o mesmo endpoint que Contas a Pagar usa (nenhum endpoint de pagamento novo)
-    pay = client.post(f"/payables/bills/{bill['id']}/pay", headers=headers)
+    pay = _pay(client, headers, bill["id"], conta)
     assert pay.status_code == 200
     assert pay.json()["status"] == "paid"
     assert pay.json()["paid_at"]  # auditoria mínima (quando pagou)
@@ -171,3 +202,89 @@ def test_queue_orders_by_due_date_within_bucket(client: TestClient, headers):
     _create(client, headers, due_date=_ymd(4), amount_cents=400)
     q = client.get("/payables/queue", headers=headers).json()
     assert [p["amount_cents"] for p in q["proximos_7_dias"]] == [200, 400, 600]
+
+
+# ── Story 8.14 — o QUINTO balde, e os quatro antigos intocados ────────────────────────────────
+
+
+def _agendar(client: TestClient, headers, bill_id: str, conta: str, dias: int):
+    """Baixa com data FUTURA → a conta nasce `scheduled` (o estado é derivado da data, AC2)."""
+    resp = client.post(
+        f"/payables/bills/{bill_id}/pay",
+        json={"bank_account_id": conta, "paid_on": _ymd(dias)},
+        headers=headers,
+    )
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["status"] == "scheduled", "pré-condição: a conta tinha de nascer agendada"
+    return resp.json()
+
+
+def test_os_QUATRO_baldes_antigos_nao_mudaram_sem_agendamento_nenhum(
+    client: TestClient, headers
+):
+    """**IV2 em forma de snapshot:** num cenário sem agendamento, a fila é byte a byte a de antes.
+
+    Os campos novos (`agendadas`, `agendadas_count`, `agendadas_cents`) aparecem **zerados**, nunca
+    ausentes — um consumidor que os leia sem checar existência não quebra.
+    """
+    _create(client, headers, due_date=_ymd(-2), amount_cents=100)
+    _create(client, headers, due_date=_ymd(0), amount_cents=200)
+    _create(client, headers, due_date=_ymd(5), amount_cents=300)
+    _create(client, headers, due_date=_ymd(20), amount_cents=400)
+
+    q = client.get("/payables/queue", headers=headers).json()
+    assert q["summary"] == {
+        "atrasados_count": 1, "atrasados_cents": 100,
+        "hoje_count": 1, "hoje_cents": 200,
+        "proximos_7_dias_count": 1, "proximos_7_dias_cents": 300,
+        "proximos_30_dias_count": 1, "proximos_30_dias_cents": 400,
+        "agendadas_count": 0, "agendadas_cents": 0,
+    }
+    assert q["agendadas"] == []
+
+
+def test_a_agendada_SAI_dos_quatro_baldes_de_vencimento(client: TestClient, headers, conta):
+    """**A pergunta da Fila é *"o que eu preciso pagar?"*, e uma agendada já foi resolvida.**
+
+    A conta vencia HOJE (estava no balde mais urgente depois de "atrasados") e foi agendada para
+    daqui a 10 dias: ela sai do balde de vencimento — deixá-la ali pediria ao dono uma ação que ele
+    já tomou — e o `hoje_cents` volta a zero.
+    """
+    bill = _create(client, headers, due_date=_ymd(0), amount_cents=5_000)
+    antes = client.get("/payables/queue", headers=headers).json()
+    assert antes["summary"]["hoje_count"] == 1
+
+    _agendar(client, headers, bill["id"], conta, 10)
+
+    q = client.get("/payables/queue", headers=headers).json()
+    assert q["hoje"] == [] and q["summary"]["hoje_cents"] == 0
+    assert q["atrasados"] == [] and q["proximos_7_dias"] == [] and q["proximos_30_dias"] == []
+    assert [p["id"] for p in q["agendadas"]] == [bill["id"]]
+    assert q["summary"]["agendadas_count"] == 1
+    assert q["summary"]["agendadas_cents"] == 5_000
+
+
+def test_a_agendada_NAO_some_da_fila(client: TestClient, headers, conta):
+    """**Esconder é erro; misturar também.** A conta continua visível, num balde próprio.
+
+    Se ela sumisse, o dono perderia de vista uma saída certa e a única tela que responde *"o que sai
+    do meu caixa nos próximos dias"* passaria a mentir por omissão — que é a mesma família de
+    defeito que a Onda 0 corrigiu na Projeção.
+    """
+    bill = _create(client, headers, due_date=_ymd(0), amount_cents=5_000)
+    _agendar(client, headers, bill["id"], conta, 10)
+
+    q = client.get("/payables/queue", headers=headers).json()
+    todos = (
+        q["atrasados"] + q["hoje"] + q["proximos_7_dias"] + q["proximos_30_dias"] + q["agendadas"]
+    )
+    assert bill["id"] in [p["id"] for p in todos], "a conta agendada SUMIU da Fila"
+
+
+def test_o_balde_das_agendadas_e_calculado_NA_LEITURA(client: TestClient, headers, conta):
+    """Como os outros quatro: sem job, sem cron, sem coluna. A prova é que a conta aparece no balde
+    **imediatamente** depois da baixa, sem nenhuma varredura ter rodado."""
+    bill = _create(client, headers, due_date=_ymd(0), amount_cents=1_234)
+    _agendar(client, headers, bill["id"], conta, 3)
+    q = client.get("/payables/queue", headers=headers).json()
+    assert q["summary"]["agendadas_cents"] == 1_234

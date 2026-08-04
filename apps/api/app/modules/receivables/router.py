@@ -13,6 +13,8 @@ from app.modules.receivables.models import Charge
 from app.modules.receivables.schemas import (
     ChargeCreate,
     ChargeOut,
+    ChargePaymentUpdate,
+    ChargeSettleOffRailIn,
     ChargesSummary,
     ChargeUpdate,
     DunningResult,
@@ -52,11 +54,21 @@ def _out(charge: Charge, db: Session) -> ChargeOut:
         created_at=charge.created_at,
         gateway_provider=charge.gateway_provider,
         gateway_status_raw=charge.gateway_status_raw,
+        # [8.15] O vínculo com o razão bancário fica VISÍVEL: sem ele a UI não tem como mostrar
+        # "caiu no Itaú PJ" nem como pré-selecionar a conta na correção.
+        bank_account_id=charge.bank_account_id,
+        bank_transaction_id=charge.bank_transaction_id,
     )
 
 
 def _err(e: service.ReceivableError) -> HTTPException:
-    return HTTPException(status_code=e.status_code, detail=str(e))
+    """`detail` estruturado quando o erro é ACIONÁVEL; string em todo o resto.
+
+    O 409 `{"acao": "cadastrar_conta", "mensagem": "..."}` é contrato da Story 8.12, reusado aqui
+    (8.15 AC9) e consumido pela mesma tela para abrir o cadastro de conta embutido. Sem o `detail`
+    em objeto, a UI teria de reconhecer a situação por substring da mensagem.
+    """
+    return HTTPException(status_code=e.status_code, detail=e.detail or str(e))
 
 
 @router.post("/webhook")
@@ -123,6 +135,65 @@ def pay_charge(
     try:
         charge = service.mark_paid(
             db, charge_id=charge_id, tenant_id=user.tenant_id, actor=user.user_id, by_ai=user.is_ai
+        )
+    except service.ReceivableError as e:
+        raise _err(e) from e
+    return _out(charge, db)
+
+
+@router.post("/charges/{charge_id}/settle-externally", response_model=ChargeOut)
+def settle_charge_externally(
+    charge_id: str,
+    data: ChargeSettleOffRailIn,
+    user: CurrentUser = Depends(_guard),
+    db: Session = Depends(get_tenant_db),
+) -> ChargeOut:
+    """*"Recebi direto na minha conta"* — a porta que não existia (Story 8.15, AC1).
+
+    ⚠️ **Não é o "Marcar paga" de volta.** Aquele botão foi removido de propósito (só o webhook do
+    gateway marca pago) e a diferença importa: aqui o dono está **declarando um fato sobre a conta
+    bancária dele**, não confirmando um pagamento do trilho. O e1p **não** aplica split, **não**
+    credita a Carteira e **não** cria `PlatformEarning` — o dinheiro nunca passou pela e1p.
+
+    Gera **um** movimento bancário de crédito, na mesma transação. Tenant sem conta cadastrada →
+    409 acionável (`{"acao": "cadastrar_conta"}`); cobrança já paga pelo trilho → 409.
+    """
+    try:
+        charge = service.settle_off_rail(
+            db,
+            charge_id=charge_id,
+            tenant_id=user.tenant_id,
+            actor=user.user_id,
+            bank_account_id=data.bank_account_id,
+            received_on=data.received_on,
+        )
+    except service.ReceivableError as e:
+        raise _err(e) from e
+    return _out(charge, db)
+
+
+@router.patch("/charges/{charge_id}/payment", response_model=ChargeOut)
+def update_charge_payment(
+    charge_id: str,
+    data: ChargePaymentUpdate,
+    user: CurrentUser = Depends(_guard),
+    db: Session = Depends(get_tenant_db),
+) -> ChargeOut:
+    """Corrige o **recebimento fora do trilho** (conta bancária e/ou data) — AC10.
+
+    Rota separada do `PATCH /charges/{id}` de propósito: aquele edita a **cobrança** (valor,
+    vencimento, descrição) e só aceita cobrança em aberto; este edita o **fato de caixa**, e só
+    existe em cobrança liquidada fora do trilho. Trocar a conta **move** o movimento bancário —
+    nunca duplica. Cobrança do trilho ou em aberto → 409.
+    """
+    try:
+        charge = service.update_off_rail_payment(
+            db,
+            charge_id=charge_id,
+            tenant_id=user.tenant_id,
+            actor=user.user_id,
+            bank_account_id=data.bank_account_id,
+            received_on=data.received_on,
         )
     except service.ReceivableError as e:
         raise _err(e) from e

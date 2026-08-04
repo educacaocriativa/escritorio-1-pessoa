@@ -102,3 +102,51 @@ describe("monthRange", () => {
     expect(monthRange("2026-07")).toEqual({ start: "2026-07-01", end: "2026-07-31" });
   });
 });
+
+describe("Story 8.16 — os rótulos das duas regras da Onda 2", () => {
+  it("traduz `recebimento_externo` e `debito_nao_confirmado`", () => {
+    expect(sourceLabel("recebimento_externo")).toBe("Recebimentos");
+    expect(sourceLabel("debito_nao_confirmado")).toBe("Saídas");
+  });
+
+  it('NUNCA rotula a saída como "Agendamentos" (ratificação §C-2.3, ajuste 1)', () => {
+    // Depois que o worker promove `scheduled → paid`, nada no dado distingue "agendei e o banco
+    // não executou" de "paguei no caixa e o banco não compensou". Um rótulo que promete um recorte
+    // que o dado não sustenta é o defeito D-3 na superfície mais cara — a que o dono lê.
+    const rotulo = sourceLabel("debito_nao_confirmado");
+    expect(rotulo.toLowerCase()).not.toContain("agendad");
+    expect(rotulo.toLowerCase()).not.toContain("agendament");
+  });
+
+  it("nenhum rótulo do diagnóstico usa jargão interno do épico", () => {
+    // "trilho", "split" e "plataforma" são vocabulário de dentro do e1p. O sinal de recebimento
+    // fora da cobrança é, no estudo interno, vazamento de receita da plataforma — e mesmo assim
+    // toda a redação é sobre o interesse do DONO (G-D7).
+    const fontes = [
+      "lucratividade",
+      "projecao",
+      "investimento",
+      "completude",
+      "recebimento_externo",
+      "debito_nao_confirmado",
+    ];
+    for (const fonte of fontes) {
+      const rotulo = sourceLabel(fonte).toLowerCase();
+      for (const jargao of ["trilho", "split", "plataforma"]) {
+        expect(rotulo).not.toContain(jargao);
+      }
+    }
+  });
+
+  it("não inventa rótulo para `source` desconhecido — devolve o próprio", () => {
+    expect(sourceLabel("fonte_que_ainda_nao_existe")).toBe("fonte_que_ainda_nao_existe");
+  });
+
+  it("a ressalva de precedência continua sendo SÓ da completude", () => {
+    // As duas regras novas são 🟡 e falam da mesma base de dados, mas NÃO geram a ressalva: ela é
+    // a afirmação "não confio nos outros sinais até você fechar isto", e essa é da completude.
+    expect(completudeCaveat([sig("amarelo", "recebimento_externo")])).toBe(null);
+    expect(completudeCaveat([sig("amarelo", "debito_nao_confirmado")])).toBe(null);
+    expect(completudeLevel([sig("amarelo", "debito_nao_confirmado")])).toBe(null);
+  });
+});

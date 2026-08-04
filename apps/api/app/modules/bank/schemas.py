@@ -152,15 +152,48 @@ class BankAccountOut(BaseModel):
     # Procedência OBRIGATÓRIA do saldo acima (Regra dos Planos §1.3c). Sempre `ORIGEM_BANCO`: este
     # número vem do plano 3, jamais da Carteira.
     saldo_derivado_origem: str = ORIGEM_BANCO
+    # ── O que já tem dia marcado e ainda não aconteceu (Story 8.14, AC13) ────────────────────
+    #
+    # Σ dos movimentos desta conta com `posted_at > hoje`, separada por sinal e em **MÓDULO** nos
+    # dois campos. Vem de `service.agendado_sums`, que reusa `_movements_sums` com o recorte de
+    # data invertido — **não existe uma segunda fórmula de soma** (`CLAUDE.md` Regra 4).
+    #
+    # ⚠️ **É o COMPLEMENTO EXATO de `saldo_derivado_cents`**, não uma parcela dele: aquele soma
+    # `posted_at <= hoje`, este soma `posted_at > hoje`. Nenhum movimento entra nos dois, nenhum
+    # fica de fora dos dois. **Nunca some os dois campos num total** sem dizer, na tela, que o
+    # resultado é "o saldo depois que tudo o que já foi agendado acontecer" — que é uma terceira
+    # afirmação, e afirmação de saldo sem rótulo próprio é a divergência D-6 outra vez.
+    #
+    # `agendado_entrada_cents` é **estruturalmente zero até a Story 8.15**: nada no e1p produz
+    # movimento de ENTRADA com data futura hoje. Ele nasce aqui mesmo assim porque o par simétrico
+    # é o contrato que a 8.15 consome — e um campo que aparece junto do irmão não obriga a UI a
+    # mudar de forma quando o valor deixar de ser zero.
+    agendado_saida_cents: int = 0
+    agendado_entrada_cents: int = 0
+    # Irmão de procedência dos DOIS números acima (Regra dos Planos §1.3c / `CLAUDE.md` Regra 3).
+    # Um só para os dois porque os dois vêm da mesma soma, do mesmo plano: dois campos idênticos
+    # seriam duas fontes para a mesma informação. Sempre `ORIGEM_BANCO`.
+    agendado_origem: str = ORIGEM_BANCO
     created_at: datetime
 
 
 class BankBalanceOut(BaseModel):
     """Resposta de `GET /bank/accounts/{id}/balance`.
 
-    `until` é a data de corte usada (inclusiva) — `None` significa "sem corte" (todo o histórico).
-    Ela é devolvida no payload porque a Story 8.5 compara saldos **na mesma data**, e um saldo sem
-    a data em que foi apurado é um número que não dá para conferir.
+    `until` é a data de corte **efetivamente usada** (inclusiva), devolvida no payload porque a
+    Story 8.5 compara saldos **na mesma data** e um saldo sem a data em que foi apurado é um número
+    que não dá para conferir.
+
+    ⚠️ **Desde a Story 8.10 este campo nunca vem `null` nesta rota.** Antes, chamar sem `?until=`
+    significava "todo o histórico" e o payload vinha com `until: null` — ou seja, o campo se
+    calava justamente na chamada mais comum. Agora o default é **hoje** e a rota devolve a data
+    que usou, sempre.
+
+    **O tipo continua `date | None` de propósito.** Não é frouxidão: é que o `None` deixou de ser
+    alcançável *por esta rota*, não do vocabulário do schema — apertar para `date` transformaria
+    uma decisão de rota num contrato de tipo, e o dia em que alguma superfície precisar dizer
+    honestamente "não houve corte" (`SEM_CORTE`) a mudança voltaria como quebra de contrato. Quem
+    garante o invariante é o teste, não o tipo: ver `test_bank_corte_de_data.py`.
     """
 
     saldo_derivado_cents: int
@@ -192,7 +225,24 @@ class BankTransactionCreate(BaseModel):
     # `fiscal_document_ref`) só são preenchidos por importação/conciliação e não entram aqui.
     counterparty_name: str = Field(default="", max_length=160)
     counterparty_document: str = Field(default="", max_length=20)
+    # *"Para que serve este movimento?"* — RÓTULO, nunca fato de dinheiro (Story 8.17 AC9).
+    #
+    # ⚠️ **Validado por TAMANHO, jamais contra a lista** (AC3): `models.OPERATION_NATURES` é
+    # vocabulário **sugerido na UI**, e o texto livre de *"Outro (descreva)"* precisa passar. Um
+    # `Literal[...]`/`Enum` aqui recusaria o fato bancário legítimo que ninguém imaginou (estorno de
+    # tarifa, crédito de convênio, cashback) e recriaria a incompletude que a onda combate. Não
+    # afrouxe o `max_length` também: a coluna é `String(24)`.
     operation_nature: str | None = Field(default=None, max_length=24)
+    # ⚠️ **NÃO É PERSISTIDO — e não deve passar a ser** (Story 8.17 AC5). É a resposta do usuário à
+    # pergunta do 409 (*"é outro pagamento mesmo"*), ou seja, uma confirmação de **intenção**; um
+    # fato sobre o movimento é outra coisa, e gravá-lo criaria uma coluna que descreve o diálogo em
+    # vez do dinheiro. `create_transaction` lê o campo e o descarta — não existe coluna equivalente
+    # em `BankTransaction`, e o `BankTransactionOut` não o devolve.
+    #
+    # Fluxo: 1º POST → 409 com as duas escolhas → o usuário escolhe *"é outro pagamento"* → o mesmo
+    # POST volta com `confirmar_avulso=true` e passa. Repetir é o mecanismo, de propósito: nada é
+    # pré-selecionado para ele, e o formulário não é perdido no caminho (AC8).
+    confirmar_avulso: bool = Field(default=False)
 
     @field_validator("description", "counterparty_name")
     @classmethod
@@ -258,13 +308,21 @@ class BankTransactionOut(BaseModel):
     implementações não divirjam depois (Dev Notes da 8.3).
 
     **Colunas da tabela que NÃO entram neste contrato agora**, e por quê: `fitid`, `dedup_hash`,
-    `balance_after_cents`, `import_batch_id` e `transfer_id` são criadas pela migration desta story
-    porque a Onda 3/4 depende delas (design §7.3), mas nesta onda **nenhum caminho de código as
-    escreve** e nenhum consumidor as lê — são NULL/derivadas por construção. Quem passar a
-    populá-las define o contrato de saída delas, com uma pergunta a mais no caso de
-    `balance_after_cents`: por carregar um saldo (o que o banco reportou após o movimento), ela
-    precisa nascer com o irmão `*_origem` da Regra dos Planos §1.3c. Expor um campo de saldo agora,
-    sempre nulo e sem procedência, seria justamente o contra-exemplo que essa regra procura.
+    `balance_after_cents` e `import_batch_id` são criadas pela migration da 8.3 porque a Onda 3/4
+    depende delas (design §7.3), mas nesta onda **nenhum caminho de código as escreve** e nenhum
+    consumidor as lê — são NULL/derivadas por construção. Quem passar a populá-las define o contrato
+    de saída delas, com uma pergunta a mais no caso de `balance_after_cents`: por carregar um saldo
+    (o que o banco reportou após o movimento), ela precisa nascer com o irmão `*_origem` da Regra
+    dos Planos §1.3c. Expor um campo de saldo agora, sempre nulo e sem procedência, seria justamente
+    o contra-exemplo que essa regra procura.
+
+    ⚠️ **[Story 8.18] `transfer_id` SAIU dessa lista e entrou no contrato** — pelo caminho que a
+    própria nota acima previa (*"quem passar a populá-las define o contrato de saída delas"*). A
+    8.18 é quem o popula, e ela tem um consumidor real: a tela de movimentos oferece *"desfazer
+    transferência"* sobre uma perna, e para isso precisa saber **qual** transferência apagar. A
+    alternativa seria a UI decompor o `origin_id` por string (`"{id}:out"`), o que espalharia o
+    formato da chave de origem para o frontend — um segundo lugar que passaria a depender dela.
+    Ele **não** carrega saldo, então não precisa de irmão `*_origem`.
     """
 
     id: str
@@ -284,8 +342,76 @@ class BankTransactionOut(BaseModel):
     # Sempre `manual` nesta onda; existe no contrato porque a UI da 8.7 precisa distinguir o que foi
     # digitado do que veio de arquivo assim que a Onda 3 existir.
     source: str
+    # ⚠️ **[Story 8.18]** Pareia as duas pernas irmãs de uma transferência. `None` em todo o resto —
+    # inclusive nas origens de perna única (`payable`, `charge`). Quem o lê é a tela de movimentos,
+    # para oferecer "desfazer transferência" sem precisar conhecer o formato de `origin_id`.
+    transfer_id: str | None = None
     status: str
     ignored_reason: str
+    created_at: datetime
+    updated_at: datetime
+
+
+# ── Transferência entre contas próprias (Story 8.18) ─────────────────────────────────────────
+
+
+class BankTransferCreate(BaseModel):
+    """*"Movi R$ X da minha conta A para a minha conta B."* Um lançamento, duas pernas.
+
+    ⚠️ **`amount_cents` é SEMPRE POSITIVO** — o sinal vive nas pernas (invariante (b) de
+    `BankTransfer`). A guarda de `<= 0` mora no **service**, e não num `Field(gt=0)` aqui, pelo
+    mesmo motivo que `kind` de conta é validado lá: a mensagem precisa explicar *por quê* (um
+    negativo aqui seria a terceira convenção de sinal do repositório), e não devolver o erro
+    genérico do Pydantic.
+
+    ⚠️ **Nenhum campo de saldo entra nesta requisição nem na resposta.** Se um dia entrar, ele
+    precisa do irmão `*_origem` (Regra dos Planos §1.3c / `CLAUDE.md` Regra 3) — a dívida G-1 já tem
+    6 campos de saldo sem irmão e não deve crescer.
+
+    `kind` é validado contra `models.TRANSFER_KINDS` no service. Ele é vocabulário do módulo `bank`
+    e **não referencia `investments`**: `investment_in`/`investment_out` dizem para onde o dinheiro
+    do dono foi, não qual produto financeiro ele comprou (isso é Onda 2b).
+    """
+
+    from_account_id: str = Field(min_length=1, max_length=36)
+    to_account_id: str = Field(min_length=1, max_length=36)
+    amount_cents: int
+    posted_at: date
+    kind: str = Field(default="own_transfer", max_length=20)
+    description: str = Field(default="")
+
+    @field_validator("kind", "from_account_id", "to_account_id")
+    @classmethod
+    def _ids(cls, v: str) -> str:
+        return v.strip()
+
+    @field_validator("description")
+    @classmethod
+    def _description(cls, v: str) -> str:
+        return v.strip()
+
+
+class BankTransferOut(BaseModel):
+    """A transferência como a API a devolve — o LANÇAMENTO, nunca as pernas.
+
+    As duas pernas são `BankTransaction` e saem pelas rotas de movimento, como qualquer outra linha
+    de extrato; devolvê-las embutidas aqui criaria uma segunda representação delas, que divergiria
+    da primeira no dia em que uma das duas ganhasse um campo.
+
+    O pareamento é `transfer_id` — quem quiser as pernas pede
+    `GET /bank/transactions?bank_account_id=...` e casa por ele.
+
+    ⚠️ **Sem nenhum campo de saldo, de propósito.** Ver a nota em `BankTransferCreate`.
+    """
+
+    id: str
+    from_account_id: str
+    to_account_id: str
+    # SEMPRE POSITIVO — o sinal está nas pernas, não aqui.
+    amount_cents: int
+    posted_at: date
+    kind: str
+    description: str
     created_at: datetime
     updated_at: datetime
 
@@ -419,6 +545,16 @@ class ConferenciaReportOut(BaseModel):
     `total_divergencia_cents` soma **apenas** as contas avaliáveis e é `None` quando nenhuma é.
     `contas_avaliadas`/`contas_sem_checkpoint` existem para que o consumidor saiba **o que o total
     cobre** sem precisar recontar a lista, e `notes` avisa em texto quando ele é parcial.
+
+    **Os quatro campos da Story 8.16 ANOTAM, nunca subtraem.** Eles medem a **pré-condição do
+    gate** — o que o e1p sabe que moveu dinheiro numa conta real e ainda não virou movimento
+    bancário no período. Nenhum deles entra em `divergencia_cents`, `tolerancia_cents`,
+    `dentro_da_tolerancia`, `total_divergencia_cents` nem `contas_fora_da_banda`: descontá-los
+    a divergência a zero por construção sempre que o sistema soubesse explicar a diferença, e a
+    métrica primária do épico morreria (Regra 5 do `CLAUDE.md`).
+
+    São do RELATÓRIO e não por conta porque a conta é justamente o que falta nas duas primeiras
+    populações — ver `reconciliation.ConferenciaReport`.
     """
 
     start: date
@@ -429,3 +565,11 @@ class ConferenciaReportOut(BaseModel):
     contas_sem_checkpoint: int
     contas_fora_da_banda: list[ContaForaDaBandaOut]
     notes: list[str]
+    # P1 + P2 — baixa de conta a pagar e recebimento fora da cobrança do e1p, sem conta informada.
+    # Fecham na **Onda 2**, e a nota correspondente em `notes` diz isso.
+    lancamentos_sem_conta_informada: int = 0
+    valor_sem_conta_informada_cents: int = 0
+    # P3 — rendimento de aplicação sem perna bancária. Contador PRÓPRIO porque fecha na **Onda 2b**,
+    # não nesta: achatá-lo dentro do par acima prometeria na tela um prazo falso.
+    rendimentos_sem_perna_bancaria: int = 0
+    valor_rendimentos_sem_perna_cents: int = 0

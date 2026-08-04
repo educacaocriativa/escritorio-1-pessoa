@@ -13,24 +13,43 @@ import { Link } from "react-router-dom";
 import Modal, { Field } from "../../components/Modal";
 import { api, apiErrorMessage } from "../../lib/api";
 import { usePrimaryAction } from "../../store/pageActions";
+// ⚠️ O cadastro/edição de conta MUDOU DE ARQUIVO na Story 8.13 (`./AccountModal`), sem mudar de
+// comportamento: o fluxo "409 acionável → cadastro embutido → retoma a baixa" das telas de baixa
+// precisa do mesmo formulário, com o aviso pró-ativo e a guarda do recuo da 8.11 intactos.
+import AccountModal from "./AccountModal";
 import {
+  acaoBaixarPayable,
+  avisoDestinoAplicacao,
   type BankAccount,
   type BankBalanceCheckpoint,
   type BankTransaction,
-  BANK_ACCOUNT_KINDS,
   centsToInput,
+  contasAtivas,
+  type DuplicataAcionavel,
   formatBRL,
   formatDateBR,
   hojeISO,
+  impedimentoDaTransferencia,
   isIgnored,
-  KIND_CHECKING,
+  kindDaTransferencia,
   kindLabel,
+  motivoDeNaoEditar,
+  naturezaParaEnvio,
+  operationNatureLabel,
+  OPERATION_NATURE_OUTRO,
+  OPERATION_NATURE_TRANSFERENCIA,
+  OPERATION_NATURES,
   origemLabel,
   parseCentsBRL,
+  podeEditarOsFatosDoMovimento,
+  ponteiroDaTransferencia,
   type ResumoSaldo,
   resumoSaldos,
+  saldoApuradoEm,
   signedAmountView,
+  SOURCE_TRANSFER,
   statusLabel,
+  TRANSFERIR_LABEL,
 } from "./contas";
 import PeriodPicker from "./PeriodPicker";
 import { type PeriodRange, resolvePeriod } from "./periodRange";
@@ -67,6 +86,9 @@ export default function ContasSaldosPage() {
   const [editando, setEditando] = useState<BankAccount | null>(null);
   const [declarando, setDeclarando] = useState<BankAccount | null>(null);
   const [lancando, setLancando] = useState<BankAccount | null>(null);
+  // Story 8.18 — a transferência é sobre um PAR de contas, então o estado é "está aberto, com esta
+  // conta pré-selecionada como origem" (ou `""` quando o gesto veio do cabeçalho, sem conta).
+  const [transferindoDe, setTransferindoDe] = useState<string | null>(null);
 
   const load = useCallback(async () => {
     setError(null);
@@ -142,14 +164,28 @@ export default function ContasSaldosPage() {
             saldo que o app do seu banco já mostra, e o e1p diz se está batendo.
           </p>
         </div>
-        <label className="flex items-center gap-2 text-sm text-neutral-600">
-          <input
-            type="checkbox"
-            checked={includeArchived}
-            onChange={(e) => setIncludeArchived(e.target.checked)}
-          />
-          Mostrar arquivadas
-        </label>
+        <div className="flex flex-wrap items-center gap-4">
+          {/* Story 8.18 — a transferência mora AQUI, sem tela nova: ela é sobre onde o dinheiro
+              está, que é a pergunta desta página. Só aparece com duas contas ativas, porque com
+              uma só não há para onde transferir e o botão seria uma promessa vazia. */}
+          {contasAtivas(accounts).length >= 2 && (
+            <button
+              type="button"
+              onClick={() => setTransferindoDe("")}
+              className="inline-flex items-center gap-1 rounded-pill border border-neutral-200 px-4 py-1.5 text-sm font-medium text-neutral-600 hover:border-primary-300 hover:text-primary-600"
+            >
+              <ArrowLeftRight size={14} /> {TRANSFERIR_LABEL}
+            </button>
+          )}
+          <label className="flex items-center gap-2 text-sm text-neutral-600">
+            <input
+              type="checkbox"
+              checked={includeArchived}
+              onChange={(e) => setIncludeArchived(e.target.checked)}
+            />
+            Mostrar arquivadas
+          </label>
+        </div>
       </div>
 
       {error && <p className="rounded-lg bg-red-50 p-2 text-sm text-danger">{error}</p>}
@@ -187,6 +223,9 @@ export default function ContasSaldosPage() {
                 onEdit={() => setEditando(a)}
                 onDeclare={() => setDeclarando(a)}
                 onLaunch={() => setLancando(a)}
+                onTransfer={
+                  contasAtivas(accounts).length >= 2 ? () => setTransferindoDe(a.id) : null
+                }
                 onArchive={() => arquivar(a)}
               />
             ))}
@@ -226,6 +265,17 @@ export default function ContasSaldosPage() {
           if (lancando) setSelectedId(lancando.id);
         }}
       />
+      <TransferirModal
+        open={transferindoDe !== null}
+        accounts={accounts}
+        origemInicialId={transferindoDe ?? ""}
+        onClose={() => setTransferindoDe(null)}
+        onSaved={(origemId) => {
+          load();
+          // Abre a conta de ORIGEM: é lá que o dono espera ver a saída que ele acabou de registrar.
+          setSelectedId(origemId);
+        }}
+      />
     </div>
   );
 }
@@ -255,8 +305,8 @@ function TotaisCard({ resumo }: { resumo: ResumoSaldo[] }) {
         ))}
       </div>
       <p className="mt-4 text-xs text-neutral-400">
-        Somas das contas ativas. A lista abaixo mostra conta por conta — o total nunca aparece
-        sozinho.
+        Somas das contas ativas, apuradas em {formatDateBR(hojeISO())}. A lista abaixo mostra conta
+        por conta — o total nunca aparece sozinho.
       </p>
     </div>
   );
@@ -270,6 +320,7 @@ function AccountCard({
   onEdit,
   onDeclare,
   onLaunch,
+  onTransfer,
   onArchive,
 }: {
   account: BankAccount;
@@ -279,6 +330,8 @@ function AccountCard({
   onEdit: () => void;
   onDeclare: () => void;
   onLaunch: () => void;
+  /** `null` = não há segunda conta ativa, então não há para onde transferir (Story 8.18). */
+  onTransfer: (() => void) | null;
   onArchive: () => void;
 }) {
   const arquivada = account.archived_at !== null;
@@ -325,6 +378,10 @@ function AccountCard({
           </p>
           {/* Procedência COLADA ao número (Regra dos Planos §1.3c) — nenhum saldo sem origem. */}
           <p className="text-xs text-neutral-400">{origemLabel(account.saldo_derivado_origem)}</p>
+          {/* Story 8.10 — a DATA em que este número foi apurado, colada nele pelo mesmo motivo que
+              a origem: um saldo sem a data em que foi apurado é um número que não dá para conferir.
+              Até a 8.10 não havia data a mostrar, porque o saldo era "todo o histórico". */}
+          <p className="text-xs text-neutral-400">{saldoApuradoEm(hojeISO())}</p>
           <p className="mt-1 text-xs text-neutral-500">
             {checkpoint
               ? `Saldo declarado em ${formatDateBR(checkpoint.reference_date)}: ${formatBRL(checkpoint.balance_cents)}`
@@ -350,6 +407,15 @@ function AccountCard({
             >
               <ArrowLeftRight size={14} /> Lançar movimento
             </button>
+            {onTransfer && (
+              <button
+                type="button"
+                onClick={onTransfer}
+                className="inline-flex items-center gap-1 text-neutral-600 hover:text-primary-600"
+              >
+                <ArrowLeftRight size={14} /> {TRANSFERIR_LABEL}
+              </button>
+            )}
           </>
         )}
         <Link
@@ -477,6 +543,35 @@ function AccountDetail({
     }
   }
 
+  /**
+   * Story 8.18 (AC8) — desfazer a transferência a partir de UMA das pernas.
+   *
+   * ⚠️ **O gesto é sobre o LANÇAMENTO, e a frase diz isso.** As duas pernas somem juntas; oferecer
+   * "apagar este movimento" seria prometer algo que a Regra da Origem (c) não permite (o movimento é
+   * espelho do lançamento, não uma linha independente). É por isso que a confirmação nomeia as duas
+   * contas em vez de dizer "remover linha".
+   */
+  async function desfazerTransferencia(tx: BankTransaction) {
+    if (!tx.transfer_id) return;
+    if (
+      !confirm(
+        "Desfazer esta transferência? As DUAS pernas — a saída na conta de origem e a entrada na " +
+          "de destino — são apagadas juntas, e os dois saldos voltam ao que eram. A operação fica " +
+          "registrada na trilha de auditoria.",
+      )
+    ) {
+      return;
+    }
+    setError(null);
+    try {
+      await api.delete(`/bank/transfers/${tx.transfer_id}`);
+      load();
+      onChanged();
+    } catch (err) {
+      setError(apiErrorMessage(err));
+    }
+  }
+
   async function removerDeclaracao(cp: BankBalanceCheckpoint) {
     if (
       !confirm(
@@ -546,6 +641,7 @@ function AccountDetail({
                   onEdit={() => setEditando(tx)}
                   onIgnore={() => setIgnorando(tx)}
                   onUnignore={() => desfazerIgnorar(tx)}
+                  onDesfazerTransferencia={() => desfazerTransferencia(tx)}
                 />
               ))}
             </tbody>
@@ -634,14 +730,21 @@ function TransactionRow({
   onEdit,
   onIgnore,
   onUnignore,
+  onDesfazerTransferencia,
 }: {
   tx: BankTransaction;
   onEdit: () => void;
   onIgnore: () => void;
   onUnignore: () => void;
+  onDesfazerTransferencia: () => void;
 }) {
   const ignorado = isIgnored(tx);
   const valor = signedAmountView(tx.amount_cents);
+  // Story 8.18 / AC9 — a tela **lê o `source`**; ela não conhece a regra. O backend recusa com 422
+  // de todo jeito (`service._recusa_se_origem_do_sistema`); o que a UI faz é não oferecer um botão
+  // que ela sabe que vai falhar — oferecer e falhar treina o dono a ignorar mensagens de erro.
+  const editavel = podeEditarOsFatosDoMovimento(tx);
+  const motivo = motivoDeNaoEditar(tx);
   return (
     <tr className={`border-b border-neutral-50 last:border-0 ${ignorado ? "bg-neutral-50" : ""}`}>
       <td className="whitespace-nowrap py-2.5 pr-3 tabular-nums text-neutral-600">
@@ -652,6 +755,15 @@ function TransactionRow({
           título de modal nem query string. */}
       <td className={`py-2.5 pr-3 ${ignorado ? "text-neutral-400 line-through" : "text-neutral-800"}`}>
         {tx.description || "—"}
+        {/* A finalidade (Story 8.17), quando houver. Movimento legado nasceu com `NULL` e continua
+            legítimo: aqui ele simplesmente **não mostra a linha** — nada de "não informado", que
+            transformaria um dado ausente num defeito aparente e pediria preenchimento retroativo
+            (AC7: nada automático sobre o `source='manual'` que já existe). */}
+        {tx.operation_nature && (
+          <span className="block text-[11px] text-neutral-400">
+            {operationNatureLabel(tx.operation_nature)}
+          </span>
+        )}
       </td>
       <td
         className={`whitespace-nowrap py-2.5 pr-3 text-right tabular-nums font-medium ${
@@ -667,149 +779,56 @@ function TransactionRow({
           <span className="block text-[11px] text-neutral-400">{tx.ignored_reason}</span>
         )}
       </td>
-      <td className="whitespace-nowrap py-2.5 text-xs font-medium">
-        <span className="flex gap-3">
-          <button type="button" onClick={onEdit} className="text-neutral-500 hover:text-primary-600">
-            Editar
-          </button>
-          {ignorado ? (
+      <td className="py-2.5 text-xs font-medium">
+        {editavel ? (
+          <span className="flex gap-3">
             <button
               type="button"
-              onClick={onUnignore}
+              onClick={onEdit}
               className="text-neutral-500 hover:text-primary-600"
             >
-              Desfazer ignorar
+              Editar
             </button>
-          ) : (
-            <button type="button" onClick={onIgnore} className="text-neutral-500 hover:text-danger">
-              Ignorar
-            </button>
-          )}
-        </span>
+            {ignorado ? (
+              <button
+                type="button"
+                onClick={onUnignore}
+                className="text-neutral-500 hover:text-primary-600"
+              >
+                Desfazer ignorar
+              </button>
+            ) : (
+              <button
+                type="button"
+                onClick={onIgnore}
+                className="text-neutral-500 hover:text-danger"
+              >
+                Ignorar
+              </button>
+            )}
+          </span>
+        ) : (
+          <span className="flex flex-col gap-1">
+            {/* A frase existe porque uma linha SEM botão e SEM explicação é lida como bug da tela.
+                Ela diz o porquê e diz o que fazer — a diferença entre restrição e parede. */}
+            <span className="max-w-xs font-normal text-[11px] text-neutral-400">{motivo}</span>
+            {tx.source === SOURCE_TRANSFER && tx.transfer_id && (
+              <button
+                type="button"
+                onClick={onDesfazerTransferencia}
+                className="self-start text-neutral-500 hover:text-danger"
+              >
+                Desfazer transferência
+              </button>
+            )}
+          </span>
+        )}
       </td>
     </tr>
   );
 }
 
 // ── Modais ───────────────────────────────────────────────────────────────────────────────────
-
-function AccountModal({
-  open,
-  editing,
-  onClose,
-  onSaved,
-}: {
-  open: boolean;
-  editing: BankAccount | null;
-  onClose: () => void;
-  onSaved: () => void;
-}) {
-  const [name, setName] = useState("");
-  const [kind, setKind] = useState(KIND_CHECKING);
-  const [institution, setInstitution] = useState("");
-  const [branch, setBranch] = useState("");
-  const [number, setNumber] = useState("");
-  const [opening, setOpening] = useState("0,00");
-  const [openingDate, setOpeningDate] = useState(hojeISO);
-  const [isPrimary, setIsPrimary] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  const [saving, setSaving] = useState(false);
-
-  useEffect(() => {
-    if (!open) return;
-    setName(editing?.name ?? "");
-    setKind(editing?.kind ?? KIND_CHECKING);
-    setInstitution(editing?.institution ?? "");
-    setBranch(editing?.branch ?? "");
-    setNumber(editing?.number ?? "");
-    setOpening(centsToInput(editing?.opening_balance_cents ?? 0));
-    setOpeningDate(editing?.opening_date ?? hojeISO());
-    setIsPrimary(editing?.is_primary ?? false);
-    setError(null);
-  }, [open, editing]);
-
-  async function save() {
-    setError(null);
-    setSaving(true);
-    try {
-      const body = {
-        name,
-        kind,
-        institution,
-        branch,
-        number,
-        opening_balance_cents: parseCentsBRL(opening),
-        opening_date: openingDate,
-      };
-      if (editing) {
-        await api.patch(`/bank/accounts/${editing.id}`, { ...body, is_primary: isPrimary });
-      } else {
-        const res = await api.post<BankAccount>("/bank/accounts", body);
-        // `is_primary` não existe no corpo de criação (8.2): quando pedido, é um PATCH logo depois.
-        if (isPrimary) await api.patch(`/bank/accounts/${res.data.id}`, { is_primary: true });
-      }
-      onSaved();
-      onClose();
-    } catch (err) {
-      setError(apiErrorMessage(err));
-    } finally {
-      setSaving(false);
-    }
-  }
-
-  return (
-    <Modal title={editing ? "Editar conta" : "Nova conta"} open={open} onClose={onClose}>
-      <div className="space-y-3">
-        <Field label="Nome da conta" value={name} onChange={setName} placeholder="Ex.: Itaú PJ" />
-        <label className="block">
-          <span className="mb-1 block text-xs font-medium text-neutral-600">Tipo</span>
-          <select
-            value={kind}
-            onChange={(e) => setKind(e.target.value)}
-            aria-label="Tipo de conta"
-            className="w-full rounded-lg border border-neutral-200 px-3 py-2 text-sm outline-none focus:border-primary-400"
-          >
-            {BANK_ACCOUNT_KINDS.map(([v, l]) => (
-              <option key={v} value={v}>
-                {l}
-              </option>
-            ))}
-          </select>
-        </label>
-        <Field label="Instituição" value={institution} onChange={setInstitution} placeholder="Itaú" />
-        <div className="grid grid-cols-2 gap-3">
-          <Field label="Agência" value={branch} onChange={setBranch} />
-          <Field label="Conta" value={number} onChange={setNumber} />
-        </div>
-        <div className="grid grid-cols-2 gap-3">
-          <Field label="Saldo de abertura (R$)" value={opening} onChange={setOpening} />
-          <Field label="Data de abertura" value={openingDate} onChange={setOpeningDate} type="date" />
-        </div>
-        <p className="rounded-lg bg-primary-50 p-2 text-xs text-primary-700">
-          Use <strong>o saldo que o app do seu banco mostra hoje</strong> e a data de hoje. É
-          confirmação, não reconstrução de histórico — você não precisa lançar o passado.
-        </p>
-        <label className="flex items-center gap-2 text-sm text-neutral-600">
-          <input
-            type="checkbox"
-            checked={isPrimary}
-            onChange={(e) => setIsPrimary(e.target.checked)}
-          />
-          Conta principal
-        </label>
-        {error && <p className="rounded-lg bg-red-50 p-2 text-sm text-danger">{error}</p>}
-        <button
-          type="button"
-          onClick={save}
-          disabled={saving || !name.trim()}
-          className="w-full rounded-pill bg-accent-400 py-2.5 font-semibold text-white transition hover:bg-accent-500 disabled:opacity-60"
-        >
-          {saving ? "Salvando…" : editing ? "Salvar" : "Cadastrar conta"}
-        </button>
-      </div>
-    </Modal>
-  );
-}
 
 function DeclararSaldoModal({
   account,
@@ -893,7 +912,14 @@ function LancarMovimentoModal({
   const [entrada, setEntrada] = useState(false);
   const [value, setValue] = useState("0,00");
   const [description, setDescription] = useState("");
+  // Story 8.17 — *"para que serve este movimento?"*. Obrigatório, com a válvula de texto livre.
+  const [natureza, setNatureza] = useState("");
+  const [naturezaLivre, setNaturezaLivre] = useState("");
   const [error, setError] = useState<string | null>(null);
+  // O 409 acionável da contagem dupla. Enquanto ele existe, o formulário CONTINUA na tela com tudo
+  // o que foi digitado (AC8) — um 409 que apaga o formulário treina o usuário a marcar "é outro
+  // pagamento" sem ler.
+  const [duplicata, setDuplicata] = useState<DuplicataAcionavel | null>(null);
   const [saving, setSaving] = useState(false);
 
   useEffect(() => {
@@ -903,7 +929,11 @@ function LancarMovimentoModal({
     setEntrada(false);
     setValue("0,00");
     setDescription("");
+    // Nada pré-selecionado: a pergunta é "para que serve", e responder por ele seria inventar.
+    setNatureza("");
+    setNaturezaLivre("");
     setError(null);
+    setDuplicata(null);
   }, [account]);
 
   const cents = parseCentsBRL(value);
@@ -911,8 +941,18 @@ function LancarMovimentoModal({
   // o usuário lê antes de clicar seja literalmente o que vai para a API.
   const assinado = entrada ? Math.abs(cents) : -Math.abs(cents);
   const previa = signedAmountView(assinado);
+  const operationNature = naturezaParaEnvio(natureza, naturezaLivre);
+  // ⚠️ **Obrigatório na TELA, aceito vazio pela API** — e a assimetria é deliberada. O campo é
+  // nullable no banco e movimento legado nasceu com `NULL`; forçar preenchimento no backend
+  // quebraria a edição de tudo o que já existe (AC7). A curadoria é de UI.
+  const naturezaPendente = operationNature === null;
+  // Ponteiro para a transferência de verdade. **`true` a partir da Story 8.18**: ela existe agora
+  // (`POST /bank/transfers` + o modal desta tela), e a 8.17 deixou escrito que quem a implementasse
+  // trocaria o argumento aqui, no único ponto de chamada.
+  const ponteiro =
+    natureza === OPERATION_NATURE_TRANSFERENCIA ? ponteiroDaTransferencia(true) : null;
 
-  async function save() {
+  async function save(confirmarAvulso = false) {
     if (!account) return;
     setError(null);
     setSaving(true);
@@ -922,11 +962,17 @@ function LancarMovimentoModal({
         // O SINAL é o dado (8.3): entrada positiva, saída negativa. O backend recusa 0.
         amount_cents: assinado,
         description,
+        operation_nature: operationNature,
+        // Só viaja como `true` quando o usuário respondeu "é outro pagamento" ao 409 (AC5).
+        confirmar_avulso: confirmarAvulso,
       });
       onSaved();
       onClose();
     } catch (err) {
-      setError(apiErrorMessage(err));
+      // Reconhecido pelo `acao`, nunca por substring da mensagem (contrato da 8.12, reusado aqui).
+      const acionavel = acaoBaixarPayable(err);
+      if (acionavel) setDuplicata(acionavel);
+      else setError(apiErrorMessage(err));
     } finally {
       setSaving(false);
     }
@@ -952,6 +998,37 @@ function LancarMovimentoModal({
             <option value="entrada">Entrada (dinheiro entrou na conta)</option>
           </select>
         </label>
+        {/*
+          A curadoria (AC1): o formulário deixa de ser "novo movimento" e pergunta a FINALIDADE.
+          A lista é curta e sugerida; "Outro (descreva)" é a válvula obrigatória — a API aceita
+          texto livre e recusar um fato bancário legítimo é o defeito que esta story combate.
+        */}
+        <label className="block">
+          <span className="mb-1 block text-xs font-medium text-neutral-600">Para que serve</span>
+          <select
+            value={natureza}
+            onChange={(e) => setNatureza(e.target.value)}
+            aria-label="Para que serve este movimento"
+            className="w-full rounded-lg border border-neutral-200 px-3 py-2 text-sm outline-none focus:border-primary-400"
+          >
+            <option value="">Escolha…</option>
+            {OPERATION_NATURES.map(([valor, rotulo]) => (
+              <option key={valor} value={valor}>
+                {rotulo}
+              </option>
+            ))}
+            <option value={OPERATION_NATURE_OUTRO}>Outro (descreva)</option>
+          </select>
+        </label>
+        {ponteiro && <p className="rounded-lg bg-neutral-50 p-2 text-xs text-neutral-600">{ponteiro}</p>}
+        {natureza === OPERATION_NATURE_OUTRO && (
+          <Field
+            label="Descreva a finalidade"
+            value={naturezaLivre}
+            onChange={setNaturezaLivre}
+            placeholder="Ex.: estorno de tarifa"
+          />
+        )}
         <Field label="Valor (R$)" value={value} onChange={setValue} />
         <Field
           label="Descrição"
@@ -968,13 +1045,197 @@ function LancarMovimentoModal({
           em {formatDateBR(postedAt)}.
         </p>
         {error && <p className="rounded-lg bg-red-50 p-2 text-sm text-danger">{error}</p>}
+        {/*
+          O 409 acionável: a frase vem da API (uma redação, um lugar) e as DUAS ações ficam no
+          mesmo bloco visível, logo acima do botão — nenhuma pré-selecionada, e o formulário
+          preservado atrás (AC8, lições dos PRs #56 e #58 em ~360px).
+        */}
+        {duplicata && (
+          <div className="space-y-2 rounded-lg bg-amber-50 p-3">
+            <p className="text-sm text-neutral-800">{duplicata.mensagem}</p>
+            <div className="flex flex-col gap-2">
+              <Link
+                to="/pagar"
+                className="rounded-pill bg-primary-500 px-3 py-2 text-center text-sm font-semibold text-white transition hover:bg-primary-600"
+              >
+                Dar baixa nessa conta
+              </Link>
+              <button
+                type="button"
+                onClick={() => save(true)}
+                disabled={saving}
+                className="rounded-pill border border-neutral-300 px-3 py-2 text-sm font-semibold text-neutral-700 transition hover:bg-neutral-50 disabled:opacity-60"
+              >
+                É outro pagamento
+              </button>
+            </div>
+          </div>
+        )}
         <button
           type="button"
-          onClick={save}
-          disabled={saving || cents === 0}
+          onClick={() => save()}
+          disabled={saving || cents === 0 || naturezaPendente}
           className="w-full rounded-pill bg-accent-400 py-2.5 font-semibold text-white transition hover:bg-accent-500 disabled:opacity-60"
         >
           {saving ? "Salvando…" : "Lançar movimento"}
+        </button>
+      </div>
+    </Modal>
+  );
+}
+
+/**
+ * **Transferir entre contas** (Story 8.18, AC10) — dentro de Contas & Saldos, sem tela nova.
+ *
+ * Três decisões de tela que não são estéticas:
+ *
+ * 1. **Não existe `<select>` de "tipo de transferência".** O `kind` é **derivado** dos tipos das
+ *    duas contas (`kindDaTransferencia`): um terceiro campo dizendo o que os dois primeiros já dizem
+ *    poderia discordar deles, e não haveria regra escrita em lugar nenhum sobre quem vence.
+ * 2. **O aviso da aplicação vem ANTES de confirmar** (`avisoDestinoAplicacao`), e é obrigatório —
+ *    transferir para a aplicação derruba o "Disponível como caixa" e o saldo de partida da Projeção.
+ *    É correto e é a primeira vez que uma ação do dono encurta o runway sem nada ter sido pago.
+ * 3. **O resumo, o aviso e o botão ficam no MESMO bloco visível** (lições dos PRs #56 e #58 em
+ *    ~360px): um checkbox/aviso que só aparece depois de rolar é um aviso que não existe.
+ */
+function TransferirModal({
+  open,
+  accounts,
+  origemInicialId,
+  onClose,
+  onSaved,
+}: {
+  open: boolean;
+  accounts: BankAccount[];
+  origemInicialId: string;
+  onClose: () => void;
+  onSaved: (origemId: string) => void;
+}) {
+  const [fromId, setFromId] = useState("");
+  const [toId, setToId] = useState("");
+  const [value, setValue] = useState("0,00");
+  const [postedAt, setPostedAt] = useState(hojeISO);
+  const [description, setDescription] = useState("");
+  const [error, setError] = useState<string | null>(null);
+  const [saving, setSaving] = useState(false);
+
+  // Só contas ATIVAS: a arquivada não recebe lançamento novo (o backend recusa com 422), e
+  // oferecê-la no seletor seria montar uma parede um clique adiante.
+  const elegiveis = useMemo(() => contasAtivas(accounts), [accounts]);
+
+  useEffect(() => {
+    if (!open) return;
+    const origem = origemInicialId || elegiveis[0]?.id || "";
+    setFromId(origem);
+    // O destino nasce na primeira conta que NÃO é a origem — nunca igual a ela, que é 422.
+    setToId(elegiveis.find((a) => a.id !== origem)?.id ?? "");
+    setValue("0,00");
+    setPostedAt(hojeISO());
+    setDescription("");
+    setError(null);
+  }, [open, origemInicialId, elegiveis]);
+
+  const origem = elegiveis.find((a) => a.id === fromId) ?? null;
+  const destino = elegiveis.find((a) => a.id === toId) ?? null;
+  const cents = parseCentsBRL(value);
+  const impedimento = impedimentoDaTransferencia(origem, destino, cents, postedAt);
+  const aviso = avisoDestinoAplicacao(destino);
+
+  async function save() {
+    if (!origem || !destino) return;
+    setError(null);
+    setSaving(true);
+    try {
+      await api.post("/bank/transfers", {
+        from_account_id: origem.id,
+        to_account_id: destino.id,
+        // SEMPRE POSITIVO: o sinal vive nas pernas, e é o backend quem o aplica.
+        amount_cents: cents,
+        posted_at: postedAt,
+        kind: kindDaTransferencia(origem.kind, destino.kind),
+        description,
+      });
+      onSaved(origem.id);
+      onClose();
+    } catch (err) {
+      setError(apiErrorMessage(err));
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  return (
+    <Modal title={TRANSFERIR_LABEL} open={open} onClose={onClose}>
+      <div className="space-y-3">
+        <p className="text-sm text-neutral-600">
+          Dinheiro que foi de uma conta sua para outra. <strong>Não é receita nem despesa</strong> —
+          a sua DRE não muda; o que muda são os saldos das duas contas.
+        </p>
+        <label className="block">
+          <span className="mb-1 block text-xs font-medium text-neutral-600">Sai de</span>
+          <select
+            value={fromId}
+            onChange={(e) => setFromId(e.target.value)}
+            aria-label="Conta de origem"
+            className="w-full rounded-lg border border-neutral-200 px-3 py-2 text-sm outline-none focus:border-primary-400"
+          >
+            {elegiveis.map((a) => (
+              <option key={a.id} value={a.id}>
+                {a.name} ({kindLabel(a.kind)}) — {formatBRL(a.saldo_derivado_cents)}
+              </option>
+            ))}
+          </select>
+        </label>
+        <label className="block">
+          <span className="mb-1 block text-xs font-medium text-neutral-600">Entra em</span>
+          <select
+            value={toId}
+            onChange={(e) => setToId(e.target.value)}
+            aria-label="Conta de destino"
+            className="w-full rounded-lg border border-neutral-200 px-3 py-2 text-sm outline-none focus:border-primary-400"
+          >
+            {elegiveis.map((a) => (
+              <option key={a.id} value={a.id}>
+                {a.name} ({kindLabel(a.kind)}) — {formatBRL(a.saldo_derivado_cents)}
+              </option>
+            ))}
+          </select>
+        </label>
+        <Field label="Valor (R$)" value={value} onChange={setValue} />
+        <Field label="Data" value={postedAt} onChange={setPostedAt} type="date" />
+        <Field
+          label="Descrição (opcional)"
+          value={description}
+          onChange={setDescription}
+          placeholder="Ex.: reserva de emergência"
+        />
+        {/* ── O bloco fixo: resumo + aviso + impedimento + botão, fisicamente inseparáveis ── */}
+        <p className="rounded-lg bg-neutral-50 p-2 text-xs text-neutral-600">
+          {origem && destino ? (
+            <>
+              Sai <strong>{formatBRL(cents)}</strong> de <strong>{origem.name}</strong> e entra em{" "}
+              <strong>{destino.name}</strong> em {formatDateBR(postedAt)}. Duas linhas nascem
+              juntas, uma em cada extrato.
+            </>
+          ) : (
+            "Escolha as duas contas."
+          )}
+        </p>
+        {aviso && <p className="rounded-lg bg-amber-50 p-2 text-xs text-neutral-800">{aviso}</p>}
+        {impedimento && (
+          <p className="rounded-lg bg-neutral-50 p-2 text-xs text-neutral-500">{impedimento}</p>
+        )}
+        {error && <p className="rounded-lg bg-red-50 p-2 text-sm text-danger">{error}</p>}
+        <button
+          type="button"
+          onClick={save}
+          disabled={saving || impedimento !== null}
+          className="w-full rounded-pill bg-accent-400 py-2.5 font-semibold text-white transition hover:bg-accent-500 disabled:opacity-60"
+        >
+          {/* Rótulo PRÓPRIO, diferente do da ação que abre o modal (`TRANSFERIR_LABEL`): um botão
+              de confirmar com o mesmo nome do gatilho é ambíguo para leitor de tela e para teste —
+              "cliquei em Transferir entre contas" passaria a ter duas respostas possíveis. */}
+          {saving ? "Registrando…" : "Registrar transferência"}
         </button>
       </div>
     </Modal>

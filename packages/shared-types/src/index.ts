@@ -128,8 +128,17 @@ export interface AuditEntry {
 // ── Envelope de erro padrão da API ─────────────────────
 // `detail` é string nos erros de negócio (HTTPException), mas o FastAPI devolve uma LISTA de
 // objetos {loc, msg, type} em erros de validação Pydantic (422) — ambos os formatos são reais.
+// O TERCEIRO formato é o erro ACIONÁVEL (Story 8.12): um objeto `{acao, mensagem}`, em que `acao`
+// é contrato (a tela reconhece a situação pela ação, nunca por substring da mensagem).
+export interface ApiActionableError {
+  acao: string;
+  mensagem: string;
+}
 export interface ApiError {
-  detail: string | { loc: (string | number)[]; msg: string; type: string }[];
+  detail:
+    | string
+    | { loc: (string | number)[]; msg: string; type: string }[]
+    | ApiActionableError;
   code?: string;
 }
 
@@ -319,7 +328,11 @@ export interface SplitRates {
 }
 
 // ── Contas a Receber ───────────────────────────────────
-export type ChargeStatus = "open" | "paid" | "canceled";
+// ⚠️ **[Story 8.15] `scheduled` — o Pix que o cliente agendou e ainda não caiu.**
+// Nasce **só** pelo caminho fora do trilho (`POST /charges/{id}/settle-externally` com
+// `received_on` futuro); o estado é **derivado da data** no backend, nunca escolhido pelo cliente.
+// O caminho do gateway (webhook) continua sem estado agendado — a assimetria é a informação.
+export type ChargeStatus = "open" | "scheduled" | "paid" | "canceled";
 
 export interface Charge {
   id: UUID;
@@ -343,7 +356,18 @@ export interface Charge {
   recurrence: Recurrence;
   recurrence_group: string | null;
   payment_code: string;
+  // ── A INVARIANTE DO TRILHO, pelos DOIS ponteiros (Story 8.15) ─────────────────────────────
+  // Numa cobrança liquidada, **exatamente um** deles é não-nulo:
+  //   `transaction_id`  → **trilho**: caiu na Carteira da e1p, com split 40/30/20;
+  //   `bank_account_id` → **fora do trilho**: caiu direto na conta bancária do dono, sem split.
+  // ⚠️ **Não existe campo de rota.** Ela é DERIVADA (`features/cobrancas/rota.ts`); um rótulo
+  // persistido pode divergir dos ponteiros e vira a terceira fonte de verdade.
   transaction_id: UUID | null;
+  bank_account_id: UUID | null;
+  bank_transaction_id: UUID | null;
+  // Regime de CAIXA (`paid_at`) × regime de COMPETÊNCIA (`competence_date`) — nunca se invertem.
+  competence_date: string | null;
+  paid_at: string | null;
   created_at: string;
 }
 
@@ -353,10 +377,17 @@ export interface ChargesSummary {
   paid_cents: number;
   open_count: number;
   overdue_count: number;
+  // [Story 8.15] Recebido fora do trilho com data FUTURA — fora de `open_cents` e de `paid_cents`.
+  scheduled_cents: number;
 }
 
 // ── Contas a Pagar ─────────────────────────────────────
-export type PayableStatus = "open" | "paid" | "canceled";
+// ⚠️ **[Story 8.14] `scheduled` — débito AGENDADO no app do banco, com data futura.**
+// O estado é **derivado da data** no backend (`paid_on > hoje ⇒ scheduled`), nunca escolhido pelo
+// cliente: nenhum payload de entrada tem campo `status`. Uma agendada não é "a pagar" (já foi
+// resolvida) nem "paga" (o dinheiro não saiu) — e é justamente por não caber em nenhum dos dois
+// que ela precisou de valor próprio. Ver `apps/api/app/modules/payables/models.py`.
+export type PayableStatus = "open" | "scheduled" | "paid" | "canceled";
 export type Recurrence = "none" | "weekly" | "monthly" | "yearly";
 
 export interface Payable {
@@ -390,6 +421,10 @@ export interface PayablesSummary {
   week_cents: number;
   month_cents: number;
   paid_month_cents: number;
+  // Story 8.14 — Σ das contas agendadas. **Fora** de `open_cents` e de `paid_month_cents`; os
+  // cinco campos acima não mudaram de definição (`month_cents` continua contando a agendada por
+  // vencimento, de propósito). Opcional no TS para que o front não quebre contra um backend antigo.
+  scheduled_cents?: number;
 }
 
 // Story 5.9: Fila de Pagamentos — visão nova sobre Payable (sem tabela nova). Baldes calculados
@@ -403,6 +438,9 @@ export interface PaymentQueueSummary {
   proximos_7_dias_cents: number;
   proximos_30_dias_count: number;
   proximos_30_dias_cents: number;
+  // Story 8.14 — o quinto balde. NÃO é balde de vencimento: é o que já tem dia marcado para sair.
+  agendadas_count?: number;
+  agendadas_cents?: number;
 }
 
 export interface PaymentQueue {
@@ -410,6 +448,9 @@ export interface PaymentQueue {
   hoje: Payable[];
   proximos_7_dias: Payable[];
   proximos_30_dias: Payable[];
+  // Story 8.14 — ordenadas pela DATA DO DÉBITO (`paid_at`), não por `due_date`, e sem corte de 30
+  // dias: um compromisso assumido para daqui a 60 dias continua sendo um compromisso.
+  agendadas?: Payable[];
   summary: PaymentQueueSummary;
 }
 

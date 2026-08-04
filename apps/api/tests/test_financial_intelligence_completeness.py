@@ -169,7 +169,7 @@ def test_motor_nao_recalcula_a_banda_usa_a_tolerancia_recebida() -> None:
 def test_tres_contas_nenhuma_conferida_geram_tres_sinais() -> None:
     """3 contas nunca conferidas → **3** sinais, não 6. É a razão de existir do Ajuste 2.
 
-    Cada conta é simultaneamente "sem saldo declarado na janela" e "nunca confirmada"; a regra
+    Cada conta é simultaneamente "sem comparação avaliável no período" e "nunca confirmada"; a regra
     pré-fusão emitiria um 🟡 para cada um dos dois fatos, em cada conta."""
     contas = [
         _conta("Itaú PJ", divergencia=None, tolerancia=0, dias=None),
@@ -188,7 +188,11 @@ def test_fusao_um_unico_amarelo_diz_os_dois_motivos() -> None:
     """Conta sem saldo na janela **e** nunca confirmada → UM 🟡 que diz os dois casos."""
     (sinal,) = _sinais(_conta("Itaú PJ", divergencia=None, tolerancia=0, dias=None))
     assert sinal.level == AMARELO
-    assert "sem saldo declarado na janela" in sinal.explanation
+    # Story 8.20 — o motivo diz "sem comparação avaliável", e não "sem saldo declarado": são DOIS
+    # os motivos para `divergencia_cents is None` (nenhum saldo no período **ou** saldo declarado na
+    # data de abertura, comparação tautológica) e o motor é PURO — recebe só o número, não sabe qual
+    # dos dois é. A frase nova é verdadeira nos dois; a precisão fica na nota por conta.
+    assert "sem comparação avaliável no período" in sinal.explanation
     assert "nunca confirmado" in sinal.explanation
 
 
