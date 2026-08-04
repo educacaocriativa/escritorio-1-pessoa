@@ -71,6 +71,7 @@ function ConversationThread({
   const [approvedTemplates, setApprovedTemplates] = useState<WhatsappTemplate[]>([]);
   const [text, setText] = useState("");
   const [error, setError] = useState<string | null>(null);
+  const [imageUrls, setImageUrls] = useState<Record<string, string>>({});
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   const load = useCallback(async () => {
@@ -94,6 +95,37 @@ function ConversationThread({
     const id = setInterval(load, POLL_MS);
     return () => clearInterval(id);
   }, [load]);
+
+  useEffect(() => {
+    const missing = timeline.filter(
+      (e) => e.kind === "image" && e.media_attachment_id && !imageUrls[e.media_attachment_id],
+    );
+    if (missing.length === 0) return;
+    let cancelled = false;
+    Promise.all(
+      missing.map(async (e) => {
+        const { data } = await api.get(`/attachments/${e.media_attachment_id}/download`, {
+          responseType: "blob",
+        });
+        return [e.media_attachment_id as string, URL.createObjectURL(data as Blob)] as const;
+      }),
+    ).then((pairs) => {
+      if (cancelled) return;
+      setImageUrls((prev) => ({ ...prev, ...Object.fromEntries(pairs) }));
+    });
+    return () => {
+      cancelled = true;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [timeline]);
+
+  useEffect(() => {
+    // Revoga os object URLs ao desmontar (troca de conversa) — evita vazar memória.
+    return () => {
+      Object.values(imageUrls).forEach((url) => URL.revokeObjectURL(url));
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [clientId]);
 
   async function sendText() {
     if (!text.trim()) return;
@@ -147,7 +179,21 @@ function ConversationThread({
             {entry.source === "automated" && (
               <p className="mb-0.5 text-xs font-semibold">🤖 {entry.purpose_label}</p>
             )}
-            {entry.media_attachment_id && (
+            {entry.kind === "image" && entry.media_attachment_id && (
+              imageUrls[entry.media_attachment_id] ? (
+                <img
+                  src={imageUrls[entry.media_attachment_id]}
+                  onClick={() => openAttachment(entry.media_attachment_id!)}
+                  alt={entry.text_body || "Imagem"}
+                  className="mb-1 max-h-72 w-full cursor-pointer rounded-lg object-cover"
+                />
+              ) : (
+                <div className="mb-1 flex h-40 w-full items-center justify-center rounded-lg bg-black/10 text-xs">
+                  Carregando imagem...
+                </div>
+              )
+            )}
+            {entry.kind !== "image" && entry.media_attachment_id && (
               <button
                 onClick={() => openAttachment(entry.media_attachment_id!)}
                 className={`mb-1 flex items-center gap-1 text-xs font-semibold underline ${
@@ -155,7 +201,7 @@ function ConversationThread({
                 }`}
               >
                 <Paperclip size={12} />
-                {entry.kind === "image" ? "Ver imagem" : "Baixar anexo"}
+                Baixar anexo
               </button>
             )}
             {(entry.text_body || !entry.media_attachment_id) && (
