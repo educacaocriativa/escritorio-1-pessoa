@@ -230,6 +230,78 @@ def test_bank_nao_importa_payables_tambem_por_texto_cru():
     )
 
 
+# ── Story 8.18 — a asserção NOVA: `bank` não importa `investments` ────────────────────────────
+
+_INVESTMENTS_PROIBIDO = "app.modules.investments"
+
+
+def test_bank_transfers_nao_importa_investments():
+    """`app.modules.bank` NUNCA importa `app.modules.investments` (Story 8.18 AC5, IV4).
+
+    **O que esta asserção protege, e por que ela nasce agora.** A Story 8.18 cria `bank_transfers`
+    com `kind ∈ {own_transfer, investment_in, investment_out}` — um vocabulário que *soa* como uma
+    ponte para o módulo de investimentos e **não é**. `investment_in`/`investment_out` dizem para
+    onde o dinheiro do dono foi (uma `bank_account` com `kind='investment'`), não qual produto
+    financeiro ele comprou. A faceta de produto — `investment_accounts.bank_account_id`,
+    `principal_cents` derivado, `register_yield` — é **Onda 2b**, e é lá que mora **o único backfill
+    sobre dado existente de todo o épico**, exposto à armadilha do `FORCE RLS` (a lição da 0046, que
+    o SQLite dos testes não pega).
+
+    O corte entre as duas ondas é o mesmo que o design-mãe §3.2 já fez no modelo: **a transferência
+    é o dinheiro; a aplicação é o produto financeiro.** Acoplar os dois aqui adiaria o urgente (o
+    fluxo de pagamento, 45 contas com saldo derivado R$ 0,00) pelo arriscado.
+
+    ⚠️ **É o gate acima que impede a antecipação, não a boa intenção de quem lê a story.** O atalho
+    provável é concreto e tentador: *"já que a transferência sabe que o destino é uma aplicação, ela
+    podia atualizar o `principal_cents` da `InvestmentAccount` correspondente"*. Isso derivaria um
+    campo hoje digitado (o AC1 da Story 5.6, que **não** é superado por esta story) a partir de um
+    caminho sem backfill — e as contas antigas ficariam com um principal que ninguém recalculou.
+
+    **Sem allowlist**, pelo mesmo motivo de `test_wallet_nao_importa_bank`: a ligação foi desenhada
+    para acontecer na 2b, do lado de `investments` (que **pode** importar `bank`). Se uma story
+    futura "precisar" de uma exceção aqui, o que ela precisa de verdade é inverter a chamada.
+
+    **Mutante que este teste mata** (demonstrado na implementação da 8.18): um
+    `from app.modules.investments.models import InvestmentAccount` dentro de
+    `app/modules/bank/transfers.py` — inclusive na forma evasiva `from app.modules import
+    investments`, que o `_imported_modules` pega pelo caminho com alias apenso.
+    """
+    offenders: list[str] = []
+    for path in _python_files(BANK_DIR):
+        for module in _imported_modules(path):
+            nu = module.lstrip(".")
+            if module.startswith(_INVESTMENTS_PROIBIDO) or nu.startswith("investments"):
+                offenders.append(f"{path.relative_to(APP_DIR)} → import {module}")
+
+    assert not offenders, (
+        "Story 8.18 AC5 VIOLADO: app/modules/bank importa app/modules/investments. "
+        f"Ocorrências: {offenders}. A transferência é GENÉRICA — `kind` é vocabulário do módulo "
+        "`bank` e não referencia o produto financeiro. A aplicação (rentabilidade, principal "
+        "derivado, `register_yield`) é Onda 2b, e é lá que mora o único backfill do épico. Se a "
+        "ligação for legítima, ela se faz do lado de `investments`, que PODE importar `bank`."
+    )
+
+
+def test_bank_nao_importa_investments_tambem_por_texto_cru():
+    """O equivalente literal do `grep -r "app.modules.investments" app/modules/bank/`.
+
+    Redundante com o teste por AST **de propósito**, e a redundância não é simétrica — a mesma razão
+    escrita em `test_bank_nao_importa_payables_tambem_por_texto_cru`: o AST pega
+    `from app.modules import investments`; o grep pega
+    `importlib.import_module("app.modules.investments")`. Foi a mutação do re-gate da Onda 1
+    (TEST-001) que provou que **os dois** são necessários.
+    """
+    offenders = [
+        str(path.relative_to(APP_DIR))
+        for path in _python_files(BANK_DIR)
+        if _INVESTMENTS_PROIBIDO in path.read_text(encoding="utf-8")
+    ]
+    assert not offenders, (
+        f"Menção a `{_INVESTMENTS_PROIBIDO}` dentro de app/modules/bank: {offenders}. "
+        "Ver test_bank_transfers_nao_importa_investments."
+    )
+
+
 def test_bank_service_nao_nomeia_a_entidade_de_negocio():
     """**Story 8.17 / achado A-2** — o gate que a porta de saída da guarda tinha de sobreviver.
 

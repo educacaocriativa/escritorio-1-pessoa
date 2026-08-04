@@ -16,6 +16,7 @@ import {
   AGENDADO_SAIDA_LABEL,
   DISPONIVEL_CAIXA_LABEL,
   TOTAL_EM_CONTAS_LABEL,
+  TRANSFERIR_LABEL,
 } from "./contas";
 import { ROTULO_BANCO } from "./projecao";
 
@@ -864,5 +865,168 @@ describe("Story 8.17 — movimento legado com finalidade NULA continua legítimo
     fireEvent.click(screen.getByText("Ver movimentos"));
 
     expect(await screen.findByText("Tarifa / juros")).toBeInTheDocument();
+  });
+});
+
+
+// ── Story 8.18 — transferência entre contas próprias ─────────────────────────────────────────
+
+describe("Story 8.18 — a ação de transferir mora em Contas & Saldos, sem tela nova (AC10)", () => {
+  const duasContas = [
+    conta({ id: "a", name: "Itaú PJ", kind: "checking", saldo_derivado_cents: 5_000_00 }),
+    conta({ id: "b", name: "Nubank PJ", kind: "checking", saldo_derivado_cents: 200_00 }),
+  ];
+
+  it("com DUAS contas ativas a ação aparece; com UMA, não (não há para onde transferir)", async () => {
+    mockApi(duasContas);
+    const { unmount } = renderPage();
+    await screen.findByText("Itaú PJ");
+    expect(screen.getAllByRole("button", { name: TRANSFERIR_LABEL }).length).toBeGreaterThan(0);
+    unmount();
+
+    mockApi([duasContas[0]]);
+    renderPage();
+    await screen.findByText("Itaú PJ");
+    expect(screen.queryByRole("button", { name: TRANSFERIR_LABEL })).toBeNull();
+  });
+
+  it("o destino NUNCA nasce igual à origem — seria 422 e não moveria dinheiro nenhum", async () => {
+    mockApi(duasContas);
+    renderPage();
+    await screen.findByText("Itaú PJ");
+
+    await userEvent.click(screen.getAllByRole("button", { name: TRANSFERIR_LABEL })[0]);
+    const origem = (await screen.findByLabelText("Conta de origem")) as HTMLSelectElement;
+    const destino = screen.getByLabelText("Conta de destino") as HTMLSelectElement;
+    expect(origem.value).not.toBe(destino.value);
+  });
+
+  it("envia amount_cents POSITIVO e o `kind` DERIVADO das duas contas — nunca perguntado", async () => {
+    // O sinal vive nas pernas (o backend o aplica). E não existe `<select>` de "tipo de
+    // transferência": um terceiro campo dizendo o que os dois seletores já dizem poderia discordar
+    // deles, e não haveria regra escrita sobre quem vence (o defeito D-3 na camada de formulário).
+    mockApi(duasContas);
+    vi.mocked(api.post).mockResolvedValue({ data: {} } as never);
+    renderPage();
+    await screen.findByText("Itaú PJ");
+
+    await userEvent.click(screen.getAllByRole("button", { name: TRANSFERIR_LABEL })[0]);
+    const valor = await screen.findByLabelText("Valor (R$)");
+    fireEvent.change(valor, { target: { value: "1.000,00" } });
+    await userEvent.click(screen.getByRole("button", { name: "Registrar transferência" }));
+
+    await waitFor(() => expect(api.post).toHaveBeenCalled());
+    const [url, body] = vi.mocked(api.post).mock.calls.at(-1) as [string, Record<string, unknown>];
+    expect(url).toBe("/bank/transfers");
+    expect(body.amount_cents).toBe(100_000);
+    expect(body.from_account_id).toBe("a");
+    expect(body.to_account_id).toBe("b");
+    expect(body.kind).toBe("own_transfer");
+    expect(screen.queryByLabelText(/tipo de transfer/i)).toBeNull();
+  });
+
+  it("destino APLICAÇÃO avisa, ANTES de confirmar, que o valor sai do disponível como caixa", async () => {
+    // Obrigatório, não polimento (decisão do @po): é a primeira vez no produto que uma ação do dono
+    // encurta o runway sem que nada tenha sido pago. Sem o aviso, ele veria o número cair e sairia
+    // procurando um furo que não existe.
+    mockApi([duasContas[0], conta({ id: "c", name: "CDB", kind: "investment", saldo_derivado_cents: 0 })]);
+    renderPage();
+    await screen.findByText("Itaú PJ");
+
+    await userEvent.click(screen.getAllByRole("button", { name: TRANSFERIR_LABEL })[0]);
+    const aviso = await screen.findByText(/é uma conta de aplicação/i);
+    expect(aviso.textContent).toContain("CDB");
+    // E ele diz o que NÃO muda — senão "aplicar" seria lido como "perder dinheiro".
+    expect(aviso.textContent).toContain(TOTAL_EM_CONTAS_LABEL);
+  });
+
+  it("entre contas elegíveis NÃO há aviso — silêncio é o default (disciplina anti-ruído)", async () => {
+    mockApi(duasContas);
+    renderPage();
+    await screen.findByText("Itaú PJ");
+
+    await userEvent.click(screen.getAllByRole("button", { name: TRANSFERIR_LABEL })[0]);
+    await screen.findByLabelText("Conta de origem");
+    expect(screen.queryByText(/é uma conta de aplicação/i)).toBeNull();
+  });
+
+  it("o botão de confirmar fica DESABILITADO enquanto o valor é zero (mesmo bloco visível)", async () => {
+    mockApi(duasContas);
+    renderPage();
+    await screen.findByText("Itaú PJ");
+
+    await userEvent.click(screen.getAllByRole("button", { name: TRANSFERIR_LABEL })[0]);
+    const confirmar = await screen.findByRole("button", { name: "Registrar transferência" });
+    expect(confirmar).toBeDisabled();
+    fireEvent.change(screen.getByLabelText("Valor (R$)"), { target: { value: "10,00" } });
+    await waitFor(() => expect(confirmar).toBeEnabled());
+  });
+
+  it("falha da API aparece na tela e o formulário NÃO é perdido", async () => {
+    mockApi(duasContas);
+    vi.mocked(api.post).mockRejectedValue(new Error("boom"));
+    renderPage();
+    await screen.findByText("Itaú PJ");
+
+    await userEvent.click(screen.getAllByRole("button", { name: TRANSFERIR_LABEL })[0]);
+    fireEvent.change(await screen.findByLabelText("Valor (R$)"), { target: { value: "10,00" } });
+    await userEvent.click(screen.getByRole("button", { name: "Registrar transferência" }));
+
+    expect(await screen.findByText("Erro inesperado")).toBeInTheDocument();
+    expect((screen.getByLabelText("Valor (R$)") as HTMLInputElement).value).toBe("10,00");
+  });
+});
+
+describe("Story 8.18 (AC9) — a perna não é editável nem ignorável PELA TELA", () => {
+  const perna = movimento({
+    id: "tx-perna",
+    source: "transfer",
+    transfer_id: "tr-1",
+    amount_cents: -100_000,
+    raw_description: "Transferência para Nubank PJ",
+    description: "Transferência para Nubank PJ",
+    operation_nature: "transferencia_propria",
+    status: "matched",
+  });
+
+  it("some com Editar/Ignorar e diz POR QUÊ — linha sem botão e sem frase é lida como bug", async () => {
+    mockApi([conta()], [], [perna]);
+    renderPage();
+    await screen.findByText("Itaú PJ");
+    fireEvent.click(screen.getByText("Ver movimentos"));
+
+    await screen.findByText("Transferência para Nubank PJ");
+    const tabela = within(screen.getByRole("table"));
+    expect(tabela.queryByRole("button", { name: "Editar" })).toBeNull();
+    expect(tabela.queryByRole("button", { name: "Ignorar" })).toBeNull();
+    expect(screen.getByText(/apague a transferência/i)).toBeInTheDocument();
+    // O rótulo da transferência aparece na linha (AC10) — a tela lê `operation_nature`.
+    expect(screen.getByText("Transferência entre minhas contas")).toBeInTheDocument();
+  });
+
+  it("oferece 'Desfazer transferência', e o DELETE é sobre o LANÇAMENTO (as duas pernas)", async () => {
+    mockApi([conta()], [], [perna]);
+    vi.mocked(api.delete).mockResolvedValue({ data: null } as never);
+    vi.spyOn(window, "confirm").mockReturnValue(true);
+    renderPage();
+    await screen.findByText("Itaú PJ");
+    fireEvent.click(screen.getByText("Ver movimentos"));
+
+    await userEvent.click(await screen.findByRole("button", { name: "Desfazer transferência" }));
+    await waitFor(() => expect(api.delete).toHaveBeenCalledWith("/bank/transfers/tr-1"));
+  });
+
+  it("o movimento MANUAL continua editável e ignorável — a guarda é sobre ORIGEM DE SISTEMA", async () => {
+    // Sem este par ao lado, o teste acima estaria satisfeito pela forma mais fácil e mais errada:
+    // esconder os botões de todo mundo.
+    mockApi([conta()], [], [movimento()]);
+    renderPage();
+    await screen.findByText("Itaú PJ");
+    fireEvent.click(screen.getByText("Ver movimentos"));
+
+    const tabelaManual = within(await screen.findByRole("table"));
+    expect(tabelaManual.getByRole("button", { name: "Editar" })).toBeInTheDocument();
+    expect(tabelaManual.getByRole("button", { name: "Ignorar" })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Desfazer transferência" })).toBeNull();
   });
 });

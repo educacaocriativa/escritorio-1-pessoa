@@ -4,6 +4,7 @@ import {
   acaoBaixarPayable,
   AGENDADO_ENTRADA_LABEL,
   AGENDADO_SAIDA_LABEL,
+  avisoDestinoAplicacao,
   type BankAccount,
   BANK_ACCOUNT_KINDS,
   avisoContasPagasAnteriores,
@@ -12,7 +13,21 @@ import {
   diaAnteriorISO,
   DISPONIVEL_CAIXA_LABEL,
   formatDateBR,
+  hojeISO,
+  impedimentoDaTransferencia,
   isIgnored,
+  isOrigemDoSistema,
+  kindDaTransferencia,
+  motivoDeNaoEditar,
+  podeEditarOsFatosDoMovimento,
+  SOURCE_MANUAL,
+  SOURCE_PAYABLE,
+  SOURCE_TRANSFER,
+  SOURCES_SISTEMA,
+  TRANSFER_KIND_INVESTMENT_IN,
+  TRANSFER_KIND_INVESTMENT_OUT,
+  TRANSFER_KIND_OWN,
+  TRANSFERIR_LABEL,
   KIND_CASH,
   KIND_CHECKING,
   KIND_INVESTMENT,
@@ -534,5 +549,182 @@ describe("Story 8.17 — o 409 acionável da contagem dupla", () => {
     expect(acaoBaixarPayable(erro409("Movimento inválido"))).toBeNull();
     expect(acaoBaixarPayable(new Error("rede caiu"))).toBeNull();
     expect(acaoBaixarPayable(undefined)).toBeNull();
+  });
+});
+
+
+// ── Story 8.18 — transferência entre contas próprias ─────────────────────────────────────────
+
+describe("Story 8.18 — o vocabulário da transferência não colide com rótulo de SALDO (UX-001)", () => {
+  it("⚠️ o rótulo da AÇÃO passa pelo MESMO teste de colisão dos totais, estendido", () => {
+    // A instrução da 8.14 é literal: *"o teste que fixa isso é o MESMO de `contas.test.ts`,
+    // estendido, nunca um paralelo"* — um teste por story faria cada rótulo novo ser conferido
+    // contra um subconjunto diferente dos antigos, que é exatamente como a colisão volta.
+    const rotulos = [
+      TOTAL_EM_CONTAS_LABEL,
+      DISPONIVEL_CAIXA_LABEL,
+      AGENDADO_SAIDA_LABEL,
+      AGENDADO_ENTRADA_LABEL,
+      TRANSFERIR_LABEL,
+    ];
+    for (const r of rotulos) {
+      expect(r).not.toBe(ROTULO_BANCO);
+      expect(r.toLowerCase()).not.toContain(ROTULO_BANCO.toLowerCase());
+      expect(r.toLowerCase()).not.toContain("no banco");
+    }
+    for (const a of rotulos) {
+      for (const b of rotulos) {
+        if (a === b) continue;
+        expect(a.toLowerCase()).not.toContain(b.toLowerCase());
+      }
+    }
+    expect(new Set(rotulos).size).toBe(rotulos.length);
+  });
+
+  it("é vocabulário de MOVIMENTO, não de saldo — não diz 'total', 'disponível' nem 'saldo'", () => {
+    // "sair"/"entrar"/"transferir" descrevem o dinheiro se mexendo; "total"/"disponível"/"no banco"
+    // descrevem o dinheiro parado. A tela não pode sugerir que são a mesma coisa.
+    for (const palavra of ["total", "disponível", "saldo"]) {
+      expect(TRANSFERIR_LABEL.toLowerCase()).not.toContain(palavra);
+    }
+  });
+});
+
+describe("Story 8.18 — kindDaTransferencia: DERIVADO das contas, nunca perguntado", () => {
+  it("corrente → poupança é transferência entre contas próprias", () => {
+    expect(kindDaTransferencia(KIND_CHECKING, KIND_SAVINGS)).toBe(TRANSFER_KIND_OWN);
+    expect(kindDaTransferencia(KIND_CASH, KIND_CHECKING)).toBe(TRANSFER_KIND_OWN);
+  });
+
+  it("destino APLICAÇÃO é entrada de aplicação; origem aplicação é saída", () => {
+    expect(kindDaTransferencia(KIND_CHECKING, KIND_INVESTMENT)).toBe(
+      TRANSFER_KIND_INVESTMENT_IN,
+    );
+    expect(kindDaTransferencia(KIND_INVESTMENT, KIND_CHECKING)).toBe(
+      TRANSFER_KIND_INVESTMENT_OUT,
+    );
+  });
+
+  it("aplicação → aplicação conta como ENTRADA (o destino manda) — regra escrita, não acidente", () => {
+    // Precedência declarada: o destino decide. Sem esta asserção, o caso ficaria por conta da ordem
+    // dos `if`, e ninguém saberia que houve uma escolha.
+    expect(kindDaTransferencia(KIND_INVESTMENT, KIND_INVESTMENT)).toBe(
+      TRANSFER_KIND_INVESTMENT_IN,
+    );
+  });
+});
+
+describe("Story 8.18 — avisoDestinoAplicacao: obrigatório, e silêncio no resto", () => {
+  it("com destino de aplicação, nomeia a conta, o recorte que CAI e o que NÃO muda", () => {
+    const frase = avisoDestinoAplicacao(
+      conta({ id: "c", name: "CDB Itaú", kind: KIND_INVESTMENT }),
+    );
+    expect(frase).toContain("CDB Itaú");
+    // O que cai — e a frase cita a CONSTANTE do rótulo, não uma cópia do texto.
+    expect(frase).toContain(DISPONIVEL_CAIXA_LABEL);
+    expect(frase).toContain("Projeção de Caixa");
+    // ...e o que NÃO cai, senão "aplicar" seria lido como "perder dinheiro".
+    expect(frase).toContain(TOTAL_EM_CONTAS_LABEL);
+  });
+
+  it("destino elegível ou nenhum destino → `null` (silêncio é o default)", () => {
+    expect(avisoDestinoAplicacao(conta({ kind: KIND_CHECKING }))).toBeNull();
+    expect(avisoDestinoAplicacao(conta({ kind: KIND_SAVINGS }))).toBeNull();
+    expect(avisoDestinoAplicacao(null)).toBeNull();
+  });
+
+  it("⚠️ o aviso não reusa o rótulo da parcela da Projeção ('no banco') — UX-001", () => {
+    const frase = avisoDestinoAplicacao(conta({ kind: KIND_INVESTMENT })) ?? "";
+    expect(frase).not.toContain(ROTULO_BANCO);
+  });
+});
+
+describe("Story 8.18 — impedimentoDaTransferencia: o que a tela consegue antecipar, e só isso", () => {
+  const a = conta({ id: "a", kind: KIND_CHECKING });
+  const b = conta({ id: "b", kind: KIND_SAVINGS });
+  const HOJE = hojeISO();
+
+  it("sem as duas contas, pede as duas", () => {
+    expect(impedimentoDaTransferencia(null, b, 100, HOJE)).toMatch(/origem e a de destino/);
+    expect(impedimentoDaTransferencia(a, null, 100, HOJE)).toMatch(/origem e a de destino/);
+  });
+
+  it("mesma conta nos dois lados é impedimento — não moveria dinheiro nenhum", () => {
+    expect(impedimentoDaTransferencia(a, a, 100, HOJE)).toMatch(/a mesma/);
+  });
+
+  it("valor zero ou negativo é impedimento — o sinal vive nas pernas", () => {
+    expect(impedimentoDaTransferencia(a, b, 0, HOJE)).toMatch(/maior que zero/);
+    expect(impedimentoDaTransferencia(a, b, -100, HOJE)).toMatch(/maior que zero/);
+  });
+
+  it("data futura é impedimento — o mesmo 422 que `create_transfer` aplica no backend", () => {
+    // A tela antecipa a guarda para não montar uma parede um clique adiante; quem a APLICA é o
+    // backend (achado A-3: ela não pode viver na guarda genérica do módulo, que aceita futuro para
+    // origem de sistema desde a Story 8.14).
+    const amanha = new Date(Date.now() + 86_400_000).toISOString().slice(0, 10);
+    expect(impedimentoDaTransferencia(a, b, 100, amanha)).toMatch(/não pode ser futura/);
+  });
+
+  it("tudo certo → `null`, inclusive HOJE (a borda aceita)", () => {
+    expect(impedimentoDaTransferencia(a, b, 100_00, HOJE)).toBeNull();
+    const ontem = new Date(Date.now() - 86_400_000).toISOString().slice(0, 10);
+    expect(impedimentoDaTransferencia(a, b, 100_00, ontem)).toBeNull();
+  });
+});
+
+describe("Story 8.18 (AC9) — a tela LÊ o `source`; ela não conhece a regra", () => {
+  const perna = (over: Partial<BankTransaction> = {}) =>
+    ({ source: SOURCE_TRANSFER, transfer_id: "tr-1", ...over }) as BankTransaction;
+
+  it("toda origem de SISTEMA perde a edição de fatos — escrito contra o CONJUNTO", () => {
+    // Nunca contra `'transfer'` solto: quando a Onda 2b ligar `yield` e a Onda 3 ligar `payout`, a
+    // tela herda o comportamento sem que ninguém edite um `if`.
+    for (const source of SOURCES_SISTEMA) {
+      const tx = { source } as BankTransaction;
+      expect(isOrigemDoSistema(tx)).toBe(true);
+      expect(podeEditarOsFatosDoMovimento(tx)).toBe(false);
+      expect(motivoDeNaoEditar(tx)).toBeTruthy();
+    }
+  });
+
+  it("o movimento MANUAL continua editável — a guarda é sobre origem, não sobre movimento", () => {
+    const tx = { source: "manual" } as BankTransaction;
+    expect(isOrigemDoSistema(tx)).toBe(false);
+    expect(podeEditarOsFatosDoMovimento(tx)).toBe(true);
+    expect(motivoDeNaoEditar(tx)).toBeNull();
+  });
+
+  it("`source` desconhecido cai no lado EXTERNO — o erro barulhento, não o silencioso", () => {
+    // Assumir "de sistema" ESCONDERIA a edição de um movimento legítimo, e ninguém abre chamado
+    // para um botão que nunca esteve lá. Assumir "externo" no máximo oferece um botão que o
+    // backend recusa com 422 — visível e corrigível.
+    const tx = { source: "origem_de_um_backend_mais_novo" } as BankTransaction;
+    expect(podeEditarOsFatosDoMovimento(tx)).toBe(true);
+  });
+
+  it("a perna de transferência aponta para o gesto CERTO: apagar o lançamento, não a linha", () => {
+    expect(motivoDeNaoEditar(perna())).toMatch(/apague a transferência/i);
+    expect(motivoDeNaoEditar(perna())).toMatch(/as duas pernas somem juntas/i);
+    // A origem de perna única aponta para o lançamento dela, que é outro gesto.
+    expect(motivoDeNaoEditar({ source: SOURCE_PAYABLE } as BankTransaction)).toMatch(
+      /corrija o lançamento de origem/i,
+    );
+  });
+
+  it("o espelho de `SOURCES_SISTEMA` tem os cinco valores do backend", () => {
+    expect([...SOURCES_SISTEMA].sort()).toEqual(
+      ["charge", "payable", "payout", "transfer", "yield"],
+    );
+    expect(SOURCES_SISTEMA).not.toContain(SOURCE_MANUAL);
+  });
+});
+
+describe("Story 8.18 — o ponteiro do manual passa a apontar para algo que existe", () => {
+  it("a 8.17 o deixou condicional e a 8.18 é quem torna o `true` legítimo", () => {
+    // A condicional FICA: ela é o registro de que este ponteiro depende de uma superfície existir.
+    expect(ponteiroDaTransferencia(false)).toBeNull();
+    expect(ponteiroDaTransferencia(true)).toContain("transferência entre contas");
+    expect(ponteiroDaTransferencia(true)).toContain("não digita duas vezes");
   });
 });

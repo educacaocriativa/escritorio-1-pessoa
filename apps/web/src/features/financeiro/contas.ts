@@ -79,6 +79,14 @@ export interface BankTransaction {
   counterparty_document: string;
   operation_nature: string | null;
   source: string;
+  /**
+   * Story 8.18 — pareia as duas pernas irmãs de uma transferência; `null` em todo o resto.
+   *
+   * Opcional no TS para que a tela não quebre contra um backend anterior à 8.18. É ele que permite
+   * oferecer "desfazer transferência" a partir de uma perna **sem** a UI precisar conhecer o
+   * formato da chave de origem (`"{id}:out"`) — que é do backend e deve continuar sendo.
+   */
+  transfer_id?: string | null;
   status: string;
   ignored_reason: string;
   created_at: string;
@@ -160,6 +168,72 @@ export function isIgnored(tx: BankTransaction): boolean {
   return tx.status === STATUS_IGNORED;
 }
 
+// ── Origem do movimento (`models.SOURCES_*`) — Story 8.18 ────────────────────────────────────
+//
+// ⚠️ **A tela não sabe a REGRA; ela lê o `source`.** A Regra da Origem (d) diz que *"um movimento de
+// origem do sistema não é editável nem ignorável pela tela de movimentos — quem quer mudá-lo mexe no
+// lançamento de origem. A única exceção é `user_description`, que é rótulo, não fato"*. Quem a
+// **aplica** é o backend (422); o que a tela faz é não oferecer um botão que ela sabe que vai
+// recusar — oferecer e falhar treina o dono a ignorar mensagens de erro.
+//
+// A lista é **espelho manual** de `bank/models.py::SOURCES_SISTEMA`, e é escrita contra o CONJUNTO,
+// nunca contra `'transfer'` solto: quando a Onda 2b ligar `yield` e a Onda 3 ligar `payout`, a tela
+// herda o comportamento sem que ninguém edite um `if`.
+
+export const SOURCE_MANUAL = "manual";
+export const SOURCE_PAYABLE = "payable";
+export const SOURCE_CHARGE = "charge";
+export const SOURCE_TRANSFER = "transfer";
+export const SOURCE_YIELD = "yield";
+export const SOURCE_PAYOUT = "payout";
+
+/** Espelho de `SOURCES_SISTEMA` — as origens que o próprio e1p escreve. */
+export const SOURCES_SISTEMA: readonly string[] = [
+  SOURCE_PAYABLE,
+  SOURCE_CHARGE,
+  SOURCE_TRANSFER,
+  SOURCE_YIELD,
+  SOURCE_PAYOUT,
+];
+
+/**
+ * O movimento nasceu de um lançamento do e1p (e não de digitação/importação)? PURA.
+ *
+ * Um `source` desconhecido (vindo de um backend mais novo) cai no lado **externo** de propósito: a
+ * consequência é a tela oferecer um botão que o backend pode recusar — barulhento e corrigível.
+ * O erro oposto (assumir "de sistema") **esconderia** silenciosamente a edição de um movimento
+ * manual legítimo, e ninguém abre um chamado para um botão que nunca esteve lá.
+ */
+export function isOrigemDoSistema(tx: BankTransaction): boolean {
+  return SOURCES_SISTEMA.includes(tx.source);
+}
+
+/**
+ * O movimento aceita `PATCH` de data/valor e `ignore`? PURA. `false` para origem de sistema.
+ *
+ * ⚠️ **`user_description` continua editável em qualquer origem** — é a exceção nomeada da regra. Por
+ * isso o nome desta função fala de *fato*, não de *edição*: quem a usar para esconder o campo de
+ * rótulo estará tirando do dono a única coisa que ele legitimamente pode mudar numa perna de
+ * transferência.
+ */
+export function podeEditarOsFatosDoMovimento(tx: BankTransaction): boolean {
+  return !isOrigemDoSistema(tx);
+}
+
+/**
+ * A frase que substitui os botões ausentes. `null` quando o movimento é editável normalmente.
+ *
+ * Uma linha sem botão e sem explicação é lida como bug da tela. Esta frase diz **por que** e diz
+ * **o que fazer** — que é a diferença entre uma restrição e uma parede.
+ */
+export function motivoDeNaoEditar(tx: BankTransaction): string | null {
+  if (!isOrigemDoSistema(tx)) return null;
+  if (tx.source === SOURCE_TRANSFER) {
+    return "Gerado por uma transferência entre suas contas. Para desfazer, apague a transferência — as duas pernas somem juntas.";
+  }
+  return "Gerado por um lançamento seu. Para mudar, corrija o lançamento de origem — o movimento acompanha.";
+}
+
 // ── Natureza da operação (`models.OPERATION_NATURES`) — Story 8.17 ───────────────────────────
 //
 // *"Para que serve este movimento?"* — a curadoria que transforma "Novo movimento" (que parece o
@@ -224,11 +298,14 @@ export function naturezaParaEnvio(escolha: string, livre: string): string | null
  * minhas contas"*: lançar as duas pernas à mão é a digitação dupla que a Regra da Origem §4.8(e)
  * manda evitar.
  *
- * ⚠️ **Condicional de propósito, e hoje o argumento é `false`.** A Story 8.18 **não está em
- * produção** (não existe `bank_transfers`, nem rota, nem tela) — apontar para ela agora mandaria o
- * usuário para lugar nenhum. A opção continua na lista mesmo assim, porque **recusar um fato
- * legítimo é o defeito que esta story combate**. Quando a 8.18 subir, quem a implementar troca o
- * argumento por `true` no único ponto de chamada.
+ * ⚠️ **Condicional de propósito.** A Story 8.17 o escreveu com o argumento fixo em `false` porque a
+ * 8.18 ainda não existia e apontar para ela mandaria o usuário para lugar nenhum. **A 8.18 subiu**
+ * (`bank_transfers`, `POST /bank/transfers` e o modal desta tela), então o único ponto de chamada
+ * passa `true` — que é literalmente a instrução deixada aqui pela 8.17.
+ *
+ * **A condicional FICA**, e não vira texto solto: ela é o registro de que este ponteiro depende de
+ * uma superfície existir, e a próxima onda que mexer no formulário vai reler esta decisão em vez de
+ * herdá-la sem saber.
  */
 export function ponteiroDaTransferencia(transferenciaDisponivel: boolean): string | null {
   if (!transferenciaDisponivel) return null;
@@ -236,6 +313,104 @@ export function ponteiroDaTransferencia(transferenciaDisponivel: boolean): strin
     "Se o dinheiro foi de uma conta sua para outra, use a transferência entre contas — " +
     "as duas pernas nascem juntas e você não digita duas vezes."
   );
+}
+
+// ── Transferência entre contas próprias (Story 8.18) ─────────────────────────────────────────
+
+/** `BankTransferOut` — o LANÇAMENTO. As duas pernas viajam como `BankTransaction`, à parte. */
+export interface BankTransfer {
+  id: string;
+  from_account_id: string;
+  to_account_id: string;
+  /** SEMPRE POSITIVO — o sinal vive nas pernas (invariante do modelo). */
+  amount_cents: number;
+  posted_at: string;
+  kind: string;
+  description: string;
+  created_at: string;
+  updated_at: string;
+}
+
+export const TRANSFER_KIND_OWN = "own_transfer";
+export const TRANSFER_KIND_INVESTMENT_IN = "investment_in";
+export const TRANSFER_KIND_INVESTMENT_OUT = "investment_out";
+
+/**
+ * O `kind` da transferência **DERIVADO** dos tipos das duas contas. PURA.
+ *
+ * ⚠️ **Derivado, e não perguntado.** Um `<select>` de "tipo de transferência" ao lado dos dois
+ * seletores de conta seria um terceiro campo dizendo o que os dois primeiros já dizem — e o dia em
+ * que os três discordassem (aplicação escolhida no destino, "entre minhas contas" no tipo) não
+ * haveria regra escrita em lugar nenhum sobre quem vence. É o defeito D-3 na camada de formulário.
+ *
+ * O backend valida contra a lista de todo jeito: derivar aqui é conveniência da tela, não a guarda.
+ */
+export function kindDaTransferencia(origemKind: string, destinoKind: string): string {
+  if (destinoKind === KIND_INVESTMENT) return TRANSFER_KIND_INVESTMENT_IN;
+  if (origemKind === KIND_INVESTMENT) return TRANSFER_KIND_INVESTMENT_OUT;
+  return TRANSFER_KIND_OWN;
+}
+
+/**
+ * O rótulo da AÇÃO na tela de Contas & Saldos.
+ *
+ * ⚠️ **Vocabulário de MOVIMENTO, deliberadamente distante do vocabulário de SALDO.** Ele não pode
+ * ser nem conter `ROTULO_BANCO` ("no banco"), `TOTAL_EM_CONTAS_LABEL` nem `DISPONIVEL_CAIXA_LABEL`
+ * — a colisão D-6/UX-001 que o épico já pagou para separar. O teste que fixa isso é o **mesmo** de
+ * `contas.test.ts`, estendido, nunca um paralelo: um teste por story faria cada rótulo novo ser
+ * conferido contra um subconjunto diferente dos antigos, que é como a colisão volta.
+ */
+export const TRANSFERIR_LABEL = "Transferir entre contas";
+
+/**
+ * O aviso, antes de confirmar, quando o destino é uma conta de **aplicação**. PURA.
+ *
+ * ⚠️ **Obrigatório, não polimento** (decisão do @po). Transferir para a aplicação **derruba** o
+ * `DISPONIVEL_CAIXA_LABEL` e, por consequência, o saldo inicial da Projeção de Caixa — que exclui
+ * aplicação (design §6.1: dinheiro aplicado não é caixa para pagar a conta de amanhã). É **correto**
+ * (o dinheiro deixou de ser caixa), e é a **primeira vez** no produto que uma ação do dono encurta o
+ * runway sem que nada tenha sido pago. Sem o aviso, ele veria o número cair e procuraria um furo.
+ *
+ * `null` quando não há o que dizer — **silêncio é o default**, a mesma disciplina anti-ruído da
+ * banda de tolerância da conferência. Um aviso que aparece sempre deixa de ser lido.
+ *
+ * A frase nomeia o recorte pela constante (`DISPONIVEL_CAIXA_LABEL`), nunca por uma cópia do texto:
+ * se o rótulo mudar um dia, o aviso muda junto em vez de passar a citar uma tela que não existe.
+ */
+export function avisoDestinoAplicacao(destino: BankAccount | null): string | null {
+  if (!destino || destino.kind !== KIND_INVESTMENT) return null;
+  return (
+    `${destino.name} é uma conta de aplicação: este valor sai do "${DISPONIVEL_CAIXA_LABEL}" ` +
+    "(e do saldo de partida da Projeção de Caixa) assim que a transferência for registrada. " +
+    "O dinheiro continua seu e continua no \"" +
+    TOTAL_EM_CONTAS_LABEL +
+    '" — ele só deixa de ser caixa disponível.'
+  );
+}
+
+/**
+ * O que impede o botão de confirmar, ou `null` quando está tudo pronto. PURA.
+ *
+ * Espelha as guardas do backend que a tela **consegue** antecipar (contas distintas, valor > 0, data
+ * não futura) — e **só** essas. As demais (conta arquivada, data anterior à abertura) dependem de
+ * dado que a tela tem, mas cuja mensagem o backend escreve melhor: duplicar a redação aqui criaria
+ * duas frases para a mesma regra, e a daqui envelheceria primeiro.
+ */
+export function impedimentoDaTransferencia(
+  origem: BankAccount | null,
+  destino: BankAccount | null,
+  cents: number,
+  postedAt: string,
+): string | null {
+  if (!origem || !destino) return "Escolha a conta de origem e a de destino.";
+  if (origem.id === destino.id) {
+    return "A conta de origem e a de destino são a mesma — isso não moveria dinheiro nenhum.";
+  }
+  if (cents <= 0) return "Informe um valor maior que zero.";
+  if (postedAt > hojeISO()) {
+    return "A data não pode ser futura: registre a transferência no dia em que ela cair.";
+  }
+  return null;
 }
 
 // ── O 409 acionável da contagem dupla (contrato da Story 8.17, formato da 8.12) ───────────────

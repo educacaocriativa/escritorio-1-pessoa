@@ -1060,6 +1060,48 @@ def _validate_posted_at(
     return posted_at
 
 
+def _recusa_se_origem_do_sistema(tx: BankTransaction, *, gesto: str) -> None:
+    """**A Regra da Origem (d), aplicada.** Movimento de sistema não é editado nem ignorado aqui.
+
+    > *"Um movimento de origem do sistema **não é editável nem ignorável** pela tela de movimentos —
+    > quem quer mudá-lo mexe no lançamento de origem. A única exceção é `user_description`, que é
+    > rótulo, não fato."* (design Onda 2 §2, epic §4.8(d))
+
+    ⚠️ **DESVIO DOCUMENTADO — a premissa da Story 8.18 AC9 era falsa.** O AC9 diz que as pernas da
+    transferência *"herdam a guarda que a Story 8.9 implementa"*. Ao implementar a 8.18 verificou-se
+    que a 8.9 **escreveu a regra (na docstring de `bank/origin.py`) e não a implementou**: nem
+    `update_transaction` nem `ignore_transaction` olhavam para `tx.source`, e o comentário em
+    `update_transaction` já afirmava que a edição *"é impedida antes, pela Regra da Origem (d)"* —
+    afirmação que não tinha código por trás. Seguindo o repo e documentando (a lição do `CLAUDE.md`
+    §6.1: *"quando uma instrução se apoiar em premissa que você verificar ser falsa, siga o repo e
+    documente"*), a guarda entra **aqui**, uma vez, para todo `SOURCES_SISTEMA` — nunca uma por
+    origem.
+
+    **Escrita contra o CONJUNTO, jamais contra `'transfer'`** (regra normativa da 8.9 AC3): fosse
+    contra o valor solto, `payable` e `charge` continuariam editáveis e a regra teria exceções que
+    ninguém decidiu. Acrescentar uma origem de sistema nova continua sendo uma entrada numa tupla.
+
+    **Por que ignorar uma perna é pior do que parece:** `ignore` tira o movimento do saldo derivado.
+    Numa transferência, ignorar **uma** das duas pernas quebra a simetria — o dinheiro sai de uma
+    conta e não entra em lugar nenhum —, e o resultado é uma divergência na conferência com a
+    aparência exata de um lançamento faltante. O produto mandaria o dono caçar um furo que ele mesmo
+    criou com um clique, e divergência inventada é pior que divergência escondida.
+
+    A saída é dita na mensagem: quem quer desfazer mexe no **lançamento** (estornar a conta a pagar,
+    desfazer a baixa, apagar a transferência), e o movimento acompanha — Regra da Origem (c).
+    """
+    if tx.source not in SOURCES_SISTEMA:
+        return
+    raise BankError(
+        f"Este movimento foi criado pelo próprio e1p a partir de um lançamento seu "
+        f"(origem: {tx.source}) e por isso não pode ser {gesto} por aqui — quem manda nele é o "
+        "lançamento que o gerou. Desfaça ou corrija o lançamento e o movimento acompanha. "
+        "Você pode "
+        "editar a descrição dele, que é rótulo, não fato.",
+        422,
+    )
+
+
 def _validate_statuses(statuses: Sequence[str]) -> tuple[str, ...]:
     invalidos = [s for s in statuses if s not in STATUSES]
     if invalidos:
@@ -1234,6 +1276,14 @@ def update_transaction(
     """
     tx = get_transaction(db, transaction_id)
 
+    # ── A Regra da Origem (d) — a exceção é `user_description`, e SÓ ela ─────────────────────
+    #
+    # A checagem é por CAMPO, e não pelo movimento inteiro, porque a regra tem uma exceção nomeada:
+    # o rótulo do dono sobrevive a qualquer origem (*"é rótulo, não fato"*). Recusar o PATCH inteiro
+    # tiraria dele a única edição que ele legitimamente tem sobre uma perna de transferência.
+    if data.posted_at is not None or data.amount_cents is not None:
+        _recusa_se_origem_do_sistema(tx, gesto="editado")
+
     if data.posted_at is not None:
         # Revalida contra a conta ATUAL do movimento (a conta não muda: não há rota para movê-lo)
         # e contra o **`source` da própria linha** (Story 8.14 AC4) — não contra um valor fixo.
@@ -1271,6 +1321,10 @@ def ignore_transaction(
     duplo.
     """
     tx = get_transaction(db, transaction_id)
+    # Regra da Origem (d): movimento de sistema não é ignorável. A guarda vem ANTES do no-op de
+    # idempotência de propósito — uma perna nunca chega a `ignored` por este caminho, então o
+    # `return tx` antecipado só poderia mascarar um estado que outro caminho tivesse criado.
+    _recusa_se_origem_do_sistema(tx, gesto="ignorado")
     if tx.status == STATUS_IGNORED:
         return tx
     tx.status = STATUS_IGNORED

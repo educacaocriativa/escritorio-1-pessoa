@@ -815,6 +815,16 @@ _CHAMADORES_PERMITIDOS: dict[str, str] = {
         "A direção de import `payables → bank` é permitida (Regra dos Planos §1.3d); a volta é "
         "proibida e `test_bank_nao_importa_payables` a reprova."
     ),
+    "modules/bank/transfers.py": (
+        "**Story 8.18** — a transferência entre contas próprias é o TERCEIRO chamador de produção "
+        "da Regra da Origem, e o único que chama o sincronizador **duas vezes por operação**: uma "
+        "perna `:out` (negativa, na conta de origem) e uma `:in` (positiva, na de destino), na "
+        "MESMA transação do `bank_transfer`, pareadas pelo kwarg `transfer_id`. "
+        "⚠️ **É o único chamador que vive DENTRO do próprio módulo `bank`** — e isso não afrouxa "
+        "nada: a permissão continua sendo por arquivo, `create_transfer` continua sendo o único "
+        "ponto de escrita das pernas, e `delete_transfer` reusa o mesmo sincronizador "
+        "(`bank_account_id=None`) em vez de recopiar a guarda da linha puramente sintética."
+    ),
     "modules/receivables/service.py": (
         "**Story 8.15** — o recebimento fora do trilho (`settle_off_rail`/`update_off_rail_"
         "payment`) é o SEGUNDO chamador de produção da Regra da Origem, e o primeiro do lado das "

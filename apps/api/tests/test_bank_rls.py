@@ -1658,3 +1658,247 @@ def test_promocao_de_cobrancas_agendadas_isolamento_cross_tenant(app_url: str) -
         assert sb.get(Charge, charge_b).status == STATUS_SCHEDULED, (
             "o sweep do tenant A promoveu a cobrança agendada do tenant B"
         )
+
+
+# ── Story 8.18 — `bank_transfers`: a migration 0062 e o FORCE RLS da tabela nova ───────────────
+#
+# > **[@dev 8.18] Desvio documentado das File Locations da Story 8.18.** A story previa um arquivo
+# > novo, `tests/test_bank_transfers_rls.py`. Ele exigiria um **segundo** `PostgresContainer` (a
+# > fixture `app_url` tem escopo de MÓDULO) e, com ele, um segundo `alembic upgrade head` — minutos
+# > de CI para exercitar exatamente as mesmas tabelas já preparadas aqui. A instrução escrita no
+# > topo deste arquivo (*"acrescente casos AQUI"*) é a mais recente e a mais informada, e a 8.5 já
+# > abriu o precedente com a mesma justificativa. Divergência registrada em Completion Notes.
+#
+# ⚠️ **É aqui — e SÓ aqui — que a migration 0062 é de fato exercida.** O SQLite dos testes
+# unitários cria a tabela por `Base.metadata.create_all` e **não conhece RLS**: lá `FORCE ROW LEVEL
+# SECURITY` e a policy `tenant_isolation` simplesmente não existem, e um `WITH CHECK` esquecido
+# passaria verde em 1400 testes. `_run_migrations_as_app` roda a cadeia inteira como o papel
+# NÃO-superusuário `e1p_app` (superusuário faz bypass **mesmo com FORCE**), então um
+# `down_revision` errado na 0062 aparece aqui como "multiple heads" e derruba o job inteiro.
+
+
+def test_bank_transfer_isolamento_cross_tenant(app_url: str) -> None:
+    """A transferência de A e as **duas pernas** dela são invisíveis e intocáveis para B.
+
+    Cobre o que o SQLite não alcança:
+    - **leitura:** B não lista nem lê a transferência de A (`db.get` → None → 404 fail-closed);
+    - **escrita:** `INSERT` com `tenant_id` alheio é barrado pelo `WITH CHECK` da policy — sem ele,
+      A conseguiria PLANTAR uma transferência dentro do tenant B, e leitura protegida com escrita
+      aberta é meia proteção;
+    - **`DELETE` cross-tenant:** A não apaga a transferência de B (404), e as pernas de B seguem lá;
+    - **fail-closed sem GUC:** sem `app.current_tenant_id` a leitura devolve ZERO linhas — o estado
+      seguro é "não vejo nada", nunca "vejo tudo". É a asserção que prova o `FORCE`: sem ele, o
+      papel DONO da tabela ignoraria a policy e veria as duas transferências.
+    """
+    from app.modules.bank import service as bank_service
+    from app.modules.bank import transfers as transfers_service
+    from app.modules.bank.models import SOURCE_TRANSFER, BankTransaction, BankTransfer
+    from app.modules.bank.schemas import BankTransferCreate
+
+    tenant_a = str(uuid4())
+    tenant_b = str(uuid4())
+    hoje = _hoje_utc()
+    abertura = hoje - timedelta(days=60)
+    dia = hoje - timedelta(days=1)
+
+    origem_a = _seed_account(
+        app_url, tenant_a, name="A origem", opening=1_000_00, number="8181-1",
+        opening_date=abertura,
+    )
+    destino_a = _seed_account(
+        app_url, tenant_a, name="A destino", opening=0, number="8181-2", opening_date=abertura
+    )
+    origem_b = _seed_account(
+        app_url, tenant_b, name="B origem", opening=1_000_00, number="8181-1",
+        opening_date=abertura,
+    )
+    destino_b = _seed_account(
+        app_url, tenant_b, name="B destino", opening=0, number="8181-2", opening_date=abertura
+    )
+
+    def _transferir(tenant: str, de: str, para: str, valor: int) -> str:
+        with _session_for(app_url, tenant) as s:
+            t = transfers_service.create_transfer(
+                s,
+                tenant_id=tenant,
+                actor="dono",
+                data=BankTransferCreate(
+                    from_account_id=de, to_account_id=para, amount_cents=valor,
+                    posted_at=dia, kind="own_transfer", description="entre contas",
+                ),
+            )
+            return t.id
+
+    transfer_a = _transferir(tenant_a, origem_a, destino_a, 300_00)
+    transfer_b = _transferir(tenant_b, origem_b, destino_b, 700_00)
+
+    # ── Leitura: cada um só enxerga o próprio ────────────────────────────────────────────────
+    with _session_for(app_url, tenant_a) as sa:
+        assert [t.id for t in transfers_service.list_transfers(sa)] == [transfer_a]
+        assert sa.get(BankTransfer, transfer_b) is None, "RLS falhou: A leu a transferência de B"
+        with pytest.raises(bank_service.BankError) as exc:
+            transfers_service.get_transfer(sa, transfer_b)
+        assert exc.value.status_code == 404, "cross-tenant deve ser 404 fail-closed, não 403"
+        # As duas pernas de A existem e são de A; as de B não aparecem.
+        pernas = [t for t in bank_service.list_transactions(sa) if t.source == SOURCE_TRANSFER]
+        assert len(pernas) == 2
+        assert {p.transfer_id for p in pernas} == {transfer_a}
+        assert sorted(p.amount_cents for p in pernas) == [-300_00, 300_00]
+        # O saldo de A é o de A — vazamento aqui viraria divergência inexplicável na conferência.
+        assert bank_service.derived_balance(sa, bank_account_id=origem_a, until=hoje) == 700_00
+        assert bank_service.derived_balance(sa, bank_account_id=destino_a, until=hoje) == 300_00
+
+    with _session_for(app_url, tenant_b) as sb:
+        assert [t.id for t in transfers_service.list_transfers(sb)] == [transfer_b]
+        assert bank_service.derived_balance(sb, bank_account_id=destino_b, until=hoje) == 700_00
+
+    # ── Escrita com tenant_id alheio: barrada pelo WITH CHECK da policy ──────────────────────
+    with _session_for(app_url, tenant_a) as sa:
+        sa.add(
+            BankTransfer(
+                tenant_id=tenant_b,  # ← o ataque: gravar dentro do tenant do vizinho
+                from_account_id=origem_b,
+                to_account_id=destino_b,
+                amount_cents=1,
+                posted_at=dia,
+                kind="own_transfer",
+                description="plantada por A",
+            )
+        )
+        with pytest.raises(ProgrammingError):
+            sa.commit()
+        sa.rollback()
+
+    with _session_for(app_url, tenant_b) as sb:
+        assert [t.id for t in transfers_service.list_transfers(sb)] == [transfer_b], (
+            "WITH CHECK falhou: A plantou uma transferência no tenant de B"
+        )
+
+    # ── DELETE cross-tenant: A não desfaz a transferência de B ───────────────────────────────
+    with _session_for(app_url, tenant_a) as sa:
+        with pytest.raises(bank_service.BankError) as exc:
+            transfers_service.delete_transfer(
+                sa, transfer_id=transfer_b, tenant_id=tenant_a, actor="a"
+            )
+        assert exc.value.status_code == 404
+
+    with _session_for(app_url, tenant_b) as sb:
+        assert sb.get(BankTransfer, transfer_b) is not None
+        pernas_b = [t for t in bank_service.list_transactions(sb) if t.source == SOURCE_TRANSFER]
+        assert len(pernas_b) == 2, "A apagou as pernas de B"
+
+    # ── Fail-closed sem GUC: é isto que prova o FORCE (o papel é DONO da tabela) ─────────────
+    with _session_for(app_url, None) as anon:
+        assert anon.query(BankTransfer).count() == 0, (
+            "sem a GUC `app.current_tenant_id` o SELECT devolveu linhas — ou a policy nao existe, "
+            "ou faltou `FORCE ROW LEVEL SECURITY` (o papel dono da tabela faz bypass sem ele)"
+        )
+        assert (
+            anon.query(BankTransaction)
+            .filter(BankTransaction.source == SOURCE_TRANSFER)
+            .count()
+            == 0
+        )
+
+
+def test_delete_de_transferencia_apaga_as_DUAS_pernas_no_postgres_real(app_url: str) -> None:
+    """AC8 no banco real: o `DELETE` do lançamento leva as duas pernas — e nada do vizinho.
+
+    O caminho de `delete_transfer` passa por `sync_origin_movement(bank_account_id=None)`, que faz
+    `db.delete(tx)` sob a policy. Se a GUC não estivesse fixada, o `DELETE` seria filtrado a **zero
+    linhas em silêncio** (a mesma armadilha da 0046, pela porta do runtime) e o lançamento sumiria
+    deixando as duas pernas órfãs no razão — sem erro nenhum.
+    """
+    from app.modules.bank import service as bank_service
+    from app.modules.bank import transfers as transfers_service
+    from app.modules.bank.models import SOURCE_TRANSFER, BankTransaction, BankTransfer
+    from app.modules.bank.schemas import BankTransferCreate
+
+    tenant_a = str(uuid4())
+    tenant_b = str(uuid4())
+    hoje = _hoje_utc()
+    abertura = hoje - timedelta(days=60)
+    dia = hoje - timedelta(days=1)
+
+    origem = _seed_account(
+        app_url, tenant_a, name="Del origem", opening=1_000_00, number="8182-1",
+        opening_date=abertura,
+    )
+    destino = _seed_account(
+        app_url, tenant_a, name="Del destino", opening=0, number="8182-2", opening_date=abertura
+    )
+    origem_b = _seed_account(
+        app_url, tenant_b, name="Viz origem", opening=1_000_00, number="8182-1",
+        opening_date=abertura,
+    )
+    destino_b = _seed_account(
+        app_url, tenant_b, name="Viz destino", opening=0, number="8182-2", opening_date=abertura
+    )
+
+    def _transferir(tenant, de, para):
+        with _session_for(app_url, tenant) as s:
+            return transfers_service.create_transfer(
+                s, tenant_id=tenant, actor="dono",
+                data=BankTransferCreate(
+                    from_account_id=de, to_account_id=para, amount_cents=250_00,
+                    posted_at=dia, kind="own_transfer", description="",
+                ),
+            ).id
+
+    alvo = _transferir(tenant_a, origem, destino)
+    vizinha = _transferir(tenant_b, origem_b, destino_b)
+
+    with _session_for(app_url, tenant_a) as sa:
+        transfers_service.delete_transfer(sa, transfer_id=alvo, tenant_id=tenant_a, actor="dono")
+
+    with _session_for(app_url, tenant_a) as sa:
+        assert sa.get(BankTransfer, alvo) is None
+        assert (
+            sa.query(BankTransaction).filter(BankTransaction.source == SOURCE_TRANSFER).count() == 0
+        ), "o lançamento sumiu e as pernas ficaram órfãs no razão"
+        assert bank_service.derived_balance(sa, bank_account_id=origem, until=hoje) == 1_000_00
+        assert bank_service.derived_balance(sa, bank_account_id=destino, until=hoje) == 0
+
+    with _session_for(app_url, tenant_b) as sb:
+        assert sb.get(BankTransfer, vizinha) is not None
+        assert (
+            sb.query(BankTransaction).filter(BankTransaction.source == SOURCE_TRANSFER).count() == 2
+        ), "o DELETE do tenant A alcançou as pernas do tenant B"
+
+
+def test_a_tabela_nova_tem_FORCE_RLS_e_a_policy_com_USING_e_WITH_CHECK(app_url: str) -> None:
+    """**Asserção ESTRUTURAL sobre a migration 0062** — lida do catálogo do Postgres.
+
+    Os testes acima medem o comportamento; este mede a **forma**, e as duas coisas falham de jeitos
+    diferentes. Sem `FORCE`, o papel dono da tabela (`e1p_app`, que é quem roda a app) faz bypass da
+    policy e **todo** teste de comportamento continuaria verde num banco novo, porque as sessões dos
+    testes sempre fixam a GUC. Sem `WITH CHECK`, a leitura fica protegida e a escrita não.
+    """
+    engine = create_engine(app_url, poolclass=NullPool)
+    try:
+        with engine.connect() as conn:
+            rls, force = conn.execute(
+                text(
+                    "SELECT relrowsecurity, relforcerowsecurity FROM pg_class "
+                    "WHERE relname = 'bank_transfers'"
+                )
+            ).one()
+            assert rls is True, "a 0062 não habilitou ROW LEVEL SECURITY em bank_transfers"
+            assert force is True, (
+                "faltou FORCE ROW LEVEL SECURITY: o papel DONO da tabela ignoraria a policy, e a "
+                "app roda exatamente como esse papel (`CLAUDE.md` Regra de Ouro nº 1)"
+            )
+            nome, using, check = conn.execute(
+                text(
+                    "SELECT polname, pg_get_expr(polqual, polrelid), "
+                    "pg_get_expr(polwithcheck, polrelid) FROM pg_policy "
+                    "WHERE polrelid = 'bank_transfers'::regclass"
+                )
+            ).one()
+            assert nome == "tenant_isolation"
+            assert using is not None and "app.current_tenant_id" in using
+            assert check is not None and "app.current_tenant_id" in check, (
+                "a policy tem USING e nao tem WITH CHECK — leitura protegida, escrita aberta"
+            )
+    finally:
+        engine.dispose()

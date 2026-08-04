@@ -22,8 +22,13 @@ from sqlalchemy.orm import Session
 
 from app.core.money_planes import ORIGEM_BANCO
 from app.core.tenancy import CurrentUser, get_tenant_db, require_module
-from app.modules.bank import reconciliation, service
-from app.modules.bank.models import BankAccount, BankBalanceCheckpoint, BankTransaction
+from app.modules.bank import reconciliation, service, transfers
+from app.modules.bank.models import (
+    BankAccount,
+    BankBalanceCheckpoint,
+    BankTransaction,
+    BankTransfer,
+)
 from app.modules.bank.schemas import (
     BankAccountCreate,
     BankAccountOut,
@@ -32,6 +37,8 @@ from app.modules.bank.schemas import (
     BankTransactionCreate,
     BankTransactionOut,
     BankTransactionUpdate,
+    BankTransferCreate,
+    BankTransferOut,
     CheckpointCreate,
     CheckpointOut,
     ConferenciaContaOut,
@@ -107,6 +114,8 @@ def _tx_out(t: BankTransaction) -> BankTransactionOut:
         counterparty_document=t.counterparty_document,
         operation_nature=t.operation_nature,
         source=t.source,
+        # Story 8.18 — o pareamento das pernas irmãs. `None` em toda origem de perna única.
+        transfer_id=t.transfer_id,
         status=t.status,
         ignored_reason=t.ignored_reason,
         created_at=t.created_at,
@@ -450,6 +459,109 @@ def unignore_transaction(
     except service.BankError as e:
         raise _err(e) from e
     return _tx_out(tx)
+
+
+# ── Transferência entre contas próprias (Story 8.18) ─────────────────────────────────────────
+#
+# ⚠️ **O `DELETE` daqui é a SEGUNDA exceção do módulo** (a primeira é o checkpoint), e o porquê está
+# em `transfers.delete_transfer`: sem ele, a única correção de uma transferência errada seria a
+# contrapartida que o design §4.5 rejeita nominalmente. Ele não contradiz o "sem DELETE de
+# movimento" do topo deste arquivo — as pernas continuam não sendo apagáveis **por elas mesmas**;
+# quem as apaga é o lançamento que as gerou (Regra da Origem (c): o movimento é espelho).
+#
+# **Não existe `PATCH` de transferência**, e a ausência é decisão: corrigir é apagar e recriar, o
+# que é barato aqui (duas linhas puramente sintéticas, nenhum evento de Agenda envolvido).
+
+
+def _transfer_out(t: BankTransfer) -> BankTransferOut:
+    return BankTransferOut(
+        id=t.id,
+        from_account_id=t.from_account_id,
+        to_account_id=t.to_account_id,
+        amount_cents=t.amount_cents,
+        posted_at=t.posted_at,
+        kind=t.kind,
+        description=t.description,
+        created_at=t.created_at,
+        updated_at=t.updated_at,
+    )
+
+
+@router.post("/transfers", response_model=BankTransferOut, status_code=201)
+def create_transfer(
+    data: BankTransferCreate,
+    user: CurrentUser = Depends(_guard),
+    db: Session = Depends(get_tenant_db),
+) -> BankTransferOut:
+    """Registra que dinheiro foi de uma conta sua para outra.
+
+    Gera **as duas pernas**, num commit só.
+
+    **Não é receita nem despesa** (Regra da Neutralidade): a DRE, a Lucratividade e a Projeção não
+    se movem por causa dela. O que muda são os saldos derivados das duas contas — e, quando o
+    destino é uma conta de aplicação, o *"Disponível como caixa"* cai, porque o dinheiro deixou de
+    ser caixa.
+
+    As duas contas vêm no CORPO (e não no path) porque nenhuma das duas é "a conta desta rota": a
+    operação é sobre o par. `posted_at` futuro é **422** — ver `transfers._validate_nao_futura`.
+    """
+    try:
+        t = transfers.create_transfer(db, tenant_id=user.tenant_id, actor=user.user_id, data=data)
+    except service.BankError as e:
+        raise _err(e) from e
+    return _transfer_out(t)
+
+
+@router.get("/transfers", response_model=list[BankTransferOut])
+def list_transfers(
+    bank_account_id: str | None = Query(
+        default=None, description="Casa os DOIS lados: origem ou destino."
+    ),
+    start: date | None = Query(default=None),
+    end: date | None = Query(default=None),
+    limit: int = Query(default=100, ge=1, le=500),
+    offset: int = Query(default=0, ge=0),
+    _user: CurrentUser = Depends(_guard),
+    db: Session = Depends(get_tenant_db),
+) -> list[BankTransferOut]:
+    """Transferências do tenant, `posted_at` desc. `start`/`end` inclusivos nas duas pontas."""
+    rows = transfers.list_transfers(
+        db,
+        bank_account_id=bank_account_id or None,
+        start=start,
+        end=end,
+        limit=limit,
+        offset=offset,
+    )
+    return [_transfer_out(t) for t in rows]
+
+
+@router.get("/transfers/{transfer_id}", response_model=BankTransferOut)
+def get_transfer(
+    transfer_id: str,
+    _user: CurrentUser = Depends(_guard),
+    db: Session = Depends(get_tenant_db),
+) -> BankTransferOut:
+    try:
+        return _transfer_out(transfers.get_transfer(db, transfer_id))
+    except service.BankError as e:
+        raise _err(e) from e
+
+
+@router.delete("/transfers/{transfer_id}", status_code=204)
+def delete_transfer(
+    transfer_id: str,
+    user: CurrentUser = Depends(_guard),
+    db: Session = Depends(get_tenant_db),
+) -> Response:
+    """Desfaz a transferência: o lançamento **e as duas pernas** somem juntos. Ver o service."""
+    try:
+        transfers.delete_transfer(
+            db, transfer_id=transfer_id, tenant_id=user.tenant_id, actor=user.user_id
+        )
+    except service.BankError as e:
+        raise _err(e) from e
+    return Response(status_code=204)
 
 
 # ── Saldos declarados (Story 8.4) ────────────────────────────────────────────────────────────

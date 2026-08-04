@@ -19,16 +19,21 @@ import { usePrimaryAction } from "../../store/pageActions";
 import AccountModal from "./AccountModal";
 import {
   acaoBaixarPayable,
+  avisoDestinoAplicacao,
   type BankAccount,
   type BankBalanceCheckpoint,
   type BankTransaction,
   centsToInput,
+  contasAtivas,
   type DuplicataAcionavel,
   formatBRL,
   formatDateBR,
   hojeISO,
+  impedimentoDaTransferencia,
   isIgnored,
+  kindDaTransferencia,
   kindLabel,
+  motivoDeNaoEditar,
   naturezaParaEnvio,
   operationNatureLabel,
   OPERATION_NATURE_OUTRO,
@@ -36,12 +41,15 @@ import {
   OPERATION_NATURES,
   origemLabel,
   parseCentsBRL,
+  podeEditarOsFatosDoMovimento,
   ponteiroDaTransferencia,
   type ResumoSaldo,
   resumoSaldos,
   saldoApuradoEm,
   signedAmountView,
+  SOURCE_TRANSFER,
   statusLabel,
+  TRANSFERIR_LABEL,
 } from "./contas";
 import PeriodPicker from "./PeriodPicker";
 import { type PeriodRange, resolvePeriod } from "./periodRange";
@@ -78,6 +86,9 @@ export default function ContasSaldosPage() {
   const [editando, setEditando] = useState<BankAccount | null>(null);
   const [declarando, setDeclarando] = useState<BankAccount | null>(null);
   const [lancando, setLancando] = useState<BankAccount | null>(null);
+  // Story 8.18 — a transferência é sobre um PAR de contas, então o estado é "está aberto, com esta
+  // conta pré-selecionada como origem" (ou `""` quando o gesto veio do cabeçalho, sem conta).
+  const [transferindoDe, setTransferindoDe] = useState<string | null>(null);
 
   const load = useCallback(async () => {
     setError(null);
@@ -153,14 +164,28 @@ export default function ContasSaldosPage() {
             saldo que o app do seu banco já mostra, e o e1p diz se está batendo.
           </p>
         </div>
-        <label className="flex items-center gap-2 text-sm text-neutral-600">
-          <input
-            type="checkbox"
-            checked={includeArchived}
-            onChange={(e) => setIncludeArchived(e.target.checked)}
-          />
-          Mostrar arquivadas
-        </label>
+        <div className="flex flex-wrap items-center gap-4">
+          {/* Story 8.18 — a transferência mora AQUI, sem tela nova: ela é sobre onde o dinheiro
+              está, que é a pergunta desta página. Só aparece com duas contas ativas, porque com
+              uma só não há para onde transferir e o botão seria uma promessa vazia. */}
+          {contasAtivas(accounts).length >= 2 && (
+            <button
+              type="button"
+              onClick={() => setTransferindoDe("")}
+              className="inline-flex items-center gap-1 rounded-pill border border-neutral-200 px-4 py-1.5 text-sm font-medium text-neutral-600 hover:border-primary-300 hover:text-primary-600"
+            >
+              <ArrowLeftRight size={14} /> {TRANSFERIR_LABEL}
+            </button>
+          )}
+          <label className="flex items-center gap-2 text-sm text-neutral-600">
+            <input
+              type="checkbox"
+              checked={includeArchived}
+              onChange={(e) => setIncludeArchived(e.target.checked)}
+            />
+            Mostrar arquivadas
+          </label>
+        </div>
       </div>
 
       {error && <p className="rounded-lg bg-red-50 p-2 text-sm text-danger">{error}</p>}
@@ -198,6 +223,9 @@ export default function ContasSaldosPage() {
                 onEdit={() => setEditando(a)}
                 onDeclare={() => setDeclarando(a)}
                 onLaunch={() => setLancando(a)}
+                onTransfer={
+                  contasAtivas(accounts).length >= 2 ? () => setTransferindoDe(a.id) : null
+                }
                 onArchive={() => arquivar(a)}
               />
             ))}
@@ -235,6 +263,17 @@ export default function ContasSaldosPage() {
           load();
           // Abre a conta lançada para o movimento novo aparecer sem um segundo clique.
           if (lancando) setSelectedId(lancando.id);
+        }}
+      />
+      <TransferirModal
+        open={transferindoDe !== null}
+        accounts={accounts}
+        origemInicialId={transferindoDe ?? ""}
+        onClose={() => setTransferindoDe(null)}
+        onSaved={(origemId) => {
+          load();
+          // Abre a conta de ORIGEM: é lá que o dono espera ver a saída que ele acabou de registrar.
+          setSelectedId(origemId);
         }}
       />
     </div>
@@ -281,6 +320,7 @@ function AccountCard({
   onEdit,
   onDeclare,
   onLaunch,
+  onTransfer,
   onArchive,
 }: {
   account: BankAccount;
@@ -290,6 +330,8 @@ function AccountCard({
   onEdit: () => void;
   onDeclare: () => void;
   onLaunch: () => void;
+  /** `null` = não há segunda conta ativa, então não há para onde transferir (Story 8.18). */
+  onTransfer: (() => void) | null;
   onArchive: () => void;
 }) {
   const arquivada = account.archived_at !== null;
@@ -365,6 +407,15 @@ function AccountCard({
             >
               <ArrowLeftRight size={14} /> Lançar movimento
             </button>
+            {onTransfer && (
+              <button
+                type="button"
+                onClick={onTransfer}
+                className="inline-flex items-center gap-1 text-neutral-600 hover:text-primary-600"
+              >
+                <ArrowLeftRight size={14} /> {TRANSFERIR_LABEL}
+              </button>
+            )}
           </>
         )}
         <Link
@@ -492,6 +543,35 @@ function AccountDetail({
     }
   }
 
+  /**
+   * Story 8.18 (AC8) — desfazer a transferência a partir de UMA das pernas.
+   *
+   * ⚠️ **O gesto é sobre o LANÇAMENTO, e a frase diz isso.** As duas pernas somem juntas; oferecer
+   * "apagar este movimento" seria prometer algo que a Regra da Origem (c) não permite (o movimento é
+   * espelho do lançamento, não uma linha independente). É por isso que a confirmação nomeia as duas
+   * contas em vez de dizer "remover linha".
+   */
+  async function desfazerTransferencia(tx: BankTransaction) {
+    if (!tx.transfer_id) return;
+    if (
+      !confirm(
+        "Desfazer esta transferência? As DUAS pernas — a saída na conta de origem e a entrada na " +
+          "de destino — são apagadas juntas, e os dois saldos voltam ao que eram. A operação fica " +
+          "registrada na trilha de auditoria.",
+      )
+    ) {
+      return;
+    }
+    setError(null);
+    try {
+      await api.delete(`/bank/transfers/${tx.transfer_id}`);
+      load();
+      onChanged();
+    } catch (err) {
+      setError(apiErrorMessage(err));
+    }
+  }
+
   async function removerDeclaracao(cp: BankBalanceCheckpoint) {
     if (
       !confirm(
@@ -561,6 +641,7 @@ function AccountDetail({
                   onEdit={() => setEditando(tx)}
                   onIgnore={() => setIgnorando(tx)}
                   onUnignore={() => desfazerIgnorar(tx)}
+                  onDesfazerTransferencia={() => desfazerTransferencia(tx)}
                 />
               ))}
             </tbody>
@@ -649,14 +730,21 @@ function TransactionRow({
   onEdit,
   onIgnore,
   onUnignore,
+  onDesfazerTransferencia,
 }: {
   tx: BankTransaction;
   onEdit: () => void;
   onIgnore: () => void;
   onUnignore: () => void;
+  onDesfazerTransferencia: () => void;
 }) {
   const ignorado = isIgnored(tx);
   const valor = signedAmountView(tx.amount_cents);
+  // Story 8.18 / AC9 — a tela **lê o `source`**; ela não conhece a regra. O backend recusa com 422
+  // de todo jeito (`service._recusa_se_origem_do_sistema`); o que a UI faz é não oferecer um botão
+  // que ela sabe que vai falhar — oferecer e falhar treina o dono a ignorar mensagens de erro.
+  const editavel = podeEditarOsFatosDoMovimento(tx);
+  const motivo = motivoDeNaoEditar(tx);
   return (
     <tr className={`border-b border-neutral-50 last:border-0 ${ignorado ? "bg-neutral-50" : ""}`}>
       <td className="whitespace-nowrap py-2.5 pr-3 tabular-nums text-neutral-600">
@@ -691,25 +779,50 @@ function TransactionRow({
           <span className="block text-[11px] text-neutral-400">{tx.ignored_reason}</span>
         )}
       </td>
-      <td className="whitespace-nowrap py-2.5 text-xs font-medium">
-        <span className="flex gap-3">
-          <button type="button" onClick={onEdit} className="text-neutral-500 hover:text-primary-600">
-            Editar
-          </button>
-          {ignorado ? (
+      <td className="py-2.5 text-xs font-medium">
+        {editavel ? (
+          <span className="flex gap-3">
             <button
               type="button"
-              onClick={onUnignore}
+              onClick={onEdit}
               className="text-neutral-500 hover:text-primary-600"
             >
-              Desfazer ignorar
+              Editar
             </button>
-          ) : (
-            <button type="button" onClick={onIgnore} className="text-neutral-500 hover:text-danger">
-              Ignorar
-            </button>
-          )}
-        </span>
+            {ignorado ? (
+              <button
+                type="button"
+                onClick={onUnignore}
+                className="text-neutral-500 hover:text-primary-600"
+              >
+                Desfazer ignorar
+              </button>
+            ) : (
+              <button
+                type="button"
+                onClick={onIgnore}
+                className="text-neutral-500 hover:text-danger"
+              >
+                Ignorar
+              </button>
+            )}
+          </span>
+        ) : (
+          <span className="flex flex-col gap-1">
+            {/* A frase existe porque uma linha SEM botão e SEM explicação é lida como bug da tela.
+                Ela diz o porquê e diz o que fazer — a diferença entre restrição e parede. */}
+            <span className="max-w-xs font-normal text-[11px] text-neutral-400">{motivo}</span>
+            {tx.source === SOURCE_TRANSFER && tx.transfer_id && (
+              <button
+                type="button"
+                onClick={onDesfazerTransferencia}
+                className="self-start text-neutral-500 hover:text-danger"
+              >
+                Desfazer transferência
+              </button>
+            )}
+          </span>
+        )}
       </td>
     </tr>
   );
@@ -833,9 +946,11 @@ function LancarMovimentoModal({
   // nullable no banco e movimento legado nasceu com `NULL`; forçar preenchimento no backend
   // quebraria a edição de tudo o que já existe (AC7). A curadoria é de UI.
   const naturezaPendente = operationNature === null;
-  // Ponteiro para a transferência de verdade (8.18). Hoje `false`: ela não está em produção.
+  // Ponteiro para a transferência de verdade. **`true` a partir da Story 8.18**: ela existe agora
+  // (`POST /bank/transfers` + o modal desta tela), e a 8.17 deixou escrito que quem a implementasse
+  // trocaria o argumento aqui, no único ponto de chamada.
   const ponteiro =
-    natureza === OPERATION_NATURE_TRANSFERENCIA ? ponteiroDaTransferencia(false) : null;
+    natureza === OPERATION_NATURE_TRANSFERENCIA ? ponteiroDaTransferencia(true) : null;
 
   async function save(confirmarAvulso = false) {
     if (!account) return;
@@ -963,6 +1078,164 @@ function LancarMovimentoModal({
           className="w-full rounded-pill bg-accent-400 py-2.5 font-semibold text-white transition hover:bg-accent-500 disabled:opacity-60"
         >
           {saving ? "Salvando…" : "Lançar movimento"}
+        </button>
+      </div>
+    </Modal>
+  );
+}
+
+/**
+ * **Transferir entre contas** (Story 8.18, AC10) — dentro de Contas & Saldos, sem tela nova.
+ *
+ * Três decisões de tela que não são estéticas:
+ *
+ * 1. **Não existe `<select>` de "tipo de transferência".** O `kind` é **derivado** dos tipos das
+ *    duas contas (`kindDaTransferencia`): um terceiro campo dizendo o que os dois primeiros já dizem
+ *    poderia discordar deles, e não haveria regra escrita em lugar nenhum sobre quem vence.
+ * 2. **O aviso da aplicação vem ANTES de confirmar** (`avisoDestinoAplicacao`), e é obrigatório —
+ *    transferir para a aplicação derruba o "Disponível como caixa" e o saldo de partida da Projeção.
+ *    É correto e é a primeira vez que uma ação do dono encurta o runway sem nada ter sido pago.
+ * 3. **O resumo, o aviso e o botão ficam no MESMO bloco visível** (lições dos PRs #56 e #58 em
+ *    ~360px): um checkbox/aviso que só aparece depois de rolar é um aviso que não existe.
+ */
+function TransferirModal({
+  open,
+  accounts,
+  origemInicialId,
+  onClose,
+  onSaved,
+}: {
+  open: boolean;
+  accounts: BankAccount[];
+  origemInicialId: string;
+  onClose: () => void;
+  onSaved: (origemId: string) => void;
+}) {
+  const [fromId, setFromId] = useState("");
+  const [toId, setToId] = useState("");
+  const [value, setValue] = useState("0,00");
+  const [postedAt, setPostedAt] = useState(hojeISO);
+  const [description, setDescription] = useState("");
+  const [error, setError] = useState<string | null>(null);
+  const [saving, setSaving] = useState(false);
+
+  // Só contas ATIVAS: a arquivada não recebe lançamento novo (o backend recusa com 422), e
+  // oferecê-la no seletor seria montar uma parede um clique adiante.
+  const elegiveis = useMemo(() => contasAtivas(accounts), [accounts]);
+
+  useEffect(() => {
+    if (!open) return;
+    const origem = origemInicialId || elegiveis[0]?.id || "";
+    setFromId(origem);
+    // O destino nasce na primeira conta que NÃO é a origem — nunca igual a ela, que é 422.
+    setToId(elegiveis.find((a) => a.id !== origem)?.id ?? "");
+    setValue("0,00");
+    setPostedAt(hojeISO());
+    setDescription("");
+    setError(null);
+  }, [open, origemInicialId, elegiveis]);
+
+  const origem = elegiveis.find((a) => a.id === fromId) ?? null;
+  const destino = elegiveis.find((a) => a.id === toId) ?? null;
+  const cents = parseCentsBRL(value);
+  const impedimento = impedimentoDaTransferencia(origem, destino, cents, postedAt);
+  const aviso = avisoDestinoAplicacao(destino);
+
+  async function save() {
+    if (!origem || !destino) return;
+    setError(null);
+    setSaving(true);
+    try {
+      await api.post("/bank/transfers", {
+        from_account_id: origem.id,
+        to_account_id: destino.id,
+        // SEMPRE POSITIVO: o sinal vive nas pernas, e é o backend quem o aplica.
+        amount_cents: cents,
+        posted_at: postedAt,
+        kind: kindDaTransferencia(origem.kind, destino.kind),
+        description,
+      });
+      onSaved(origem.id);
+      onClose();
+    } catch (err) {
+      setError(apiErrorMessage(err));
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  return (
+    <Modal title={TRANSFERIR_LABEL} open={open} onClose={onClose}>
+      <div className="space-y-3">
+        <p className="text-sm text-neutral-600">
+          Dinheiro que foi de uma conta sua para outra. <strong>Não é receita nem despesa</strong> —
+          a sua DRE não muda; o que muda são os saldos das duas contas.
+        </p>
+        <label className="block">
+          <span className="mb-1 block text-xs font-medium text-neutral-600">Sai de</span>
+          <select
+            value={fromId}
+            onChange={(e) => setFromId(e.target.value)}
+            aria-label="Conta de origem"
+            className="w-full rounded-lg border border-neutral-200 px-3 py-2 text-sm outline-none focus:border-primary-400"
+          >
+            {elegiveis.map((a) => (
+              <option key={a.id} value={a.id}>
+                {a.name} ({kindLabel(a.kind)}) — {formatBRL(a.saldo_derivado_cents)}
+              </option>
+            ))}
+          </select>
+        </label>
+        <label className="block">
+          <span className="mb-1 block text-xs font-medium text-neutral-600">Entra em</span>
+          <select
+            value={toId}
+            onChange={(e) => setToId(e.target.value)}
+            aria-label="Conta de destino"
+            className="w-full rounded-lg border border-neutral-200 px-3 py-2 text-sm outline-none focus:border-primary-400"
+          >
+            {elegiveis.map((a) => (
+              <option key={a.id} value={a.id}>
+                {a.name} ({kindLabel(a.kind)}) — {formatBRL(a.saldo_derivado_cents)}
+              </option>
+            ))}
+          </select>
+        </label>
+        <Field label="Valor (R$)" value={value} onChange={setValue} />
+        <Field label="Data" value={postedAt} onChange={setPostedAt} type="date" />
+        <Field
+          label="Descrição (opcional)"
+          value={description}
+          onChange={setDescription}
+          placeholder="Ex.: reserva de emergência"
+        />
+        {/* ── O bloco fixo: resumo + aviso + impedimento + botão, fisicamente inseparáveis ── */}
+        <p className="rounded-lg bg-neutral-50 p-2 text-xs text-neutral-600">
+          {origem && destino ? (
+            <>
+              Sai <strong>{formatBRL(cents)}</strong> de <strong>{origem.name}</strong> e entra em{" "}
+              <strong>{destino.name}</strong> em {formatDateBR(postedAt)}. Duas linhas nascem
+              juntas, uma em cada extrato.
+            </>
+          ) : (
+            "Escolha as duas contas."
+          )}
+        </p>
+        {aviso && <p className="rounded-lg bg-amber-50 p-2 text-xs text-neutral-800">{aviso}</p>}
+        {impedimento && (
+          <p className="rounded-lg bg-neutral-50 p-2 text-xs text-neutral-500">{impedimento}</p>
+        )}
+        {error && <p className="rounded-lg bg-red-50 p-2 text-sm text-danger">{error}</p>}
+        <button
+          type="button"
+          onClick={save}
+          disabled={saving || impedimento !== null}
+          className="w-full rounded-pill bg-accent-400 py-2.5 font-semibold text-white transition hover:bg-accent-500 disabled:opacity-60"
+        >
+          {/* Rótulo PRÓPRIO, diferente do da ação que abre o modal (`TRANSFERIR_LABEL`): um botão
+              de confirmar com o mesmo nome do gatilho é ambíguo para leitor de tela e para teste —
+              "cliquei em Transferir entre contas" passaria a ter duas respostas possíveis. */}
+          {saving ? "Registrando…" : "Registrar transferência"}
         </button>
       </div>
     </Modal>

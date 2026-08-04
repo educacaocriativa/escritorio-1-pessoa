@@ -308,13 +308,21 @@ class BankTransactionOut(BaseModel):
     implementações não divirjam depois (Dev Notes da 8.3).
 
     **Colunas da tabela que NÃO entram neste contrato agora**, e por quê: `fitid`, `dedup_hash`,
-    `balance_after_cents`, `import_batch_id` e `transfer_id` são criadas pela migration desta story
-    porque a Onda 3/4 depende delas (design §7.3), mas nesta onda **nenhum caminho de código as
-    escreve** e nenhum consumidor as lê — são NULL/derivadas por construção. Quem passar a
-    populá-las define o contrato de saída delas, com uma pergunta a mais no caso de
-    `balance_after_cents`: por carregar um saldo (o que o banco reportou após o movimento), ela
-    precisa nascer com o irmão `*_origem` da Regra dos Planos §1.3c. Expor um campo de saldo agora,
-    sempre nulo e sem procedência, seria justamente o contra-exemplo que essa regra procura.
+    `balance_after_cents` e `import_batch_id` são criadas pela migration da 8.3 porque a Onda 3/4
+    depende delas (design §7.3), mas nesta onda **nenhum caminho de código as escreve** e nenhum
+    consumidor as lê — são NULL/derivadas por construção. Quem passar a populá-las define o contrato
+    de saída delas, com uma pergunta a mais no caso de `balance_after_cents`: por carregar um saldo
+    (o que o banco reportou após o movimento), ela precisa nascer com o irmão `*_origem` da Regra
+    dos Planos §1.3c. Expor um campo de saldo agora, sempre nulo e sem procedência, seria justamente
+    o contra-exemplo que essa regra procura.
+
+    ⚠️ **[Story 8.18] `transfer_id` SAIU dessa lista e entrou no contrato** — pelo caminho que a
+    própria nota acima previa (*"quem passar a populá-las define o contrato de saída delas"*). A
+    8.18 é quem o popula, e ela tem um consumidor real: a tela de movimentos oferece *"desfazer
+    transferência"* sobre uma perna, e para isso precisa saber **qual** transferência apagar. A
+    alternativa seria a UI decompor o `origin_id` por string (`"{id}:out"`), o que espalharia o
+    formato da chave de origem para o frontend — um segundo lugar que passaria a depender dela.
+    Ele **não** carrega saldo, então não precisa de irmão `*_origem`.
     """
 
     id: str
@@ -334,8 +342,76 @@ class BankTransactionOut(BaseModel):
     # Sempre `manual` nesta onda; existe no contrato porque a UI da 8.7 precisa distinguir o que foi
     # digitado do que veio de arquivo assim que a Onda 3 existir.
     source: str
+    # ⚠️ **[Story 8.18]** Pareia as duas pernas irmãs de uma transferência. `None` em todo o resto —
+    # inclusive nas origens de perna única (`payable`, `charge`). Quem o lê é a tela de movimentos,
+    # para oferecer "desfazer transferência" sem precisar conhecer o formato de `origin_id`.
+    transfer_id: str | None = None
     status: str
     ignored_reason: str
+    created_at: datetime
+    updated_at: datetime
+
+
+# ── Transferência entre contas próprias (Story 8.18) ─────────────────────────────────────────
+
+
+class BankTransferCreate(BaseModel):
+    """*"Movi R$ X da minha conta A para a minha conta B."* Um lançamento, duas pernas.
+
+    ⚠️ **`amount_cents` é SEMPRE POSITIVO** — o sinal vive nas pernas (invariante (b) de
+    `BankTransfer`). A guarda de `<= 0` mora no **service**, e não num `Field(gt=0)` aqui, pelo
+    mesmo motivo que `kind` de conta é validado lá: a mensagem precisa explicar *por quê* (um
+    negativo aqui seria a terceira convenção de sinal do repositório), e não devolver o erro
+    genérico do Pydantic.
+
+    ⚠️ **Nenhum campo de saldo entra nesta requisição nem na resposta.** Se um dia entrar, ele
+    precisa do irmão `*_origem` (Regra dos Planos §1.3c / `CLAUDE.md` Regra 3) — a dívida G-1 já tem
+    6 campos de saldo sem irmão e não deve crescer.
+
+    `kind` é validado contra `models.TRANSFER_KINDS` no service. Ele é vocabulário do módulo `bank`
+    e **não referencia `investments`**: `investment_in`/`investment_out` dizem para onde o dinheiro
+    do dono foi, não qual produto financeiro ele comprou (isso é Onda 2b).
+    """
+
+    from_account_id: str = Field(min_length=1, max_length=36)
+    to_account_id: str = Field(min_length=1, max_length=36)
+    amount_cents: int
+    posted_at: date
+    kind: str = Field(default="own_transfer", max_length=20)
+    description: str = Field(default="")
+
+    @field_validator("kind", "from_account_id", "to_account_id")
+    @classmethod
+    def _ids(cls, v: str) -> str:
+        return v.strip()
+
+    @field_validator("description")
+    @classmethod
+    def _description(cls, v: str) -> str:
+        return v.strip()
+
+
+class BankTransferOut(BaseModel):
+    """A transferência como a API a devolve — o LANÇAMENTO, nunca as pernas.
+
+    As duas pernas são `BankTransaction` e saem pelas rotas de movimento, como qualquer outra linha
+    de extrato; devolvê-las embutidas aqui criaria uma segunda representação delas, que divergiria
+    da primeira no dia em que uma das duas ganhasse um campo.
+
+    O pareamento é `transfer_id` — quem quiser as pernas pede
+    `GET /bank/transactions?bank_account_id=...` e casa por ele.
+
+    ⚠️ **Sem nenhum campo de saldo, de propósito.** Ver a nota em `BankTransferCreate`.
+    """
+
+    id: str
+    from_account_id: str
+    to_account_id: str
+    # SEMPRE POSITIVO — o sinal está nas pernas, não aqui.
+    amount_cents: int
+    posted_at: date
+    kind: str
+    description: str
     created_at: datetime
     updated_at: datetime
 

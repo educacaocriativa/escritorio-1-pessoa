@@ -422,6 +422,107 @@ class BankTransaction(Base, TenantMixin, TimestampMixin):
     ignored_reason: Mapped[str] = mapped_column(String(120), default="", nullable=False)
 
 
+# ── Vocabulário de `kind` da TRANSFERÊNCIA — do módulo `bank`, e só dele (Story 8.18) ─────────
+#
+# ⚠️ **Este vocabulário NÃO referencia o módulo de investimentos, e a ausência é o AC5 inteiro.**
+# (O caminho de import dele não aparece escrito em lugar nenhum deste módulo — nem em prosa: o gate
+# por TEXTO CRU o pega em qualquer posição, e essa é a metade que pega a fuga por `importlib`.)
+# `investment_in`/`investment_out` descrevem *para onde o dinheiro do dono foi* — uma conta
+# bancária dele com `kind='investment'` —, não um produto financeiro com rentabilidade. A faceta de
+# produto (`investment_accounts`, `principal_cents` derivado, `register_yield`) é **Onda 2b**, e é
+# lá que mora o único backfill do épico. Transferir para uma `bank_account` de aplicação **já
+# funciona** desde a Onda 1: o dinheiro se move e os dois saldos derivados batem.
+#
+# O gate estrutural `test_bank_transfers_nao_importa_investments` (varredura AST, em
+# `tests/test_money_planes.py`) reprova o dia em que alguém "ligar" os dois por conveniência.
+#
+# Validado por LISTA no service, como `KINDS` de conta e ao contrário de `operation_nature`: este
+# campo tem comportamento associado (`investment_in` é o que a UI usa para avisar que o valor sai do
+# "Disponível como caixa"), então um valor fora do vocabulário seria um comportamento não decidido.
+# A coluna continua `VARCHAR(20)` (não é enum no banco) para que crescer o vocabulário não exija
+# migration — a validação mora no service, onde ela pode explicar o porquê ao usuário.
+TRANSFER_KIND_OWN = "own_transfer"          # entre duas contas correntes/poupança/caixa do dono
+TRANSFER_KIND_INVESTMENT_IN = "investment_in"    # o dinheiro foi PARA uma conta de aplicação
+TRANSFER_KIND_INVESTMENT_OUT = "investment_out"  # o dinheiro VOLTOU de uma conta de aplicação
+
+TRANSFER_KINDS: tuple[str, ...] = (
+    TRANSFER_KIND_OWN,
+    TRANSFER_KIND_INVESTMENT_IN,
+    TRANSFER_KIND_INVESTMENT_OUT,
+)
+
+
+class BankTransfer(Base, TenantMixin, TimestampMixin):
+    """*"Movi R$ X da minha conta A para a minha conta B em tal dia."* **Plano 3** (Story 8.18).
+
+    É o **lançamento**; as duas linhas de extrato que ele produz são `BankTransaction` com
+    `source='transfer'`, `origin_id = f"{transfer.id}:out"` / `f"{transfer.id}:in"` e
+    `transfer_id = transfer.id`. Quem as escreve é `bank/origin.py::sync_origin_movement`, em
+    **duas chamadas**, na mesma transação — nunca esta classe, nunca um `setattr` direto.
+
+    Quatro invariantes:
+
+    **(a) A Regra da NEUTRALIDADE — transferência não é receita nem despesa.** Ela é
+    **exclusivamente** evento do plano 3: nunca cria, altera ou baixa `Charge`, `Payable` ou
+    `Transaction`, e por isso **não aparece** na DRE, na Lucratividade nem na Projeção como entrada
+    ou saída. Isto é verdadeiro **por construção** (`dre.py` agrega exatamente essas três tabelas e
+    `bank_transfers` não é nenhuma delas) — e mesmo assim tem teste nomeado,
+    `test_transferencia_nao_altera_dre`, porque a garantia é a **invariante, não o nome**: o dia em
+    que alguém "melhorar" a DRE para incluir uma quarta fonte, o teste é o que avisa.
+
+    **(b) `amount_cents` é SEMPRE POSITIVO — o sinal vive nas pernas.** Guardar o sinal aqui seria a
+    terceira convenção de sinal do repositório (a DRE tem a dela, `bank_transactions` tem a dela) e
+    a pergunta *"o negativo aqui significa 'saiu de A' ou 'a transferência foi invertida'?"* não tem
+    resposta escrita em lugar nenhum. Guarda no service (`create_transfer`), não `CheckConstraint`.
+
+    **(c) As duas pernas são ESPELHO deste lançamento.** Apagar a transferência apaga as duas
+    (`delete_transfer`, sob a mesma guarda de linha puramente sintética da 8.12); corrigir não
+    existe — apagar e recriar é barato aqui, ao contrário de `payables`/`charges`, porque **nenhum
+    evento de Agenda está envolvido**. E as pernas **não** são editáveis nem ignoráveis pela tela de
+    movimentos: elas herdam a guarda da Regra da Origem (d), escrita contra `SOURCES_SISTEMA`.
+
+    **(d) Nenhuma coluna de saldo, aqui como em `bank_accounts`.** O saldo é derivado dos
+    movimentos, sempre (design §3.1). Uma transferência **redistribui** saldo entre contas; o total
+    das contas elegíveis não muda. Quando o destino é `kind='investment'`, o *"Disponível como
+    caixa"* **cai** — e isso é correto: o dinheiro deixou de ser caixa.
+
+    **Referências soltas, sem FK dura** (`from_account_id`, `to_account_id`): padrão do projeto
+    (`charges.client_id`, `payables.cost_center_id`) — a integridade é validada no service, sob RLS.
+    Uma FK entre tabelas com RLS `FORCE` cria caminhos de erro difíceis de diagnosticar quando a GUC
+    não está setada.
+
+    Herda `TenantMixin` — é o que dá a coluna `tenant_id` que a RLS usa **e** a purga automática na
+    exclusão de conta (`platform.service._business_table_names` descobre subclasses dinamicamente).
+    """
+
+    __tablename__ = "bank_transfers"
+
+    __table_args__ = (
+        # Só leitura: *"o que passou por esta conta?"*. `tenant_id` primeiro porque índice é global
+        # e não respeita RLS — mesmo raciocínio dos índices únicos deste módulo.
+        Index(
+            "ix_bank_transfers_accounts",
+            "tenant_id",
+            "from_account_id",
+            "to_account_id",
+        ),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
+    # Conta de ORIGEM: é dela que sai a perna `:out`, com valor NEGATIVO.
+    from_account_id: Mapped[str] = mapped_column(String(36), nullable=False)
+    # Conta de DESTINO: é nela que entra a perna `:in`, com valor POSITIVO.
+    to_account_id: Mapped[str] = mapped_column(String(36), nullable=False)
+    # Ver invariante (b): SEMPRE POSITIVO. Centavos, BigInteger.
+    amount_cents: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    # `Date`, JAMAIS `DateTime` (design §3.3) — a mesma disciplina de `BankTransaction.posted_at`.
+    posted_at: Mapped[date] = mapped_column(Date, nullable=False)
+    # Vocabulário `TRANSFER_KINDS`, validado no service. Ver o bloco acima.
+    kind: Mapped[str] = mapped_column(String(20), nullable=False)
+    # O que o dono escreveu. Vira `raw_description` das DUAS pernas (elas são espelho).
+    description: Mapped[str] = mapped_column(Text, default="", nullable=False)
+
+
 # ── Vocabulário de `origin` — o **EIXO B** da procedência (design §1.3.1) ─────────────────────
 #
 # A pergunta que este eixo responde: *"por qual PORTA este saldo EXTERNO entrou no e1p?"*
