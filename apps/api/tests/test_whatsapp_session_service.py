@@ -66,8 +66,10 @@ def test_connect_creates_instance_configures_webhook_and_returns_qr(
     assert webhook_call["url"].endswith(
         "/webhook/set/e1p-22222222-2222-2222-2222-222222222222"
     )
-    assert webhook_call["json"]["webhook_by_events"] is False
-    assert webhook_call["json"]["url"].startswith(
+    webhook_payload = webhook_call["json"]["webhook"]
+    assert webhook_payload["enabled"] is True
+    assert webhook_payload["byEvents"] is False
+    assert webhook_payload["url"].startswith(
         "http://api:8000/internal/whatsapp/evolution/webhook/"
     )
 
@@ -79,7 +81,7 @@ def test_connect_creates_instance_configures_webhook_and_returns_qr(
     assert row.last_status == "connecting"
     # o segredo do webhook usado na URL é o mesmo guardado na linha (cifrado em repouso, mas
     # o valor em texto plano lido de volta bate)
-    assert row.webhook_secret in webhook_call["json"]["url"]
+    assert row.webhook_secret in webhook_payload["url"]
 
 
 def test_connect_without_api_key_raises(db) -> None:
