@@ -45,9 +45,18 @@ services:
     # API. SEM `ports:` e SEM rede `edge` — não é HTTP-facing, não precisa do Traefik
     # compartilhado. mem_limit RÍGIDO: se uma sessão Baileys inchar, o OOM killer mata a
     # Evolution, não o Postgres. Versão FIXADA, nunca `:latest`.
+    #
+    # 512m (não o 1g da spec original — ver docker-compose.prod.yml, cenário de VPS dedicada):
+    # esta VPS específica é COMPARTILHADA com vários outros clientes (axisgov/fiscalize,
+    # autoinfracao, nexus-publica, doro-site) e tinha só ~358Mi livres de verdade no momento
+    # do primeiro deploy (2026-08-04) — decisão do fundador foi começar conservador (nenhum
+    # tenant e1p conectado ainda, então não há sessão real em risco de ser cortada por um teto
+    # baixo) e subir depois com dado real de consumo por sessão, em vez de reservar 1g numa
+    # caixa já densa e arriscar o OOM killer escolher vítima fora do nosso controle sob
+    # pressão global de memória.
     image: atendai/evolution-api:v2.2.3
     restart: always
-    mem_limit: 1g
+    mem_limit: 512m
     environment:
       AUTHENTICATION_API_KEY: ${EVOLUTION_API_KEY:?defina no .env.prod}
       DATABASE_PROVIDER: postgresql
