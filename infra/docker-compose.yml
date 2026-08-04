@@ -42,7 +42,7 @@ services:
     # API. SEM `ports:` — nada publicado, nada no Traefik (o manager web da Evolution não existe
     # pra fora). mem_limit RÍGIDO: se uma sessão Baileys inchar, o OOM killer mata a Evolution,
     # não o Postgres (o WhatsApp cai, o produto continua de pé). Versão FIXADA, nunca `:latest`.
-    image: atendai/evolution-api:v2.2.3
+    image: evoapicloud/evolution-api:v2.3.7
     restart: unless-stopped
     mem_limit: 1g
     environment:

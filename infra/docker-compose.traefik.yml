@@ -54,7 +54,7 @@ services:
     # baixo) e subir depois com dado real de consumo por sessão, em vez de reservar 1g numa
     # caixa já densa e arriscar o OOM killer escolher vítima fora do nosso controle sob
     # pressão global de memória.
-    image: atendai/evolution-api:v2.2.3
+    image: evoapicloud/evolution-api:v2.3.7
     restart: always
     mem_limit: 512m
     environment:
