@@ -1,6 +1,11 @@
 """Regras do CRM: estágios do funil, clientes (cards), movimentação e board.
 
 Sessão já isolada por tenant (RLS). tenant_id só carimba novas linhas.
+
+Nota sobre o import de `whatsapp_inbox.models`: é o MODELO, nunca o service. O
+`whatsapp_inbox/service.py` importa de `crm`, então importar o service dele aqui fecharia
+ciclo; `whatsapp_inbox/models.py` não importa nada de `crm`. Usado por
+`last_interaction_map`, que precisa da data da última mensagem para o card do Kanban.
 """
 from __future__ import annotations
 
@@ -23,8 +28,6 @@ from app.modules.crm.models import (
     PipelineStage,
 )
 from app.modules.crm.schemas import ClientCreate, ClientUpdate, StageCreate, StageUpdate
-# Só o MODELO do inbox, nunca o service dele: `whatsapp_inbox/service.py` importa de `crm`,
-# então importar o service aqui fecharia ciclo. `whatsapp_inbox/models.py` não importa `crm`.
 from app.modules.whatsapp_inbox.models import WhatsappMessage
 
 EVENT_CLIENT_MOVED = "crm.client.moved"
