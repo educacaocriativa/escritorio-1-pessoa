@@ -157,13 +157,24 @@ def ingest_webhook_payload(
             if msg.from_phone is None:
                 client_id = None
             else:
+                # `push_name` só nomeia o cliente quando o CONTATO escreveu: em mensagem
+                # espelhada do aparelho do dono (`from_me`), o `pushName` que a Evolution manda
+                # é o do PRÓPRIO DONO — usá-lo criaria (ou renomearia) o cliente com o nome do
+                # dono na primeira mensagem espelhada de um contato ainda desconhecido.
+                # `_get_or_create_client` cai no telefone quando o nome vem vazio.
                 client = _get_or_create_client(
-                    db, tenant_id=tenant_id, phone=msg.from_phone, name=msg.push_name
+                    db, tenant_id=tenant_id, phone=msg.from_phone,
+                    name="" if msg.from_me else msg.push_name,
                 )
                 client_id = client.id
 
+            # A autoria vem do provider (`key.fromMe` da Evolution), nunca é assumida: espelhar
+            # como `in` uma mensagem que o dono escreveu no celular apaga o autor na tela de
+            # Conversas E abre indevidamente a janela de 24h (`is_within_session_window` conta
+            # só `DIRECTION_IN` — a janela é reaberta pelo CLIENTE, não por nós).
+            direction = DIRECTION_OUT if msg.from_me else DIRECTION_IN
             msg_row = WhatsappMessage(
-                tenant_id=tenant_id, client_id=client_id, direction=DIRECTION_IN, kind=msg.kind,
+                tenant_id=tenant_id, client_id=client_id, direction=direction, kind=msg.kind,
                 text_body=msg.text_body, media_status=MEDIA_STATUS_NONE,
                 wa_message_id=msg.wa_message_id, status="sent",
             )
@@ -206,7 +217,13 @@ def ingest_webhook_payload(
 
             audit.record(
                 db, tenant_id=tenant_id, actor="whatsapp:inbox",
-                action="whatsapp_inbox.message.received", target=client_id or "unidentified",
+                # Ação distinta para a mensagem espelhada do aparelho do dono: "received" numa
+                # mensagem que o próprio dono escreveu é trilha de auditoria que mente.
+                action=(
+                    "whatsapp_inbox.message.mirrored" if msg.from_me
+                    else "whatsapp_inbox.message.received"
+                ),
+                target=client_id or "unidentified",
             )
             db.commit()  # commita SÓ esta mensagem — transação atômica própria, isolada de
             # qualquer mensagem seguinte do mesmo lote que venha a falhar (ver nota no topo da

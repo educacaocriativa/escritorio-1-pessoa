@@ -48,6 +48,68 @@ describe("ConversasPage", () => {
     expect(screen.getByPlaceholderText(/mensagem/i)).toBeInTheDocument();
   });
 
+  it("distingue autor e mostra dia e horário de cada mensagem", async () => {
+    // Instantes fixos em UTC-3 (fuso do produto) para o horário renderizado ser previsível.
+    // Os dois primeiros são do mesmo dia; o terceiro é de outro dia — exige 2 separadores.
+    vi.mocked(api.get).mockImplementation((url: string) => {
+      if (url === "/whatsapp-conversations") {
+        return Promise.resolve({
+          data: [{
+            client_id: "c1", client_name: "Murilo Moreschi", client_phone: "5511977776666",
+            last_message_at: "2026-07-20T17:19:00-03:00", last_message_preview: "Ok",
+            unread: false,
+          }],
+        });
+      }
+      if (url === "/whatsapp-conversations/c1/timeline") {
+        return Promise.resolve({
+          data: [
+            {
+              source: "conversation", direction: "in", kind: "text",
+              text_body: "sempre na curva", media_attachment_id: null, purpose_label: null,
+              created_at: "2026-07-19T14:18:00-03:00",
+            },
+            {
+              source: "conversation", direction: "out", kind: "text",
+              text_body: "Ok", media_attachment_id: null, purpose_label: null,
+              created_at: "2026-07-19T14:19:00-03:00",
+            },
+            {
+              source: "conversation", direction: "out", kind: "text",
+              text_body: "Primeira enviada", media_attachment_id: null, purpose_label: null,
+              created_at: "2026-07-20T17:19:00-03:00",
+            },
+          ],
+        });
+      }
+      if (url === "/whatsapp-conversations/c1/window") {
+        return Promise.resolve({ data: { within_session_window: true } });
+      }
+      if (url === "/whatsapp-templates") return Promise.resolve({ data: [] });
+      return Promise.resolve({ data: [] });
+    });
+    vi.mocked(api.post).mockResolvedValue({ data: {} } as never);
+
+    render(<ConversasPage />);
+    await waitFor(() => screen.getByText("Murilo Moreschi"));
+    await userEvent.click(screen.getByText("Murilo Moreschi"));
+    await waitFor(() => screen.getByText("sempre na curva"));
+
+    // Autoria em texto: só as duas mensagens NOSSAS são marcadas "Você".
+    expect(screen.getAllByText(/^Você ·/)).toHaveLength(2);
+    // ...e a do cliente carrega só o horário, sem "Você".
+    expect(screen.getByText("14:18")).toBeInTheDocument();
+    expect(screen.getByText("Você · 14:19")).toBeInTheDocument();
+
+    // Um separador por DIA (o fixture tem 3 mensagens em 2 dias), não um por mensagem. O
+    // regex exige o dia-da-semana antes da data, o que distingue o separador ("dom., 19/07/2026")
+    // do carimbo da lista de conversas, que é só a data ("20/07/2026").
+    const separadores = screen.getAllByText(/^\S+,? \d{2}\/\d{2}\/\d{4}$/);
+    expect(separadores.map((n) => n.textContent)).toEqual([
+      "dom., 19/07/2026", "seg., 20/07/2026",
+    ]);
+  });
+
   it("troca pro seletor de template quando a janela de 24h está fechada", async () => {
     vi.mocked(api.get).mockImplementation((url: string) => {
       if (url === "/whatsapp-conversations") {

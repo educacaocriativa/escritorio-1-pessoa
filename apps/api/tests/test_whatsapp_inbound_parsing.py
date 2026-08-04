@@ -65,6 +65,53 @@ def test_evolution_parse_inbound_lid_has_no_phone() -> None:
     assert messages[0].push_name == "Cliente Sem Numero"
 
 
+def test_evolution_parse_inbound_marks_from_me() -> None:
+    """`key.fromMe=true` = o DONO escreveu (no WhatsApp do celular dele) e o Baileys espelhou
+    no mesmo evento `messages.upsert`. Sem ler este campo, as duas pontas da conversa entram
+    como recebidas e a tela de Conversas fica sem autor."""
+    payload = {
+        "data": {
+            "key": {
+                "id": "3EB0MINE", "remoteJid": "5511988887777@s.whatsapp.net", "fromMe": True,
+            },
+            "pushName": "Nome Do Dono",
+            "message": {"conversation": "Ok, fechado"},
+        }
+    }
+    msg = evolution.parse_inbound(payload)[0]
+    assert msg.from_me is True
+    # O remoteJid de uma mensagem PRÓPRIA é o do destinatário — o contato continua resolvido
+    # corretamente; só a autoria muda.
+    assert msg.from_phone == "5511988887777"
+
+
+def test_evolution_parse_inbound_from_me_default_is_false() -> None:
+    assert evolution.parse_inbound(EVOLUTION_TEXT_PAYLOAD)[0].from_me is False
+
+
+def test_evolution_parse_inbound_media_carries_from_me() -> None:
+    payload = {
+        "data": {
+            "key": {"id": "3EB0IMGME", "remoteJid": "5511988887777@s.whatsapp.net",
+                    "fromMe": True},
+            "pushName": "Nome Do Dono",
+            "message": {
+                "imageMessage": {"mimetype": "image/jpeg", "caption": "segue o print"},
+                "base64": base64.b64encode(b"fake").decode(),
+            },
+        }
+    }
+    msg = evolution.parse_inbound(payload)[0]
+    assert msg.from_me is True
+    assert msg.kind == "image"
+
+
+def test_meta_parse_inbound_never_marks_from_me() -> None:
+    """O webhook da Meta não entrega mensagem própria no array `messages` (só status de entrega,
+    em `statuses`) — o provider Meta deixa `from_me` no default."""
+    assert meta.parse_inbound(META_TEXT_PAYLOAD)[0].from_me is False
+
+
 def test_evolution_parse_inbound_malformed_payload_returns_empty() -> None:
     assert evolution.parse_inbound({"unexpected": "shape"}) == []
     assert evolution.parse_inbound({}) == []
