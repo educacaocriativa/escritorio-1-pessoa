@@ -112,7 +112,7 @@ def test_get_status_connecting_when_evolution_reports_non_open(
                 return None
 
             def json(self) -> list:
-                return [{"instance": {"instanceName": "e1p-" + TENANT_ID, "status": "connecting"}}]
+                return [{"name": "e1p-" + TENANT_ID, "connectionStatus": "connecting"}]
 
         return _Resp()
 
@@ -136,7 +136,7 @@ def test_get_status_does_not_write_to_db(db, monkeypatch: pytest.MonkeyPatch) ->
                 return None
 
             def json(self) -> list:
-                return [{"instance": {"instanceName": "e1p-" + TENANT_ID, "status": "open"}}]
+                return [{"name": "e1p-" + TENANT_ID, "connectionStatus": "open"}]
 
         return _Resp()
 
@@ -166,7 +166,7 @@ def test_confirm_sets_provider_when_evolution_reports_open(
                 return None
 
             def json(self) -> list:
-                return [{"instance": {"instanceName": "e1p-" + TENANT_ID, "status": "open"}}]
+                return [{"name": "e1p-" + TENANT_ID, "connectionStatus": "open"}]
 
         return _Resp()
 
@@ -197,7 +197,7 @@ def test_confirm_does_not_set_provider_when_not_open(
                 return None
 
             def json(self) -> list:
-                return [{"instance": {"instanceName": "e1p-" + TENANT_ID, "status": "connecting"}}]
+                return [{"name": "e1p-" + TENANT_ID, "connectionStatus": "connecting"}]
 
         return _Resp()
 
@@ -277,7 +277,7 @@ def test_check_connections_emails_owner_on_drop(db, monkeypatch: pytest.MonkeyPa
 
             def json(self) -> list:
                 return [{
-                    "instance": {"instanceName": params.get("instanceName"), "status": "close"}
+                    "name": params.get("instanceName"), "connectionStatus": "close"
                 }]
 
         return _R()
@@ -316,7 +316,7 @@ def test_check_connections_noop_when_still_connected(db, monkeypatch: pytest.Mon
 
             def json(self) -> list:
                 return [{
-                    "instance": {"instanceName": params.get("instanceName"), "status": "open"}
+                    "name": params.get("instanceName"), "connectionStatus": "open"
                 }]
 
         return _R()

@@ -143,9 +143,12 @@ def _fetch_evolution_status(instance: str) -> str | None:
     data = resp.json()
     items = data if isinstance(data, list) else []
     for item in items:
-        inst = item.get("instance", item)
-        if inst.get("instanceName") == instance:
-            return inst.get("status")
+        # v2.3.7 devolve os campos direto no item (sem wrapper "instance"), com "name" (não
+        # "instanceName") e "connectionStatus" (não "status") — confirmado ao vivo contra a
+        # API real; achado porque a versão anterior deste código nunca batia, então
+        # get_status()/confirm() sempre viam a sessão como desconectada mesmo já conectada.
+        if item.get("name") == instance:
+            return item.get("connectionStatus")
     return None
 
 
