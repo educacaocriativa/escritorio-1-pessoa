@@ -365,7 +365,12 @@ export interface ChargesSummary {
 }
 
 // ── Contas a Pagar ─────────────────────────────────────
-export type PayableStatus = "open" | "paid" | "canceled";
+// ⚠️ **[Story 8.14] `scheduled` — débito AGENDADO no app do banco, com data futura.**
+// O estado é **derivado da data** no backend (`paid_on > hoje ⇒ scheduled`), nunca escolhido pelo
+// cliente: nenhum payload de entrada tem campo `status`. Uma agendada não é "a pagar" (já foi
+// resolvida) nem "paga" (o dinheiro não saiu) — e é justamente por não caber em nenhum dos dois
+// que ela precisou de valor próprio. Ver `apps/api/app/modules/payables/models.py`.
+export type PayableStatus = "open" | "scheduled" | "paid" | "canceled";
 export type Recurrence = "none" | "weekly" | "monthly" | "yearly";
 
 export interface Payable {
@@ -399,6 +404,10 @@ export interface PayablesSummary {
   week_cents: number;
   month_cents: number;
   paid_month_cents: number;
+  // Story 8.14 — Σ das contas agendadas. **Fora** de `open_cents` e de `paid_month_cents`; os
+  // cinco campos acima não mudaram de definição (`month_cents` continua contando a agendada por
+  // vencimento, de propósito). Opcional no TS para que o front não quebre contra um backend antigo.
+  scheduled_cents?: number;
 }
 
 // Story 5.9: Fila de Pagamentos — visão nova sobre Payable (sem tabela nova). Baldes calculados
@@ -412,6 +421,9 @@ export interface PaymentQueueSummary {
   proximos_7_dias_cents: number;
   proximos_30_dias_count: number;
   proximos_30_dias_cents: number;
+  // Story 8.14 — o quinto balde. NÃO é balde de vencimento: é o que já tem dia marcado para sair.
+  agendadas_count?: number;
+  agendadas_cents?: number;
 }
 
 export interface PaymentQueue {
@@ -419,6 +431,9 @@ export interface PaymentQueue {
   hoje: Payable[];
   proximos_7_dias: Payable[];
   proximos_30_dias: Payable[];
+  // Story 8.14 — ordenadas pela DATA DO DÉBITO (`paid_at`), não por `due_date`, e sem corte de 30
+  // dias: um compromisso assumido para daqui a 60 dias continua sendo um compromisso.
+  agendadas?: Payable[];
   summary: PaymentQueueSummary;
 }
 

@@ -276,41 +276,63 @@ def test_data_anterior_a_abertura_da_conta_e_422_com_as_duas_saidas(
     assert "saldo daquele dia" in detail
 
 
-def test_data_futura_e_422_e_nao_truncada(client: TestClient, headers, conta):
-    """**Teto — `[CORTE DO @PM]`, e ele SAI na Story 8.14.**
+def test_data_futura_agora_grava_scheduled_e_nao_e_mais_422(client: TestClient, headers, conta):
+    """⚠️ **[Story 8.14 — @dev] ESTE TESTE MUDOU DE EXPECTATIVA, E A MUDANÇA É A CORREÇÃO.**
 
-    Garante que **nunca exista um `payable` `paid` com data futura** enquanto `scheduled` não
-    existir: se `paid`+futuro entrasse primeiro, o backfill das 45 e os agendamentos ficariam no
-    mesmo status, separáveis só por um predicado sobre a data — e desmanchar isso depois seria uma
-    migration com backfill sob `FORCE RLS`.
+    Enquanto valia a Story 8.12 ele se chamava `test_data_futura_e_422_e_nao_truncada` e afirmava
+    **422**. Aquele teto era `[CORTE DO @PM]` e **faseamento, não regra de negócio**: existia para
+    garantir que nunca houvesse um `payable` `paid` com data futura *enquanto `scheduled` não
+    existisse* — porque, se `paid`+futuro entrasse primeiro, o backfill das 45 contas do mutirão e
+    os agendamentos ficariam no MESMO status, separáveis só por um predicado sobre a data, e
+    desmanchar isso depois seria uma migration com backfill sob `FORCE RLS`.
 
-    **422, jamais truncado em silêncio para hoje:** gravar uma data que o usuário não informou é
-    inventar o fato de caixa (Artigo IV).
+    `scheduled` existe agora, e a story 8.12 escreveu, na própria docstring da guarda, *"na 8.14 o
+    teto sai"*. Este é o teste que fecha aquele ciclo. Não o "conserte de volta".
+
+    **O que continua valendo, e é o que impede a regressão de verdade:** a data **não é truncada em
+    silêncio** para hoje. `paid_at` é exatamente o dia que o usuário informou — gravar uma data que
+    ele não informou continua sendo inventar o fato de caixa (Artigo IV).
     """
     bill = _bill(client, headers)
     amanha = _hoje() + timedelta(days=1)
     resp = _pay(client, headers, bill["id"], conta_id=conta["id"], paid_on=amanha)
-    assert resp.status_code == 422, resp.text
-    assert "futura" in resp.json()["detail"]
-    assert client.get(f"/payables/bills/{bill['id']}", headers=headers).json()["status"] == "open"
+    assert resp.status_code == 200, resp.text
+
+    out = client.get(f"/payables/bills/{bill['id']}", headers=headers).json()
+    assert out["status"] == "scheduled", "o estado não foi DERIVADO da data (8.14 AC2)"
+    assert out["paid_at"].startswith(amanha.isoformat()), (
+        "a data foi truncada para hoje em silêncio — é inventar o fato de caixa (Artigo IV)"
+    )
+    # E a conta continua NÃO sendo atrasada: `is_overdue` exige `open`, e agendada não é aberta.
+    assert out["is_overdue"] is False
 
 
-def test_vencimento_futuro_sem_data_informada_tambem_bate_no_teto(
+def test_vencimento_futuro_sem_data_informada_agora_agenda_em_vez_de_recusar(
     client: TestClient, headers, conta
 ):
-    """A consequência **declarada** de combinar o default do AC3 com o teto: conta a vencer exige a
-    data em que o dinheiro saiu.
+    """⚠️ **[Story 8.14 — @dev] MUDOU DE EXPECTATIVA junto com o teste acima, pelo mesmo motivo.**
 
-    O default é o vencimento; se o vencimento é futuro, o default é futuro, e o teto recusa. Não é
-    um furo do teste — é o comportamento que a 8.14 vem resolver com `scheduled`. Escrito como
-    asserção para que a 8.14 saiba exatamente qual linha muda.
+    Antes se chamava `..._tambem_bate_no_teto` e afirmava 422: o default de `paid_on` é o
+    **vencimento** (fundador F10), então uma conta que vence no futuro caía no teto sem o usuário
+    ter digitado data nenhuma. A 8.12 registrou aquilo como *"consequência declarada"* e escreveu a
+    asserção **para que a 8.14 soubesse exatamente qual linha muda**. É esta.
+
+    Agora o mesmo clique grava `scheduled` no vencimento — que é literalmente o que o dono quis
+    dizer ao marcar como paga uma conta que ele acabou de agendar no app do banco.
     """
-    bill = _bill(client, headers, due_date=(_hoje() + timedelta(days=10)).isoformat())
-    assert _pay(client, headers, bill["id"], conta_id=conta["id"]).status_code == 422
-    # ... e informar o dia em que o dinheiro saiu resolve, sem tela nova.
-    assert _pay(
-        client, headers, bill["id"], conta_id=conta["id"], paid_on=_hoje()
-    ).status_code == 200
+    vencimento = _hoje() + timedelta(days=10)
+    bill = _bill(client, headers, due_date=vencimento.isoformat())
+    resp = _pay(client, headers, bill["id"], conta_id=conta["id"])
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["status"] == "scheduled"
+    assert resp.json()["paid_at"].startswith(vencimento.isoformat())
+
+    # ... e informar o dia em que o dinheiro saiu DE VERDADE continua funcionando, sem tela nova:
+    # a conta agendada atravessa a idempotência de `apply_paid` e re-deriva o estado.
+    depois = _pay(client, headers, bill["id"], conta_id=conta["id"], paid_on=_hoje())
+    assert depois.status_code == 200, depois.text
+    assert depois.json()["status"] == "paid"
+    assert depois.json()["paid_at"].startswith(_hoje().isoformat())
 
 
 # ── AC11 — o corpo obrigatório ───────────────────────────────────────────────────────────────

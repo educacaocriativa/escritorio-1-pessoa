@@ -252,12 +252,16 @@ describe("PagarPage — dar baixa (Story 8.13)", () => {
     ]);
   });
 
-  it("o campo de dia tem teto em HOJE — o `max` que a Story 8.14 remove", async () => {
+  it("⚠️ [8.14] o campo de dia NÃO tem mais `max` — data futura é agendamento, não erro", async () => {
+    // **Mudança de expectativa, e ela é a CORREÇÃO.** Este teste afirmava `max === hoje()` e o
+    // próprio nome dele dizia "o `max` que a Story 8.14 remove". Removido: com o estado
+    // `scheduled`, informar uma data futura é registrar um débito que o dono agendou no app do
+    // banco — e o backend deriva o estado da data, sem inventar nada.
     mockComConta([CONTA]);
     await abrirBaixa();
 
     const dia = (await screen.findByLabelText(/dia em que o dinheiro saiu/i)) as HTMLInputElement;
-    expect(dia.getAttribute("max")).toBe(hoje());
+    expect(dia.getAttribute("max")).toBeNull();
   });
 
   it("a conta primária vem pré-selecionada e o NOME dela aparece no próprio botão (AC5)", async () => {
@@ -400,5 +404,85 @@ describe("PagarPage — dar baixa (Story 8.13)", () => {
     const table = await screen.findByRole("table");
     expect(table.parentElement?.className).toContain("overflow-x-auto");
     expect(table.className).toMatch(/min-w-\[/);
+  });
+});
+
+// ── Story 8.14 — a conta AGENDADA na tela de Contas a Pagar ───────────────────────────────────
+
+describe("Story 8.14 — a conta agendada tem rótulo próprio e gesto próprio", () => {
+  const CONTA_AGENDADA = {
+    ...CONTA_ABERTA,
+    id: "b-agendada",
+    description: "Energia",
+    status: "scheduled",
+    // Vence dia 10; o débito foi agendado para o dia 20 — as duas datas divergem por construção,
+    // e é a do DÉBITO que responde à pergunta "quando o dinheiro sai?".
+    due_date: "2026-06-10",
+    paid_at: "2026-06-20T00:00:00Z",
+    bank_account_id: "acc-1",
+  };
+
+  function mockComAgendada() {
+    vi.mocked(api.get).mockImplementation((url: string) => {
+      if (url === "/payables/summary") return Promise.resolve({ data: emptySummary } as never);
+      if (url === "/payables/bills") {
+        return Promise.resolve({ data: [CONTA_AGENDADA] } as never);
+      }
+      if (url === "/bank/accounts") return Promise.resolve({ data: [CONTA] } as never);
+      return Promise.resolve({ data: [] } as never);
+    });
+  }
+
+  it("mostra 'Agendada' — nem 'Pago' (o dinheiro não saiu) nem 'A pagar' (já foi resolvida)", async () => {
+    mockComAgendada();
+    renderPage();
+
+    expect(await screen.findByText("Agendada")).toBeInTheDocument();
+    // Escopado à TABELA: "A pagar" também é o rótulo de um dos cartões de resumo no topo da tela,
+    // e é o STATUS da linha que está sendo afirmado aqui.
+    const tabela = await screen.findByRole("table");
+    expect(within(tabela).queryByText("Pago")).toBeNull();
+    expect(within(tabela).queryByText("A pagar")).toBeNull();
+    expect(within(tabela).getByText("Agendada")).toBeInTheDocument();
+  });
+
+  it("mostra a DATA DO DÉBITO na linha, não o vencimento", async () => {
+    mockComAgendada();
+    renderPage();
+
+    // 20/06 é o `paid_at` (dia do débito). O vencimento (10/06) continua na coluna Vencimento.
+    expect(await screen.findByText(/sai 20\/06/)).toBeInTheDocument();
+  });
+
+  it("oferece 'Cancelar agendamento' — mesma rota do estorno, outro nome", async () => {
+    // No backend é o MESMO `POST /reverse` (não há verbo novo: `reverse` sempre significou "esta
+    // saída não vai acontecer"). Na tela o nome precisa ser outro — "Estornar" uma conta que nunca
+    // foi paga não é frase que o dono reconheça.
+    mockComAgendada();
+    vi.mocked(api.post).mockResolvedValue({ data: {} } as never);
+    const confirmSpy = vi.spyOn(window, "confirm").mockReturnValue(true);
+    const user = userEvent.setup();
+    renderPage();
+
+    const botao = await screen.findByRole("button", { name: /cancelar agendamento/i });
+    expect(screen.queryByRole("button", { name: /^estornar$/i })).toBeNull();
+    await user.click(botao);
+
+    await waitFor(() => expect(api.post).toHaveBeenCalled());
+    expect(vi.mocked(api.post).mock.calls[0][0]).toBe("/payables/bills/b-agendada/reverse");
+    // A confirmação fala a linguagem do agendamento, não a do estorno.
+    expect(confirmSpy.mock.calls[0][0]).toMatch(/cancelar o agendamento/i);
+    confirmSpy.mockRestore();
+  });
+
+  it("NÃO oferece 'Marcar paga' nem 'Cancelar' — a conta já foi resolvida", async () => {
+    // "Marcar paga" convidaria a uma segunda baixa do mesmo dinheiro; "Cancelar" (cancelar a
+    // CONTA) é outro fato e o backend a recusa em `scheduled` de todo jeito.
+    mockComAgendada();
+    renderPage();
+
+    await screen.findByText("Agendada");
+    expect(screen.queryByRole("button", { name: /marcar paga/i })).toBeNull();
+    expect(screen.queryByRole("button", { name: /^cancelar$/i })).toBeNull();
   });
 });

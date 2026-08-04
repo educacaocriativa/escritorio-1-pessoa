@@ -1,4 +1,4 @@
-import { render, screen, waitFor } from "@testing-library/react";
+import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { api } from "../../lib/api";
@@ -51,9 +51,27 @@ const FILA = {
   },
 };
 
-function mockApi(contas: unknown[] = [CONTA]) {
+/** Story 8.14 — a conta cujo débito já tem dia marcado. Vence 10/06, sai 20/06. */
+const AGENDADA = {
+  ...ATRASADA,
+  id: "b-agendada",
+  description: "Aluguel",
+  supplier: "Imobiliária",
+  amount_cents: 500000,
+  status: "scheduled",
+  is_overdue: false,
+  paid_at: "2026-06-20T00:00:00Z",
+};
+
+const FILA_COM_AGENDADA = {
+  ...FILA,
+  agendadas: [AGENDADA],
+  summary: { ...FILA.summary, agendadas_count: 1, agendadas_cents: 500000 },
+};
+
+function mockApi(contas: unknown[] = [CONTA], fila: unknown = FILA) {
   vi.mocked(api.get).mockImplementation((url: string) => {
-    if (url === "/payables/queue") return Promise.resolve({ data: FILA } as never);
+    if (url === "/payables/queue") return Promise.resolve({ data: fila } as never);
     if (url === "/bank/accounts") return Promise.resolve({ data: contas } as never);
     return Promise.resolve({ data: [] } as never);
   });
@@ -189,5 +207,47 @@ describe("FilaPagamentosPage — a baixa (Story 8.13, AC6)", () => {
     // `flex-wrap`: descrição + valor + copiar + baixa não cabem em 360px numa linha só. Sem ele,
     // o botão que comete a ação sai da área visível — o defeito dos PRs #56/#58, aqui pela ponta.
     expect(linha.className).toContain("flex-wrap");
+  });
+});
+
+// ── Story 8.14 — o QUINTO balde ───────────────────────────────────────────────────────────────
+
+describe("Story 8.14 — a conta agendada não some da Fila", () => {
+  beforeEach(() => vi.clearAllMocks());
+
+  it("aparece num balde próprio, com a data do DÉBITO — e sem botão de baixa", async () => {
+    // **Esconder é erro; misturar também.** Sem o balde, uma saída certa de R$ 5.000 sumiria da
+    // única tela que responde "o que sai do meu caixa nos próximos dias". E oferecer "Marcar pago"
+    // aqui convidaria a uma segunda baixa do MESMO dinheiro.
+    mockApi([CONTA], FILA_COM_AGENDADA);
+    render(<FilaPagamentosPage />);
+
+    expect(await screen.findByText("Agendadas")).toBeInTheDocument();
+    expect(screen.getByText("Aluguel")).toBeInTheDocument();
+    expect(screen.getByText(/sai 20\/06\/2026/)).toBeInTheDocument();
+    // Um único "Marcar pago" na tela: o da conta ATRASADA, não o da agendada.
+    expect(screen.getAllByRole("button", { name: /marcar pago/i })).toHaveLength(1);
+  });
+
+  it("o balde é OMITIDO quando não há agendada — e o payload antigo não quebra a tela", async () => {
+    // `FILA` é o payload de um backend anterior à 8.14 (sem a chave `agendadas`): a tela tolera a
+    // ausência em vez de estourar em `undefined.length`.
+    mockApi();
+    render(<FilaPagamentosPage />);
+
+    await waitFor(() => expect(screen.getByText("Energia")).toBeInTheDocument());
+    expect(screen.queryByText("Agendadas")).toBeNull();
+  });
+
+  it("o agendado fica FORA do 'total pendente' — ele não é pendência, já foi resolvido", async () => {
+    mockApi([CONTA], FILA_COM_AGENDADA);
+    render(<FilaPagamentosPage />);
+
+    // Só a atrasada (R$ 300,00) entra no total; os R$ 5.000 agendados, não.
+    const total = await screen.findByText(/Total pendente na fila/);
+    // `within` porque o valor vive num `<strong>` aninhado — e comparação por nó, não por string
+    // crua: `toLocaleString` usa espaço NÃO-QUEBRÁVEL depois de "R$", e `textContent` o preserva.
+    expect(within(total).getByText("R$ 300,00")).toBeInTheDocument();
+    expect(within(total).queryByText(/5\.300/)).toBeNull();
   });
 });

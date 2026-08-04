@@ -6,6 +6,7 @@ funil pelo worker (IV1), processamento da fila, no-op idempotente, isolamento de
 etapa/tenant (IV2) e exclusão do tenant "platform".
 """
 from contextlib import contextmanager
+from datetime import UTC, datetime, timedelta
 
 from fastapi.testclient import TestClient
 from sqlalchemy import select
@@ -168,3 +169,131 @@ def test_run_sweep_continues_across_tenants(db, monkeypatch):
     assert result["tenants_checked"] == 2
     assert result["notifications_processed"] == 2
     assert len(result["errors"]) == 2  # um erro de tick por tenant, nenhum trava o sweep
+
+
+# ── Story 8.14 (AC10) — a etapa 4: promoção `scheduled → paid` ────────────────────────────────
+#
+# ⚠️ **O worker é COSMÉTICA DE STATUS, não componente da aritmética** (F-D11). O movimento bancário
+# nasce com `posted_at` = a data agendada, e tanto o saldo derivado quanto a Projeção são função da
+# **data**. A prova disso vive em `test_payables_scheduled.py::test_O_SALDO_DERIVADO_NAO_DEPENDE_DO_
+# WORKER` e em `test_financial_intelligence_projection.py::test_AC6_o_numero_e_IDENTICO_com_e_sem_o_
+# worker`. Aqui testamos a etapa em si: o contador, a idempotência e o **isolamento de falha**.
+
+
+def _tenant_com_conta_agendada(client: TestClient, *, dias: int = 5):
+    """Um tenant real com uma conta a pagar AGENDADA para daqui a `dias`.
+
+    Devolve `(headers, bill)`. A conta nasce agendada pelo caminho de PRODUÇÃO (a rota de baixa com
+    data futura), nunca plantada pelo model: o estado é derivado da data, e montá-lo à mão aqui
+    esconderia justamente a derivação que a etapa 4 depende.
+    """
+    registro = {
+        "legal_name": "Agenda Worker SA",
+        "document": "11444777000161",
+        "slug": "agendaworker",
+        "email": "agendaworker@example.com",
+        "name": "Selma",
+        "password": "senha-bem-comprida",
+    }
+    token = client.post("/auth/register", json=registro).json()["access_token"]
+    headers = {"Authorization": f"Bearer {token}"}
+    hoje = datetime.now(UTC).date()
+    conta = client.post(
+        "/bank/accounts",
+        json={
+            "name": "Itaú PJ",
+            "kind": "checking",
+            "opening_balance_cents": 100_000_00,
+            "opening_date": (hoje - timedelta(days=90)).isoformat(),
+        },
+        headers=headers,
+    ).json()
+    bill = client.post(
+        "/payables/bills",
+        json={"description": "Aluguel", "amount_cents": 5_000_00, "due_date": hoje.isoformat()},
+        headers=headers,
+    ).json()
+    resp = client.post(
+        f"/payables/bills/{bill['id']}/pay",
+        json={
+            "bank_account_id": conta["id"],
+            "paid_on": (hoje + timedelta(days=dias)).isoformat(),
+        },
+        headers=headers,
+    )
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["status"] == "scheduled", "pré-condição: a conta tinha de nascer agendada"
+    return headers, bill
+
+
+def test_etapa4_promove_a_agendada_quando_o_dia_chega(client: TestClient, db):
+    """O sweep com `now` INJETADO depois do dia do débito promove a conta e conta no resultado."""
+    headers, bill = _tenant_com_conta_agendada(client, dias=5)
+    cm = _cm_factory(db)
+
+    depois = datetime.now(UTC) + timedelta(days=6)
+    result = run_sweep(session_factory=cm, tenant_session_factory=cm, now=depois)
+
+    assert result["scheduled_promoted"] == 1
+    assert client.get(
+        f"/payables/bills/{bill['id']}", headers=headers
+    ).json()["status"] == "paid"
+
+
+def test_etapa4_nao_promove_o_que_ainda_nao_venceu(client: TestClient, db):
+    """O sweep de hoje **não** toca a conta agendada para daqui a 5 dias. `now=None` = agora."""
+    headers, bill = _tenant_com_conta_agendada(client, dias=5)
+    cm = _cm_factory(db)
+
+    result = run_sweep(session_factory=cm, tenant_session_factory=cm)
+
+    assert result["scheduled_promoted"] == 0
+    assert client.get(
+        f"/payables/bills/{bill['id']}", headers=headers
+    ).json()["status"] == "scheduled"
+
+
+def test_etapa4_e_idempotente_entre_sweeps(client: TestClient, db):
+    """Dois sweeps seguidos: promove no primeiro, **zero** no segundo."""
+    _tenant_com_conta_agendada(client, dias=2)
+    cm = _cm_factory(db)
+    depois = datetime.now(UTC) + timedelta(days=3)
+
+    primeiro = run_sweep(session_factory=cm, tenant_session_factory=cm, now=depois)
+    segundo = run_sweep(session_factory=cm, tenant_session_factory=cm, now=depois)
+
+    assert primeiro["scheduled_promoted"] == 1
+    assert segundo["scheduled_promoted"] == 0, "a etapa 4 não é idempotente"
+
+
+def test_falha_na_etapa4_NAO_derruba_as_outras_tres(client: TestClient, db, monkeypatch):
+    """**IV4 — o isolamento de falha vale para a etapa nova exatamente como para as três antigas.**
+
+    Um erro na promoção é logado, entra em `errors` com `stage="scheduled_promote"` e **não** impede
+    o tick do funil, a fila de notificações nem a mídia do WhatsApp — nem para este tenant, nem para
+    os demais. Sem isso, uma conta a pagar malformada de um tenant pararia a entrega de notificação
+    de todo mundo.
+    """
+    from app.modules.payables import service as payables_service
+
+    _tenant_com_conta_agendada(client, dias=1)
+
+    def _explode(*_args, **_kwargs):
+        raise RuntimeError("promoção explodiu")
+
+    monkeypatch.setattr(payables_service, "promote_scheduled", _explode)
+    cm = _cm_factory(db)
+    result = run_sweep(session_factory=cm, tenant_session_factory=cm)
+
+    assert result["scheduled_promoted"] == 0
+    assert [e["stage"] for e in result["errors"]] == ["scheduled_promote"]
+    # As outras três rodaram: os contadores existem e o sweep não abortou no meio.
+    assert result["tenants_checked"] == 1
+    assert "funnel_resumed" in result and "notifications_processed" in result
+
+
+def test_sweep_sem_nada_agendado_e_no_op(client: TestClient, db):
+    """Idempotente por construção, como as outras três etapas: sem agendada, o contador é 0."""
+    client.post("/auth/register", json=REGISTER)
+    cm = _cm_factory(db)
+    assert run_sweep(session_factory=cm, tenant_session_factory=cm)["scheduled_promoted"] == 0

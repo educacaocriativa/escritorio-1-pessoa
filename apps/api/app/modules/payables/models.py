@@ -18,9 +18,29 @@ from sqlalchemy.orm import Mapped, mapped_column
 from app.db.base import Base, TenantMixin, TimestampMixin, _uuid
 
 STATUS_OPEN = "open"
+# ── `scheduled` (Story 8.14) — o pagamento AGENDADO no app do banco ──────────────────────────
+#
+# *"Esta conta ainda vai sair da minha conta?"* com `scheduled` é `status == 'scheduled'`. Com a
+# alternativa rejeitada (`paid` + `paid_at` futuro) seria `status == 'paid' AND paid_at > today` —
+# um predicado que se lê **"pago no futuro"**, contradição em termos, que teria de ser replicado em
+# CINCO lugares (`payment_queue`, `summary`, `projection._window_sums`, `receipts.list_candidates`
+# e a regra do Diagnóstico da 8.16). *"Cinco cópias de um predicado autocontraditório é a definição
+# de o modelo estar errado."*
+#
+# E o argumento que decidiu não foi de gosto, foi um **bug verificado**: com `paid`+futuro a conta
+# sai dos fluxos de saída da Projeção (`projection.py` filtrava `status == 'open'`) **e** o
+# movimento futuro não entra no `saldo_inicial` (`active_balance_total(until=today)`). Os R$ 5.000
+# agendados **sumiriam** da Projeção — a máquina de falso negativo da Onda 0 ressuscitada, na mesma
+# tela que a Onda 0 consertou.
+#
+# ⚠️ **CABE EM `String(12)` — e é por isso que esta story não tem migration.** `"scheduled"` tem 9
+# caracteres (`test_scheduled_cabe_na_coluna` afere isso explicitamente, contra o `type.length` real
+# da coluna). Quem quiser "melhorar" este vocabulário para uma string maior paga uma migration com
+# `ALTER TYPE` sobre dado em produção, sob `FORCE RLS` — a armadilha da 0046 que o ADR 0003 nomeia.
+STATUS_SCHEDULED = "scheduled"
 STATUS_PAID = "paid"
 STATUS_CANCELED = "canceled"
-ALL_STATUSES = {STATUS_OPEN, STATUS_PAID, STATUS_CANCELED}
+ALL_STATUSES = {STATUS_OPEN, STATUS_SCHEDULED, STATUS_PAID, STATUS_CANCELED}
 
 # Recorrência (auto-geração de contas futuras fica como dívida — só armazenamos por ora).
 RECUR_NONE = "none"
@@ -48,6 +68,8 @@ class Payable(Base, TenantMixin, TimestampMixin):
     amount_cents: Mapped[int] = mapped_column(BigInteger, nullable=False)
     due_date: Mapped[date] = mapped_column(Date, nullable=False)
 
+    # `String(12)` — ver o comentário de `STATUS_SCHEDULED` acima: o valor novo da Story 8.14 cabe
+    # aqui (9 < 12) e é por isso que aquela story não cria migration nenhuma.
     status: Mapped[str] = mapped_column(String(12), default=STATUS_OPEN, nullable=False)
     # paid_at (regime de CAIXA) já existia (Fase 2) — setado em mark_paid.
     paid_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)

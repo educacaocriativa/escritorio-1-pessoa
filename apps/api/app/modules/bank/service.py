@@ -58,6 +58,8 @@ from app.modules.bank.models import (
     ORIGIN_OFX,
     ORIGINS,
     SOURCE_MANUAL,
+    SOURCES_EXTERNA,
+    SOURCES_SISTEMA,
     STATUS_IGNORED,
     STATUS_UNMATCHED,
     STATUSES,
@@ -486,7 +488,12 @@ def primary_account(db: Session) -> BankAccount | None:
 
 
 def _movements_sums(
-    db: Session, *, accounts: Sequence[BankAccount], until: date | None = None
+    db: Session,
+    *,
+    accounts: Sequence[BankAccount],
+    until: date | None = None,
+    since: date | None = None,
+    sign: int | None = None,
 ) -> dict[str, int]:
     """Σ dos movimentos de cada conta, em **UMA** query. `{bank_account_id: centavos}`.
 
@@ -501,11 +508,29 @@ def _movements_sums(
                                                         -- opening_balance_cents; contá-lo de novo
                                                         -- dobraria o valor
           AND (:until IS NULL OR posted_at <= :until)    -- `until` é DATE e INCLUSIVO
+          AND (:since IS NULL OR posted_at >  :since)    -- `since` é DATE e EXCLUSIVO (8.14)
+          AND (:sign  IS NULL OR sinal(amount_cents) = :sign)
           AND status <> 'ignored'                        -- AC5: ignorar TIRA do saldo
 
     ⚠️ **O filtro `status <> 'ignored'` mora AQUI, dentro do saldo** — é contrato para as Stories
     8.5 e 8.7: quem consome o saldo derivado **não** refiltra. Ter o filtro em dois lugares é ter
     dois lugares para divergirem.
+
+    ⚠️ **[Story 8.14] `since` e `sign` existem para que "Agendado para sair" NÃO seja uma segunda
+    fórmula.** O número da tela é a Σ dos movimentos com `posted_at > hoje`, separada por sinal —
+    o mesmo `WHERE` do saldo com o **recorte de data invertido**. Escrever aquela soma noutro lugar
+    duplicaria o piso (`posted_at > opening_date`) e o `status <> 'ignored'`, e o dia em que um dos
+    dois fosse corrigido só de um lado o "Agendado para sair" passaria a divergir do saldo por um
+    motivo que ninguém acharia. Ver `agendado_sums`.
+
+    `since` é **exclusivo** (`>`) para casar exatamente com o `<=` de `until`: os dois recortes
+    particionam o eixo do tempo em `(…, hoje]` e `(hoje, …)` sem sobreposição e sem buraco. Um
+    movimento **de hoje** está no saldo corrente e **não** está no agendado — que é a invariante
+    de que o AC6 da Projeção depende.
+
+    `sign` é `+1` (só entradas), `-1` (só saídas) ou `None` (líquido, o comportamento do saldo).
+    Nunca `0`: `_validate_amount` recusa movimento de valor zero, então esse conjunto é vazio por
+    construção e aceitá-lo seria oferecer um filtro que nunca soma nada.
 
     A cláusula de conta é um `OR` de pares `(conta, opening_date)` em vez de um `IN (...)` porque
     cada conta tem a **sua** data de corte. Ainda é uma query só — a alternativa (`GROUP BY` com
@@ -536,6 +561,13 @@ def _movements_sums(
     )
     if until is not None:
         stmt = stmt.where(BankTransaction.posted_at <= until)
+    if since is not None:
+        stmt = stmt.where(BankTransaction.posted_at > since)
+    if sign is not None:
+        if sign > 0:
+            stmt = stmt.where(BankTransaction.amount_cents > 0)
+        else:
+            stmt = stmt.where(BankTransaction.amount_cents < 0)
     return {account_id: int(total or 0) for account_id, total in db.execute(stmt).all()}
 
 
@@ -661,6 +693,61 @@ def active_balance_total(
     excluded = set(exclude_kinds)
     accounts = [a for a in list_accounts(db) if a.kind not in excluded]
     return sum(_balances_for(db, accounts, until=until).values())
+
+
+@dataclass(frozen=True)
+class AgendadoDaConta:
+    """O que já tem dia marcado para sair/entrar desta conta e **ainda não saiu/entrou**.
+
+    Os dois valores são **ABSOLUTOS** (nunca negativos): o sinal já foi consumido pela separação
+    em dois campos, e devolver `-500_00` num campo chamado `saida` obrigaria cada consumidor a
+    lembrar de qual convenção usar. O sinal continua sendo o dado dentro de `bank_transactions`
+    (invariante (b) do modelo) — aqui ele virou **estrutura**, que é o que a tela precisa.
+    """
+
+    saida_cents: int
+    entrada_cents: int
+
+
+def agendado_sums(
+    db: Session, *, accounts: Sequence[BankAccount], today: date | None = None
+) -> dict[str, AgendadoDaConta]:
+    """Σ dos movimentos **FUTUROS** (`posted_at > hoje`) de cada conta, separada por sinal.
+
+    É a origem do terceiro número da tela "Contas & Saldos" — *"Agendado para sair"* (Story 8.14
+    AC12/AC13) — e, a partir da Story 8.15, do irmão *"Agendado para entrar"*.
+
+    ⚠️ **NÃO é uma segunda fórmula de soma.** Reusa `_movements_sums`, a única implementação do
+    repositório, com o **recorte de data invertido** (`since=hoje` em vez de `until=hoje`). Por
+    tabela, isso significa que o piso da conta (`posted_at > opening_date`) e o
+    `status <> 'ignored'` valem aqui exatamente como valem no saldo, sem que ninguém precise
+    lembrar de repeti-los. Escrever a soma noutro lugar é o que a Regra 4 do `CLAUDE.md` proíbe.
+
+    ⚠️ **É o COMPLEMENTO EXATO do saldo corrente, e essa é a propriedade que importa.** Depois da
+    Story 8.10, `derived_balance(until=None)` soma `posted_at <= hoje`; esta função soma
+    `posted_at > hoje`. Juntas elas cobrem o histórico inteiro **uma vez só** — nem um movimento
+    fica de fora dos dois, nem um entra nos dois. É por isso que o dono pode ler os números lado a
+    lado sem ninguém explicar como somá-los.
+
+    ⚠️ **Duas queries, CONSTANTES — não N+1.** Uma para as saídas, outra para as entradas: os dois
+    recortes são exclusivos e um `SUM(CASE ...)` único devolveria uma linha com duas colunas ao
+    preço de duplicar o `WHERE` dentro do `_movements_sums`, que é justamente o que se está
+    evitando. Duas agregações para a lista inteira de contas continuam sendo O(1) em número de
+    contas, que é a razão de `derived_balances_as_of` existir.
+
+    Conta sem movimento futuro vem com `(0, 0)` — nunca ausente do dicionário; o laço é sobre
+    `accounts`, não sobre o resultado da query (o mesmo erro clássico que `_balances_for` evita).
+    """
+    corte = _today() if today is None else today
+    saidas = _movements_sums(db, accounts=accounts, since=corte, sign=-1)
+    entradas = _movements_sums(db, accounts=accounts, since=corte, sign=1)
+    return {
+        a.id: AgendadoDaConta(
+            saida_cents=abs(saidas.get(a.id, 0)),
+            entrada_cents=entradas.get(a.id, 0),
+        )
+        for a in accounts
+    }
 
 
 def _balances_for(
@@ -920,22 +1007,51 @@ def validate_posted_at_floor(posted_at: date, account: BankAccount) -> date:
     return posted_at
 
 
-def _validate_posted_at(posted_at: date, account: BankAccount) -> date:
-    """As duas guardas de data do lançamento **externo** (`SOURCES_EXTERNA`). Ambas 422.
+def _validate_posted_at(
+    posted_at: date, account: BankAccount, *, source: str = SOURCE_MANUAL
+) -> date:
+    """As duas guardas de data do movimento — e **o teto é cortado por `source`** (Story 8.14 AC4).
 
-    1. **`posted_at > opening_date`** — o piso, delegado a `validate_posted_at_floor` (que vale
-       para toda origem, inclusive as do sistema).
-    2. **Não futura** — extrato bancário é fato passado. Data futura é erro de digitação (ano
-       errado é o caso comum), e um movimento no futuro entra no saldo de `until=None` e some do
-       saldo de hoje, o que aparece como divergência inexplicável na conferência da 8.5.
+    1. **`posted_at > opening_date`** — o piso, delegado a `validate_posted_at_floor`. Vale para
+       **toda** origem, sem exceção, e é a metade que não muda nunca.
+    2. **Não futura — só para `SOURCES_EXTERNA`** (`manual`, `ofx`, `csv`). Ali data futura é erro
+       de digitação (ano errado é o caso comum) e um movimento no futuro entraria no histórico sem
+       aparecer no saldo de hoje, o que vira divergência inexplicável na conferência da 8.5.
 
     ⚠️ **O teto NÃO se aplica a `SOURCES_SISTEMA`** (design Onda 2 §4.2.0, normativo): *"o e1p pode
     afirmar o futuro do que ele mesmo agendou; não pode afirmar o futuro do que outro atestou"*. Um
-    OFX descreve o que já aconteceu; um pagamento agendado no app do banco, não. O corte é por
-    `source` — **nunca** por um booleano `permite_futuro` decidido pelo chamador, que é o parâmetro
-    que alguém passa `True` no caminho manual, um dia, por conveniência.
+    OFX **descreve** o que já aconteceu; um pagamento agendado no app do banco é fato que o e1p
+    conhece em primeira mão, porque foi ele quem o registrou. A justificativa antiga desta guarda
+    (*"extrato bancário é fato passado"*) descrevia **transcrição** — e continua verdadeira para o
+    que é transcrito. Ela nunca descreveu origem de sistema.
+
+    ⚠️ **O corte é por `source`, e por `source` APENAS.** Nada de booleano `permite_futuro`
+    decidido pelo chamador: *"é o parâmetro que alguém passa `True` no caminho manual, um dia, por
+    conveniência — e nenhum gate de AST o pega, porque não há import envolvido"* (ratificação
+    §C-6.2). O eixo já existe e é `source`; **um eixo, uma pergunta**.
+
+    ⚠️ **`source` desconhecido é 422, não "passa".** A partição é escrita nas DUAS metades
+    (`in SOURCES_SISTEMA` … `not in SOURCES_EXTERNA` → 422), e nunca como a negação de uma só. Um
+    `if source not in SOURCES_SISTEMA` sozinho faria valor novo herdar o teto sem ninguém decidir;
+    um `if source in SOURCES_EXTERNA` sozinho o faria herdar a **isenção** — que é o lado caro. O
+    valor novo tem de entrar por um dos dois conjuntos, e é isso que esta forma obriga.
+
+    ⚠️ **Esta função continua sendo chamada apenas pela porta MANUAL** (`create_transaction`,
+    `update_transaction`), e `sync_origin_movement` continua chamando só o piso. O corte por
+    `source` aqui **não é redundante**: ele torna a regra da §4.2.0 escrita, testável e
+    localizável em um lugar só, em vez de emergente de *qual função alguém escolheu chamar* —
+    que é uma regra que ninguém consegue citar e que o próximo caminho de escrita não herda.
     """
     validate_posted_at_floor(posted_at, account)
+    if source in SOURCES_SISTEMA:
+        # O e1p originou o fato — ele pode afirmar o futuro do que ele mesmo agendou.
+        return posted_at
+    if source not in SOURCES_EXTERNA:
+        raise BankError(
+            f"Origem de movimento inválida: '{source}'. Use um de: "
+            f"{', '.join(SOURCES_EXTERNA + SOURCES_SISTEMA)}.",
+            422,
+        )
     if posted_at > _today():
         raise BankError(
             "A data do movimento não pode ser futura: o extrato registra o que já aconteceu.",
@@ -1039,7 +1155,10 @@ def create_transaction(
             422,
         )
     amount_cents = _validate_amount(data.amount_cents)
-    posted_at = _validate_posted_at(data.posted_at, acc)
+    # `SOURCE_MANUAL` explícito, e não o default: é a mesma constante que a linha vai gravar em
+    # `source` logo abaixo, e escrevê-la aqui deixa visível no diff que esta porta é a EXTERNA —
+    # a que continua recusando data futura depois da Story 8.14.
+    posted_at = _validate_posted_at(data.posted_at, acc, source=SOURCE_MANUAL)
 
     # ── A guarda de contagem dupla (AC5) ──────────────────────────────────────────────────────
     #
@@ -1116,8 +1235,15 @@ def update_transaction(
     tx = get_transaction(db, transaction_id)
 
     if data.posted_at is not None:
-        # Revalida contra a conta ATUAL do movimento (a conta não muda: não há rota para movê-lo).
-        tx.posted_at = _validate_posted_at(data.posted_at, get_account(db, tx.bank_account_id))
+        # Revalida contra a conta ATUAL do movimento (a conta não muda: não há rota para movê-lo)
+        # e contra o **`source` da própria linha** (Story 8.14 AC4) — não contra um valor fixo.
+        # Editar a data de um movimento de origem de sistema por esta rota é impedido antes, pela
+        # Regra da Origem (d): quem quer mudá-lo mexe no lançamento. Passar `tx.source` mantém as
+        # duas guardas coerentes se essa porta um dia se abrir, em vez de deixar um `manual`
+        # hard-coded decidindo sobre uma linha que não é manual.
+        tx.posted_at = _validate_posted_at(
+            data.posted_at, get_account(db, tx.bank_account_id), source=tx.source
+        )
     if data.amount_cents is not None:
         tx.amount_cents = _validate_amount(data.amount_cents)
     if data.user_description is not None:

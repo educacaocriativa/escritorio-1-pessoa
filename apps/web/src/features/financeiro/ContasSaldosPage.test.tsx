@@ -11,7 +11,12 @@ import type {
   BankTransaction,
   PayablesPaidBefore,
 } from "./contas";
-import { DISPONIVEL_CAIXA_LABEL, TOTAL_EM_CONTAS_LABEL } from "./contas";
+import {
+  AGENDADO_ENTRADA_LABEL,
+  AGENDADO_SAIDA_LABEL,
+  DISPONIVEL_CAIXA_LABEL,
+  TOTAL_EM_CONTAS_LABEL,
+} from "./contas";
 import { ROTULO_BANCO } from "./projecao";
 
 /**
@@ -666,8 +671,15 @@ describe("Story 8.10 — a data de apuração do saldo aparece na tela", () => {
     expect(screen.getByText(/Saldo declarado em 28\/07\/2026/)).toBeInTheDocument();
   });
 
-  it("AC9 — nenhum rótulo NOVO de total: continuam existindo só os dois da 8.7", async () => {
-    // "Agendado para sair" é da Story 8.14. Esta story não acrescenta terceiro número à tela.
+  it("⚠️ [8.14] sem nada agendado, a tela continua com os DOIS totais — o terceiro é omitido", async () => {
+    // **Mudança de expectativa parcial, e ela é a CORREÇÃO.** Este teste se chamava "AC9 — nenhum
+    // rótulo NOVO de total" e dizia, em comentário, *"'Agendado para sair' é da Story 8.14. Esta
+    // story não acrescenta terceiro número à tela"*. A 8.14 chegou — mas a asserção de ausência
+    // **continua valendo neste cenário**, agora por outro motivo: o terceiro número existe e é
+    // **omitido quando é zero**, pela mesma disciplina anti-ruído do "Disponível como caixa".
+    //
+    // Ou seja: o dono que nunca agendou nada vê exatamente a mesma tela de antes. Isso é o que
+    // este teste passa a proteger, e é uma afirmação mais forte que a original.
     mockApi([
       conta({ id: "a", saldo_derivado_cents: 4_000_000 }),
       conta({ id: "c", kind: "investment", saldo_derivado_cents: 1_000_000 }),
@@ -678,6 +690,28 @@ describe("Story 8.10 — a data de apuração do saldo aparece na tela", () => {
     expect(screen.getByText(DISPONIVEL_CAIXA_LABEL)).toBeInTheDocument();
     expect(container.textContent).not.toMatch(/agendado/i);
     expect(container.textContent).not.toContain(ROTULO_BANCO);
+  });
+
+  it("⚠️ [8.14] havendo débito agendado, o TERCEIRO número aparece — e não contamina o saldo", async () => {
+    // O cenário que a story existe para resolver: R$ 50.000 em contas, R$ 5.000 já com dia
+    // marcado para sair. Os dois números convivem, com rótulos que não se confundem.
+    mockApi([
+      conta({ id: "a", saldo_derivado_cents: 5_000_000, agendado_saida_cents: 500_000 }),
+    ]);
+    renderPage();
+
+    await waitFor(() => expect(screen.getByText(AGENDADO_SAIDA_LABEL)).toBeInTheDocument());
+    // Escopado ao cartão dos totais: "R$ 50.000,00" também aparece no cartão da conta, e é o
+    // TOPO da tela (onde os recortes convivem) que este teste está afirmando.
+    const totais = screen.getByText(TOTAL_EM_CONTAS_LABEL).closest("div")
+      ?.parentElement as HTMLElement;
+    // O "Total em contas" NÃO foi reduzido pelo agendado: o dinheiro ainda está lá.
+    expect(within(totais).getByText("R$ 50.000,00")).toBeInTheDocument();
+    expect(within(totais).getByText("R$ 5.000,00")).toBeInTheDocument();
+    // A explicação acompanha o número, como nos outros dois totais.
+    expect(screen.getByText(/data futura/i)).toBeInTheDocument();
+    // E o par simétrico continua omitido — ele só passa a ter valor na Story 8.15.
+    expect(screen.queryByText(AGENDADO_ENTRADA_LABEL)).toBeNull();
   });
 });
 

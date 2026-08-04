@@ -52,8 +52,22 @@ const RECUR = [
   ["yearly", "Anual"],
 ] as const;
 
+/** "2026-08-20T00:00:00Z" → "20/08". Fatiamento de string, nunca `new Date` (bug de fuso §6.0). */
+function diaDoDebito(paidAt: string | null): string {
+  if (!paidAt) return "";
+  const [, mes, dia] = paidAt.slice(0, 10).split("-");
+  return dia && mes ? `${dia}/${mes}` : "";
+}
+
 function statusInfo(p: Payable): { label: string; cls: string } {
   if (p.status === "paid") return { label: "Pago", cls: "bg-accent-50 text-accent-700" };
+  // ⚠️ **[Story 8.14] `scheduled` tem RÓTULO PRÓPRIO — não é "Pago" nem "A pagar".**
+  //
+  // Mostrá-la como "Pago" diria que o dinheiro saiu (não saiu); como "A pagar", pediria uma ação
+  // que o dono já tomou. O estado existe justamente porque não cabe em nenhum dos dois, e o rótulo
+  // tem de refletir isso. A **data do débito** vai junto (ver a coluna Status), porque a pergunta
+  // seguinte do dono é sempre *"em que dia sai?"* — e essa data não é o vencimento.
+  if (p.status === "scheduled") return { label: "Agendada", cls: "bg-sky-50 text-sky-700" };
   if (p.status === "canceled") return { label: "Cancelado", cls: "bg-neutral-100 text-neutral-500" };
   if (p.is_overdue) return { label: "Atrasado", cls: "bg-red-50 text-danger" };
   return { label: "A pagar", cls: "bg-amber-50 text-amber-700" };
@@ -66,6 +80,8 @@ export default function PagarPage() {
     week_cents: 0,
     month_cents: 0,
     paid_month_cents: 0,
+    // Story 8.14 — o resumo ganhou o campo; os cinco antigos não mudaram de definição.
+    scheduled_cents: 0,
   };
   const [summary, setSummary] = useState<PayablesSummary>(empty);
   const [bills, setBills] = useState<Payable[]>([]);
@@ -123,8 +139,20 @@ export default function PagarPage() {
     await api.post(`/payables/bills/${id}/cancel`);
     load();
   }
-  async function reverse(id: string) {
-    if (!confirm('Estornar esta conta? Ela volta para "A pagar" e pode ser editada de novo.')) return;
+  /**
+   * Estorno — **e o cancelamento de agendamento é a MESMA rota** (Story 8.14 AC9).
+   *
+   * A confirmação muda de frase porque os dois gestos não são o mesmo fato para o dono: estornar
+   * desfaz um pagamento que aconteceu; cancelar um agendamento impede um que ainda vai acontecer.
+   * A consequência no sistema, essa sim, é idêntica: a conta volta para "A pagar", reaparece na
+   * Fila e o movimento bancário é apagado.
+   */
+  async function reverse(id: string, agendada = false) {
+    const pergunta = agendada
+      ? "Cancelar o agendamento desta conta? O débito programado deixa de ser contado e ela volta " +
+        'para "A pagar".'
+      : 'Estornar esta conta? Ela volta para "A pagar" e pode ser editada de novo.';
+    if (!confirm(pergunta)) return;
     await api.post(`/payables/bills/${id}/reverse`);
     load();
   }
@@ -205,6 +233,13 @@ export default function PagarPage() {
                     <td className="px-4 py-3 font-medium tabular-nums">{brl(p.amount_cents)}</td>
                     <td className="px-4 py-3">
                       <span className={`rounded-pill px-2 py-0.5 text-xs ${st.cls}`}>{st.label}</span>
+                      {/* A data do DÉBITO, não o vencimento: numa agendada as duas divergem por
+                          construção, e é a do débito que responde "quando o dinheiro sai?". */}
+                      {p.status === "scheduled" && p.paid_at && (
+                        <span className="block text-[11px] text-neutral-400">
+                          sai {diaDoDebito(p.paid_at)}
+                        </span>
+                      )}
                     </td>
                     <td className="px-4 py-3 text-right">
                       <div className="flex items-center justify-end gap-3">
@@ -234,6 +269,16 @@ export default function PagarPage() {
                         {p.status === "paid" && (
                           <button onClick={() => reverse(p.id)} className="text-xs font-medium text-neutral-400 hover:text-danger">
                             Estornar
+                          </button>
+                        )}
+                        {/* ⚠️ **[Story 8.14] Mesma ação, rótulo diferente.** No backend é o MESMO
+                            `POST /reverse` — não há verbo novo, porque `reverse` sempre significou
+                            "esta saída não vai acontecer" e isso serve igualmente para uma saída
+                            que ainda não aconteceu. Na tela o nome precisa ser outro: "Estornar"
+                            uma conta que nunca foi paga não é frase que o dono reconheça. */}
+                        {p.status === "scheduled" && (
+                          <button onClick={() => reverse(p.id, true)} className="text-xs font-medium text-neutral-400 hover:text-danger">
+                            Cancelar agendamento
                           </button>
                         )}
                       </div>

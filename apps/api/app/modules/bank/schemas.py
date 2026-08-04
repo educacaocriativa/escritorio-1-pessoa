@@ -152,6 +152,28 @@ class BankAccountOut(BaseModel):
     # Procedência OBRIGATÓRIA do saldo acima (Regra dos Planos §1.3c). Sempre `ORIGEM_BANCO`: este
     # número vem do plano 3, jamais da Carteira.
     saldo_derivado_origem: str = ORIGEM_BANCO
+    # ── O que já tem dia marcado e ainda não aconteceu (Story 8.14, AC13) ────────────────────
+    #
+    # Σ dos movimentos desta conta com `posted_at > hoje`, separada por sinal e em **MÓDULO** nos
+    # dois campos. Vem de `service.agendado_sums`, que reusa `_movements_sums` com o recorte de
+    # data invertido — **não existe uma segunda fórmula de soma** (`CLAUDE.md` Regra 4).
+    #
+    # ⚠️ **É o COMPLEMENTO EXATO de `saldo_derivado_cents`**, não uma parcela dele: aquele soma
+    # `posted_at <= hoje`, este soma `posted_at > hoje`. Nenhum movimento entra nos dois, nenhum
+    # fica de fora dos dois. **Nunca some os dois campos num total** sem dizer, na tela, que o
+    # resultado é "o saldo depois que tudo o que já foi agendado acontecer" — que é uma terceira
+    # afirmação, e afirmação de saldo sem rótulo próprio é a divergência D-6 outra vez.
+    #
+    # `agendado_entrada_cents` é **estruturalmente zero até a Story 8.15**: nada no e1p produz
+    # movimento de ENTRADA com data futura hoje. Ele nasce aqui mesmo assim porque o par simétrico
+    # é o contrato que a 8.15 consome — e um campo que aparece junto do irmão não obriga a UI a
+    # mudar de forma quando o valor deixar de ser zero.
+    agendado_saida_cents: int = 0
+    agendado_entrada_cents: int = 0
+    # Irmão de procedência dos DOIS números acima (Regra dos Planos §1.3c / `CLAUDE.md` Regra 3).
+    # Um só para os dois porque os dois vêm da mesma soma, do mesmo plano: dois campos idênticos
+    # seriam duas fontes para a mesma informação. Sempre `ORIGEM_BANCO`.
+    agendado_origem: str = ORIGEM_BANCO
     created_at: datetime
 
 

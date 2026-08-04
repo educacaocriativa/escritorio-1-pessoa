@@ -12,7 +12,7 @@ não é exercida (ver conftest).
 """
 from __future__ import annotations
 
-from datetime import date
+from datetime import UTC, date, datetime, timedelta
 
 import pytest
 from fastapi.testclient import TestClient
@@ -275,3 +275,61 @@ def test_paid_charge_transaction_is_not_double_counted(
     body = _dre(client, headers)
     receita = _group(body, "RECEITA")
     assert receita["total_cents"] == 20000  # só a Charge — a Transaction fica de fora
+
+
+# ── Story 8.14 (AC14) — o estado `scheduled` tem impacto ZERO na DRE, e isso e VERIFICADO ─────
+
+
+def _conta_bancaria_814(client: TestClient, headers) -> dict:
+    """Conta com abertura bem antiga: o piso da data de baixa nao interfere neste cenario."""
+    r = client.post(
+        "/bank/accounts",
+        json={
+            "name": "Itau PJ",
+            "kind": "checking",
+            "opening_balance_cents": 100_000_00,
+            "opening_date": (datetime.now(UTC).date() - timedelta(days=400)).isoformat(),
+        },
+        headers=headers,
+    )
+    assert r.status_code == 201, r.text
+    return r.json()
+
+
+def _agendar_814(client: TestClient, headers, bill_id: str, conta_id: str) -> None:
+    futuro = datetime.now(UTC).date() + timedelta(days=20)
+    resp = client.post(
+        f"/payables/bills/{bill_id}/pay",
+        json={"bank_account_id": conta_id, "paid_on": futuro.isoformat()},
+        headers=headers,
+    )
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["status"] == "scheduled", "pre-condicao: a conta tinha de nascer agendada"
+
+
+def test_AC14_dre_IDENTICA_campo_a_campo_com_e_sem_conta_agendada(client: TestClient, headers):
+    """**Custo medido pela @architect: ZERO — e aqui ele e conferido contra o repo, nao presumido.**
+
+    `dre.py` filtra `status != canceled` nas **quatro** agregacoes, entao o valor novo passa direto:
+    uma conta que era `open` e virou `scheduled` continua contando exatamente igual. Snapshot campo
+    a campo, com e sem agendamento.
+
+    Alertas embutidos, se ficar vermelho: ou uma das 4 agregacoes trocou o filtro por uma lista de
+    estados um a um (e esqueceu o novo), ou `competence_date` foi movido junto com `paid_on` — e
+    **os dois eixos nunca se invertem** (`payables/models.py:6-9`, regra dura).
+    """
+    _payable(client, headers, amount=120_000, competence="2026-07-10")
+    _charge(client, headers, amount=300_000, competence="2026-07-05")
+    antes = _dre(client, headers)
+
+    conta = _conta_bancaria_814(client, headers)
+    bill = client.get("/payables/bills", headers=headers).json()[0]
+    _agendar_814(client, headers, bill["id"], conta["id"])
+
+    assert _dre(client, headers) == antes, (
+        "a DRE mudou porque uma conta virou `scheduled` — impacto que o AC14 declara ser ZERO"
+    )
+    # E a competencia da conta continua exatamente onde estava (caixa nao move competencia).
+    assert client.get(
+        f"/payables/bills/{bill['id']}", headers=headers
+    ).json()["competence_date"] == "2026-07-10"

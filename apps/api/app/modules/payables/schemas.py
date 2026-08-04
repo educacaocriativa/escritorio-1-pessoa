@@ -160,6 +160,16 @@ class PayablesSummary(BaseModel):
     week_cents: int  # vence nesta semana
     month_cents: int  # total do mês (não cancelado)
     paid_month_cents: int  # já pago no mês
+    # Story 8.14 (AC8) — Σ das contas em `scheduled` (débito agendado, data futura).
+    #
+    # ⚠️ **Não se mistura com nada.** Fora de `open_cents` (agendada não é "a pagar") e fora de
+    # `paid_month_cents` (não saiu). Os cinco campos acima **não mudaram de definição** — inclusive
+    # `month_cents`, que já filtrava `status != canceled` e portanto continua contando a agendada
+    # por VENCIMENTO, de propósito (é o total do mês por competência de vencimento, não por caixa).
+    #
+    # Default `0` para que um cliente antigo (ou um teste que construa o schema à mão) não quebre
+    # ao ganhar um campo — o serviço sempre o preenche.
+    scheduled_cents: int = 0
 
 
 # ── Story 5.9: Fila de Pagamentos ──────────────────────────────────────────────────────────────
@@ -176,13 +186,22 @@ class PaymentQueueSummary(BaseModel):
     proximos_7_dias_cents: int
     proximos_30_dias_count: int
     proximos_30_dias_cents: int
+    # Story 8.14 (AC7) — o quinto balde. Não é balde de VENCIMENTO: é o que já foi agendado, com o
+    # débito marcado para uma data futura. Default `0` pelo mesmo motivo de `scheduled_cents`.
+    agendadas_count: int = 0
+    agendadas_cents: int = 0
 
 
 class PaymentQueueOut(BaseModel):
-    """Fila agrupada em 4 baldes de PayableOut (reaproveitado) + o resumo por balde."""
+    """Fila agrupada em 5 baldes de PayableOut (reaproveitado) + o resumo por balde."""
 
     atrasados: list[PayableOut]  # due_date < hoje
     hoje: list[PayableOut]  # due_date == hoje
     proximos_7_dias: list[PayableOut]  # hoje < due_date <= hoje+7
     proximos_30_dias: list[PayableOut]  # hoje+7 < due_date <= hoje+30
+    # Story 8.14 — `status == 'scheduled'`, ordenadas pela DATA DO DÉBITO (`paid_at`), não por
+    # `due_date`: a pergunta deste balde é *quando o dinheiro sai*, e numa agendada as duas datas
+    # são diferentes por construção. Sem janela de 30 dias — um compromisso assumido para daqui a
+    # 60 dias continua sendo um compromisso, e escondê-lo é a omissão que o AC7 combate.
+    agendadas: list[PayableOut] = []
     summary: PaymentQueueSummary

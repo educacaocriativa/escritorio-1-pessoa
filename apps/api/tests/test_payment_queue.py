@@ -202,3 +202,89 @@ def test_queue_orders_by_due_date_within_bucket(client: TestClient, headers):
     _create(client, headers, due_date=_ymd(4), amount_cents=400)
     q = client.get("/payables/queue", headers=headers).json()
     assert [p["amount_cents"] for p in q["proximos_7_dias"]] == [200, 400, 600]
+
+
+# ── Story 8.14 — o QUINTO balde, e os quatro antigos intocados ────────────────────────────────
+
+
+def _agendar(client: TestClient, headers, bill_id: str, conta: str, dias: int):
+    """Baixa com data FUTURA → a conta nasce `scheduled` (o estado é derivado da data, AC2)."""
+    resp = client.post(
+        f"/payables/bills/{bill_id}/pay",
+        json={"bank_account_id": conta, "paid_on": _ymd(dias)},
+        headers=headers,
+    )
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["status"] == "scheduled", "pré-condição: a conta tinha de nascer agendada"
+    return resp.json()
+
+
+def test_os_QUATRO_baldes_antigos_nao_mudaram_sem_agendamento_nenhum(
+    client: TestClient, headers
+):
+    """**IV2 em forma de snapshot:** num cenário sem agendamento, a fila é byte a byte a de antes.
+
+    Os campos novos (`agendadas`, `agendadas_count`, `agendadas_cents`) aparecem **zerados**, nunca
+    ausentes — um consumidor que os leia sem checar existência não quebra.
+    """
+    _create(client, headers, due_date=_ymd(-2), amount_cents=100)
+    _create(client, headers, due_date=_ymd(0), amount_cents=200)
+    _create(client, headers, due_date=_ymd(5), amount_cents=300)
+    _create(client, headers, due_date=_ymd(20), amount_cents=400)
+
+    q = client.get("/payables/queue", headers=headers).json()
+    assert q["summary"] == {
+        "atrasados_count": 1, "atrasados_cents": 100,
+        "hoje_count": 1, "hoje_cents": 200,
+        "proximos_7_dias_count": 1, "proximos_7_dias_cents": 300,
+        "proximos_30_dias_count": 1, "proximos_30_dias_cents": 400,
+        "agendadas_count": 0, "agendadas_cents": 0,
+    }
+    assert q["agendadas"] == []
+
+
+def test_a_agendada_SAI_dos_quatro_baldes_de_vencimento(client: TestClient, headers, conta):
+    """**A pergunta da Fila é *"o que eu preciso pagar?"*, e uma agendada já foi resolvida.**
+
+    A conta vencia HOJE (estava no balde mais urgente depois de "atrasados") e foi agendada para
+    daqui a 10 dias: ela sai do balde de vencimento — deixá-la ali pediria ao dono uma ação que ele
+    já tomou — e o `hoje_cents` volta a zero.
+    """
+    bill = _create(client, headers, due_date=_ymd(0), amount_cents=5_000)
+    antes = client.get("/payables/queue", headers=headers).json()
+    assert antes["summary"]["hoje_count"] == 1
+
+    _agendar(client, headers, bill["id"], conta, 10)
+
+    q = client.get("/payables/queue", headers=headers).json()
+    assert q["hoje"] == [] and q["summary"]["hoje_cents"] == 0
+    assert q["atrasados"] == [] and q["proximos_7_dias"] == [] and q["proximos_30_dias"] == []
+    assert [p["id"] for p in q["agendadas"]] == [bill["id"]]
+    assert q["summary"]["agendadas_count"] == 1
+    assert q["summary"]["agendadas_cents"] == 5_000
+
+
+def test_a_agendada_NAO_some_da_fila(client: TestClient, headers, conta):
+    """**Esconder é erro; misturar também.** A conta continua visível, num balde próprio.
+
+    Se ela sumisse, o dono perderia de vista uma saída certa e a única tela que responde *"o que sai
+    do meu caixa nos próximos dias"* passaria a mentir por omissão — que é a mesma família de
+    defeito que a Onda 0 corrigiu na Projeção.
+    """
+    bill = _create(client, headers, due_date=_ymd(0), amount_cents=5_000)
+    _agendar(client, headers, bill["id"], conta, 10)
+
+    q = client.get("/payables/queue", headers=headers).json()
+    todos = (
+        q["atrasados"] + q["hoje"] + q["proximos_7_dias"] + q["proximos_30_dias"] + q["agendadas"]
+    )
+    assert bill["id"] in [p["id"] for p in todos], "a conta agendada SUMIU da Fila"
+
+
+def test_o_balde_das_agendadas_e_calculado_NA_LEITURA(client: TestClient, headers, conta):
+    """Como os outros quatro: sem job, sem cron, sem coluna. A prova é que a conta aparece no balde
+    **imediatamente** depois da baixa, sem nenhuma varredura ter rodado."""
+    bill = _create(client, headers, due_date=_ymd(0), amount_cents=1_234)
+    _agendar(client, headers, bill["id"], conta, 3)
+    q = client.get("/payables/queue", headers=headers).json()
+    assert q["summary"]["agendadas_cents"] == 1_234

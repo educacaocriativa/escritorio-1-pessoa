@@ -45,7 +45,18 @@ router = APIRouter(prefix="/bank", tags=["bank"])
 _guard = require_module("bank")
 
 
-def _out(a: BankAccount, saldo_derivado_cents: int) -> BankAccountOut:
+def _out(
+    a: BankAccount,
+    saldo_derivado_cents: int,
+    agendado: service.AgendadoDaConta | None = None,
+) -> BankAccountOut:
+    """`BankAccount` → `BankAccountOut`, com o saldo corrente e o agendado (Story 8.14 AC13).
+
+    `agendado=None` significa *"esta conta não tem movimento futuro"* e vira `(0, 0)` — nunca
+    "não sei". O default existe só para a rota de **criação**, onde a conta acabou de nascer e
+    não pode ter movimento nenhum, muito menos futuro; todas as demais passam o valor real.
+    """
+    agendado = agendado or service.AgendadoDaConta(saida_cents=0, entrada_cents=0)
     return BankAccountOut(
         id=a.id,
         name=a.name,
@@ -64,8 +75,22 @@ def _out(a: BankAccount, saldo_derivado_cents: int) -> BankAccountOut:
         # Constante do vocabulário do eixo A (`app.core.money_planes`) — nunca a string "banco"
         # escrita à mão. Todo saldo declara o plano de onde vem (Regra dos Planos §1.3c).
         saldo_derivado_origem=ORIGEM_BANCO,
+        # Story 8.14 — o que já tem dia marcado e ainda não aconteceu. Os dois em MÓDULO, com o
+        # irmão de procedência: nenhum saldo trafega sem plano declarado (Regra dos Planos §1.3c).
+        agendado_saida_cents=agendado.saida_cents,
+        agendado_entrada_cents=agendado.entrada_cents,
+        agendado_origem=ORIGEM_BANCO,
         created_at=a.created_at,
     )
+
+
+def _agendado_de(db: Session, acc: BankAccount) -> service.AgendadoDaConta:
+    """O agendado de UMA conta — o helper das rotas de conta única (Story 8.14).
+
+    Existe para que as quatro rotas de CRUD chamem **a mesma** função em lote que a lista chama,
+    com uma conta só, em vez de nascer uma variante "para uma conta" que divergiria da outra.
+    """
+    return service.agendado_sums(db, accounts=[acc])[acc.id]
 
 
 def _tx_out(t: BankTransaction) -> BankTransactionOut:
@@ -188,7 +213,13 @@ def list_accounts(
     # cada `derived_balance` avulso custaria um `SUM` próprio, e é esse N+1 que a função em lote
     # existe para evitar.
     balances = service.derived_balances_as_of(db, include_archived=include_archived)
-    return [_out(a, balances.get(a.id, a.opening_balance_cents)) for a in accounts]
+    # Story 8.14 — o agendado sai da MESMA lista, em duas agregacoes constantes (nunca uma por
+    # conta): `agendado_sums` existe pelo mesmo motivo que `derived_balances_as_of`.
+    agendados = service.agendado_sums(db, accounts=accounts)
+    return [
+        _out(a, balances.get(a.id, a.opening_balance_cents), agendados.get(a.id))
+        for a in accounts
+    ]
 
 
 @router.post("/accounts", response_model=BankAccountOut, status_code=201)
@@ -199,6 +230,8 @@ def create_account(
 ) -> BankAccountOut:
     try:
         acc = service.create_account(db, tenant_id=user.tenant_id, actor=user.user_id, data=data)
+        # Sem `agendado`: a conta nasce nesta chamada e nao pode ter movimento nenhum,
+        # muito menos futuro. E o unico caminho em que o `(0, 0)` do default e um FATO.
         return _out(acc, service.derived_balance(db, bank_account_id=acc.id))
     except service.BankError as e:
         raise _err(e) from e
@@ -212,7 +245,9 @@ def get_account(
 ) -> BankAccountOut:
     try:
         acc = service.get_account(db, account_id)
-        return _out(acc, service.derived_balance(db, bank_account_id=acc.id))
+        return _out(
+            acc, service.derived_balance(db, bank_account_id=acc.id), _agendado_de(db, acc)
+        )
     except service.BankError as e:
         raise _err(e) from e
 
@@ -228,7 +263,9 @@ def update_account(
         acc = service.update_account(
             db, account_id=account_id, tenant_id=user.tenant_id, actor=user.user_id, data=data
         )
-        return _out(acc, service.derived_balance(db, bank_account_id=acc.id))
+        return _out(
+            acc, service.derived_balance(db, bank_account_id=acc.id), _agendado_de(db, acc)
+        )
     except service.BankError as e:
         raise _err(e) from e
 
@@ -243,7 +280,9 @@ def archive_account(
         acc = service.archive_account(
             db, account_id=account_id, tenant_id=user.tenant_id, actor=user.user_id
         )
-        return _out(acc, service.derived_balance(db, bank_account_id=acc.id))
+        return _out(
+            acc, service.derived_balance(db, bank_account_id=acc.id), _agendado_de(db, acc)
+        )
     except service.BankError as e:
         raise _err(e) from e
 

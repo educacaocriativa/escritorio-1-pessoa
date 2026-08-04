@@ -8,8 +8,9 @@
  * Mesmo par de nomes de `financeiro/contas.ts` + `ContasSaldosPage.tsx`.)
  *
  * Uma implementação, três telas. Três cópias divergiriam no primeiro ajuste — e o ajuste desta em
- * particular já está agendado: a **Story 8.14** remove o teto de hoje (`MAX_DATA`) no mesmo commit
- * em que o estado `scheduled` passa a existir.
+ * particular já estava agendado: a **Story 8.14 removeu o teto de hoje** no mesmo commit em que o
+ * estado `scheduled` passou a existir. **Ele valeu para as três telas de uma vez**, sem que nenhuma
+ * delas fosse editada — que é exatamente o retorno prometido por ter uma implementação só.
  */
 
 /** Só o que estas telas precisam de uma conta bancária. Espelho parcial de `financeiro/contas`. */
@@ -122,33 +123,46 @@ export const PADDING_INFERIOR_DA_PAGINA = 208;
 // ── A data da baixa ───────────────────────────────────────────────────────────────────────────
 
 /**
- * ⚠️ **O teto de hoje SAI NA STORY 8.14** — não o remova antes, e não o troque por um truncamento
- * silencioso em `hoje` (gravar uma data que o usuário não informou é inventar o fato de caixa).
+ * ⚠️ **[Story 8.14] O TETO SAIU — e a remoção fecha um ciclo que a 8.13 abriu de propósito.**
  *
- * Ele existe para garantir que **nunca exista um `payable` `paid` com data futura** enquanto o
- * estado `scheduled` não existir: separar os dois depois seria uma migration com backfill sob
- * `FORCE RLS`, a armadilha da 0046. Na 8.14 o `max` sai no mesmo commit em que `scheduled` nasce, e
- * o estado passa a ser **derivado da data** (futuro ⇒ `scheduled`; hoje ou passado ⇒ `paid`).
+ * Até a 8.13 esta função devolvia `hoje` e o `<input type="date">` levava `max={...}`. Aquilo era
+ * **faseamento**, não regra de produto: o teto garantia que nunca existisse um `payable` `paid`
+ * com data futura *enquanto o estado `scheduled` não existisse* — separar os dois depois seria uma
+ * migration com backfill sob `FORCE RLS`, a armadilha da 0046.
  *
- * Isto é o **espelho** da guarda de `payables.service._valida_data_de_baixa`, não uma segunda
- * implementação dela: o backend continua sendo quem recusa, com a mensagem que nomeia as saídas.
+ * Agora `scheduled` existe e o estado é **derivado da data** no backend (futuro ⇒ `scheduled`;
+ * hoje ou passado ⇒ `paid`). Devolver `undefined` remove o `max` do campo **sem** o componente
+ * precisar de um `if`: o atributo simplesmente não é renderizado.
+ *
+ * **Não reintroduza o teto**, e não o troque por um truncamento silencioso em `hoje` — que
+ * continua sendo a "correção" tentadora: gravar uma data que o usuário não informou é inventar o
+ * fato de caixa.
+ *
+ * A função **fica** (em vez de sumir junto com a chamada) porque ela é o lugar onde esta decisão
+ * está escrita, e é a ela que o `<input>` pergunta. Um `max` some do JSX sem deixar rastro; uma
+ * função que devolve `undefined` com este comentário em cima, não.
  */
-export function tetoDaDataDeBaixa(hoje: string): string {
-  return hoje;
+export function tetoDaDataDeBaixa(_hoje: string): string | undefined {
+  return undefined;
 }
 
 /**
- * Aviso (não bloqueio) quando a data pré-preenchida cai depois de hoje — o caso de pagar
- * adiantado uma conta com vencimento futuro, em que o default `due_date` do AC1 bate no teto acima.
+ * Aviso (não bloqueio) quando a data escolhida cai depois de hoje.
  *
- * Avisar antes é honesto; **impedir** seria reimplementar no frontend uma guarda que é do backend,
- * e o 422 dele já nomeia as duas saídas ("informe o dia em que ele saiu" / "dê a baixa quando o
- * dinheiro sair"). A tela exibe aquela mensagem como veio.
+ * ⚠️ **[Story 8.14] O TEXTO MUDOU, e a frase antiga virou mentira.** Ela dizia *"pagamento
+ * agendado ainda não é acompanhado pelo e1p"* — verdade até a 8.13, falso a partir daqui. Deixá-la
+ * seria pior do que não avisar nada: mandaria o dono desfazer exatamente o que o produto passou a
+ * fazer certo.
+ *
+ * O aviso continua existindo porque a informação continua sendo útil, só que agora ela **confirma**
+ * em vez de alertar: o dono precisa saber que o registro vai nascer como *agendado* e que o
+ * dinheiro ainda não saiu. Avisar antes é honesto; **impedir** seria reimplementar no frontend uma
+ * guarda que nem existe mais no backend.
  */
 export function avisoDeDataFutura(data: string, hoje: string): string | null {
   if (!data || data <= hoje) return null;
   return (
-    "Esta conta vence depois de hoje. Informe o dia em que o dinheiro saiu da conta — " +
-    "pagamento agendado ainda não é acompanhado pelo e1p."
+    "Esta data é no futuro: a conta será registrada como AGENDADA. O dinheiro ainda não saiu — " +
+    "ela entra na Projeção de Caixa pelo dia do débito e sai da fila do que você precisa pagar."
   );
 }

@@ -43,6 +43,23 @@ export interface BankAccount {
   saldo_derivado_cents: number;
   /** Eixo A do saldo acima — sempre `banco`. Exibido colado ao número. */
   saldo_derivado_origem: string;
+  /**
+   * Story 8.14 — Σ dos movimentos com `posted_at > hoje`, separada por sinal e **em módulo**.
+   *
+   * ⚠️ **É o COMPLEMENTO EXATO de `saldo_derivado_cents`, não uma parcela dele:** aquele soma até
+   * hoje (inclusive), este soma depois de hoje. Nenhum movimento entra nos dois, nenhum fica de
+   * fora dos dois. **Nunca some os dois num total** sem rotular o resultado — seria uma terceira
+   * afirmação sobre saldo, e afirmação de saldo sem rótulo próprio é a divergência D-6 outra vez.
+   *
+   * `agendado_entrada_cents` é estruturalmente `0` até a Story 8.15 (nada produz entrada futura
+   * hoje); ele existe desde já porque o par simétrico é o contrato que aquela story consome.
+   *
+   * Opcionais no TS para que a tela não quebre contra um backend anterior à 8.14.
+   */
+  agendado_saida_cents?: number;
+  agendado_entrada_cents?: number;
+  /** Eixo A dos dois números acima — sempre `banco`. Um só, porque vêm da mesma soma. */
+  agendado_origem?: string;
   created_at: string;
 }
 
@@ -301,6 +318,25 @@ export function signedAmountView(cents: number): SignedAmountView {
 export const TOTAL_EM_CONTAS_LABEL = "Total em contas";
 export const DISPONIVEL_CAIXA_LABEL = "Disponível como caixa";
 
+/**
+ * ⚠️ **Story 8.14 — o TERCEIRO número, e ele passa pelos MESMOS testes de colisão do UX-001.**
+ *
+ * *"Agendado para sair"* nomeia dinheiro que **ainda está na conta** e **já tem destino marcado**.
+ * Ele não é saldo (não entra em `TOTAL_EM_CONTAS_LABEL`) e não é dívida (a conta já foi resolvida):
+ * é a única coisa que o dono precisa saber para não contar duas vezes com o mesmo dinheiro.
+ *
+ * O rótulo **não pode ser nem conter** `ROTULO_BANCO` (`"no banco"`, que na Projeção nomeia uma
+ * parcela de saldo), `TOTAL_EM_CONTAS_LABEL` nem `DISPONIVEL_CAIXA_LABEL` — a colisão D-6/UX-001
+ * que o épico já pagou para separar. O teste que fixa isso é o **mesmo** de `contas.test.ts`,
+ * estendido, nunca um paralelo (instrução da story para a 8.15 e a 8.18 também).
+ *
+ * "sair"/"entrar" é vocabulário de **movimento**, deliberadamente distante de "total"/"disponível"/
+ * "no banco", que são vocabulário de **saldo**. Não são sinônimos e a tela não pode sugerir que são.
+ */
+export const AGENDADO_SAIDA_LABEL = "Agendado para sair";
+/** O par simétrico. Só passa a ter valor com a Story 8.15 (recebimento com data futura). */
+export const AGENDADO_ENTRADA_LABEL = "Agendado para entrar";
+
 /** Tipos que NÃO são caixa imediato — espelha o default de `active_balance_total` (design §6.1). */
 export const KINDS_FORA_DO_CAIXA: readonly string[] = [KIND_INVESTMENT];
 
@@ -333,30 +369,69 @@ export interface ResumoSaldo {
 }
 
 /**
+ * Σ do que já tem dia marcado para SAIR das contas ativas (Story 8.14). Centavos, absoluto. PURA.
+ *
+ * O backend já entrega o número por conta (`agendado_saida_cents`), somado com a mesma fórmula do
+ * saldo (`_movements_sums`, recorte de data invertido) — a tela **soma as contas**, nunca deriva o
+ * valor por diferença entre dois saldos. Derivar aqui seria uma segunda fórmula de saldo na camada
+ * mais frágil, e a Regra 4 do `CLAUDE.md` manda o saldo ser derivado num lugar só.
+ */
+export function totalAgendadoCents(
+  accounts: BankAccount[],
+  campo: "agendado_saida_cents" | "agendado_entrada_cents",
+): number {
+  return contasAtivas(accounts).reduce((acc, a) => acc + (a[campo] ?? 0), 0);
+}
+
+/**
  * Os totais a exibir no topo da lista de contas, já rotulados. PURA.
  *
- * Devolve **um** item quando não há conta de aplicação ativa (os dois recortes coincidem e a
- * segunda linha seria ruído) e **dois** quando há — nessa ordem. Nunca devolve um total ambíguo,
- * e nunca usa o rótulo da parcela da Projeção (`ROTULO_BANCO`).
+ * - **"Total em contas"** — sempre presente;
+ * - **"Disponível como caixa"** — só quando há conta de aplicação ativa (senão os dois recortes
+ *   coincidem e a segunda linha é ruído);
+ * - **"Agendado para sair"** / **"Agendado para entrar"** (Story 8.14) — **omitidos quando o valor
+ *   é zero**, pela mesma disciplina anti-ruído: um número que é sempre zero na tela do dono que
+ *   nunca agenda nada é exatamente o tipo de peso de ERP que este produto recusa. "Agendado para
+ *   entrar" nasce, na prática, sempre omitido — ele só passa a ter valor com a Story 8.15.
+ *
+ * Nunca devolve um total ambíguo, e nenhum dos rótulos é o da parcela da Projeção (`ROTULO_BANCO`).
  */
 export function resumoSaldos(accounts: BankAccount[]): ResumoSaldo[] {
   const total = totalSaldoCents(accounts);
   const temAplicacao = contasAtivas(accounts).some((a) => KINDS_FORA_DO_CAIXA.includes(a.kind));
-  const primeiro: ResumoSaldo = {
-    rotulo: TOTAL_EM_CONTAS_LABEL,
-    cents: total,
-    explicacao: "Soma de todas as suas contas ativas, incluindo aplicações.",
-  };
-  if (!temAplicacao) return [primeiro];
-  return [
-    primeiro,
+  const resumo: ResumoSaldo[] = [
     {
+      rotulo: TOTAL_EM_CONTAS_LABEL,
+      cents: total,
+      explicacao: "Soma de todas as suas contas ativas, incluindo aplicações.",
+    },
+  ];
+  if (temAplicacao) {
+    resumo.push({
       rotulo: DISPONIVEL_CAIXA_LABEL,
       cents: totalSaldoCents(accounts, { excludeKinds: KINDS_FORA_DO_CAIXA }),
       explicacao:
         "Exclui as aplicações — é esta parcela que a Projeção de Caixa soma ao disponível da Carteira e1p.",
-    },
-  ];
+    });
+  }
+  const saida = totalAgendadoCents(accounts, "agendado_saida_cents");
+  if (saida > 0) {
+    resumo.push({
+      rotulo: AGENDADO_SAIDA_LABEL,
+      cents: saida,
+      explicacao:
+        "Débitos já agendados, com data futura — o dinheiro ainda está aí, mas não está no Total em contas por engano: ele já tem destino.",
+    });
+  }
+  const entrada = totalAgendadoCents(accounts, "agendado_entrada_cents");
+  if (entrada > 0) {
+    resumo.push({
+      rotulo: AGENDADO_ENTRADA_LABEL,
+      cents: entrada,
+      explicacao: "Recebimentos já marcados para uma data futura — ainda não estão na sua conta.",
+    });
+  }
+  return resumo;
 }
 
 // ── Entrada de dinheiro e datas ──────────────────────────────────────────────────────────────

@@ -2,6 +2,8 @@ import { describe, expect, it } from "vitest";
 import {
   ACAO_BAIXAR_PAYABLE,
   acaoBaixarPayable,
+  AGENDADO_ENTRADA_LABEL,
+  AGENDADO_SAIDA_LABEL,
   type BankAccount,
   BANK_ACCOUNT_KINDS,
   avisoContasPagasAnteriores,
@@ -37,6 +39,7 @@ import {
   STATUS_IGNORED,
   STATUS_UNMATCHED,
   TOTAL_EM_CONTAS_LABEL,
+  totalAgendadoCents,
   totalSaldoCents,
 } from "./contas";
 import type { BankTransaction } from "./contas";
@@ -59,6 +62,11 @@ function conta(over: Partial<BankAccount> = {}): BankAccount {
     archived_at: null,
     saldo_derivado_cents: 0,
     saldo_derivado_origem: "banco",
+    // Story 8.14 — a conta padrão nasce SEM nada agendado, que é o estado do dono comum. Cada
+    // teste que quer o terceiro número o pede explicitamente.
+    agendado_saida_cents: 0,
+    agendado_entrada_cents: 0,
+    agendado_origem: "banco",
     created_at: "2026-01-01T00:00:00Z",
     ...over,
   };
@@ -166,16 +174,36 @@ describe("totalSaldoCents / resumoSaldos — a divergência D-6 dos dois totais"
     expect(totalSaldoCents(contas, { excludeKinds: KINDS_FORA_DO_CAIXA })).toBe(6_000_000);
   });
 
-  it("⚠️ D-6: nenhum dos dois rótulos desta tela é o da parcela da Projeção ('no banco')", () => {
+  it("⚠️ D-6: nenhum rótulo desta tela é o da parcela da Projeção ('no banco'), nem colide entre si", () => {
     // O ponto do épico inteiro: dois números diferentes NÃO podem sair com o mesmo nome. O
     // `ROTULO_BANCO` pertence à parcela da Story 8.8 (que exclui aplicação e é somada ao
     // disponível da Carteira); esta tela usa rótulos próprios.
-    expect(TOTAL_EM_CONTAS_LABEL).not.toBe(ROTULO_BANCO);
-    expect(DISPONIVEL_CAIXA_LABEL).not.toBe(ROTULO_BANCO);
-    expect(TOTAL_EM_CONTAS_LABEL).not.toBe(DISPONIVEL_CAIXA_LABEL);
-    for (const r of [TOTAL_EM_CONTAS_LABEL, DISPONIVEL_CAIXA_LABEL]) {
+    //
+    // ⚠️ **[Story 8.14] ESTENDIDO, não duplicado.** O terceiro número ("Agendado para sair") e o
+    // par simétrico dele passam pelos MESMOS testes de colisão que o UX-001 instituiu — a story
+    // instrui a 8.15 e a 8.18 a fazerem o mesmo. Um teste paralelo por story faria cada rótulo
+    // novo ser conferido contra um subconjunto diferente dos antigos, que é como a colisão volta.
+    const rotulos = [
+      TOTAL_EM_CONTAS_LABEL,
+      DISPONIVEL_CAIXA_LABEL,
+      AGENDADO_SAIDA_LABEL,
+      AGENDADO_ENTRADA_LABEL,
+    ];
+    for (const r of rotulos) {
+      expect(r).not.toBe(ROTULO_BANCO);
+      // Nem SER nem CONTER: "Total em contas no banco" seria tão ruim quanto a igualdade.
+      expect(r.toLowerCase()).not.toContain(ROTULO_BANCO.toLowerCase());
       expect(r.toLowerCase()).not.toContain("no banco");
     }
+    // E nenhum contém OUTRO — dois recortes cujos nomes se contêm são lidos como o mesmo número
+    // com um qualificador, que é a D-6 pela porta de dentro.
+    for (const a of rotulos) {
+      for (const b of rotulos) {
+        if (a === b) continue;
+        expect(a.toLowerCase()).not.toContain(b.toLowerCase());
+      }
+    }
+    expect(new Set(rotulos).size).toBe(rotulos.length);
   });
 
   it("havendo aplicação ativa, saem DOIS totais rotulados — nunca um número ambíguo", () => {
@@ -203,6 +231,62 @@ describe("totalSaldoCents / resumoSaldos — a divergência D-6 dos dois totais"
     ]);
     expect(resumo).toHaveLength(1);
     expect(resumo[0].cents).toBe(100);
+  });
+
+  // ── Story 8.14 — o terceiro número ─────────────────────────────────────────────────────────
+
+  it("'Agendado para sair' é OMITIDO quando é zero (mesma disciplina anti-ruído do 2º total)", () => {
+    // O dono que nunca agenda nada não pode ver uma linha "R$ 0,00" para sempre: um número que é
+    // sempre zero é peso de ERP, e o produto recusa peso de ERP.
+    const resumo = resumoSaldos([conta({ id: "a", saldo_derivado_cents: 100 })]);
+    expect(resumo.map((r) => r.rotulo)).toEqual([TOTAL_EM_CONTAS_LABEL]);
+  });
+
+  it("havendo débito agendado, o TERCEIRO número aparece — com a explicação colada", () => {
+    const resumo = resumoSaldos([
+      conta({ id: "a", saldo_derivado_cents: 1_000_000, agendado_saida_cents: 500_000 }),
+      conta({ id: "b", saldo_derivado_cents: 200_000, agendado_saida_cents: 30_000 }),
+    ]);
+    const agendado = resumo.find((r) => r.rotulo === AGENDADO_SAIDA_LABEL);
+    expect(agendado?.cents).toBe(530_000);
+    // O número nunca aparece sem dizer o que ele é — e sobretudo o que ele NÃO é.
+    expect(agendado?.explicacao).toMatch(/data futura/i);
+    expect(agendado?.explicacao).toMatch(/Total em contas/);
+    // ...e ele NÃO contamina o saldo: o "Total em contas" continua sendo a soma dos saldos.
+    expect(resumo[0]).toMatchObject({ rotulo: TOTAL_EM_CONTAS_LABEL, cents: 1_200_000 });
+  });
+
+  it("'Agendado para entrar' nasce omitido — só passa a ter valor na Story 8.15", () => {
+    const resumo = resumoSaldos([
+      conta({ id: "a", saldo_derivado_cents: 100, agendado_saida_cents: 50 }),
+    ]);
+    expect(resumo.map((r) => r.rotulo)).not.toContain(AGENDADO_ENTRADA_LABEL);
+    // ...mas o par simétrico funciona no dia em que o backend o preencher (o contrato já existe).
+    const comEntrada = resumoSaldos([
+      conta({ id: "a", saldo_derivado_cents: 100, agendado_entrada_cents: 900 }),
+    ]);
+    expect(comEntrada.find((r) => r.rotulo === AGENDADO_ENTRADA_LABEL)?.cents).toBe(900);
+  });
+
+  it("conta ARQUIVADA não entra no agendado, como não entra em soma nenhuma", () => {
+    expect(
+      totalAgendadoCents(
+        [
+          conta({ id: "a", agendado_saida_cents: 100 }),
+          conta({ id: "z", agendado_saida_cents: 900, archived_at: "2026-05-01T00:00:00Z" }),
+        ],
+        "agendado_saida_cents",
+      ),
+    ).toBe(100);
+  });
+
+  it("backend antigo (sem os campos) não quebra nem inventa número", () => {
+    // O front tolera o payload anterior à 8.14: campo ausente vira 0, e a linha some por omissão —
+    // nunca `NaN`, nunca "R$ 0,00" pendurado.
+    const semOsCampos = { ...conta({ id: "a", saldo_derivado_cents: 100 }) } as BankAccount;
+    delete (semOsCampos as Partial<BankAccount>).agendado_saida_cents;
+    expect(totalAgendadoCents([semOsCampos], "agendado_saida_cents")).toBe(0);
+    expect(resumoSaldos([semOsCampos]).map((r) => r.rotulo)).toEqual([TOTAL_EM_CONTAS_LABEL]);
   });
 
   it("sem conta nenhuma, o total é 0 e continua rotulado (não vira `NaN` nem some)", () => {

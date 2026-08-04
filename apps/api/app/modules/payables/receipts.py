@@ -17,7 +17,18 @@ from sqlalchemy.orm import Session
 
 from app.modules.attachments import service as attachments_service
 from app.modules.attachments.models import Attachment
-from app.modules.payables.models import STATUS_CANCELED, STATUS_OPEN, STATUS_PAID, Payable
+from app.modules.payables.models import (
+    STATUS_CANCELED,
+    STATUS_OPEN,
+    STATUS_PAID,
+    STATUS_SCHEDULED,
+    Payable,
+)
+
+# Os estados em que a baixa já aconteceu — o dinheiro saiu (`paid`) ou já tem dia marcado para sair
+# (`scheduled`, Story 8.14). Nos dois o comprovante do banco **já existe e o dono o tem na mão**.
+# `open` tem query própria (ordena por `due_date`); `canceled` nunca entra.
+_ESTADOS_LIQUIDADOS: tuple[str, ...] = (STATUS_PAID, STATUS_SCHEDULED)
 
 # owner_type do anexo enquanto ele está em staging (ainda sem conta definida).
 OWNER_INBOX = "receipt_inbox"
@@ -121,6 +132,16 @@ def list_candidates(db: Session, *, q: str = "", paid_window_days: int = 30) -> 
 
     A ordenação é feita em duas queries, não num ORDER BY composto, porque os dois grupos
     ordenam por colunas diferentes (due_date crescente vs paid_at decrescente).
+
+    ⚠️ **[Story 8.14] As AGENDADAS entram junto das pagas recentes** (AC11), pela mesma janela e a
+    mesma ordenação. *"O comprovante do agendamento existe e é o que o dono tem na mão"* — o app do
+    banco emite o comprovante do agendamento na hora, e é aquele PDF que ele compartilha pelo
+    celular. Deixar a agendada de fora obrigaria o dono a esperar o dia do débito para anexar um
+    arquivo que ele já tem — e, na prática, a nunca anexar.
+
+    A janela de `paid_window_days` continua sendo aplicada sobre `paid_at`, que numa agendada é a
+    data **futura** do débito: `paid_at >= cutoff` é verdadeiro para toda agendada, e isso está
+    certo — nenhuma agendada é "antiga demais" para receber comprovante.
     """
     term = q.strip().lower()
 
@@ -143,14 +164,20 @@ def list_candidates(db: Session, *, q: str = "", paid_window_days: int = 30) -> 
     pagas = list(
         db.scalars(
             _match(
-                select(Payable).where(Payable.status == STATUS_PAID, Payable.paid_at >= cutoff)
+                select(Payable).where(
+                    # [8.14] `IN (paid, scheduled)`, escrito contra a tupla e não contra dois
+                    # `==` encadeados: quando a 8.15/8.16 precisarem do mesmo recorte, é uma
+                    # entrada a mais e nenhuma regra muda.
+                    Payable.status.in_(_ESTADOS_LIQUIDADOS),
+                    Payable.paid_at >= cutoff,
+                )
             )
             .order_by(Payable.paid_at.desc())
             .limit(100)
         ).all()
     )
-    # Contas canceladas nunca entram: nenhum dos dois filtros (status aberta ou status paga)
-    # as inclui, portanto não precisamos de um `.where(status != cancelada)` explícito.
+    # Contas canceladas nunca entram: nenhum dos dois filtros (status aberta ou status
+    # paga/agendada) as inclui, portanto não precisamos de um `.where(status != cancelada)`.
     return (abertas + pagas)[:100]
 
 

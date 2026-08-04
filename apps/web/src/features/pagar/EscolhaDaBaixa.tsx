@@ -213,8 +213,11 @@ export function EscolhaDaBaixa({
             type="date"
             value={estado.data}
             onChange={(e) => estado.setData(e.target.value)}
-            // ⚠️ **O `max` SAI na Story 8.14**, junto com o estado `scheduled` — ver
-            // `tetoDaDataDeBaixa`. Ele espelha o teto do backend; não é uma segunda guarda.
+            // ⚠️ **[Story 8.14] `tetoDaDataDeBaixa` passou a devolver `undefined`**, e com isso o
+            // atributo `max` deixa de ser renderizado — o campo aceita data futura, e o backend
+            // grava a conta como `scheduled`. A chamada FICA (em vez de a linha sumir) porque é
+            // ela que documenta a decisão e é a ela que se volta se o teto precisar retornar; um
+            // `max` apagado do JSX não deixa rastro nenhum.
             max={tetoDaDataDeBaixa(hojeISO())}
             aria-label="Dia em que o dinheiro saiu da conta"
             className={campo}

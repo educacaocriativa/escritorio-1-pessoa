@@ -36,7 +36,7 @@ dedicado do CI (`cross-tenant-rls`) ou manualmente com Docker (`pytest -m rls_e2
 from __future__ import annotations
 
 from collections.abc import Iterator
-from datetime import date
+from datetime import date, timedelta
 from pathlib import Path
 from uuid import uuid4
 
@@ -119,7 +119,28 @@ def _session_for(app_url: str, tenant_id: str | None):
     return _ctx()
 
 
-def _seed_account(app_url: str, tenant_id: str, *, name: str, opening: int, number: str) -> str:
+def _hoje_utc() -> date:
+    """A MESMA âncora de `bank.service._today()` e de `payables` — UTC, nunca local."""
+    from app.modules.bank import service as bank_service
+
+    return bank_service._today()
+
+
+def _seed_account(
+    app_url: str,
+    tenant_id: str,
+    *,
+    name: str,
+    opening: int,
+    number: str,
+    opening_date: date = date(2026, 7, 1),
+) -> str:
+    """⚠️ **[Story 8.14] `opening_date` virou parâmetro, com o MESMO default de antes.**
+
+    Os casos de agendamento precisam de datas ancoradas em "hoje" (o estado `scheduled` é derivado
+    do relógio real), e uma abertura fixa em 2026-07-01 barraria a baixa pelo piso assim que o
+    calendário passasse dela. Nenhum chamador existente muda de comportamento.
+    """
     from app.modules.bank.models import BankAccount
 
     with _session_for(app_url, tenant_id) as session:
@@ -132,7 +153,7 @@ def _seed_account(app_url: str, tenant_id: str, *, name: str, opening: int, numb
             branch="0001",
             number=number,
             opening_balance_cents=opening,
-            opening_date=date(2026, 7, 1),
+            opening_date=opening_date,
             is_primary=True,
         )
         session.add(acc)
@@ -1355,3 +1376,135 @@ def test_guarda_de_contagem_dupla_isolamento_cross_tenant(app_url: str) -> None:
     with _session_for(app_url, tenant_a) as sa:
         assert bank_service.derived_balance(sa, bank_account_id=acc_a, until=dia) == 500_000
         assert sa.query(BankTransaction).filter(BankTransaction.id == tx.id).count() == 0
+
+
+# ── Story 8.14 (IV5) — a promoção `scheduled → paid` NÃO atravessa o tenant ───────────────────
+#
+# É o teste de maior valor da 8.14 em Postgres real, e o motivo é estrutural: `promote_scheduled`
+# roda **no worker**, fora de qualquer request HTTP, num laço que percorre TODOS os tenants — o
+# único lugar do sistema em que o mesmo processo abre sessão para um tenant depois do outro. Se a
+# varredura escapasse da GUC (sessão global, filtro manual esquecido, `SessionLocal` no lugar de
+# `tenant_session`), o sweep do tenant A promoveria as contas do tenant B **em silêncio**: nenhum
+# erro, nenhum 500, só o status do vizinho mudando sozinho de madrugada.
+#
+# O SQLite dos unitários não pega isso — lá todas as linhas são visíveis a todas as sessões.
+
+
+def test_promocao_de_agendadas_isolamento_cross_tenant(app_url: str) -> None:
+    """A varredura de A promove **só** as agendadas de A. B fica intacto, contador incluído."""
+    from app.modules.payables import service as payables_service
+    from app.modules.payables.models import STATUS_PAID, STATUS_SCHEDULED, Payable
+
+    tenant_a = str(uuid4())
+    tenant_b = str(uuid4())
+    # ⚠️ Datas ancoradas em HOJE, nunca fixas: o estado `scheduled` é derivado do relógio real
+    # (`apply_paid` compara `paid_on` com `datetime.now(UTC).date()`), então um `debito` fixo no
+    # calendário viraria `paid` no dia em que o repositório passasse por ele — e o teste passaria a
+    # exercitar outro cenário sem nunca ficar vermelho.
+    hoje = _hoje_utc()
+    abertura = hoje - timedelta(days=90)
+    acc_a = _seed_account(
+        app_url, tenant_a, name="Agenda A", opening=100_000, number="8140-1", opening_date=abertura
+    )
+    acc_b = _seed_account(
+        app_url, tenant_b, name="Agenda B", opening=100_000, number="8140-2", opening_date=abertura
+    )
+    debito = hoje + timedelta(days=10)
+    bill_a = _seed_payable(app_url, tenant_a, amount_cents=500_00, due=debito)
+    bill_b = _seed_payable(app_url, tenant_b, amount_cents=700_00, due=debito)
+
+    # Os dois tenants agendam para o MESMO dia futuro.
+    for tenant, acc, bill in ((tenant_a, acc_a, bill_a), (tenant_b, acc_b, bill_b)):
+        with _session_for(app_url, tenant) as s:
+            p = payables_service.apply_paid(
+                s, payable_id=bill, tenant_id=tenant, actor="dono",
+                bank_account_id=acc, paid_on=debito,
+            )
+            s.commit()
+            assert p.status == STATUS_SCHEDULED, (
+                "pré-condição: com `today` real anterior ao débito, a baixa nasce agendada"
+            )
+
+    # ⚠️ A varredura roda dentro da sessão de A, como o worker faz (`tenant_session(tenant_id)`).
+    with _session_for(app_url, tenant_a) as sa:
+        promovidas = payables_service.promote_scheduled(
+            sa, tenant_id=tenant_a, actor="system:worker", today=debito
+        )
+    assert promovidas == 1, (
+        f"a varredura de A promoveu {promovidas} contas. Se foi 2, ela enxergou o tenant B — a "
+        "sessão escapou da GUC `app.current_tenant_id` ou alguém trocou `tenant_session` por uma "
+        "sessão global."
+    )
+
+    with _session_for(app_url, tenant_a) as sa:
+        assert sa.get(Payable, bill_a).status == STATUS_PAID
+
+    with _session_for(app_url, tenant_b) as sb:
+        assert sb.get(Payable, bill_b).status == STATUS_SCHEDULED, (
+            "o sweep do tenant A promoveu a conta agendada do tenant B — o vizinho teve o estado "
+            "de um lançamento dele alterado por um processo que não é dele"
+        )
+
+    # E a varredura de B, quando rodar, promove a dele — e só a dele.
+    with _session_for(app_url, tenant_b) as sb:
+        assert payables_service.promote_scheduled(
+            sb, tenant_id=tenant_b, actor="system:worker", today=debito
+        ) == 1
+    with _session_for(app_url, tenant_b) as sb:
+        assert sb.get(Payable, bill_b).status == STATUS_PAID
+
+
+def test_movimento_agendado_nao_move_o_saldo_do_vizinho(app_url: str) -> None:
+    """O movimento com `posted_at` FUTURO respeita o corte de data **e** a RLS, ao mesmo tempo.
+
+    Os dois recortes são independentes e se compõem: A não vê a linha de B (RLS) e nenhum dos dois
+    vê o próprio futuro no saldo corrente (Story 8.10). Um teste que exercitasse só um dos dois
+    passaria com o outro quebrado.
+    """
+    from app.modules.bank import service as bank_service
+    from app.modules.payables import service as payables_service
+
+    tenant_a = str(uuid4())
+    tenant_b = str(uuid4())
+    hoje = _hoje_utc()
+    abertura = hoje - timedelta(days=90)
+    acc_a = _seed_account(
+        app_url, tenant_a, name="Futuro A", opening=100_000, number="8141-1", opening_date=abertura
+    )
+    acc_b = _seed_account(
+        app_url, tenant_b, name="Futuro B", opening=100_000, number="8141-2", opening_date=abertura
+    )
+    debito = hoje + timedelta(days=10)
+    bill_a = _seed_payable(app_url, tenant_a, amount_cents=900_00, due=debito)
+
+    with _session_for(app_url, tenant_a) as sa:
+        payables_service.mark_paid(
+            sa, payable_id=bill_a, tenant_id=tenant_a, actor="a",
+            bank_account_id=acc_a, paid_on=debito,
+        )
+
+    with _session_for(app_url, tenant_a) as sa:
+        # Antes do débito: o dinheiro ainda está lá (corte de data da 8.10).
+        assert bank_service.derived_balance(
+            sa, bank_account_id=acc_a, until=debito - timedelta(days=1)
+        ) == 100_000
+        # No dia: já saiu — sem worker nenhum ter rodado (F-D11).
+        assert (
+            bank_service.derived_balance(sa, bank_account_id=acc_a, until=debito)
+            == 100_000 - 900_00
+        )
+        # E o agendado da conta é o complemento exato, em módulo.
+        agendado = bank_service.agendado_sums(
+            sa, accounts=[bank_service.get_account(sa, acc_a)], today=debito - timedelta(days=1)
+        )
+        assert agendado[acc_a].saida_cents == 900_00
+        assert agendado[acc_a].entrada_cents == 0
+
+    with _session_for(app_url, tenant_b) as sb:
+        assert bank_service.derived_balance(sb, bank_account_id=acc_b, until=debito) == 100_000
+        agendado_b = bank_service.agendado_sums(
+            sb, accounts=[bank_service.get_account(sb, acc_b)], today=debito - timedelta(days=1)
+        )
+        assert agendado_b[acc_b].saida_cents == 0, (
+            "o 'Agendado para sair' de B enxergou o movimento futuro de A"
+        )

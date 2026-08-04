@@ -368,13 +368,18 @@ describe("ComprovantePage — a escolha da baixa (Story 8.13)", () => {
     expect(screen.getByRole("button", { name: /anexar e dar baixa · sai do Itaú PJ/i })).toBeTruthy();
   });
 
-  it("a data padrão da BANDEJA é hoje (não o vencimento) e tem teto em hoje", async () => {
+  it("a data padrão da BANDEJA é hoje (não o vencimento) — e [8.14] não há mais teto", async () => {
     await escolherCandidata();
 
     // Aqui, diferente de PagarPage/Fila, o default é HOJE: o comprovante chega pelo share sheet no
-    // instante do pagamento. O vencimento da candidata (2099-01-10) nem entraria — bateria no teto.
+    // instante do pagamento. **O default não mudou** — o que mudou foi o teto.
     expect(campoDia().value).toBe(hoje());
-    expect(campoDia().getAttribute("max")).toBe(hoje());
+    // ⚠️ **[Story 8.14] mudança de expectativa, e ela é a CORREÇÃO.** Este teste afirmava
+    // `max === hoje()`. O teto era faseamento (garantir que não existisse `paid` com data futura
+    // enquanto `scheduled` não existisse) e saiu no commit em que `scheduled` nasceu. A bandeja
+    // herdou a mudança **sem ser editada**: as três telas de baixa compartilham `baixa.ts`, e é
+    // esse o retorno de ter uma implementação só.
+    expect(campoDia().getAttribute("max")).toBeNull();
   });
 
   it("o dia é EDITÁVEL e é o valor editado que viaja", async () => {

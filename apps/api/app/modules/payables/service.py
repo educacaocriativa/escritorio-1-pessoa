@@ -8,13 +8,29 @@ from sqlalchemy.orm import Session
 
 from app.core import audit
 from app.core.recurrence import advance, occurrences
+
+# O estado é DERIVADO da data, nunca escolhido (Story 8.14 AC2). O helper é **público e neutro**
+# (`app/core/`) porque a Story 8.15 o consome para `Charge` — **importar, nunca copiar**.
+from app.core.scheduling import status_por_data
 from app.db.base import _uuid
+
+# ⚠️ **Duas palavras `scheduled` neste arquivo, e elas NÃO são a mesma coisa.** O `scheduled` da
+# Agenda quer dizer *"este evento ainda está pendente na sua agenda"* (é o estado NÃO-terminal de um
+# `AgendaEvent`); o `scheduled` de `payables` (Story 8.14) quer dizer *"o débito já tem dia marcado
+# no banco"* — que, do ponto de vista da Agenda, deixa o evento **`done`**. Os dois vocabulários
+# apontam para lados opostos no mesmo instante, então o da Agenda entra com prefixo: um `import`
+# nu faria a colisão passar como sombreamento silencioso, e o sintoma seria o evento voltando a
+# "pendente" numa baixa bem-sucedida.
 from app.modules.agenda.models import (
     KIND_COBRANCA_PAGAR,
     PRIORITY_NORMAL,
-    STATUS_DONE,
-    STATUS_SCHEDULED,
     AgendaEvent,
+)
+from app.modules.agenda.models import (
+    STATUS_DONE as AGENDA_STATUS_DONE,
+)
+from app.modules.agenda.models import (
+    STATUS_SCHEDULED as AGENDA_STATUS_PENDENTE,
 )
 
 # ⚠️ **A direção de import de NEGÓCIO → BANCO (Regra dos Planos §1.3d, Story 8.9 AC10).**
@@ -30,6 +46,7 @@ from app.modules.payables.models import (
     STATUS_CANCELED,
     STATUS_OPEN,
     STATUS_PAID,
+    STATUS_SCHEDULED,
     Payable,
 )
 from app.modules.payables.schemas import (
@@ -51,8 +68,12 @@ class PayableError(Exception):
 # Os estados em que uma conta a pagar ainda é uma OBRIGAÇÃO que pode ter virado dinheiro saindo —
 # e portanto candidata a ser o mesmo dinheiro de um lançamento manual (Story 8.17 AC5). `canceled`
 # fica fora: não é obrigação nenhuma, e casá-la daria um 409 sem saída pelo caminho oferecido.
-# ⚠️ Quando a Story 8.14 criar `scheduled`, ele entra AQUI — uma entrada nesta tupla, e nada mais.
-_ESTADOS_CANDIDATOS: tuple[str, ...] = (STATUS_OPEN, STATUS_PAID)
+# ⚠️ **[Story 8.14] `scheduled` ENTROU AQUI** — a Story 8.17 já o listava no AC5 e o registrou como
+# desvio declarado ("`scheduled` não existe ainda"); a dívida se paga com **uma entrada nesta
+# tupla**, exatamente como aquela story previu, e nada mais mudou. Uma conta agendada é o caso mais
+# perigoso da guarda: o dono agendou no app do banco, deu a baixa no e1p **e** lançou o mesmo Pix à
+# mão — o saldo cairia duas vezes.
+_ESTADOS_CANDIDATOS: tuple[str, ...] = (STATUS_OPEN, STATUS_SCHEDULED, STATUS_PAID)
 
 ACAO_CADASTRAR_CONTA = "cadastrar_conta"
 
@@ -188,7 +209,8 @@ def build_payable(db: Session, *, tenant_id: str, actor: str, data: PayableCreat
         db.flush()
         day_start = datetime.combine(due, time.min, tzinfo=UTC)
         event = AgendaEvent(
-            tenant_id=tenant_id, title=title, kind=KIND_COBRANCA_PAGAR, status=STATUS_SCHEDULED,
+            tenant_id=tenant_id, title=title, kind=KIND_COBRANCA_PAGAR,
+            status=AGENDA_STATUS_PENDENTE,
             priority=PRIORITY_NORMAL, source="payables", starts_at=day_start,
             ends_at=day_start.replace(hour=23, minute=59), all_day=True,
             amount_cents=data.amount_cents, external_ref=payable.id,
@@ -348,7 +370,7 @@ def _traduz_bank_error(call):
 
 
 def _valida_data_de_baixa(paid_on: date, acc: BankAccount) -> date:
-    """As duas guardas da data da baixa (AC3). Ambas 422 — nunca truncam em silêncio.
+    """A guarda da data da baixa: **só o PISO**. 422 — nunca trunca em silêncio.
 
     **Piso — `paid_on > acc.opening_date`.** A comparação NÃO é reescrita aqui: quem a aplica é
     `bank.service.validate_posted_at_floor`, extraída como pública pela Story 8.9 exatamente para
@@ -357,27 +379,26 @@ def _valida_data_de_baixa(paid_on: date, acc: BankAccount) -> date:
     `bank` explica a fórmula do saldo, e quem está dando baixa numa conta antiga precisa saber o
     que fazer, não por que a soma dobraria.
 
-    **Teto — `paid_on <= hoje`.** ⚠️ **`[CORTE DO @PM]`, e ele SAI na Story 8.14.** O design da Onda
-    2 §4.2 diz *"sem teto superior"* e **isto não é contradição, é faseamento**: o teto garante que
-    **nunca exista um `payable` `paid` com data futura** enquanto o estado `scheduled` não existir.
-    Se `paid`+futuro entrasse primeiro, o backfill das 45 contas do mutirão e os pagamentos
-    agendados ficariam **no mesmo status**, indistinguíveis a não ser por um predicado sobre a data
-    — e separá-los depois seria uma migration com backfill sobre dado existente sob `FORCE RLS`, a
-    armadilha da 0046 que o ADR 0003 nomeia como o único ponto desse tipo do épico.
+    ── ⚠️ **[Story 8.14] O TETO SAIU DAQUI, e a remoção é o fecho de um ciclo aberto de propósito.**
 
-    **Na 8.14 o teto sai** no mesmo commit em que `scheduled` passa a existir, e o estado vira
-    **derivado da data, nunca escolhido**: `paid_on` futuro ⇒ `scheduled`; hoje ou passado ⇒ `paid`.
-    Não remova este teto antes disso — e não o troque por um truncamento silencioso em `hoje`, que
-    é a "correção" tentadora: gravar uma data que o usuário não informou é inventar o fato de caixa.
+    Até a Story 8.13 esta função também recusava `paid_on > hoje`, com a marca `[CORTE DO @PM]` e a
+    instrução literal *"não remova este teto antes da 8.14"*. O teto nunca foi uma regra de negócio:
+    era **faseamento**. Ele garantia que **nunca existisse um `payable` `paid` com data futura**
+    enquanto o estado `scheduled` não existisse — porque, se `paid`+futuro entrasse primeiro, o
+    backfill das 45 contas do mutirão e os pagamentos agendados ficariam no MESMO status,
+    separáveis só por um predicado sobre a data, e desmanchar isso depois seria uma migration com
+    backfill sob `FORCE RLS` (a armadilha da 0046).
+
+    Agora `scheduled` existe, e o estado passou a ser **derivado da data** (`apply_paid`):
+    `paid_on` futuro ⇒ `scheduled`; hoje ou passado ⇒ `paid`. **Não reintroduza o teto** — e não o
+    troque por um truncamento silencioso em `hoje`, que continua sendo a "correção" tentadora:
+    gravar uma data que o usuário não informou é inventar o fato de caixa (Artigo IV).
+
+    A guarda de data futura que **continua de pé** é outra e protege outra coisa: a do lançamento
+    **externo** (`bank.service._validate_posted_at`, `SOURCES_EXTERNA`), onde data futura é erro de
+    digitação. O corte é por `source` — *"o e1p pode afirmar o futuro do que ele mesmo agendou; não
+    pode afirmar o futuro do que outro atestou"*.
     """
-    hoje = _today()
-    if paid_on > hoje:
-        raise PayableError(
-            f"A data de pagamento não pode ser futura ({paid_on.isoformat()}). Se o pagamento já "
-            "saiu da conta, informe o dia em que ele saiu; se ele está agendado no app do banco, "
-            "dê a baixa quando o dinheiro sair — o e1p ainda não acompanha pagamento agendado.",
-            422,
-        )
     try:
         bank_service.validate_posted_at_floor(paid_on, acc)
     except bank_service.BankError as e:
@@ -469,6 +490,25 @@ def apply_paid(
     duplicado não é este `if`: é o índice único parcial `uq_bank_transactions_origin`
     `(tenant_id, source, origin_id)`, no banco, fail-closed.
 
+    ── ⚠️ **[Story 8.14] O ESTADO É DERIVADO DA DATA, NUNCA ESCOLHIDO** (AC2)
+
+    | `paid_on` | `status` resultante | `paid_at` |
+    |---|---|---|
+    | `> hoje` | `scheduled` | o `paid_on` informado |
+    | `== hoje` ou `< hoje` | `paid` | o `paid_on` informado |
+
+    A derivação mora em `app.core.scheduling.status_por_data` — **público e neutro**, porque a Story
+    8.15 o consome para `Charge`. Nenhum schema de entrada (`PayableCreate`, `PayableUpdate`,
+    `PayablePayIn`, `PayablePaymentUpdate`) aceita `status`: quem decide é a data, e a API não
+    oferece o campo. Invariante testável nas duas direções:
+    **`status == 'scheduled' ⟺ paid_at.date() > hoje`, no momento da escrita** — depois disso quem
+    move é `promote_scheduled`, no worker.
+
+    **`scheduled` NÃO é idempotente aqui, e isso é o ponto:** uma conta agendada que recebe uma
+    baixa nova (com a data em que o dinheiro saiu de verdade) **atravessa** o `if` acima e
+    re-deriva o estado. O movimento não duplica porque `sync_origin_movement` é upsert sobre
+    `(source, origin_id)`: ele **move**, nunca cria um segundo.
+
     Args:
         bank_account_id: **OBRIGATÓRIO, sem default e sem `| None`** (AC1, fundador F7). Não há
             sobrecarga e **não há fallback para a conta primária aqui**: o pré-preenchimento pela
@@ -478,10 +518,11 @@ def apply_paid(
         paid_on: `None` ⇒ **`p.due_date`** (fundador F10: *"deixar habilitado no vencimento, pois
             se estiver fazendo retroativo, pq não deu certo no dia"*) — não `now()`, e **não**
             `min(due_date, hoje)`, recomendação que a própria @architect revogou por estar
-            *"desenhando o produto em volta de uma limitação do meu próprio modelo"*. Piso e teto
-            em `_valida_data_de_baixa`. ⚠️ Consequência do teto **nesta story**: dar baixa numa
-            conta com vencimento **futuro** exige informar `paid_on` (o dia em que o dinheiro saiu)
-            — sem isso o default cai no futuro e o teto recusa com 422. Some na 8.14.
+            *"desenhando o produto em volta de uma limitação do meu próprio modelo"*. **Só o piso**
+            em `_valida_data_de_baixa` (o teto saiu na 8.14). ⚠️ Consequência da remoção do teto:
+            dar baixa numa conta com vencimento **futuro** sem informar `paid_on` deixou de ser
+            422 e passou a gravar `scheduled` no vencimento — que é exatamente o que o dono quis
+            dizer ao clicar em "marcar paga" numa conta que ele acabou de agendar no app do banco.
 
     `p.paid_at` (regime de CAIXA) passa a **derivar de `paid_on`** em vez de ser `now()` cravado.
     `p.competence_date` (regime de COMPETÊNCIA) **não é tocado** — `payables/models.py:6-9`, regra
@@ -503,14 +544,21 @@ def apply_paid(
     acc = _conta_de_baixa(db, bank_account_id)
     paid_on = _valida_data_de_baixa(paid_on if paid_on is not None else p.due_date, acc)
 
-    p.status = STATUS_PAID
+    # [8.14] Derivado da data, nunca escolhido — e pelo helper PÚBLICO, que a 8.15 importa.
+    p.status = status_por_data(
+        paid_on, _today(), status_agendado=STATUS_SCHEDULED, status_pago=STATUS_PAID
+    )
     # Meia-noite UTC da data de caixa — mesma convenção de `paid_before` e de `summary`, e o mesmo
     # cuidado de data-de-calendário que o bug de fuso da Agenda (`CLAUDE.md` §6.0) ensinou.
     p.paid_at = datetime.combine(paid_on, time.min, tzinfo=UTC)
     if p.agenda_event_id:
         ev = db.get(AgendaEvent, p.agenda_event_id)
         if ev is not None:
-            ev.status = STATUS_DONE  # não fica "atrasado" na agenda
+            # `done` também no caminho `scheduled` (8.14): do ponto de vista da Agenda a decisão já
+            # foi tomada e a conta não é mais uma pendência de hoje. É o que permite o worker do
+            # AC10 promover `scheduled → paid` **sem tocar na Agenda** — o evento já está no estado
+            # final desde a baixa, e a promoção não tem nada a reverberar ali.
+            ev.status = AGENDA_STATUS_DONE  # não fica "atrasado" na agenda
     _sincroniza_movimento(
         db, p, tenant_id=tenant_id, actor=actor, bank_account_id=acc.id, posted_at=paid_on
     )
@@ -556,8 +604,11 @@ def update_payment(
     Sem ela, corrigir seria estornar + repagar — **delete + recreate** do movimento e o evento da
     Agenda indo e voltando; operação pesada para um evento leve, todo mês.
 
-    - aceita **apenas** `status='paid'` nesta story (a 8.14 acrescenta `scheduled`); conta em
-      aberto → **409**, porque não há pagamento a corrigir;
+    - aceita `status='paid'` **e `status='scheduled'`** (a 8.14 acrescentou o segundo); conta em
+      aberto → **409**, porque não há pagamento a corrigir. **A rota pode MOVER o estado nas duas
+      direções** — corrigir a data para o futuro transforma `paid` em `scheduled`, e antecipar uma
+      agendada para hoje/ontem a transforma em `paid`. O estado continua derivado da data, e é a
+      mesma derivação de `apply_paid` (`status_por_data`), não uma segunda cópia;
     - trocar a conta → **UPDATE de `bank_account_id` na MESMA linha** do movimento. **Move, nunca
       duplica** (Regra da Origem (c)); os dois saldos derivados se corrigem sozinhos porque são
       derivados, e o `origin_dedup_hash` é estável sob troca de conta exatamente por isto;
@@ -573,10 +624,10 @@ def update_payment(
     p = db.scalar(select(Payable).where(Payable.id == payable_id).with_for_update())
     if p is None:
         raise PayableError("Conta não encontrada", 404)
-    if p.status != STATUS_PAID:
+    if p.status not in (STATUS_PAID, STATUS_SCHEDULED):
         raise PayableError(
-            "Só uma conta paga tem pagamento a corrigir. Para mexer em valor, vencimento ou "
-            "fornecedor de uma conta em aberto, use a edição da conta.",
+            "Só uma conta paga ou agendada tem pagamento a corrigir. Para mexer em valor, "
+            "vencimento ou fornecedor de uma conta em aberto, use a edição da conta.",
             409,
         )
 
@@ -594,6 +645,12 @@ def update_payment(
     paid_on = _valida_data_de_baixa(paid_on, acc)
 
     p.paid_at = datetime.combine(paid_on, time.min, tzinfo=UTC)
+    # [8.14] A MESMA derivação de `apply_paid`, pelo MESMO helper. Duas cópias da regra derivada
+    # divergiriam no primeiro ajuste — e a correção da data é justamente onde a fronteira
+    # `paid ⇄ scheduled` é atravessada.
+    p.status = status_por_data(
+        paid_on, _today(), status_agendado=STATUS_SCHEDULED, status_pago=STATUS_PAID
+    )
     _sincroniza_movimento(
         db, p, tenant_id=tenant_id, actor=actor, bank_account_id=acc.id, posted_at=paid_on
     )
@@ -617,8 +674,8 @@ def cancel_payable(db: Session, *, payable_id: str, tenant_id: str, actor: str) 
 
 
 def reverse_payable(db: Session, *, payable_id: str, tenant_id: str, actor: str) -> Payable:
-    """Estorna uma conta paga: volta para 'open', limpa paid_at, reabre a edição completa,
-    devolve o evento vinculado na Agenda para pendente (desfaz o STATUS_DONE de mark_paid) — e
+    """Estorna uma conta paga **ou agendada**: volta para 'open', limpa paid_at, reabre a edição,
+    devolve o evento vinculado na Agenda para pendente (desfaz o `done` de mark_paid) — e
     **APAGA o movimento bancário** (AC8), na mesma transação.
 
     **Por que apagar, e não marcar `ignored` nem lançar uma contrapartida.** Um movimento bancário
@@ -643,12 +700,24 @@ def reverse_payable(db: Session, *, payable_id: str, tenant_id: str, actor: str)
     A guarda mora em `origin._desliga_ou_apaga` e **não é reimplementada aqui**. Hoje o ramo
     enriquecido é inalcançável (não há importação), **e é exatamente por isso que os 45 estornos do
     mutirão são seguros**.
+
+    ── ⚠️ **[Story 8.14] `scheduled` também é estornável — e não há verbo novo para isso** (AC9)
+
+    **Cancelar um agendamento É estornar.** O significado de `reverse` sempre foi *"esta saída não
+    vai acontecer"*, e ele serve igualmente bem para uma saída que **ainda não aconteceu**. Uma rota
+    `POST .../cancel-schedule` seria um segundo caminho para a mesma mecânica (apagar o movimento,
+    devolver o evento da Agenda, reabrir a edição) — e dois caminhos para a mesma mecânica é como
+    um deles deixa de receber a próxima correção.
+
+    A conta **reaparece na Fila**, que é o comportamento certo: agendamento cancelado significa que
+    a conta voltou a ser problema. E o movimento bancário futuro é **apagado** pela mesma mecânica
+    da 8.12 — nada sobra afirmando que aquele dinheiro vai sair.
     """
     p = db.scalar(select(Payable).where(Payable.id == payable_id).with_for_update())
     if p is None:
         raise PayableError("Conta não encontrada", 404)
-    if p.status != STATUS_PAID:
-        raise PayableError("Só contas pagas podem ser estornadas", 409)
+    if p.status not in (STATUS_PAID, STATUS_SCHEDULED):
+        raise PayableError("Só contas pagas ou agendadas podem ser estornadas", 409)
     p.status = STATUS_OPEN
     p.paid_at = None
     # `bank_account_id=None` é como se pede a remoção do movimento; o helper zera as DUAS colunas
@@ -659,7 +728,7 @@ def reverse_payable(db: Session, *, payable_id: str, tenant_id: str, actor: str)
     if p.agenda_event_id:
         ev = db.get(AgendaEvent, p.agenda_event_id)
         if ev is not None:
-            ev.status = STATUS_SCHEDULED
+            ev.status = AGENDA_STATUS_PENDENTE
     audit.record(db, tenant_id=tenant_id, actor=actor, action="payable.reverse", target=p.id)
     db.commit()
     db.refresh(p)
@@ -834,6 +903,71 @@ def list_categories(db: Session) -> list[str]:
     return list(rows)
 
 
+def promote_scheduled(
+    db: Session, *, tenant_id: str, actor: str, today: date | None = None
+) -> int:
+    """`scheduled → paid` para toda conta cuja data de débito já chegou. Devolve quantas promoveu.
+
+    **É a etapa 4 de `app.worker.run_sweep`** (Story 8.14 AC10) — e a varredura mora AQUI, não no
+    worker: o worker **orquestra** (sessão por tenant, isolamento de falha, contador), o módulo
+    **conhece a regra**. A Story 8.15 cria o irmão em `receivables` com esta mesma assinatura, e a
+    etapa 4 passa a chamar os dois; uma quinta etapa seria a mesma regra em dois lugares.
+
+    ⚠️ **O SALDO DERIVADO NÃO DEPENDE DESTE WORKER — e a story prova isso com teste** (F-D11). O
+    movimento bancário nasceu com `posted_at` = a data agendada, e o saldo é **função da data**
+    (`_movements_sums` filtra `posted_at <= until`): ele entra sozinho quando o dia chega, com o
+    worker desligado, parado ou nem instalado. O que esta função move é **só o `status`** — para a
+    Fila de Pagamentos e o resumo pararem de mostrar como "agendada" uma conta que já saiu.
+
+    A mesma disciplina vale para a Projeção: o recorte do AC6 (`scheduled AND paid_at::date > hoje`)
+    faz a aritmética depender da **data**, não do status materializado. Se este worker ficar uma
+    semana parado, nenhum número fica errado — só um rótulo fica velho.
+
+    **Não toca em mais nada**, e cada omissão é deliberada:
+    - `paid_at` **não** é re-datado (ele é a data de caixa que o usuário informou; sobrescrevê-la
+      por "hoje" inventaria um fato de caixa — Artigo IV);
+    - `bank_account_id` / `bank_transaction_id` intactos (o movimento já está certo);
+    - o evento da Agenda já está `done` desde a baixa (ver `apply_paid`);
+    - `competence_date` **jamais** (caixa × competência não se invertem).
+
+    **Idempotente:** rodar duas vezes seguidas promove zero na segunda — depois do primeiro passe
+    nenhuma linha satisfaz `status == 'scheduled'`.
+
+    `today` é **injetável** pelo mesmo motivo das Stories 8.5/8.6: um contador preso ao relógio da
+    máquina não é testável. Isolamento por RLS, sem filtro manual de `tenant_id` (Regra de Ouro
+    nº 1) — `tenant_id` fica na assinatura para a auditoria e para o teste `rls_e2e`.
+    """
+    today = today or _today()
+    # Limite de TIMESTAMP em vez de `::date` (dialeto-agnóstico — o SQLite dos testes não tem
+    # `::date`), mesmo padrão de `paid_before`/`probe_pagamento_duplicado`. "A data já chegou" é
+    # `paid_at::date <= today`, ou seja, `paid_at < meia-noite UTC de today+1`.
+    limite = datetime.combine(today + timedelta(days=1), time.min, tzinfo=UTC)
+    vencidas = list(
+        db.scalars(
+            select(Payable).where(
+                Payable.status == STATUS_SCHEDULED,
+                # Agendada sem data de caixa é estado inalcançável (a derivação exige `paid_on`);
+                # a guarda existe porque `paid_at IS NULL` compararia como desconhecido em SQL e
+                # a linha ficaria presa em `scheduled` para sempre, sem ninguém notar.
+                Payable.paid_at.is_not(None),
+                Payable.paid_at < limite,
+            )
+        ).all()
+    )
+    for p in vencidas:
+        p.status = STATUS_PAID
+        audit.record(
+            db,
+            tenant_id=tenant_id,
+            actor=actor,
+            action="payable.scheduled_promoted",
+            target=p.id,
+        )
+    if vencidas:
+        db.commit()
+    return len(vencidas)
+
+
 def summary(db: Session) -> dict:
     today = datetime.now(UTC).date()
     week_end = today + timedelta(days=7)
@@ -858,12 +992,29 @@ def summary(db: Session) -> dict:
         )
     ) or 0
 
+    # [8.14] `scheduled_cents` — e ele **não se mistura com nada** (AC8).
+    #
+    # Fica FORA de `open_cents` (uma agendada não é "a pagar": já foi resolvida) e FORA de
+    # `paid_month_cents` (o dinheiro não saiu). `overdue_cents` e `week_cents` derivam de
+    # `open_rows`, então também não a veem — agendada não é atrasada nem vence nesta semana.
+    #
+    # ⚠️ **`month_cents` CONTINUA incluindo a agendada, e isso é preservado de propósito:** ele já
+    # filtrava `status != canceled` e é o total do mês **por vencimento**, não por caixa. Excluí-la
+    # mudaria a definição de um número que está em produção — e mudaria para pior, porque a conta
+    # continua vencendo naquele mês independentemente de quando o débito foi agendado.
+    scheduled_cents = db.scalar(
+        select(func.coalesce(func.sum(Payable.amount_cents), 0)).where(
+            Payable.status == STATUS_SCHEDULED
+        )
+    ) or 0
+
     return {
         "open_cents": sum(p.amount_cents for p in open_future),
         "overdue_cents": sum(p.amount_cents for p in overdue),
         "week_cents": sum(p.amount_cents for p in open_future if p.due_date < week_end),
         "month_cents": month_total,
         "paid_month_cents": paid_month,
+        "scheduled_cents": int(scheduled_cents),
     }
 
 
@@ -897,6 +1048,22 @@ def payment_queue(
     como base do balde "atrasados". É uma VISÃO nova sobre o mesmo `Payable` de Contas a Pagar — a
     baixa é feita pelo `mark_paid` já existente, então marcar pago aqui reflete lá (mesmo registro).
 
+    ── ⚠️ **[Story 8.14] O QUINTO BALDE: "agendadas". Esconder é erro; misturar também** (AC7)
+
+      - agendadas: `status == 'scheduled'`, ordenadas pela **data do débito** (`paid_at`)
+
+    As agendadas saem dos **quatro baldes de vencimento** porque a pergunta da Fila é *"o que eu
+    preciso pagar?"* e uma conta agendada **já foi resolvida** — deixá-la em "Hoje" pediria ao dono
+    uma ação que ele já tomou. Mas ela **não some da Fila**: some, o dono perde de vista uma saída
+    certa de R$ 5.000 e a única tela que responde *"o que sai do meu caixa nos próximos 30 dias"*
+    passa a mentir por omissão.
+
+    O balde novo ordena pela **data do débito**, não por `due_date`: o dono quer saber *quando o
+    dinheiro sai*, e numa agendada essas duas datas são diferentes por construção.
+
+    Calculado **na leitura**, como os outros quatro — nenhum job, nenhum cron. O worker do AC10 é
+    cosmética de status, não pré-requisito desta lista.
+
     Isolamento por RLS (sem filtro manual de tenant_id — Regra de Ouro nº 1); `tenant_id` fica na
     assinatura por consistência com os demais serviços do módulo e para o teste rls_e2e."""
     today = today or datetime.now(UTC).date()
@@ -922,6 +1089,18 @@ def payment_queue(
             prox30.append(p)
         # due_date > today+30 → fora da fila (não é "próximo")
 
+    # [8.14] Query própria: os cinco baldes não ordenam pela mesma coluna (`due_date` × `paid_at`),
+    # exatamente como `receipts.list_candidates` já resolve com duas queries em vez de um ORDER BY
+    # composto. **Sem janela de 30 dias aqui de propósito:** um débito agendado para daqui a 60 dias
+    # é um compromisso assumido, não uma previsão — escondê-lo recriaria a omissão que o AC combate.
+    agendadas = list(
+        db.scalars(
+            select(Payable)
+            .where(Payable.status == STATUS_SCHEDULED)
+            .order_by(Payable.paid_at)
+        ).all()
+    )
+
     summary = PaymentQueueSummary(
         atrasados_count=len(atrasados),
         atrasados_cents=sum(p.amount_cents for p in atrasados),
@@ -931,11 +1110,14 @@ def payment_queue(
         proximos_7_dias_cents=sum(p.amount_cents for p in prox7),
         proximos_30_dias_count=len(prox30),
         proximos_30_dias_cents=sum(p.amount_cents for p in prox30),
+        agendadas_count=len(agendadas),
+        agendadas_cents=sum(p.amount_cents for p in agendadas),
     )
     return PaymentQueueOut(
         atrasados=[payable_out(p, today) for p in atrasados],
         hoje=[payable_out(p, today) for p in hoje],
         proximos_7_dias=[payable_out(p, today) for p in prox7],
         proximos_30_dias=[payable_out(p, today) for p in prox30],
+        agendadas=[payable_out(p, today) for p in agendadas],
         summary=summary,
     )

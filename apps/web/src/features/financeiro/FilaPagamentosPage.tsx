@@ -1,5 +1,13 @@
 import type { Payable, PaymentQueue } from "@e1p/shared-types";
-import { AlertTriangle, CalendarClock, CalendarDays, CalendarRange, Check, Copy } from "lucide-react";
+import {
+  AlertTriangle,
+  CalendarCheck,
+  CalendarClock,
+  CalendarDays,
+  CalendarRange,
+  Check,
+  Copy,
+} from "lucide-react";
 import { type ReactNode, useCallback, useEffect, useState } from "react";
 import { api, apiErrorMessage } from "../../lib/api";
 import { DialogDeBaixa } from "../pagar/EscolhaDaBaixa";
@@ -18,9 +26,15 @@ import { DialogDeBaixa } from "../pagar/EscolhaDaBaixa";
  * **intacta**, e "intacta" não é compatível com "quebrada".
  *
  * O fluxo é o MESMO das outras duas telas de baixa, pelo mesmo componente (`DialogDeBaixa`): três
- * cópias divergiriam no primeiro ajuste — e o primeiro já está agendado (a 8.14 tira o teto de
- * data). **Os baldes e o `PaymentQueueSummary` não mudaram**: continuam calculados na leitura, por
- * `due_date`, sem job nem cron.
+ * cópias divergiriam no primeiro ajuste — e o primeiro já aconteceu (a 8.14 tirou o teto de data,
+ * nas três telas de uma vez, sem editar nenhuma delas).
+ *
+ * ⚠️ **Story 8.14 — o QUINTO balde, "Agendadas".** Uma conta com débito já marcado sai dos quatro
+ * baldes de VENCIMENTO (a pergunta deles é *"o que eu preciso pagar?"*, e ela já foi resolvida) e
+ * aparece num balde próprio, ordenado pela **data do débito**. **Esconder é erro; misturar
+ * também**: sem este balde, uma saída certa de R$ 5.000 sumiria da única tela que responde *"o que
+ * sai do meu caixa nos próximos dias"*. Os quatro baldes antigos e os oito campos antigos do
+ * `PaymentQueueSummary` **não mudaram de definição** e continuam calculados na leitura.
  */
 const brl = (c: number) =>
   (c / 100).toLocaleString("pt-BR", { style: "currency", currency: "BRL" });
@@ -39,7 +53,10 @@ const EMPTY: PaymentQueue = {
     proximos_7_dias_cents: 0,
     proximos_30_dias_count: 0,
     proximos_30_dias_cents: 0,
+    agendadas_count: 0,
+    agendadas_cents: 0,
   },
+  agendadas: [],
 };
 
 export default function FilaPagamentosPage() {
@@ -79,14 +96,18 @@ export default function FilaPagamentosPage() {
   );
 
   const s = queue.summary;
+  // ⚠️ O agendado fica FORA do "total pendente" de propósito: ele não é pendência — já foi
+  // resolvido. Somá-lo aqui devolveria à tela exatamente a mistura que o balde próprio desfaz.
   const totalPendente =
     s.atrasados_cents + s.hoje_cents + s.proximos_7_dias_cents + s.proximos_30_dias_cents;
+  const agendadas = queue.agendadas ?? [];
   const nada =
     !loading &&
     queue.atrasados.length === 0 &&
     queue.hoje.length === 0 &&
     queue.proximos_7_dias.length === 0 &&
-    queue.proximos_30_dias.length === 0;
+    queue.proximos_30_dias.length === 0 &&
+    agendadas.length === 0;
 
   return (
     <div className="space-y-6">
@@ -146,6 +167,15 @@ export default function FilaPagamentosPage() {
             items={queue.proximos_30_dias}
             onPay={setPagando}
           />
+          {/* Sem `onPay`: a conta já foi resolvida, e oferecer "Marcar pago" aqui convidaria a uma
+              segunda baixa do mesmo dinheiro. Para desfazer, o gesto é "Cancelar agendamento", em
+              Contas a Pagar — um lugar só para a ação destrutiva. */}
+          <Bucket
+            title="Agendadas"
+            hint="o débito já tem dia marcado — o dinheiro ainda não saiu"
+            icon={<CalendarCheck size={16} className="text-sky-600" />}
+            items={agendadas}
+          />
         </div>
       )}
 
@@ -180,8 +210,13 @@ function Bucket({
   hint: string;
   icon: ReactNode;
   items: Payable[];
-  /** Abre a confirmação da baixa — o clique deixou de cometer a ação na Story 8.13. */
-  onPay: (p: Payable) => void;
+  /**
+   * Abre a confirmação da baixa — o clique deixou de cometer a ação na Story 8.13.
+   *
+   * **Opcional desde a 8.14:** o balde "Agendadas" não oferece baixa (a conta já foi resolvida),
+   * e a ausência do botão é a informação — não um estado desabilitado a explicar.
+   */
+  onPay?: (p: Payable) => void;
 }) {
   if (items.length === 0) return null;
   return (
@@ -222,13 +257,22 @@ function Bucket({
                 <Copy size={14} />
               </button>
             )}
-            <button
-              onClick={() => onPay(p)}
-              className="flex shrink-0 items-center gap-1.5 rounded-pill bg-accent-400 px-3 py-1.5 text-xs font-semibold text-white transition hover:bg-accent-500 disabled:opacity-60"
-            >
-              <Check size={13} />
-              Marcar pago
-            </button>
+            {onPay ? (
+              <button
+                onClick={() => onPay(p)}
+                className="flex shrink-0 items-center gap-1.5 rounded-pill bg-accent-400 px-3 py-1.5 text-xs font-semibold text-white transition hover:bg-accent-500 disabled:opacity-60"
+              >
+                <Check size={13} />
+                Marcar pago
+              </button>
+            ) : (
+              // A data do DÉBITO, não o vencimento: numa agendada as duas divergem por construção.
+              p.paid_at && (
+                <span className="shrink-0 text-xs font-medium text-sky-700">
+                  sai {new Date(p.paid_at).toLocaleDateString("pt-BR", { timeZone: "UTC" })}
+                </span>
+              )
+            )}
           </li>
         ))}
       </ul>

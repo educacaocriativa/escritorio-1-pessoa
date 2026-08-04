@@ -85,13 +85,23 @@ describe("o nome da conta fica legível SEM interação adicional (AC5)", () => 
 });
 
 describe("a data da baixa", () => {
-  it("o teto é HOJE — e sai na Story 8.14, junto com o estado `scheduled`", () => {
-    expect(tetoDaDataDeBaixa("2026-07-30")).toBe("2026-07-30");
+  it("⚠️ [8.14] NÃO existe mais teto — `tetoDaDataDeBaixa` devolve `undefined`", () => {
+    // **Mudança de expectativa, e ela é a CORREÇÃO.** Este teste afirmava `toBe("2026-07-30")` e
+    // se chamava "o teto é HOJE — e sai na Story 8.14". A 8.14 chegou: o estado `scheduled` existe
+    // e a data futura passou a ser um registro legítimo (débito agendado no app do banco), não um
+    // erro de digitação. `undefined` (e não `""`) porque é assim que o React OMITE o atributo
+    // `max` do `<input>` — com string vazia o atributo seria renderizado vazio.
+    expect(tetoDaDataDeBaixa("2026-07-30")).toBeUndefined();
   });
 
-  it("avisa (sem bloquear) quando a data pré-preenchida é futura", () => {
+  it("avisa (sem bloquear) quando a data é futura — e a frase agora CONFIRMA o agendamento", () => {
+    // A frase antiga dizia "pagamento agendado ainda não é acompanhado pelo e1p" — verdade até a
+    // 8.13, MENTIRA a partir daqui. Deixá-la seria pior que não avisar: mandaria o dono desfazer
+    // exatamente o que o produto passou a fazer certo.
     const aviso = avisoDeDataFutura("2026-08-15", "2026-07-30");
-    expect(aviso).toMatch(/dia em que o dinheiro saiu/i);
+    expect(aviso).toMatch(/agendada/i);
+    expect(aviso).toMatch(/ainda não saiu/i);
+    expect(aviso).not.toMatch(/não é acompanhado/i);
   });
 
   it("hoje NÃO dispara o aviso — a borda é `>`, e hoje é uma data legítima de baixa", () => {

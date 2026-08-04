@@ -35,6 +35,8 @@ from app.modules.bank.models import (
     KIND_CHECKING,
     KIND_INVESTMENT,
     SOURCE_MANUAL,
+    SOURCES_EXTERNA,
+    SOURCES_SISTEMA,
     STATUS_IGNORED,
     STATUS_MATCHED,
     STATUS_PARTIAL,
@@ -773,3 +775,99 @@ def test_movimento_bancario_move_a_projecao_so_pela_semente(
 
     pela_rota = client.get("/financial-intelligence/projection", headers=headers).json()
     assert pela_rota["saldo_inicial_origem"] == ORIGEM_MISTO
+
+
+# ── Story 8.14 (AC4) — a guarda de data futura passa a ser cortada por `source` ───────────────
+#
+# ⚠️ **A justificativa antiga da guarda descrevia TRANSCRIÇÃO, não origem.** *"Extrato bancário é
+# fato passado; data futura é erro de digitação"* continua verdadeiro para o que o usuário
+# **transcreve** (`SOURCES_EXTERNA`: manual, ofx, csv). Não é verdadeiro para o que o e1p
+# **originou** (`SOURCES_SISTEMA`): um débito agendado para daqui a 15 dias é verdade registrada em
+# primeira mão, não digitação errada. *"O e1p pode afirmar o futuro do que ele mesmo agendou; não
+# pode afirmar o futuro do que outro atestou."*
+#
+# ⚠️ **O corte é por `source`, e por `source` APENAS** (ratificação §C-6.2). O booleano
+# `permite_futuro` decidido pelo chamador está **rejeitado**: *"é o parâmetro que alguém passa
+# `True` no caminho manual, um dia, por conveniência — e nenhum gate de AST o pega, porque não há
+# import envolvido"*. Um eixo, uma pergunta.
+
+
+def test_AC4_manual_continua_recusando_data_futura(client: TestClient, headers):
+    """**O não-membro do conjunto isento.** `manual ∈ SOURCES_EXTERNA` → 422, mensagem inalterada.
+
+    É a proteção real que a guarda dá hoje (erro de ano na digitação) e ela **não** foi afrouxada.
+    Este teste é o par de `test_data_futura_e_recusada` acima, agora escrito contra o CONJUNTO.
+    """
+    from app.modules.bank.models import SOURCES_EXTERNA
+
+    assert SOURCE_MANUAL in SOURCES_EXTERNA
+    acc = _account(client, headers)
+    amanha = datetime.now(UTC).date() + timedelta(days=1)
+    erro = _lancar(client, headers, acc["id"], amount_cents=10_00, posted_at=amanha, expect=422)
+    assert "futura" in erro["detail"]
+
+
+@pytest.mark.parametrize("source", SOURCES_SISTEMA)
+def test_AC4_toda_origem_de_SISTEMA_aceita_data_futura(client: TestClient, headers, db, source):
+    """**Os membros do conjunto isento — todos eles, um por um.**
+
+    Parametrizado sobre a tupla inteira e não sobre `payable`: a regra é escrita contra
+    `SOURCES_SISTEMA`, então acrescentar uma origem de sistema nova (a 8.18 acrescenta `transfer`,
+    a Onda 2b `yield`, a Onda 3 `payout`) tem de herdar a isenção **sem** ninguém editar a guarda.
+    Se um valor novo entrar na tupla e a guarda não o cobrir, este teste reprova sozinho.
+
+    ⚠️ `transfer` é membro **aqui** e mesmo assim é recusado por `create_transfer` na Story 8.18,
+    por outro motivo (a A-3 de lá). São guardas diferentes, em camadas diferentes.
+    """
+    acc = _account(client, headers)
+    amanha = datetime.now(UTC).date() + timedelta(days=1)
+    assert (
+        service._validate_posted_at(amanha, service.get_account(db, acc["id"]), source=source)
+        == amanha
+    )
+
+
+@pytest.mark.parametrize("source", SOURCES_EXTERNA)
+def test_AC4_toda_origem_EXTERNA_recusa_data_futura(client: TestClient, headers, db, source):
+    """A outra metade da partição, também sobre a tupla inteira. `ofx` e `csv` ainda não têm
+    caminho de escrita (Onda 4), e é justamente por isso que a regra é fixada agora: quando o
+    parser chegar, ele herda a recusa em vez de a redescobrir."""
+    acc = _account(client, headers)
+    amanha = datetime.now(UTC).date() + timedelta(days=1)
+    with pytest.raises(service.BankError) as exc:
+        service._validate_posted_at(amanha, service.get_account(db, acc["id"]), source=source)
+    assert exc.value.status_code == 422
+    assert "futura" in str(exc.value)
+
+
+def test_AC4_source_desconhecido_e_422_e_nao_ganha_a_isencao(client: TestClient, headers, db):
+    """**Fail-closed.** Um valor fora do vocabulário não herda a permissão do lado mais frouxo.
+
+    A partição é escrita nas duas metades (`in SOURCES_SISTEMA` … `not in SOURCES_EXTERNA` → 422).
+    Um `if source not in SOURCES_SISTEMA` sozinho faria valor novo herdar o teto sem ninguém
+    decidir; um `if source in SOURCES_EXTERNA` sozinho o faria herdar a **isenção** — que é o lado
+    caro, porque cria movimento futuro que só aparece semanas depois.
+    """
+    acc = _account(client, headers)
+    amanha = datetime.now(UTC).date() + timedelta(days=1)
+    with pytest.raises(service.BankError) as exc:
+        service._validate_posted_at(
+            amanha, service.get_account(db, acc["id"]), source="origem_inventada"
+        )
+    assert exc.value.status_code == 422
+    assert "inválida" in str(exc.value)
+
+
+@pytest.mark.parametrize("source", SOURCES_EXTERNA + SOURCES_SISTEMA)
+def test_AC4_o_PISO_vale_para_TODA_origem_sem_excecao(client: TestClient, headers, db, source):
+    """O piso (`posted_at > opening_date`) **não** foi cortado por origem — e não deve ser.
+
+    Ele protege a aritmética do saldo (o que veio antes da abertura já está dentro de
+    `opening_balance_cents`), não a plausibilidade do dado. Um movimento de sistema anterior à
+    abertura ficaria órfão do saldo exatamente como um manual.
+    """
+    acc = _account(client, headers)
+    with pytest.raises(service.BankError) as exc:
+        service._validate_posted_at(OPENING, service.get_account(db, acc["id"]), source=source)
+    assert exc.value.status_code == 422
+    assert "posterior" in str(exc.value)
