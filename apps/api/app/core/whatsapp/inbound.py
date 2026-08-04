@@ -15,5 +15,12 @@ class InboundMessage:
     from_phone: str | None  # só dígitos, sem "+". None quando o provider não entrega o número
     kind: str  # text | image | audio | document | video
     text_body: str
-    media_ref: str | None  # referência de mídia opaca (meta_media_id, ou base64 da Evolution)
+    media_ref: str | None  # referência de mídia OPACA que exige um fetch depois (meta_media_id
+    # da Meta — resolvida pelo worker via `fetch_media_url`/`download_media`). A Evolution não
+    # entrega media_ref: ela entrega os BYTES já decodificados abaixo (media_bytes), porque não
+    # tem endpoint de resolução separado (ver `providers/evolution.py::fetch_media_url`).
     push_name: str
+    media_bytes: bytes | None = None  # mídia JÁ decodificada (Evolution, quando webhookBase64
+    # está ligado) — ingest cria o Attachment na hora, sem depender do worker.
+    media_mime_type: str | None = None
+    media_filename: str | None = None

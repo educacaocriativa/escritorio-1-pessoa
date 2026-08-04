@@ -104,6 +104,11 @@ def connect(db: Session, *, tenant_id: str) -> dict:
                     ),
                     "byEvents": False,
                     "events": ["MESSAGES_UPSERT"],
+                    # A Evolution baixa e decifra a mídia (tem a mediaKey) e injeta o resultado
+                    # em `message.base64` — sem isto, mídia recebida (foto/áudio/documento)
+                    # chega só com metadado (legenda/mimetype), sem os bytes (ver
+                    # `providers/evolution.py::parse_inbound`, que depende deste campo).
+                    "base64": True,
                 }
             },
             timeout=15,

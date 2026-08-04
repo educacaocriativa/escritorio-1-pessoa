@@ -108,6 +108,13 @@ function ConversationThread({
     }
   }
 
+  async function openAttachment(attachmentId: string) {
+    const { data } = await api.get(`/attachments/${attachmentId}/download`, {
+      responseType: "blob",
+    });
+    window.open(URL.createObjectURL(data as Blob), "_blank");
+  }
+
   async function sendMedia(file: File) {
     setError(null);
     const form = new FormData();
@@ -140,7 +147,22 @@ function ConversationThread({
             {entry.source === "automated" && (
               <p className="mb-0.5 text-xs font-semibold">🤖 {entry.purpose_label}</p>
             )}
-            <p>{entry.text_body || `[${entry.kind}]`}</p>
+            {entry.media_attachment_id && (
+              <button
+                onClick={() => openAttachment(entry.media_attachment_id!)}
+                className={`mb-1 flex items-center gap-1 text-xs font-semibold underline ${
+                  entry.direction === "out" ? "text-white" : "text-primary-600"
+                }`}
+              >
+                <Paperclip size={12} />
+                {entry.kind === "image" ? "Ver imagem" : "Baixar anexo"}
+              </button>
+            )}
+            {(entry.text_body || !entry.media_attachment_id) && (
+              <p className="whitespace-pre-wrap">
+                {entry.text_body || `[${entry.kind}]`}
+              </p>
+            )}
           </div>
         ))}
       </div>
