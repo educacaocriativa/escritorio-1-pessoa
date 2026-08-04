@@ -9,11 +9,20 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.core import audit, events
-from app.modules.crm.models import DEFAULT_STAGES, Client, PipelineStage
+from app.core.phone import normalize_br
+from app.modules.crm.models import (
+    DEFAULT_STAGES,
+    KIND_LEAD_CREATED,
+    KIND_STAGE_MOVE,
+    Client,
+    ClientEvent,
+    PipelineStage,
+)
 from app.modules.crm.schemas import ClientCreate, ClientUpdate, StageCreate, StageUpdate
 
 EVENT_CLIENT_MOVED = "crm.client.moved"
 EVENT_CLIENT_CREATED = "crm.client.created"
+EVENT_CLIENT_RETURNED = "crm.client.returned"
 
 
 class CrmError(Exception):
@@ -137,6 +146,48 @@ def delete_stage(db: Session, *, stage_id: str, tenant_id: str, actor: str) -> N
     db.commit()
 
 
+# ── Linha do tempo ─────────────────────────────────────
+
+
+def record_event(
+    db: Session,
+    *,
+    tenant_id: str,
+    client_id: str,
+    kind: str,
+    title: str,
+    actor: str,
+    body: str = "",
+    is_ai: bool = False,
+) -> ClientEvent:
+    """Grava um fato narrativo. **NÃO commita** — quem chama decide o momento.
+
+    Mesmo padrão de `receivables.build_charge`: assim o evento entra na MESMA transação do
+    fato que ele descreve, e não existe estado em que o card mudou de coluna mas a história
+    não registrou (ou o contrário).
+    """
+    event = ClientEvent(
+        tenant_id=tenant_id, client_id=client_id, kind=kind,
+        title=title[:140], body=body, actor=actor, is_ai=is_ai,
+    )
+    db.add(event)
+    return event
+
+
+_ROTULO_DE_CHEGADA = {
+    "landing": "Chegou pelo site",
+    "api": "Chegou por integração",
+    "whatsapp": "Chegou pelo WhatsApp",
+    "import": "Veio de importação",
+    "manual": "Cadastrado à mão",
+}
+
+
+def _titulo_de_chegada(source: str) -> str:
+    """Um `source` novo (backend mais recente) cai num rótulo honesto em vez de sumir."""
+    return _ROTULO_DE_CHEGADA.get(source, f"Chegou por “{source}”")
+
+
 # ── Clientes ───────────────────────────────────────────
 
 
@@ -155,6 +206,10 @@ def create_client(db: Session, *, tenant_id: str, actor: str, data: ClientCreate
         name=data.name,
         email=str(data.email) if data.email else None,
         phone=data.phone,
+        # Forma comparável do telefone — é o que `absorb_lead` procura. Preenchida em TODO
+        # caminho de criação, senão o backfill conserta o legado e o código novo reintroduz
+        # linhas sem chave.
+        phone_key=normalize_br(data.phone),
         document=data.document,
         gender=data.gender,
         birthdate=data.birthdate,
@@ -164,6 +219,14 @@ def create_client(db: Session, *, tenant_id: str, actor: str, data: ClientCreate
         stage_id=stage_id,
     )
     db.add(client)
+    # `client.id` só existe depois do flush (o default `_uuid` é aplicado na descarga). Sem
+    # isto, tanto a trilha quanto o evento apontariam para lugar nenhum — é exatamente a
+    # dívida MNT-001 registrada no CLAUDE.md.
+    db.flush()
+    record_event(
+        db, tenant_id=tenant_id, client_id=client.id, kind=KIND_LEAD_CREATED,
+        title=_titulo_de_chegada(client.source), actor=actor, body=data.notes,
+    )
     audit.record(db, tenant_id=tenant_id, actor=actor, action="crm.client.create", target=client.id)
     db.commit()
     db.refresh(client)
@@ -238,7 +301,15 @@ def move_client(
     if target is None:
         raise CrmError("Estágio de destino não existe", 404)
     from_stage = client.stage_id
+    origem = db.get(PipelineStage, from_stage) if from_stage else None
+    nome_origem = origem.name if origem is not None else "sem etapa"
     client.stage_id = target.id
+    # Guarda os NOMES, não os ids: renomear ou arquivar a coluna depois não pode reescrever
+    # o que aconteceu naquele dia (princípio do `raw_description` de bank_transactions).
+    record_event(
+        db, tenant_id=tenant_id, client_id=client.id, kind=KIND_STAGE_MOVE,
+        title=f"Movido de {nome_origem} → {target.name}", actor=actor, is_ai=by_ai,
+    )
     audit.record(
         db, tenant_id=tenant_id, actor=actor, action="crm.client.move",
         target=client.id, is_ai=by_ai,
