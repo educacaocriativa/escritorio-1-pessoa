@@ -13,6 +13,8 @@ from app.core.phone import normalize_br
 from app.modules.crm.models import (
     DEFAULT_STAGES,
     KIND_LEAD_CREATED,
+    KIND_LEAD_RETURN,
+    KIND_REOPENED,
     KIND_STAGE_MOVE,
     Client,
     ClientEvent,
@@ -236,6 +238,111 @@ def create_client(db: Session, *, tenant_id: str, actor: str, data: ClientCreate
         EVENT_CLIENT_CREATED, tenant_id=tenant_id, client_id=client.id, source=client.source
     )
     return client
+
+
+def _find_existing(db: Session, *, phone_key: str | None, email: str | None) -> Client | None:
+    """Procura o contato por telefone normalizado e, em segundo lugar, por e-mail.
+
+    Ordem `created_at, id` porque `phone_key` NÃO é único e não deve ser: marido e mulher
+    compartilham telefone, e os cards duplicados que já existiam (não mesclados, por decisão
+    do fundador) compartilham chave a partir do backfill da 0067. Sem um desempate
+    determinístico, o próximo retorno cairia num card imprevisível e a história se partiria
+    entre eles. O mais antigo é o que acumulou mais contexto.
+    """
+    if phone_key:
+        achado = db.scalars(
+            select(Client)
+            .where(Client.phone_key == phone_key)
+            .order_by(Client.created_at, Client.id)
+        ).first()
+        if achado is not None:
+            return achado
+    if email:
+        return db.scalars(
+            select(Client)
+            .where(func.lower(Client.email) == email.strip().lower())
+            .order_by(Client.created_at, Client.id)
+        ).first()
+    return None
+
+
+_ROTULO_DE_RETORNO = {
+    "landing": "Voltou pelo site",
+    "api": "Voltou por integração",
+}
+
+
+def _titulo_de_retorno(source: str) -> str:
+    return _ROTULO_DE_RETORNO.get(source, f"Voltou por “{source}”")
+
+
+def absorb_lead(
+    db: Session, *, tenant_id: str, actor: str, data: ClientCreate
+) -> tuple[Client, bool]:
+    """Porta ÚNICA de entrada de lead. Devolve `(contato, é_novo)`.
+
+    Quem já existe é complementado — data nova e texto novo na linha do tempo — em vez de
+    ganhar um card paralelo. É o que os três caminhos de captura (página pública, API de
+    integração, WhatsApp) passam a usar.
+    """
+    existente = _find_existing(
+        db,
+        phone_key=normalize_br(data.phone),
+        email=str(data.email) if data.email else None,
+    )
+    if existente is None:
+        return create_client(db, tenant_id=tenant_id, actor=actor, data=data), True
+
+    # Preenche só o que estava VAZIO. Sobrescrever apagaria o que o dono já corrigiu à mão;
+    # a divergência (chegou outro e-mail) fica registrada no corpo do evento.
+    complementos: list[str] = []
+    if not existente.email and data.email:
+        existente.email = str(data.email)
+        complementos.append(f"e-mail: {data.email}")
+    elif data.email and existente.email != str(data.email):
+        complementos.append(f"informou outro e-mail: {data.email}")
+    if not existente.phone and data.phone:
+        existente.phone = data.phone
+        existente.phone_key = normalize_br(data.phone)
+        complementos.append(f"telefone: {data.phone}")
+    if not existente.document and data.document:
+        existente.document = data.document
+        complementos.append(f"documento: {data.document}")
+    if not existente.phone_key and existente.phone:
+        # Contato legado cujo telefone não normalizava na 0067 (ou nasceu antes dela).
+        existente.phone_key = normalize_br(existente.phone)
+
+    corpo = "\n".join(filter(None, [data.notes, *complementos]))
+    record_event(
+        db, tenant_id=tenant_id, client_id=existente.id, kind=KIND_LEAD_RETURN,
+        title=_titulo_de_retorno(data.source), actor=actor, body=corpo,
+    )
+
+    # Coluna terminal (ganho OU perda) = a negociação anterior fechou. Quem volta sozinho
+    # depois disso é oportunidade nova: perdido que voltou, ou cliente querendo comprar de
+    # novo. Coluna do meio NÃO se move — puxar de volta apagaria trabalho em andamento.
+    etapa = db.get(PipelineStage, existente.stage_id) if existente.stage_id else None
+    if etapa is not None and (etapa.is_won or etapa.is_lost):
+        ativas = _ordered_stages(db)
+        if ativas:
+            existente.stage_id = ativas[0].id
+            record_event(
+                db, tenant_id=tenant_id, client_id=existente.id, kind=KIND_REOPENED,
+                title=f"Reaberto em {ativas[0].name} (estava em {etapa.name})", actor=actor,
+            )
+
+    audit.record(
+        db, tenant_id=tenant_id, actor=actor, action="crm.client.return", target=existente.id
+    )
+    db.commit()
+    db.refresh(existente)
+    events.emit(
+        EVENT_CLIENT_RETURNED,
+        tenant_id=tenant_id,
+        client_id=existente.id,
+        source=data.source,
+    )
+    return existente, False
 
 
 def list_clients(
