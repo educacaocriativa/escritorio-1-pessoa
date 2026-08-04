@@ -112,3 +112,67 @@ def test_deleted_or_invalid_funnel_does_not_raise(db: Session, _fake_session):
     automation.on_client_created(tenant_id=tenant.id, client_id=client.id, source="api")
 
     assert _run_for(db, client.id) is None
+
+
+def test_retorno_reinscreve_quando_a_jornada_anterior_terminou(db: Session, _fake_session):
+    from app.modules.funnels.models import RUN_DONE
+
+    tenant = _seed_tenant(db, slug="auto4", document="00000000000104")
+    funnel = _seed_funnel(db, tenant.id)
+    db.add(TenantProfile(tenant_id=tenant.id, default_entry_funnel_id=funnel.id))
+    client = Client(tenant_id=tenant.id, name="Lead Recorrente", source="landing")
+    db.add(client)
+    db.commit()
+
+    automation.on_client_created(tenant_id=tenant.id, client_id=client.id, source="landing")
+    primeira = _run_for(db, client.id)
+    assert primeira is not None
+    primeira.status = RUN_DONE
+    db.commit()
+
+    automation.on_client_returned(tenant_id=tenant.id, client_id=client.id, source="landing")
+
+    runs = list(db.scalars(select(FunnelRun).where(FunnelRun.client_id == client.id)).all())
+    assert len(runs) == 2
+
+
+def test_retorno_nao_reinscreve_quem_ja_esta_andando(db: Session, _fake_session):
+    """Preencher o formulário duas vezes não pode reiniciar a jornada do zero.
+
+    A jornada precisa estar VIVA para a guarda ter o que barrar. O funil das fixtures tem um
+    nó só e nenhuma aresta, então `enroll` o percorre inteiro e a run nasce já `done` — nesse
+    estado a reinscrição é o comportamento CERTO, não o bug. Por isso a run é colocada em
+    `waiting`, que é o estado que um funil com nó `esperar` produz na vida real.
+    """
+    from app.modules.funnels.models import RUN_WAITING
+
+    tenant = _seed_tenant(db, slug="auto5", document="00000000000105")
+    funnel = _seed_funnel(db, tenant.id)
+    db.add(TenantProfile(tenant_id=tenant.id, default_entry_funnel_id=funnel.id))
+    client = Client(tenant_id=tenant.id, name="Lead Ansioso", source="landing")
+    db.add(client)
+    db.commit()
+
+    automation.on_client_created(tenant_id=tenant.id, client_id=client.id, source="landing")
+    primeira = _run_for(db, client.id)
+    assert primeira is not None
+    primeira.status = RUN_WAITING  # esperando um delay, como num funil de verdade
+    db.commit()
+
+    automation.on_client_returned(tenant_id=tenant.id, client_id=client.id, source="landing")
+
+    runs = list(db.scalars(select(FunnelRun).where(FunnelRun.client_id == client.id)).all())
+    assert len(runs) == 1
+
+
+def test_retorno_de_source_manual_nao_inscreve(db: Session, _fake_session):
+    tenant = _seed_tenant(db, slug="auto6", document="00000000000106")
+    funnel = _seed_funnel(db, tenant.id)
+    db.add(TenantProfile(tenant_id=tenant.id, default_entry_funnel_id=funnel.id))
+    client = Client(tenant_id=tenant.id, name="Lead Manual", source="manual")
+    db.add(client)
+    db.commit()
+
+    automation.on_client_returned(tenant_id=tenant.id, client_id=client.id, source="manual")
+
+    assert db.scalar(select(FunnelRun).where(FunnelRun.client_id == client.id)) is None

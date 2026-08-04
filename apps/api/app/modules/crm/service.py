@@ -1,19 +1,38 @@
 """Regras do CRM: estágios do funil, clientes (cards), movimentação e board.
 
 Sessão já isolada por tenant (RLS). tenant_id só carimba novas linhas.
+
+Nota sobre o import de `whatsapp_inbox.models`: é o MODELO, nunca o service. O
+`whatsapp_inbox/service.py` importa de `crm`, então importar o service dele aqui fecharia
+ciclo; `whatsapp_inbox/models.py` não importa nada de `crm`. Usado por
+`last_interaction_map`, que precisa da data da última mensagem para o card do Kanban.
 """
 from __future__ import annotations
+
+from datetime import datetime
 
 from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.core import audit, events
-from app.modules.crm.models import DEFAULT_STAGES, Client, PipelineStage
+from app.core.phone import normalize_br
+from app.modules.crm.models import (
+    DEFAULT_STAGES,
+    KIND_LEAD_CREATED,
+    KIND_LEAD_RETURN,
+    KIND_REOPENED,
+    KIND_STAGE_MOVE,
+    Client,
+    ClientEvent,
+    PipelineStage,
+)
 from app.modules.crm.schemas import ClientCreate, ClientUpdate, StageCreate, StageUpdate
+from app.modules.whatsapp_inbox.models import WhatsappMessage
 
 EVENT_CLIENT_MOVED = "crm.client.moved"
 EVENT_CLIENT_CREATED = "crm.client.created"
+EVENT_CLIENT_RETURNED = "crm.client.returned"
 
 
 class CrmError(Exception):
@@ -137,6 +156,48 @@ def delete_stage(db: Session, *, stage_id: str, tenant_id: str, actor: str) -> N
     db.commit()
 
 
+# ── Linha do tempo ─────────────────────────────────────
+
+
+def record_event(
+    db: Session,
+    *,
+    tenant_id: str,
+    client_id: str,
+    kind: str,
+    title: str,
+    actor: str,
+    body: str = "",
+    is_ai: bool = False,
+) -> ClientEvent:
+    """Grava um fato narrativo. **NÃO commita** — quem chama decide o momento.
+
+    Mesmo padrão de `receivables.build_charge`: assim o evento entra na MESMA transação do
+    fato que ele descreve, e não existe estado em que o card mudou de coluna mas a história
+    não registrou (ou o contrário).
+    """
+    event = ClientEvent(
+        tenant_id=tenant_id, client_id=client_id, kind=kind,
+        title=title[:140], body=body, actor=actor, is_ai=is_ai,
+    )
+    db.add(event)
+    return event
+
+
+_ROTULO_DE_CHEGADA = {
+    "landing": "Chegou pelo site",
+    "api": "Chegou por integração",
+    "whatsapp": "Chegou pelo WhatsApp",
+    "import": "Veio de importação",
+    "manual": "Cadastrado à mão",
+}
+
+
+def _titulo_de_chegada(source: str) -> str:
+    """Um `source` novo (backend mais recente) cai num rótulo honesto em vez de sumir."""
+    return _ROTULO_DE_CHEGADA.get(source, f"Chegou por “{source}”")
+
+
 # ── Clientes ───────────────────────────────────────────
 
 
@@ -155,6 +216,10 @@ def create_client(db: Session, *, tenant_id: str, actor: str, data: ClientCreate
         name=data.name,
         email=str(data.email) if data.email else None,
         phone=data.phone,
+        # Forma comparável do telefone — é o que `absorb_lead` procura. Preenchida em TODO
+        # caminho de criação, senão o backfill conserta o legado e o código novo reintroduz
+        # linhas sem chave.
+        phone_key=normalize_br(data.phone),
         document=data.document,
         gender=data.gender,
         birthdate=data.birthdate,
@@ -164,6 +229,14 @@ def create_client(db: Session, *, tenant_id: str, actor: str, data: ClientCreate
         stage_id=stage_id,
     )
     db.add(client)
+    # `client.id` só existe depois do flush (o default `_uuid` é aplicado na descarga). Sem
+    # isto, tanto a trilha quanto o evento apontariam para lugar nenhum — é exatamente a
+    # dívida MNT-001 registrada no CLAUDE.md.
+    db.flush()
+    record_event(
+        db, tenant_id=tenant_id, client_id=client.id, kind=KIND_LEAD_CREATED,
+        title=_titulo_de_chegada(client.source), actor=actor, body=data.notes,
+    )
     audit.record(db, tenant_id=tenant_id, actor=actor, action="crm.client.create", target=client.id)
     db.commit()
     db.refresh(client)
@@ -173,6 +246,111 @@ def create_client(db: Session, *, tenant_id: str, actor: str, data: ClientCreate
         EVENT_CLIENT_CREATED, tenant_id=tenant_id, client_id=client.id, source=client.source
     )
     return client
+
+
+def _find_existing(db: Session, *, phone_key: str | None, email: str | None) -> Client | None:
+    """Procura o contato por telefone normalizado e, em segundo lugar, por e-mail.
+
+    Ordem `created_at, id` porque `phone_key` NÃO é único e não deve ser: marido e mulher
+    compartilham telefone, e os cards duplicados que já existiam (não mesclados, por decisão
+    do fundador) compartilham chave a partir do backfill da 0067. Sem um desempate
+    determinístico, o próximo retorno cairia num card imprevisível e a história se partiria
+    entre eles. O mais antigo é o que acumulou mais contexto.
+    """
+    if phone_key:
+        achado = db.scalars(
+            select(Client)
+            .where(Client.phone_key == phone_key)
+            .order_by(Client.created_at, Client.id)
+        ).first()
+        if achado is not None:
+            return achado
+    if email:
+        return db.scalars(
+            select(Client)
+            .where(func.lower(Client.email) == email.strip().lower())
+            .order_by(Client.created_at, Client.id)
+        ).first()
+    return None
+
+
+_ROTULO_DE_RETORNO = {
+    "landing": "Voltou pelo site",
+    "api": "Voltou por integração",
+}
+
+
+def _titulo_de_retorno(source: str) -> str:
+    return _ROTULO_DE_RETORNO.get(source, f"Voltou por “{source}”")
+
+
+def absorb_lead(
+    db: Session, *, tenant_id: str, actor: str, data: ClientCreate
+) -> tuple[Client, bool]:
+    """Porta ÚNICA de entrada de lead. Devolve `(contato, é_novo)`.
+
+    Quem já existe é complementado — data nova e texto novo na linha do tempo — em vez de
+    ganhar um card paralelo. É o que os três caminhos de captura (página pública, API de
+    integração, WhatsApp) passam a usar.
+    """
+    existente = _find_existing(
+        db,
+        phone_key=normalize_br(data.phone),
+        email=str(data.email) if data.email else None,
+    )
+    if existente is None:
+        return create_client(db, tenant_id=tenant_id, actor=actor, data=data), True
+
+    # Preenche só o que estava VAZIO. Sobrescrever apagaria o que o dono já corrigiu à mão;
+    # a divergência (chegou outro e-mail) fica registrada no corpo do evento.
+    complementos: list[str] = []
+    if not existente.email and data.email:
+        existente.email = str(data.email)
+        complementos.append(f"e-mail: {data.email}")
+    elif data.email and existente.email != str(data.email):
+        complementos.append(f"informou outro e-mail: {data.email}")
+    if not existente.phone and data.phone:
+        existente.phone = data.phone
+        existente.phone_key = normalize_br(data.phone)
+        complementos.append(f"telefone: {data.phone}")
+    if not existente.document and data.document:
+        existente.document = data.document
+        complementos.append(f"documento: {data.document}")
+    if not existente.phone_key and existente.phone:
+        # Contato legado cujo telefone não normalizava na 0067 (ou nasceu antes dela).
+        existente.phone_key = normalize_br(existente.phone)
+
+    corpo = "\n".join(filter(None, [data.notes, *complementos]))
+    record_event(
+        db, tenant_id=tenant_id, client_id=existente.id, kind=KIND_LEAD_RETURN,
+        title=_titulo_de_retorno(data.source), actor=actor, body=corpo,
+    )
+
+    # Coluna terminal (ganho OU perda) = a negociação anterior fechou. Quem volta sozinho
+    # depois disso é oportunidade nova: perdido que voltou, ou cliente querendo comprar de
+    # novo. Coluna do meio NÃO se move — puxar de volta apagaria trabalho em andamento.
+    etapa = db.get(PipelineStage, existente.stage_id) if existente.stage_id else None
+    if etapa is not None and (etapa.is_won or etapa.is_lost):
+        ativas = _ordered_stages(db)
+        if ativas:
+            existente.stage_id = ativas[0].id
+            record_event(
+                db, tenant_id=tenant_id, client_id=existente.id, kind=KIND_REOPENED,
+                title=f"Reaberto em {ativas[0].name} (estava em {etapa.name})", actor=actor,
+            )
+
+    audit.record(
+        db, tenant_id=tenant_id, actor=actor, action="crm.client.return", target=existente.id
+    )
+    db.commit()
+    db.refresh(existente)
+    events.emit(
+        EVENT_CLIENT_RETURNED,
+        tenant_id=tenant_id,
+        client_id=existente.id,
+        source=data.source,
+    )
+    return existente, False
 
 
 def list_clients(
@@ -238,7 +416,15 @@ def move_client(
     if target is None:
         raise CrmError("Estágio de destino não existe", 404)
     from_stage = client.stage_id
+    origem = db.get(PipelineStage, from_stage) if from_stage else None
+    nome_origem = origem.name if origem is not None else "sem etapa"
     client.stage_id = target.id
+    # Guarda os NOMES, não os ids: renomear ou arquivar a coluna depois não pode reescrever
+    # o que aconteceu naquele dia (princípio do `raw_description` de bank_transactions).
+    record_event(
+        db, tenant_id=tenant_id, client_id=client.id, kind=KIND_STAGE_MOVE,
+        title=f"Movido de {nome_origem} → {target.name}", actor=actor, is_ai=by_ai,
+    )
     audit.record(
         db, tenant_id=tenant_id, actor=actor, action="crm.client.move",
         target=client.id, is_ai=by_ai,
@@ -256,6 +442,35 @@ def move_client(
         is_lost=target.is_lost,
     )
     return client
+
+
+def last_interaction_map(db: Session) -> dict[str, datetime]:
+    """Data da última interação por contato, para o card do Kanban.
+
+    Duas consultas AGRUPADAS para o board inteiro, em vez de uma coluna
+    `clients.last_interaction_at`. Coluna seria um valor derivado guardado — a forma exata do
+    bug que a Onda 0 do Epic 8 corrigiu — e dessincronizaria no primeiro caminho de escrita
+    que alguém esquecesse de atualizar. Assim é correto por construção.
+
+    A sessão já está isolada por tenant (RLS): nada de filtro manual de `tenant_id`.
+    """
+    ultimo: dict[str, datetime] = {}
+    for tabela, coluna in (
+        (ClientEvent, ClientEvent.client_id),
+        (WhatsappMessage, WhatsappMessage.client_id),
+    ):
+        linhas = db.execute(
+            select(coluna, func.max(tabela.created_at))
+            .where(coluna.is_not(None))
+            .group_by(coluna)
+        ).all()
+        for client_id, quando in linhas:
+            if quando is None:
+                continue
+            atual = ultimo.get(client_id)
+            if atual is None or quando > atual:
+                ultimo[client_id] = quando
+    return ultimo
 
 
 def build_board(db: Session, tenant_id: str) -> list[tuple[PipelineStage, list[Client]]]:

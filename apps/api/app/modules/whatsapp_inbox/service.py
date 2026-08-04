@@ -13,6 +13,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.core import audit, whatsapp
+from app.core.phone import normalize_br
 from app.core.whatsapp.inbound import InboundMessage
 from app.modules.attachments import service as attachments_service
 from app.modules.attachments.models import ALLOWED_TYPES, MAX_BYTES
@@ -111,6 +112,20 @@ def resolve_by_verify_token(db: Session, *, verify_token: str) -> PublicWhatsapp
 
 
 def _get_or_create_client(db: Session, *, tenant_id: str, phone: str, name: str) -> Client:
+    """Resolve o contato pelo telefone NORMALIZADO — a mesma identidade que o site usa.
+
+    Comparar `Client.phone` cru (como era até aqui) deixava o conserto pela metade: o
+    formulário guarda "(11) 99999-8888" e o WhatsApp guarda "5511999998888", então a mesma
+    pessoa continuaria virando dois cards.
+    """
+    chave = normalize_br(phone)
+    if chave:
+        client = db.scalars(
+            select(Client).where(Client.phone_key == chave).order_by(Client.created_at, Client.id)
+        ).first()
+        if client is not None:
+            return client
+    # Fallback para contato legado cujo telefone nunca normalizou (e portanto não tem chave).
     client = db.scalar(select(Client).where(Client.phone == phone))
     if client is not None:
         return client

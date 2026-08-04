@@ -321,6 +321,76 @@ e uma tentativa real de conexão avançou mais um passo):
 
 **Estado atual:** conectado e funcionando ponta-a-ponta pro tenant `70c1f435-a21e-4148-a8c6-32a7e346a818` (flaviokato76@gmail.com) — QR, texto recebido, mídia recebida (imagem com miniatura inline), resposta de texto enviada, tudo validado com conversas reais em produção.
 
+## CRM: a jornada única do contato (um card por pessoa)
+
+> Spec: `docs/superpowers/specs/2026-08-04-crm-jornada-unica-do-contato-design.md` ·
+> Plano: `docs/superpowers/plans/2026-08-04-crm-jornada-unica-do-contato.md`
+
+O mesmo contato virava vários cards no Kanban (quatro "Flavio Kato" na tela do fundador):
+`pages/service.py::public_submit` e `integrations/service.py::capture_lead` chamavam
+`create_client` incondicionalmente. O WhatsApp já deduplicava — por telefone cru —, então o
+comportamento era incoerente por porta de entrada.
+
+- [x] **Porta única `crm_service.absorb_lead`** — as três portas (página pública, API de
+  integração, WhatsApp) convergem nela. Identidade: **telefone normalizado primeiro, e-mail em
+  segundo**. Quem já existe é COMPLEMENTADO (campos vazios preenchidos, nunca sobrescritos) e
+  ganha um `lead_return` com a data e o texto daquele envio. `notes` do dono não é tocado no
+  retorno — era exatamente o que apagava o que ele tinha escrito.
+- [x] **`core/phone.normalize_br` + `clients.phone_key`** (migration 0067) — `phone` guarda o
+  que a pessoa digitou, `phone_key` a forma comparável. **A regra do 9º dígito por faixa da
+  Anatel** (local de 8 dígitos começando em 6–9 é celular e ganha o 9; 2–5 é fixo e não ganha)
+  é o que impede o fixo `11 3333-4444` de colidir com o celular `11 93333-4444` — a alternativa
+  "compara os últimos 8 dígitos" juntaria duas pessoas num card só.
+- [x] **`phone_key` NÃO é único, de propósito** — marido e mulher compartilham telefone, e os
+  duplicados legados (não mesclados, decisão do fundador) compartilham chave depois do
+  backfill. `absorb_lead` desempata pelo **mais antigo** (`created_at ASC, id`); sem isso o
+  próximo retorno cairia num card imprevisível e a história se partiria. ⚠️ Quando o
+  `created_at` EMPATA (mesma transação no Postgres, mesmo segundo no SQLite) "o mais antigo"
+  deixa de ser um fato observável e a garantia entregue é só **estabilidade** — a mesma
+  escolha em toda chamada, via `id` como segundo critério. O teste que cobria isso passava por
+  sorte até ser corrigido; ver `test_multiplos_candidatos_*` em `tests/test_lead_absorb.py`.
+- [x] **Reabertura** — retorno em coluna terminal (`is_won` **ou** `is_lost`) move o card para
+  a primeira coluna ativa e grava `reopened`. Coluna do meio **não** se move (puxar de volta
+  apagaria trabalho em andamento). Ganho reabre porque lead recorrente querendo comprar de
+  novo é oportunidade nova (decisão do fundador).
+- [x] **`client_events`** — a linha do tempo NARRATIVA (`lead_created`, `lead_return`,
+  `stage_move`, `reopened`, `note`, `funnel`). **Dinheiro não entra aqui:** orçamento, cobrança
+  e pagamento continuam sendo lidos de `quotes`/`charges` por `crm/timeline.py`. Copiar
+  `amount_cents` criaria uma segunda versão da verdade sobre dinheiro — a forma exata do bug
+  que a Onda 0 do Epic 8 desfez. Ler da origem também deu o histórico financeiro
+  **retroativo** de graça. `title`/`body` são texto CONGELADO (renomear a coluna do Kanban não
+  reescreve o passado), no princípio do `raw_description` de `bank_transactions`.
+- [x] **`ClientEvent.created_at` tem default do lado do PYTHON**, sobrescrevendo o
+  `server_default=func.now()` do `TimestampMixin`. No Postgres `now()` é o timestamp da
+  TRANSAÇÃO: `lead_return` e `reopened`, gravados no mesmo commit por `absorb_lead`, sairiam
+  com instante idêntico e o desempate cairia no uuid — a timeline mostraria "Reaberto" acima
+  de "Voltou pelo site", invertendo a causalidade na tela. **Regra que fica: coluna de tempo
+  usada para ORDENAR eventos da mesma transação não pode vir de `func.now()`.**
+- [x] **Reinscrição no funil** — `crm.client.returned` reinscreve no funil de entrada, com
+  guarda de jornada `running`/`waiting` em `automation.py` (não dentro de `engine.enroll`:
+  inscrição manual pela tela continua fazendo o que o usuário mandar).
+- [x] **Superfícies** — `<ClientTimeline>` na ficha 360° (primeira `<Section>`) e como painel
+  direito de Conversas (**gaveta sobreposta abaixo de `lg`**, pela lição do PR #56). Card do
+  Kanban mostra "última interação", calculada por **duas consultas agrupadas** no endpoint do
+  board — nunca uma coluna `last_interaction_at`, que seria valor derivado guardado.
+- **Grupo de WhatsApp não tem histórico de CRM** — `client_id` é nulo e o painel diz isso em
+  texto, mantendo a decisão de 2026-08-04 de que grupo não vira contato.
+
+**Armadilha de JS que custou uma depuração e vale para qualquer setter de estado:** o
+`ClientTimeline` derrubava a **página inteira** de Conversas quando o endpoint respondia fora
+do formato. A causa não era `undefined`: com `data = []`, `data.entries` é
+`Array.prototype.entries` — uma **função** —, então `data?.entries ?? []` deixava passar, e um
+setter do React que recebe função a trata como updater e a **executa**. O guard correto é
+`Array.isArray`. Componente de painel lateral também nunca deve poder derrubar quem o hospeda:
+`load` degrada para aviso em vez de estourar.
+
+**Dívida:** os cards duplicados que já existiam **não foram mesclados** (decisão do fundador:
+a correção vale daqui para frente) — quem for mesclá-los depois precisa juntar `client_events`,
+`charges`, `quotes`, `contracts` e `whatsapp_chats` do card absorvido, e não só apagar a linha.
+Não há ferramenta de mescla na tela. Também não há "ligar conversa não identificada a um
+contato" nem marcação de histórico como lido. **Validação manual em ~360px do painel de
+Conversas ainda não foi feita** — bloqueia release, não bloqueia merge.
+
 ## 6.0 Correções importantes
 - **[CORRIGIDO] Agenda não mostrava cobranças/contas a pagar (bug de fuso).** Eventos de dia inteiro (cobranca_receber/cobranca_pagar/prazo) são gravados à **meia-noite UTC** da data de vencimento. A Agenda casava o evento ao dia com `new Date(starts_at)` (horário LOCAL) → em fuso negativo (Brasil UTC-3) o evento "voltava" um dia e, nas bordas do mês, caía fora do range → sumia. Fix (frontend, `AgendaPage.tsx`): eventos all-day casam por **data de calendário** (`starts_at.slice(0,10)` = data UTC) e o range da busca usa fronteiras **UTC-date** (`${ymd}T00:00:00Z`), não local→UTC. Idem para a cor "atrasado". Backend sempre injetou o evento corretamente (validado). **Lição (reverberar): toda data de negócio que vira evento all-day deve ser comparada por data de calendário, nunca por horário local.**
 - **[CRÍTICO, CORRIGIDO] RLS perdia o tenant no refresh pós-commit (afetava TODOS os módulos).** A `Session` ligada à Engine devolvia a conexão ao pool no `commit()`; o `db.refresh()` seguinte pegava outra conexão sem a GUC `app.current_tenant_id` → RLS escondia a linha → 500 "Could not refresh instance". Funcionava só quando o pool reusava a mesma conexão. **Fix:** `tenant_session` agora prende a Session a UMA conexão dedicada (`engine.connect()`) por todo o request; o refresh pós-commit usa a mesma conexão (GUC setada). Validado: criar em tenant novo OK em todos os módulos + isolamento entre tenants intacto. Regra: qualquer novo helper de sessão de tenant DEVE usar conexão dedicada, nunca a Engine direto.

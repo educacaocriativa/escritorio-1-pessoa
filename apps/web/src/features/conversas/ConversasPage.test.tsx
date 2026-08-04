@@ -1,4 +1,4 @@
-import { render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 import { api } from "../../lib/api";
@@ -266,5 +266,87 @@ describe("ConversasPage", () => {
 
     expect(screen.queryByText("Mensagem da conversa A")).not.toBeInTheDocument();
     expect(screen.getByPlaceholderText(/mensagem/i)).toHaveValue("");
+  });
+});
+
+const CONVERSA_DIRETA = {
+  chat_id: "c1", kind: "direct" as const, title: "Flavio Kato", phone: "5511999998888",
+  client_id: "cli1", last_message_at: "2026-08-04T10:00:00Z",
+  last_message_preview: "Oi", unread: false,
+};
+
+const GRUPO = {
+  chat_id: "g1", kind: "group" as const, title: "Turma 2026", phone: null,
+  client_id: null, last_message_at: "2026-08-04T10:00:00Z",
+  last_message_preview: "Bom dia", unread: false,
+};
+
+const TIMELINE_DO_CRM = {
+  entries: [
+    {
+      id: "e1", kind: "lead_created", title: "Chegou pelo site", body: "",
+      actor: "pagina:lead", is_ai: false, at: "2026-07-01T10:00:00Z",
+    },
+  ],
+  truncated: false,
+};
+
+function mockarConversas(conversas: unknown[]) {
+  vi.mocked(api.get).mockImplementation((url: string) => {
+    if (url === "/whatsapp-conversations") {
+      return Promise.resolve({ data: conversas } as never);
+    }
+    if (url.startsWith("/crm/clients/")) {
+      return Promise.resolve({ data: TIMELINE_DO_CRM } as never);
+    }
+    if (url.endsWith("/window")) {
+      return Promise.resolve({ data: { within_session_window: true } } as never);
+    }
+    return Promise.resolve({ data: [] } as never);
+  });
+  vi.mocked(api.post).mockResolvedValue({ data: {} } as never);
+}
+
+describe("ConversasPage — painel de histórico", () => {
+  it("conversa direta com contato mostra o histórico do CRM", async () => {
+    mockarConversas([CONVERSA_DIRETA]);
+    render(<ConversasPage />);
+    await userEvent.click(await screen.findByText("Flavio Kato"));
+
+    expect(await screen.findByTestId("painel-historico")).toBeInTheDocument();
+    expect(await screen.findByText("Chegou pelo site")).toBeInTheDocument();
+  });
+
+  it("conversa de grupo diz em TEXTO que não há contato ligado", async () => {
+    mockarConversas([GRUPO]);
+    render(<ConversasPage />);
+    await userEvent.click(await screen.findByText("Turma 2026"));
+
+    expect(
+      await screen.findByText(/não está ligada a um contato do CRM/i),
+    ).toBeInTheDocument();
+  });
+
+  it("o histórico NÃO entra no polling de 7s", async () => {
+    // `fireEvent` em vez de `userEvent` aqui de propósito: userEvent com fake timers exige
+    // configuração de `advanceTimers` e falha de forma confusa sem ela.
+    vi.useFakeTimers();
+    mockarConversas([CONVERSA_DIRETA]);
+    render(<ConversasPage />);
+    await vi.advanceTimersByTimeAsync(0);      // resolve a carga inicial das conversas
+    fireEvent.click(screen.getByText("Flavio Kato"));
+    await vi.advanceTimersByTimeAsync(0);      // resolve a carga da timeline
+
+    const chamadasDeTimeline = () =>
+      vi.mocked(api.get).mock.calls.filter(([u]) =>
+        String(u).startsWith("/crm/clients/"),
+      ).length;
+
+    const antes = chamadasDeTimeline();
+    expect(antes).toBeGreaterThan(0);          // controle positivo: carregou uma vez
+
+    await vi.advanceTimersByTimeAsync(21_000); // 3 ciclos de POLL_MS
+    expect(chamadasDeTimeline()).toBe(antes);
+    vi.useRealTimers();
   });
 });

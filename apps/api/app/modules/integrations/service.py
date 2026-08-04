@@ -115,7 +115,8 @@ def capture_lead(db: Session, *, raw_key: str, data: LeadCapture, session_factor
     from app.modules.crm.schemas import ClientCreate
 
     with session_factory(snap.tenant_id) as tdb:
-        crm_service.create_client(
+        # `absorb_lead` (não `create_client`) — mesma razão de `pages/service.py`.
+        crm_service.absorb_lead(
             tdb, tenant_id=snap.tenant_id, actor="integracao:lead",
             data=ClientCreate(
                 name=data.name,

@@ -6,11 +6,14 @@ import type {
   LegalDocumentSummary,
   Quote,
 } from "@e1p/shared-types";
-import { ArrowLeft, FileSignature, FileText, Gavel, Pencil, Receipt, Workflow } from "lucide-react";
+import {
+  ArrowLeft, FileSignature, FileText, Gavel, History, Pencil, Receipt, Workflow,
+} from "lucide-react";
 import { useCallback, useEffect, useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
 import { api, apiErrorMessage } from "../../lib/api";
 import { rotaDaCobranca } from "../cobrancas/rota";
+import ClientTimeline from "./ClientTimeline";
 import { hojeISO } from "../financeiro/contas";
 import { VOCAB_ENTRADA } from "../pagar/baixa";
 import { DialogDeBaixa } from "../pagar/EscolhaDaBaixa";
@@ -103,6 +106,12 @@ export default function ClientDetailPage() {
         <Stat label="Vencido" value={brl(overdueSum)} tone="text-danger" />
         <Stat label="Recebido" value={brl(paidSum)} tone="text-accent-700" />
       </div>
+
+      {/* Histórico — primeiro bloco de propósito: é a história que dá sentido às seções
+          operacionais abaixo (Cobranças, Contratos, Orçamentos). */}
+      <Section icon={<History size={16} />} title="Histórico">
+        <ClientTimeline clientId={id} />
+      </Section>
 
       {/* Cobranças */}
       <Section icon={<Receipt size={16} />} title={`Cobranças (${charges.length})`}>

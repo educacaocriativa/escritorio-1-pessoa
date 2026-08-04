@@ -227,9 +227,33 @@ export interface Client {
   created_at: string;
 }
 
+export interface ClientTimelineEntry {
+  id: string;
+  kind:
+    | "lead_created" | "lead_return" | "stage_move" | "reopened" | "note" | "funnel"
+    | "quote" | "charge" | "payment";
+  title: string;
+  body: string;
+  actor: string;
+  is_ai: boolean;
+  /** O instante do fato: `created_at` do evento, ou `paid_at` da cobrança. */
+  at: string;
+}
+
+export interface ClientTimelineOut {
+  entries: ClientTimelineEntry[];
+  /** `true` quando alguma fonte bateu no teto de 100 — a tela avisa. */
+  truncated: boolean;
+}
+
+/** `Client` do board, com a data da última interação (só o board calcula isso). */
+export interface BoardClient extends Client {
+  last_interaction_at: string | null;
+}
+
 export interface BoardColumn {
   stage: PipelineStage;
-  clients: Client[];
+  clients: BoardClient[];
 }
 
 export interface Board {
