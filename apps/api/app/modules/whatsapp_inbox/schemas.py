@@ -8,9 +8,15 @@ from pydantic import BaseModel
 
 
 class ConversationSummary(BaseModel):
-    client_id: str
-    client_name: str
-    client_phone: str | None
+    """Uma CONVERSA (`whatsapp_chats`), não um cliente. `client_id` continua aqui, mas como
+    vínculo opcional com o CRM — é `None` em grupo (que nunca vira contato) e em conversa
+    direta cujo telefone o WhatsApp ainda não revelou."""
+
+    chat_id: str
+    kind: str  # "direct" | "group"
+    title: str
+    phone: str | None
+    client_id: str | None
     last_message_at: datetime | None
     last_message_preview: str
     unread: bool
@@ -23,6 +29,8 @@ class TimelineEntry(BaseModel):
     text_body: str
     media_attachment_id: str | None
     purpose_label: str | None
+    # Quem falou, em grupo. `None` em conversa direta e em mensagem nossa.
+    sender_name: str | None
     created_at: datetime
 
 

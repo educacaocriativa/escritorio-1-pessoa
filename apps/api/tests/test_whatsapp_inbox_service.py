@@ -3,7 +3,6 @@
 unificada, janela de 24h, resposta (texto/mídia/template)."""
 import pytest
 from sqlalchemy import select
-from sqlalchemy.exc import IntegrityError
 
 from app.core import whatsapp
 from app.core.audit import AuditEntry
@@ -22,7 +21,7 @@ from app.modules.whatsapp_inbox.models import (
     MEDIA_STATUS_FAILED,
     MEDIA_STATUS_PENDING,
     PublicWhatsappAccount,
-    WhatsappConversationState,
+    WhatsappChat,
     WhatsappMessage,
 )
 from app.modules.whatsapp_templates.models import WhatsappTemplate
@@ -467,25 +466,42 @@ def test_ingest_persists_valid_message_after_earlier_message_fails_to_encode(db)
     assert good.text_body == "mensagem válida de verdade"
 
 
+
+def _chat_for(db, client) -> WhatsappChat:
+    """A conversa direta daquele contato — o que o ingest cria sozinho a partir do `remoteJid`.
+    Nos testes precisa ser explícito porque eles inserem `WhatsappMessage` na mão, sem passar
+    pelo webhook."""
+    chat = WhatsappChat(
+        tenant_id=TENANT_ID, chat_jid=f"{client.phone}@s.whatsapp.net", kind="direct",
+        title=client.name, client_id=client.id,
+    )
+    db.add(chat)
+    db.flush()
+    return chat
+
 def test_is_within_session_window_true_right_after_inbound(db):
     _configure_credentials(db)
     client = Client(tenant_id=TENANT_ID, name="Cliente", phone="5511900001111", source="manual")
     db.add(client)
     db.flush()
+    chat = _chat_for(db, client)
     db.add(WhatsappMessage(
-        tenant_id=TENANT_ID, client_id=client.id, direction=DIRECTION_IN, kind="text",
+        tenant_id=TENANT_ID, client_id=client.id, chat_id=chat.id, direction=DIRECTION_IN,
+        kind="text",
         text_body="oi",
     ))
     db.commit()
-    assert inbox_service.is_within_session_window(db, client_id=client.id) is True
+    assert inbox_service.is_within_session_window(db, chat_id=chat.id) is True
 
 
 def test_is_within_session_window_false_when_never_messaged(db):
     _configure_credentials(db)
     client = Client(tenant_id=TENANT_ID, name="Cliente", phone="5511900002222", source="manual")
     db.add(client)
+    db.flush()
+    chat = _chat_for(db, client)
     db.commit()
-    assert inbox_service.is_within_session_window(db, client_id=client.id) is False
+    assert inbox_service.is_within_session_window(db, chat_id=chat.id) is False
 
 
 def test_get_timeline_merges_conversation_and_automated(db):
@@ -493,8 +509,10 @@ def test_get_timeline_merges_conversation_and_automated(db):
     client = Client(tenant_id=TENANT_ID, name="Cliente", phone="5511900003333", source="manual")
     db.add(client)
     db.flush()
+    chat = _chat_for(db, client)
     db.add(WhatsappMessage(
-        tenant_id=TENANT_ID, client_id=client.id, direction=DIRECTION_IN, kind="text",
+        tenant_id=TENANT_ID, client_id=client.id, chat_id=chat.id, direction=DIRECTION_IN,
+        kind="text",
         text_body="Oi",
     ))
     db.add(Notification(
@@ -502,7 +520,7 @@ def test_get_timeline_merges_conversation_and_automated(db):
         message="Lembrete: sua cobrança vence amanhã", status="sent",
     ))
     db.commit()
-    timeline = inbox_service.get_timeline(db, client_id=client.id)
+    timeline = inbox_service.get_timeline(db, chat_id=chat.id)
     sources = {e["source"] for e in timeline}
     assert sources == {"conversation", "automated"}
 
@@ -512,8 +530,10 @@ def test_send_reply_text_within_window(db, monkeypatch: pytest.MonkeyPatch):
     client = Client(tenant_id=TENANT_ID, name="Cliente", phone="5511900004444", source="manual")
     db.add(client)
     db.flush()
+    chat = _chat_for(db, client)
     db.add(WhatsappMessage(
-        tenant_id=TENANT_ID, client_id=client.id, direction=DIRECTION_IN, kind="text",
+        tenant_id=TENANT_ID, client_id=client.id, chat_id=chat.id, direction=DIRECTION_IN,
+        kind="text",
         text_body="oi",
     ))
     db.commit()
@@ -524,7 +544,7 @@ def test_send_reply_text_within_window(db, monkeypatch: pytest.MonkeyPatch):
         lambda **kw: (captured.update(kw), "sent")[1],
     )
     msg = inbox_service.send_reply_text(
-        db, tenant_id=TENANT_ID, actor="user-1", client_id=client.id, text="Olá! Segue o cardápio.",
+        db, tenant_id=TENANT_ID, actor="user-1", chat_id=chat.id, text="Olá! Segue o cardápio.",
     )
     assert msg.direction == DIRECTION_OUT
     assert msg.status == "sent"
@@ -536,10 +556,12 @@ def test_send_reply_text_raises_outside_window(db):
     _configure_credentials(db)
     client = Client(tenant_id=TENANT_ID, name="Cliente", phone="5511900005555", source="manual")
     db.add(client)
+    db.flush()
+    chat = _chat_for(db, client)
     db.commit()
     with pytest.raises(inbox_service.WhatsappInboxError):
         inbox_service.send_reply_text(
-            db, tenant_id=TENANT_ID, actor="user-1", client_id=client.id, text="oi",
+            db, tenant_id=TENANT_ID, actor="user-1", chat_id=chat.id, text="oi",
         )
 
 
@@ -550,8 +572,10 @@ def test_send_reply_media_rejects_disallowed_mime_type_before_sending(
     client = Client(tenant_id=TENANT_ID, name="Cliente", phone="5511900005556", source="manual")
     db.add(client)
     db.flush()
+    chat = _chat_for(db, client)
     db.add(WhatsappMessage(
-        tenant_id=TENANT_ID, client_id=client.id, direction=DIRECTION_IN, kind="text",
+        tenant_id=TENANT_ID, client_id=client.id, chat_id=chat.id, direction=DIRECTION_IN,
+        kind="text",
         text_body="oi",
     ))
     db.commit()
@@ -563,7 +587,7 @@ def test_send_reply_media_rejects_disallowed_mime_type_before_sending(
 
     with pytest.raises(inbox_service.WhatsappInboxError):
         inbox_service.send_reply_media(
-            db, tenant_id=TENANT_ID, actor="user-1", client_id=client.id,
+            db, tenant_id=TENANT_ID, actor="user-1", chat_id=chat.id,
             file_bytes=b"fake-audio-bytes", filename="audio.mp3", mime_type="text/plain",
         )
 
@@ -582,8 +606,10 @@ def test_send_reply_media_rejects_empty_file_before_sending(
     client = Client(tenant_id=TENANT_ID, name="Cliente", phone="5511900005557", source="manual")
     db.add(client)
     db.flush()
+    chat = _chat_for(db, client)
     db.add(WhatsappMessage(
-        tenant_id=TENANT_ID, client_id=client.id, direction=DIRECTION_IN, kind="text",
+        tenant_id=TENANT_ID, client_id=client.id, chat_id=chat.id, direction=DIRECTION_IN,
+        kind="text",
         text_body="oi",
     ))
     db.commit()
@@ -595,7 +621,7 @@ def test_send_reply_media_rejects_empty_file_before_sending(
 
     with pytest.raises(inbox_service.WhatsappInboxError):
         inbox_service.send_reply_media(
-            db, tenant_id=TENANT_ID, actor="user-1", client_id=client.id,
+            db, tenant_id=TENANT_ID, actor="user-1", chat_id=chat.id,
             file_bytes=b"", filename="doc.pdf", mime_type="application/pdf",
         )
 
@@ -614,8 +640,10 @@ def test_send_reply_media_success_creates_message_and_attachment(
     client = Client(tenant_id=TENANT_ID, name="Cliente", phone="5511900005558", source="manual")
     db.add(client)
     db.flush()
+    chat = _chat_for(db, client)
     db.add(WhatsappMessage(
-        tenant_id=TENANT_ID, client_id=client.id, direction=DIRECTION_IN, kind="text",
+        tenant_id=TENANT_ID, client_id=client.id, chat_id=chat.id, direction=DIRECTION_IN,
+        kind="text",
         text_body="oi",
     ))
     db.commit()
@@ -624,7 +652,7 @@ def test_send_reply_media_success_creates_message_and_attachment(
     monkeypatch.setattr(whatsapp, "send_media", lambda **_kw: "sent")
 
     msg = inbox_service.send_reply_media(
-        db, tenant_id=TENANT_ID, actor="user-1", client_id=client.id,
+        db, tenant_id=TENANT_ID, actor="user-1", chat_id=chat.id,
         file_bytes=b"%PDF-1.4 fake pdf bytes", filename="cardapio.pdf",
         mime_type="application/pdf",
     )
@@ -655,84 +683,65 @@ def test_send_reply_template_requires_approved_template(db):
     )
     db.add(client)
     db.add(tpl)
+    db.flush()
+    chat = _chat_for(db, client)
     db.commit()
     with pytest.raises(inbox_service.WhatsappInboxError) as exc_info:
         inbox_service.send_reply_template(
-            db, tenant_id=TENANT_ID, actor="user-1", client_id=client.id,
+            db, tenant_id=TENANT_ID, actor="user-1", chat_id=chat.id,
             template_id=tpl.id, variables=["Fulano"],
         )
     assert "não aprovado" in str(exc_info.value)
 
 
-def test_mark_read_updates_state(db):
+def test_mark_read_marks_the_chat(db):
     _configure_credentials(db)
     client = Client(tenant_id=TENANT_ID, name="Cliente", phone="5511900007777", source="manual")
     db.add(client)
+    db.flush()
+    chat = _chat_for(db, client)
     db.commit()
-    inbox_service.mark_read(db, tenant_id=TENANT_ID, client_id=client.id)
-    state = db.scalar(
-        select(WhatsappConversationState).where(
-            WhatsappConversationState.client_id == client.id
-        )
-    )
-    assert state is not None
-    assert state.last_read_at is not None
+
+    inbox_service.mark_read(db, tenant_id=TENANT_ID, chat_id=chat.id)
+
+    assert chat.last_read_at is not None
     audit_entry = db.scalar(
         select(AuditEntry).where(AuditEntry.action == "whatsapp_inbox.conversation.mark_read")
     )
     assert audit_entry is not None
-    assert audit_entry.target == client.id
+    assert audit_entry.target == chat.id
 
 
-def test_mark_read_recovers_from_concurrent_insert_race(db, monkeypatch: pytest.MonkeyPatch):
-    """Reproduz o 500 do smoke test manual: duas requests concorrentes para o MESMO client_id
-    disparam `mark_read` quase ao mesmo tempo, ambas veem `state is None` no SELECT (nenhuma
-    commitou ainda) e tentam inserir a mesma linha (tenant_id, client_id) — a que commita por
-    último esbarra em `uq_whatsapp_conv_state_tenant_client` (IntegrityError/UniqueViolation).
+def test_mark_read_is_idempotent_under_concurrent_calls(db):
+    """Substitui `test_mark_read_recovers_from_concurrent_insert_race`, que reproduzia um 500 de
+    produção: clicar numa conversa dispara `/read` de mais de um lugar quase ao mesmo tempo (a
+    lista E a thread), as duas requests viam `state is None` e tentavam INSERIR a mesma linha em
+    `whatsapp_conversation_states`, e a última esbarrava em
+    `uq_whatsapp_conv_state_tenant_client`.
 
-    Sem threads reais: um monkeypatch em `db.commit` intercepta a PRIMEIRA chamada (a tentativa
-    de INSERT do nosso `mark_read`, o "perdedor" da corrida) e, antes de levantar o
-    `IntegrityError`, insere e commita de verdade a linha "vencedora" — simulando a OUTRA
-    request que já teria commitado bem antes. Assim o SELECT de recuperação de `mark_read`
-    encontra uma linha genuína no banco, exatamente como aconteceria em produção."""
+    Essa corrida **deixou de existir por construção** na Onda 4: o estado de leitura passou a
+    viver na própria conversa, que já existe quando `mark_read` roda. Não há INSERT — só dois
+    UPDATEs do mesmo campo, e a última escrita vencer é o resultado certo. O teste que fica é o
+    do comportamento observável: chamar duas vezes não levanta e não duplica nada."""
     _configure_credentials(db)
     client = Client(tenant_id=TENANT_ID, name="Cliente", phone="5511900006666", source="manual")
     db.add(client)
+    db.flush()
+    chat = _chat_for(db, client)
     db.commit()
 
-    real_commit = db.commit
-    calls = {"n": 0}
+    inbox_service.mark_read(db, tenant_id=TENANT_ID, chat_id=chat.id)
+    primeiro = chat.last_read_at
+    inbox_service.mark_read(db, tenant_id=TENANT_ID, chat_id=chat.id)  # não pode levantar
 
-    def _commit_with_race(*args, **kwargs):
-        calls["n"] += 1
-        if calls["n"] == 1:
-            db.rollback()  # descarta nosso INSERT + audit.record pendentes (o "perdedor")
-            winner = WhatsappConversationState(tenant_id=TENANT_ID, client_id=client.id)
-            db.add(winner)
-            real_commit()  # a linha da "outra request" agora existe de verdade no banco
-            raise IntegrityError(
-                "INSERT INTO whatsapp_conversation_states ...", {},
-                Exception(
-                    'duplicate key value violates unique constraint '
-                    '"uq_whatsapp_conv_state_tenant_client"'
-                ),
-            )
-        return real_commit(*args, **kwargs)
+    assert chat.last_read_at is not None
+    assert chat.last_read_at >= primeiro
+    chats = db.scalars(select(WhatsappChat).where(WhatsappChat.client_id == client.id)).all()
+    assert len(chats) == 1  # nada foi duplicado
 
-    monkeypatch.setattr(db, "commit", _commit_with_race)
 
-    inbox_service.mark_read(db, tenant_id=TENANT_ID, client_id=client.id)  # não pode levantar
-
-    states = db.scalars(
-        select(WhatsappConversationState).where(
-            WhatsappConversationState.client_id == client.id
-        )
-    ).all()
-    assert len(states) == 1  # nenhuma linha duplicada — recuperou atualizando a existente
-    assert states[0].last_read_at is not None
-
-    audit_entries = db.scalars(
-        select(AuditEntry).where(AuditEntry.action == "whatsapp_inbox.conversation.mark_read")
-    ).all()
-    assert len(audit_entries) == 1  # o audit da tentativa perdedora foi descartado no rollback
-    assert audit_entries[0].target == client.id
+def test_mark_read_unknown_chat_is_404(db):
+    _configure_credentials(db)
+    with pytest.raises(inbox_service.WhatsappInboxError) as exc_info:
+        inbox_service.mark_read(db, tenant_id=TENANT_ID, chat_id="nao-existe")
+    assert exc_info.value.status_code == 404

@@ -32,6 +32,7 @@ if TYPE_CHECKING:
 
 __all__ = [
     "WhatsappApiError",
+    "fetch_group_subject",
     "send_text",
     "send_template",
     "send_media",
@@ -59,6 +60,17 @@ def _evolution_instance(profile: TenantProfile | None) -> str:
     `_resolve` já confirmou `profile.whatsapp_provider == "evolution"`, então `profile` nunca é
     None aqui (garantia do chamador, não repetida em runtime)."""
     return f"e1p-{profile.tenant_id}"  # type: ignore[union-attr]
+
+
+def fetch_group_subject(*, profile: TenantProfile | None, group_jid: str) -> str | None:
+    """Nome do grupo, ou `None` quando não dá pra saber. Só a Evolution tem grupos — a Cloud API
+    da Meta não suporta o recurso —, então em qualquer outro transporte a resposta é `None` sem
+    chamada de rede nenhuma."""
+    if _resolve(profile) is not evolution:
+        return None
+    return evolution.fetch_group_subject(
+        instance=_evolution_instance(profile), group_jid=group_jid
+    )
 
 
 def send_text(

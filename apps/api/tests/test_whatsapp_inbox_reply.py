@@ -13,7 +13,7 @@ from fastapi.testclient import TestClient
 from app.core import whatsapp
 from app.modules.crm.models import Client
 from app.modules.settings import service as settings_service
-from app.modules.whatsapp_inbox.models import DIRECTION_IN, WhatsappMessage
+from app.modules.whatsapp_inbox.models import DIRECTION_IN, WhatsappChat, WhatsappMessage
 from app.modules.whatsapp_templates.models import STATUS_APPROVED, WhatsappTemplate
 
 REGISTER = {
@@ -41,14 +41,28 @@ def _configure(db, tenant_id):
     db.commit()
 
 
+
+def _chat(db, tenant_id: str, c: Client) -> WhatsappChat:
+    """A conversa direta do contato — criada explicitamente porque estes testes inserem as
+    linhas na mão, sem passar pelo webhook (que a criaria sozinho a partir do `remoteJid`)."""
+    chat = WhatsappChat(
+        tenant_id=tenant_id, chat_jid=f"{c.phone}@s.whatsapp.net", kind="direct",
+        title=c.name, client_id=c.id,
+    )
+    db.add(chat)
+    db.flush()
+    return chat
+
 def test_reply_text_endpoint_requires_open_window(client, db, monkeypatch, auth):
     headers, tenant_id = auth
     _configure(db, tenant_id)
     c = Client(tenant_id=tenant_id, name="Cliente", phone="5511900000001", source="manual")
     db.add(c)
+    db.flush()
+    chat = _chat(db, tenant_id, c)
     db.commit()
     resp = client.post(
-        f"/whatsapp-conversations/{c.id}/messages/text", json={"text": "oi"}, headers=headers
+        f"/whatsapp-conversations/{chat.id}/messages/text", json={"text": "oi"}, headers=headers
     )
     assert resp.status_code == 422
 
@@ -59,13 +73,15 @@ def test_reply_text_endpoint_success_within_window(client, db, monkeypatch, auth
     c = Client(tenant_id=tenant_id, name="Cliente", phone="5511900000002", source="manual")
     db.add(c)
     db.flush()
+    chat = _chat(db, tenant_id, c)
     db.add(WhatsappMessage(
-        tenant_id=tenant_id, client_id=c.id, direction=DIRECTION_IN, kind="text", text_body="oi",
+        tenant_id=tenant_id, client_id=c.id, chat_id=chat.id, direction=DIRECTION_IN,
+        kind="text", text_body="oi",
     ))
     db.commit()
     monkeypatch.setattr(whatsapp, "send_text", lambda **_kw: "sent")
     resp = client.post(
-        f"/whatsapp-conversations/{c.id}/messages/text",
+        f"/whatsapp-conversations/{chat.id}/messages/text",
         json={"text": "Olá, tudo bem?"},
         headers=headers,
     )
@@ -84,10 +100,12 @@ def test_reply_template_endpoint_success(client, db, monkeypatch, auth):
     )
     db.add(c)
     db.add(tpl)
+    db.flush()
+    chat = _chat(db, tenant_id, c)
     db.commit()
     monkeypatch.setattr(whatsapp, "send_template", lambda **_kw: "sent")
     resp = client.post(
-        f"/whatsapp-conversations/{c.id}/messages/template",
+        f"/whatsapp-conversations/{chat.id}/messages/template",
         json={"template_id": tpl.id, "variables": ["Fulano"]},
         headers=headers,
     )

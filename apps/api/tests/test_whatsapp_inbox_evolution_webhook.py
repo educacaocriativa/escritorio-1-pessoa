@@ -7,7 +7,7 @@ from sqlalchemy import select
 from app.modules.crm.models import Client
 from app.modules.settings import service as settings_service
 from app.modules.whatsapp_inbox import service as inbox_service
-from app.modules.whatsapp_inbox.models import WhatsappMessage
+from app.modules.whatsapp_inbox.models import WhatsappChat, WhatsappMessage
 from app.modules.whatsapp_session.models import PublicWhatsappInstance
 
 TENANT_ID = "66666666-6666-6666-6666-666666666666"
@@ -126,5 +126,8 @@ def test_webhook_from_me_does_not_open_the_24h_window(client: TestClient, db) ->
         json=_fromme_payload("3EB0JANELA", "Alguma novidade?"),
     ).status_code == 200
 
-    contato = db.scalar(select(Client).where(Client.phone == "5511988887777"))
-    assert inbox_service.is_within_session_window(db, client_id=contato.id) is False
+    chat = db.scalar(
+        select(WhatsappChat).where(WhatsappChat.chat_jid == "5511988887777@s.whatsapp.net")
+    )
+    assert chat is not None
+    assert inbox_service.is_within_session_window(db, chat_id=chat.id) is False

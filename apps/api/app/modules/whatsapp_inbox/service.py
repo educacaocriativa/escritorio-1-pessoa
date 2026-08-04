@@ -10,7 +10,6 @@ import logging
 from datetime import UTC, datetime, timedelta
 
 from sqlalchemy import select
-from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.core import audit, whatsapp
@@ -24,15 +23,17 @@ from app.modules.crm.schemas import ClientCreate
 from app.modules.notifications.models import Notification
 from app.modules.settings import service as settings_service
 from app.modules.whatsapp_inbox.models import (
+    CHAT_KIND_GROUP,
     DIRECTION_IN,
     DIRECTION_OUT,
     KIND_TEXT,
+    LEGACY_CHAT_JID,
     MEDIA_STATUS_DOWNLOADED,
     MEDIA_STATUS_FAILED,
     MEDIA_STATUS_NONE,
     MEDIA_STATUS_PENDING,
     PublicWhatsappAccount,
-    WhatsappConversationState,
+    WhatsappChat,
     WhatsappMessage,
 )
 from app.modules.whatsapp_templates.models import STATUS_APPROVED, WhatsappTemplate
@@ -40,6 +41,11 @@ from app.modules.whatsapp_templates.models import STATUS_APPROVED, WhatsappTempl
 logger = logging.getLogger("e1p.whatsapp_inbox")
 
 SESSION_WINDOW = timedelta(hours=24)
+
+# Intervalo mínimo entre duas tentativas de descobrir o nome de um grupo (ver
+# `_resolve_group_title`). 6h é folgado de propósito: o nome de um grupo quase nunca muda, e o
+# custo de errar para mais é só um grupo continuar sem nome por meio dia.
+_TITLE_RETRY = timedelta(hours=6)
 
 # Rótulo genérico para avisos automáticos na timeline (ver `get_timeline`): `Notification` hoje
 # não guarda o propósito explicitamente, então todo aviso automático cai neste rótulo único.
@@ -114,6 +120,56 @@ def _get_or_create_client(db: Session, *, tenant_id: str, phone: str, name: str)
     )
 
 
+def _resolve_group_title(profile, chat: WhatsappChat) -> None:
+    """Preenche `chat.title` com o assunto do grupo, no máximo uma tentativa por `_TITLE_RETRY`.
+
+    O assunto não vem no payload da mensagem (só o JID do grupo), então descobrir exige uma
+    chamada à Evolution. Sem o carimbo `title_checked_at`, as duas saídas possíveis seriam
+    ruins: consultar a cada mensagem recebida (rede no caminho do webhook, num laço que já
+    processa lote) ou desistir na primeira falha e deixar o grupo anônimo para sempre.
+
+    `fetch_group_subject` nunca levanta exceção e devolve `None` quando não sabe — e `None`
+    permanece `None`: a tela mostra um rótulo honesto, nunca um nome inventado."""
+    now = datetime.now(UTC)
+    checked = chat.title_checked_at
+    if checked is not None:
+        if checked.tzinfo is None:
+            checked = checked.replace(tzinfo=UTC)  # SQLite guarda naive
+        if now - checked < _TITLE_RETRY:
+            return
+    chat.title_checked_at = now
+    subject = whatsapp.fetch_group_subject(profile=profile, group_jid=chat.chat_jid)
+    if subject:
+        chat.title = subject
+
+
+def _get_or_create_chat(
+    db: Session, *, tenant_id: str, chat_jid: str, kind: str, client: Client | None, profile,
+) -> WhatsappChat:
+    """A conversa, criada sob demanda a partir do JID que o WhatsApp entregou.
+
+    `client` é ENRIQUECIMENTO, não chave: uma conversa direta cujo contato só foi identificado
+    depois (`@lid` que passou a vir com `remoteJidAlt`) ganha o vínculo aqui, sem trocar de
+    identidade nem partir o histórico."""
+    chat = db.scalar(select(WhatsappChat).where(WhatsappChat.chat_jid == chat_jid))
+    if chat is None:
+        chat = WhatsappChat(
+            tenant_id=tenant_id, chat_jid=chat_jid, kind=kind,
+            client_id=client.id if client is not None else None,
+            title=client.name if client is not None else None,
+        )
+        db.add(chat)
+        db.flush()  # materializa chat.id — usado como FK lógica na mensagem, na mesma transação
+    else:
+        if chat.client_id is None and client is not None:
+            chat.client_id = client.id
+        if not chat.title and client is not None:
+            chat.title = client.name
+    if kind == CHAT_KIND_GROUP and not chat.title:
+        _resolve_group_title(profile, chat)
+    return chat
+
+
 def ingest_webhook_payload(
     db: Session, *, tenant_id: str, messages: list[InboundMessage]
 ) -> None:
@@ -147,6 +203,10 @@ def ingest_webhook_payload(
     # `tenant_session` com `set_config(..., is_local=false)` + `conn.commit()` no nível da CONEXÃO
     # (escopo de sessão), então o rollback ORM não a reverte e as mensagens seguintes continuam
     # corretamente escopadas por tenant.
+    # Carregado UMA vez, fora do laço: só é usado para descobrir o nome de grupo novo
+    # (`_resolve_group_title`), e `get_profile` faz commit próprio — chamá-lo por mensagem
+    # atravessaria a transação-por-mensagem que o comentário acima constrói.
+    profile = settings_service.get_profile(db, tenant_id)
     for msg in messages:
         try:
             if msg.wa_message_id and db.scalar(
@@ -156,6 +216,7 @@ def ingest_webhook_payload(
 
             if msg.from_phone is None:
                 client_id = None
+                client = None
             else:
                 # `push_name` só nomeia o cliente quando o CONTATO escreveu: em mensagem
                 # espelhada do aparelho do dono (`from_me`), o `pushName` que a Evolution manda
@@ -168,6 +229,18 @@ def ingest_webhook_payload(
                 )
                 client_id = client.id
 
+            # A CONVERSA. Sem `chat_jid` (só o provider Meta, que não expõe JID quando nem o
+            # telefone veio) não há como agrupar — a mensagem entra sem conversa e o backfill
+            # legado da 0066 é quem a recolhe.
+            chat = (
+                _get_or_create_chat(
+                    db, tenant_id=tenant_id, chat_jid=msg.chat_jid, kind=msg.chat_kind,
+                    client=client, profile=profile,
+                )
+                if msg.chat_jid
+                else None
+            )
+
             # A autoria vem do provider (`key.fromMe` da Evolution), nunca é assumida: espelhar
             # como `in` uma mensagem que o dono escreveu no celular apaga o autor na tela de
             # Conversas E abre indevidamente a janela de 24h (`is_within_session_window` conta
@@ -177,6 +250,8 @@ def ingest_webhook_payload(
                 tenant_id=tenant_id, client_id=client_id, direction=direction, kind=msg.kind,
                 text_body=msg.text_body, media_status=MEDIA_STATUS_NONE,
                 wa_message_id=msg.wa_message_id, status="sent",
+                chat_id=chat.id if chat is not None else None,
+                sender_phone=msg.sender_phone, sender_name=msg.sender_name,
             )
             db.add(msg_row)
             # `default=_uuid` da coluna só materializa `msg_row.id` no FLUSH (não ao construir o
@@ -308,67 +383,96 @@ def process_pending_media(db: Session, *, tenant_id: str) -> int:
 # ── Timeline unificada + janela de 24h ──────────────────────────────────────
 
 
+def _display_title(chat: WhatsappChat) -> str:
+    """O nome que a tela mostra. Nunca inventa: quando não sabemos, DIZEMOS que não sabemos."""
+    if chat.title:
+        return chat.title
+    if chat.kind == CHAT_KIND_GROUP:
+        return "Grupo sem nome"
+    if chat.chat_jid == LEGACY_CHAT_JID:
+        return "Não identificados"
+    if chat.chat_jid.endswith("@s.whatsapp.net"):
+        return chat.chat_jid.split("@", 1)[0]  # o telefone é melhor rótulo que "desconhecido"
+    return "Contato não identificado"  # `@lid`: o que temos não é telefone, e não fingimos que é
+
+
+def _chat_phone(chat: WhatsappChat) -> str | None:
+    if chat.kind == CHAT_KIND_GROUP or not chat.chat_jid.endswith("@s.whatsapp.net"):
+        return None
+    return chat.chat_jid.split("@", 1)[0]
+
+
+def _preview(msg: WhatsappMessage, chat: WhatsappChat) -> str:
+    body = msg.text_body or f"[{msg.kind}]"
+    # Em grupo, "quem falou" é metade da informação — sem isso a lista vira uma pilha de frases
+    # soltas sem dono. Em conversa direta seria ruído: só existem duas pessoas ali.
+    if chat.kind == CHAT_KIND_GROUP and msg.direction == DIRECTION_IN and msg.sender_name:
+        return f"{msg.sender_name}: {body}"
+    return body
+
+
 def list_conversations(db: Session, tenant_id: str) -> list[dict]:
-    """Uma linha por cliente com pelo menos 1 WhatsappMessage, ordenada pela mais recente.
+    """Uma linha por CONVERSA com pelo menos 1 mensagem, ordenada pela mais recente.
+
+    Indexado por `whatsapp_chats`, não mais por cliente do CRM — é o que permite grupo existir
+    aqui (grupo não é cliente). Mensagem sem `chat_id` (legado que o backfill da 0066 não
+    alcançou) fica de fora: sem conversa não há o que abrir.
 
     `tenant_id` não filtra a query explicitamente: a sessão já chega escopada por RLS (mesma
     convenção de `crm_service.build_board`), é mantido no parâmetro por simetria com o resto do
     módulo (e uso futuro, ex.: auditoria)."""
+    chats = {c.id: c for c in db.scalars(select(WhatsappChat)).all()}
     last_msgs: dict[str, WhatsappMessage] = {}
     for msg in db.scalars(
         select(WhatsappMessage).order_by(WhatsappMessage.created_at)
     ).all():
-        last_msgs[msg.client_id] = msg  # a última iteração (ordem crescente) vence
-
-    states = {
-        s.client_id: s
-        for s in db.scalars(select(WhatsappConversationState)).all()
-    }
+        if msg.chat_id is not None:
+            last_msgs[msg.chat_id] = msg  # a última iteração (ordem crescente) vence
 
     out = []
-    for client_id, last_msg in last_msgs.items():
-        if client_id is None:
-            out.append({
-                "client_id": None,
-                "client_name": "Não identificados",
-                "client_phone": "",
-                "last_message_at": last_msg.created_at,
-                "last_message_preview": last_msg.text_body or f"[{last_msg.kind}]",
-                "unread": last_msg.direction == DIRECTION_IN,
-            })
+    for chat_id, last_msg in last_msgs.items():
+        chat = chats.get(chat_id)
+        if chat is None:
             continue
-        client = db.get(Client, client_id)
-        if client is None:
-            continue
-        state = states.get(client_id)
         unread = (
             last_msg.direction == DIRECTION_IN
-            and (
-                state is None
-                or state.last_read_at is None
-                or last_msg.created_at > state.last_read_at
-            )
+            and (chat.last_read_at is None or last_msg.created_at > chat.last_read_at)
         )
         out.append({
-            "client_id": client_id,
-            "client_name": client.name,
-            "client_phone": client.phone,
+            "chat_id": chat.id,
+            "kind": chat.kind,
+            "title": _display_title(chat),
+            "phone": _chat_phone(chat),
+            # Conversa direta já identificada aponta pro contato do CRM; grupo NUNCA aponta
+            # (decisão do fundador: grupo não entra no funil).
+            "client_id": chat.client_id,
             "last_message_at": last_msg.created_at,
-            "last_message_preview": last_msg.text_body or f"[{last_msg.kind}]",
+            "last_message_preview": _preview(last_msg, chat),
             "unread": unread,
         })
     out.sort(key=lambda c: c["last_message_at"], reverse=True)
     return out
 
 
-def get_timeline(db: Session, *, client_id: str) -> list[dict]:
-    """Mescla WhatsappMessage (conversa) + Notification(channel=whatsapp) do mesmo cliente
+def get_chat(db: Session, *, chat_id: str) -> WhatsappChat:
+    chat = db.get(WhatsappChat, chat_id)
+    if chat is None:
+        raise WhatsappInboxError("Conversa não encontrada", 404)
+    return chat
+
+
+def get_timeline(db: Session, *, chat_id: str) -> list[dict]:
+    """Mescla WhatsappMessage (a conversa) + Notification(channel=whatsapp) do cliente vinculado
     (avisos automáticos já existentes: cobrança, contrato, etc.) — leitura combinada, SEM
-    migrar nenhum dado antigo (ver design doc §2)."""
+    migrar nenhum dado antigo (ver design doc §2).
+
+    Os avisos automáticos só entram quando a conversa tem cliente: eles são endereçados a um
+    contato do CRM, e grupo não tem um."""
+    chat = get_chat(db, chat_id=chat_id)
     entries: list[dict] = []
     for msg in db.scalars(
         select(WhatsappMessage)
-        .where(WhatsappMessage.client_id == client_id)
+        .where(WhatsappMessage.chat_id == chat_id)
         .order_by(WhatsappMessage.created_at)
     ).all():
         entries.append({
@@ -378,30 +482,46 @@ def get_timeline(db: Session, *, client_id: str) -> list[dict]:
             "text_body": msg.text_body,
             "media_attachment_id": msg.media_attachment_id,
             "purpose_label": None,
+            # Quem falou — a tela usa isto para rotular a bolha em grupo. `None` em conversa
+            # direta (seria ruído: só há duas pessoas) e em mensagem nossa (a tela diz "Você").
+            "sender_name": (
+                msg.sender_name
+                if chat.kind == CHAT_KIND_GROUP and msg.direction == DIRECTION_IN
+                else None
+            ),
             "created_at": msg.created_at,
         })
-    for notif in db.scalars(
-        select(Notification)
-        .where(Notification.client_id == client_id, Notification.channel == "whatsapp")
-        .order_by(Notification.created_at)
-    ).all():
-        entries.append({
-            "source": "automated",
-            "direction": "out",
-            "kind": "text",
-            "text_body": notif.message,
-            "media_attachment_id": None,
-            "purpose_label": AUTOMATED_PURPOSE_LABEL,
-            "created_at": notif.created_at,
-        })
+    if chat.client_id:
+        for notif in db.scalars(
+            select(Notification)
+            .where(Notification.client_id == chat.client_id, Notification.channel == "whatsapp")
+            .order_by(Notification.created_at)
+        ).all():
+            entries.append({
+                "source": "automated",
+                "direction": "out",
+                "kind": "text",
+                "text_body": notif.message,
+                "media_attachment_id": None,
+                "purpose_label": AUTOMATED_PURPOSE_LABEL,
+                "sender_name": None,
+                "created_at": notif.created_at,
+            })
     entries.sort(key=lambda e: e["created_at"])
     return entries
 
 
-def is_within_session_window(db: Session, *, client_id: str) -> bool:
+def is_within_session_window(db: Session, *, chat_id: str) -> bool:
+    """A janela de 24h é uma regra da Meta (Cloud API): fora dela só template aprovado passa.
+
+    **Não se aplica a grupo** — a API oficial da Meta nem tem grupos, então a regra não existe
+    para eles; exigi-la ali só tornaria o grupo mudo por engano. Grupo responde sempre."""
+    chat = db.get(WhatsappChat, chat_id)
+    if chat is not None and chat.kind == CHAT_KIND_GROUP:
+        return True
     last_inbound = db.scalar(
         select(WhatsappMessage)
-        .where(WhatsappMessage.client_id == client_id, WhatsappMessage.direction == DIRECTION_IN)
+        .where(WhatsappMessage.chat_id == chat_id, WhatsappMessage.direction == DIRECTION_IN)
         .order_by(WhatsappMessage.created_at.desc())
         .limit(1)
     )
@@ -413,84 +533,76 @@ def is_within_session_window(db: Session, *, client_id: str) -> bool:
     return datetime.now(UTC) - created_at < SESSION_WINDOW
 
 
-def mark_read(db: Session, *, tenant_id: str, client_id: str) -> None:
+def mark_read(db: Session, *, tenant_id: str, chat_id: str) -> None:
     """Marca a conversa como lida (`last_read_at = agora`).
 
-    CHECK-THEN-ACT contra `uq_whatsapp_conv_state_tenant_client` (achado em smoke test manual:
-    clicar numa conversa dispara `/read` de mais de um lugar quase ao mesmo tempo — ex. a lista
-    de conversas E a thread aberta — e ambas as requests chegam aqui antes de qualquer uma
-    commitar). O SELECT abaixo pode devolver `None` para as duas; as duas tentam INSERIR a
-    mesma linha (tenant_id, client_id) e a que commita por último esbarra num
-    `IntegrityError` (UniqueViolation) não tratado, virando 500.
+    O estado de leitura vive na PRÓPRIA conversa desde a Onda 4. Antes vivia numa tabela à
+    parte (`whatsapp_conversation_states`) chaveada por `client_id` — que não consegue
+    representar leitura de grupo, pois grupo não tem cliente.
 
-    Mesma classe de corrida já resolvida em `crm_service._ordered_stages` (não a de
-    `create_stage`): a linha já existir NÃO é um conflito de negócio a rejeitar — só significa
-    que outra request venceu a corrida e já criou o estado; a ação correta é recuperar (rollback
-    + reconsultar) e atualizar essa linha, nunca deixar o IntegrityError escapar. Mesmo
-    `db.rollback()`-antes-de-reusar já documentado em `ingest_webhook_payload`/
-    `process_pending_media` acima: o commit que falhou deixa a Session "poisoned" e qualquer
-    uso posterior (inclusive o SELECT de recuperação) precisa do rollback explícito primeiro.
-    """
-    state = db.scalar(
-        select(WhatsappConversationState).where(
-            WhatsappConversationState.client_id == client_id
-        )
-    )
-    if state is None:
-        state = WhatsappConversationState(tenant_id=tenant_id, client_id=client_id)
-        db.add(state)
-    state.last_read_at = datetime.now(UTC)
+    Isso também dissolveu uma corrida que existia aqui: a tabela antiga precisava de
+    CHECK-THEN-ACT com recuperação de `IntegrityError`, porque clicar numa conversa dispara
+    `/read` de mais de um lugar quase ao mesmo tempo (a lista E a thread) e as duas requests
+    tentavam INSERIR a mesma linha. Agora não há INSERT nenhum: a linha do chat já existe (foi
+    criada no ingest), e duas requests concorrentes fazem dois UPDATEs do mesmo campo com
+    valores quase idênticos — a última vence, e vencer é o resultado correto."""
+    chat = get_chat(db, chat_id=chat_id)
+    chat.last_read_at = datetime.now(UTC)
     audit.record(
         db, tenant_id=tenant_id, actor="whatsapp:inbox",
-        action="whatsapp_inbox.conversation.mark_read", target=client_id,
+        action="whatsapp_inbox.conversation.mark_read", target=chat_id,
     )
-    try:
-        db.commit()
-    except IntegrityError:
-        db.rollback()  # desfaz nosso INSERT perdedor (e o audit.record da mesma transação) —
-        # a linha vencedora da corrida já está commitada por quem chegou primeiro; sem este
-        # rollback a Session fica poisoned e o SELECT de recuperação abaixo levantaria
-        # PendingRollbackError em vez de simplesmente reconsultar.
-        state = db.scalar(
-            select(WhatsappConversationState).where(
-                WhatsappConversationState.client_id == client_id
-            )
-        )
-        if state is None:
-            # Não deveria acontecer (o IntegrityError só dispara se a linha já existe pra
-            # alguém ter vencido a corrida), mas não escondemos um bug diferente atrás de um
-            # AttributeError em `state.last_read_at` — propaga o erro original.
-            raise
-        state.last_read_at = datetime.now(UTC)
-        audit.record(
-            db, tenant_id=tenant_id, actor="whatsapp:inbox",
-            action="whatsapp_inbox.conversation.mark_read", target=client_id,
-        )
-        db.commit()
+    db.commit()
 
 
 # ── Envio de resposta ────────────────────────────────────────────────────────
 
 
+def _destination(db: Session, chat: WhatsappChat) -> str:
+    """O endereço de volta da conversa.
+
+    Grupo responde no PRÓPRIO JID (`...@g.us`) — a Evolution aceita o JID inteiro no campo
+    `number`, mesmo caminho de um telefone. Conversa direta responde no telefone do contato
+    quando ele é conhecido; quando não é (`@lid`), o JID é o único endereço que temos.
+
+    Nunca devolve string vazia sem dizer por quê: um `to=""` viraria um envio silenciosamente
+    perdido, que é o pior desfecho possível para quem clicou em "enviar"."""
+    if chat.kind == CHAT_KIND_GROUP:
+        return chat.chat_jid
+    if chat.client_id:
+        client = db.get(Client, chat.client_id)
+        if client is not None and client.phone:
+            return client.phone
+    phone = _chat_phone(chat)
+    if phone:
+        return phone
+    if chat.chat_jid.startswith("legacy:") or chat.chat_jid.startswith("client:"):
+        # JIDs sintéticos criados pelo backfill da 0066 — não são endereço de nada.
+        raise WhatsappInboxError(
+            "Esta conversa não tem um destinatário conhecido (histórico antigo, sem telefone). "
+            "Responda pelo contato no CRM.", 422,
+        )
+    return chat.chat_jid
+
+
 def send_reply_text(
-    db: Session, *, tenant_id: str, actor: str, client_id: str, text: str
+    db: Session, *, tenant_id: str, actor: str, chat_id: str, text: str
 ) -> WhatsappMessage:
-    if not is_within_session_window(db, client_id=client_id):
+    chat = get_chat(db, chat_id=chat_id)
+    if not is_within_session_window(db, chat_id=chat_id):
         raise WhatsappInboxError(
             "Fora da janela de 24h — use um template aprovado para responder", 422
         )
-    client = db.get(Client, client_id)
-    if client is None:
-        raise WhatsappInboxError("Cliente não encontrado", 404)
+    to = _destination(db, chat)
     profile = settings_service.get_profile(db, tenant_id)
-    status = whatsapp.send_text(to=client.phone or "", text=text, profile=profile)
+    status = whatsapp.send_text(to=to, text=text, profile=profile)
     msg = WhatsappMessage(
-        tenant_id=tenant_id, client_id=client_id, direction=DIRECTION_OUT, kind=KIND_TEXT,
-        text_body=text, status=status,
+        tenant_id=tenant_id, client_id=chat.client_id, chat_id=chat.id,
+        direction=DIRECTION_OUT, kind=KIND_TEXT, text_body=text, status=status,
     )
     db.add(msg)
     audit.record(
-        db, tenant_id=tenant_id, actor=actor, action="whatsapp_inbox.reply.text", target=client_id
+        db, tenant_id=tenant_id, actor=actor, action="whatsapp_inbox.reply.text", target=chat_id
     )
     db.commit()
     db.refresh(msg)
@@ -498,16 +610,15 @@ def send_reply_text(
 
 
 def send_reply_media(
-    db: Session, *, tenant_id: str, actor: str, client_id: str, file_bytes: bytes,
+    db: Session, *, tenant_id: str, actor: str, chat_id: str, file_bytes: bytes,
     filename: str, mime_type: str, caption: str = "",
 ) -> WhatsappMessage:
-    if not is_within_session_window(db, client_id=client_id):
+    chat = get_chat(db, chat_id=chat_id)
+    if not is_within_session_window(db, chat_id=chat_id):
         raise WhatsappInboxError(
             "Fora da janela de 24h — use um template aprovado para responder", 422
         )
-    client = db.get(Client, client_id)
-    if client is None:
-        raise WhatsappInboxError("Cliente não encontrado", 404)
+    to = _destination(db, chat)
     if mime_type not in ALLOWED_TYPES:
         raise WhatsappInboxError("Tipo de arquivo não permitido para envio", 415)
     if not file_bytes:
@@ -523,11 +634,11 @@ def send_reply_media(
     except whatsapp.WhatsappApiError as exc:
         raise WhatsappInboxError(f"Falha ao subir mídia: {exc}", 502) from exc
     status = whatsapp.send_media(
-        to=client.phone or "", profile=profile, kind=kind, media_id=media_id, caption=caption,
+        to=to, profile=profile, kind=kind, media_id=media_id, caption=caption,
     )
     msg = WhatsappMessage(
-        tenant_id=tenant_id, client_id=client_id, direction=DIRECTION_OUT, kind=kind,
-        text_body=caption, status=status,
+        tenant_id=tenant_id, client_id=chat.client_id, chat_id=chat.id,
+        direction=DIRECTION_OUT, kind=kind, text_body=caption, status=status,
     )
     db.add(msg)
     db.flush()  # materializa msg.id na mesma transação, sem commitar — nada é durável ainda
@@ -543,7 +654,7 @@ def send_reply_media(
         raise WhatsappInboxError(f"Falha ao salvar anexo: {exc}", 502) from exc
     msg.media_attachment_id = attachment.id
     audit.record(
-        db, tenant_id=tenant_id, actor=actor, action="whatsapp_inbox.reply.media", target=client_id
+        db, tenant_id=tenant_id, actor=actor, action="whatsapp_inbox.reply.media", target=chat_id
     )
     db.commit()
     db.refresh(msg)
@@ -551,31 +662,34 @@ def send_reply_media(
 
 
 def send_reply_template(
-    db: Session, *, tenant_id: str, actor: str, client_id: str, template_id: str,
+    db: Session, *, tenant_id: str, actor: str, chat_id: str, template_id: str,
     variables: list[str],
 ) -> WhatsappMessage:
-    client = db.get(Client, client_id)
-    if client is None:
-        raise WhatsappInboxError("Cliente não encontrado", 404)
+    chat = get_chat(db, chat_id=chat_id)
+    if chat.kind == CHAT_KIND_GROUP:
+        # Template aprovado é um artefato da Cloud API da Meta, que não tem grupos. Grupo nunca
+        # precisa dele (a janela de 24h não se aplica) e nunca conseguiria usá-lo.
+        raise WhatsappInboxError("Grupo não usa template — responda com uma mensagem", 422)
+    to = _destination(db, chat)
     template = db.get(WhatsappTemplate, template_id)
     if template is None or template.status != STATUS_APPROVED:
         raise WhatsappInboxError("Template não encontrado ou ainda não aprovado pela Meta", 422)
     profile = settings_service.get_profile(db, tenant_id)
     status = whatsapp.send_template(
-        to=client.phone or "", profile=profile, template_name=template.name,
+        to=to, profile=profile, template_name=template.name,
         language=template.language, variables=variables,
     )
     rendered = template.body_text
     for i, value in enumerate(variables, start=1):
         rendered = rendered.replace(f"{{{{{i}}}}}", value)
     msg = WhatsappMessage(
-        tenant_id=tenant_id, client_id=client_id, direction=DIRECTION_OUT, kind=KIND_TEXT,
-        text_body=rendered, status=status,
+        tenant_id=tenant_id, client_id=chat.client_id, chat_id=chat.id,
+        direction=DIRECTION_OUT, kind=KIND_TEXT, text_body=rendered, status=status,
     )
     db.add(msg)
     audit.record(
         db, tenant_id=tenant_id, actor=actor, action="whatsapp_inbox.reply.template",
-        target=client_id,
+        target=chat_id,
     )
     db.commit()
     db.refresh(msg)

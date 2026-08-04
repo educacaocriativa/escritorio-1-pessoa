@@ -1,7 +1,7 @@
 import type {
   ConversationSummary, TimelineEntry, WhatsappTemplate,
 } from "@e1p/shared-types";
-import { Paperclip, Send } from "lucide-react";
+import { Paperclip, Send, Users } from "lucide-react";
 import { Fragment, useCallback, useEffect, useRef, useState } from "react";
 import { api, apiErrorMessage } from "../../lib/api";
 
@@ -62,15 +62,20 @@ export default function ConversasPage() {
         ) : (
           conversations.map((c) => (
             <button
-              key={c.client_id}
-              onClick={() => setSelected(c.client_id)}
+              key={c.chat_id}
+              onClick={() => setSelected(c.chat_id)}
               className={`block w-full border-b border-neutral-50 px-4 py-3 text-left hover:bg-neutral-50 ${
-                selected === c.client_id ? "bg-primary-50" : ""
+                selected === c.chat_id ? "bg-primary-50" : ""
               }`}
             >
               <div className="flex items-center justify-between gap-2">
-                <span className="truncate text-sm font-semibold text-neutral-800">
-                  {c.client_name}
+                <span className="flex min-w-0 items-center gap-1.5">
+                  {c.kind === "group" && (
+                    <Users size={13} className="shrink-0 text-neutral-400" aria-label="Grupo" />
+                  )}
+                  <span className="truncate text-sm font-semibold text-neutral-800">
+                    {c.title}
+                  </span>
                 </span>
                 <span className="flex shrink-0 items-center gap-1.5 text-[11px] text-neutral-400">
                   {listStamp(c.last_message_at)}
@@ -88,8 +93,8 @@ export default function ConversasPage() {
         {selected ? (
           <ConversationThread
             key={selected}
-            clientId={selected}
-            client={conversations.find((c) => c.client_id === selected) ?? null}
+            chatId={selected}
+            chat={conversations.find((c) => c.chat_id === selected) ?? null}
             onSent={loadConversations}
           />
         ) : (
@@ -103,8 +108,8 @@ export default function ConversasPage() {
 }
 
 function ConversationThread({
-  clientId, client, onSent,
-}: { clientId: string; client: ConversationSummary | null; onSent: () => void }) {
+  chatId, chat, onSent,
+}: { chatId: string; chat: ConversationSummary | null; onSent: () => void }) {
   const [timeline, setTimeline] = useState<TimelineEntry[]>([]);
   const [withinWindow, setWithinWindow] = useState(true);
   const [approvedTemplates, setApprovedTemplates] = useState<WhatsappTemplate[]>([]);
@@ -115,8 +120,8 @@ function ConversationThread({
 
   const load = useCallback(async () => {
     const [tl, win] = await Promise.all([
-      api.get<TimelineEntry[]>(`/whatsapp-conversations/${clientId}/timeline`),
-      api.get<{ within_session_window: boolean }>(`/whatsapp-conversations/${clientId}/window`),
+      api.get<TimelineEntry[]>(`/whatsapp-conversations/${chatId}/timeline`),
+      api.get<{ within_session_window: boolean }>(`/whatsapp-conversations/${chatId}/window`),
     ]);
     setTimeline(tl.data);
     setWithinWindow(win.data.within_session_window);
@@ -126,8 +131,8 @@ function ConversationThread({
       });
       setApprovedTemplates(data);
     }
-    await api.post(`/whatsapp-conversations/${clientId}/read`);
-  }, [clientId]);
+    await api.post(`/whatsapp-conversations/${chatId}/read`);
+  }, [chatId]);
 
   useEffect(() => {
     load();
@@ -164,13 +169,13 @@ function ConversationThread({
       Object.values(imageUrls).forEach((url) => URL.revokeObjectURL(url));
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [clientId]);
+  }, [chatId]);
 
   async function sendText() {
     if (!text.trim()) return;
     setError(null);
     try {
-      await api.post(`/whatsapp-conversations/${clientId}/messages/text`, { text });
+      await api.post(`/whatsapp-conversations/${chatId}/messages/text`, { text });
       setText("");
       await load();
       onSent();
@@ -191,7 +196,7 @@ function ConversationThread({
     const form = new FormData();
     form.append("file", file);
     try {
-      await api.post(`/whatsapp-conversations/${clientId}/messages/media`, form, {
+      await api.post(`/whatsapp-conversations/${chatId}/messages/media`, form, {
         headers: { "Content-Type": "multipart/form-data" },
       });
       await load();
@@ -204,12 +209,13 @@ function ConversationThread({
   return (
     <div className="flex h-full flex-col">
       <div className="border-b border-neutral-100 px-4 py-3">
-        <p className="text-sm font-semibold text-neutral-800">
-          {client?.client_name ?? "Conversa"}
+        <p className="flex items-center gap-1.5 text-sm font-semibold text-neutral-800">
+          {chat?.kind === "group" && <Users size={14} className="text-neutral-400" />}
+          {chat?.title ?? "Conversa"}
         </p>
-        {client?.client_phone && (
-          <p className="text-xs text-neutral-400">{client.client_phone}</p>
-        )}
+        <p className="text-xs text-neutral-400">
+          {chat?.kind === "group" ? "Grupo" : chat?.phone}
+        </p>
       </div>
       <div className="flex-1 space-y-2 overflow-y-auto p-4">
         {timeline.map((entry, i) => {
@@ -242,6 +248,14 @@ function ConversationThread({
               >
                 {tone === "auto" && (
                   <p className="mb-0.5 text-xs font-semibold">🤖 {entry.purpose_label}</p>
+                )}
+                {/* Em grupo, sem isto todas as bolhas recebidas são anônimas — não dá pra saber
+                    quem falou. O backend só manda `sender_name` quando ele acrescenta algo:
+                    nunca em conversa direta, nunca numa mensagem nossa. */}
+                {entry.sender_name && (
+                  <p className="mb-0.5 text-xs font-semibold text-primary-600">
+                    {entry.sender_name}
+                  </p>
                 )}
                 {entry.kind === "image" && entry.media_attachment_id && (
                   imageUrls[entry.media_attachment_id] ? (
@@ -324,7 +338,7 @@ function ConversationThread({
           </div>
         ) : (
           <TemplateReplyBox
-            clientId={clientId}
+            chatId={chatId}
             templates={approvedTemplates}
             onSent={async () => {
               await load();
@@ -338,8 +352,8 @@ function ConversationThread({
 }
 
 function TemplateReplyBox({
-  clientId, templates, onSent,
-}: { clientId: string; templates: WhatsappTemplate[]; onSent: () => void }) {
+  chatId, templates, onSent,
+}: { chatId: string; templates: WhatsappTemplate[]; onSent: () => void }) {
   const [templateId, setTemplateId] = useState("");
   const [variables, setVariables] = useState<string[]>([]);
   const [error, setError] = useState<string | null>(null);
@@ -348,7 +362,7 @@ function TemplateReplyBox({
   async function send() {
     setError(null);
     try {
-      await api.post(`/whatsapp-conversations/${clientId}/messages/template`, {
+      await api.post(`/whatsapp-conversations/${chatId}/messages/template`, {
         template_id: templateId, variables,
       });
       setTemplateId("");
