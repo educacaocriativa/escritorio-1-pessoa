@@ -54,7 +54,7 @@ class Payable(Base, TenantMixin, TimestampMixin):
     __tablename__ = "payables"
 
     # Índice de leitura da Regra da Origem (Story 8.9): *"o que saiu desta conta?"*. Declarado aqui
-    # e não com `index=True` na coluna porque a migration 0061 o cria COMPOSTO com `tenant_id` na
+    # e não com `index=True` na coluna porque a migration 0064 o cria COMPOSTO com `tenant_id` na
     # frente — e schema declarado divergindo do schema migrado é como o SQLite dos unitários passa
     # a exercitar um banco que a produção não tem.
     __table_args__ = (
@@ -101,7 +101,7 @@ class Payable(Base, TenantMixin, TimestampMixin):
     agenda_event_id: Mapped[str | None] = mapped_column(String(36), nullable=True)
     external_ref: Mapped[str | None] = mapped_column(String(64), nullable=True)
 
-    # ── A Regra da Origem (Story 8.9, migration 0061, design Onda 2 §3.3) ────────────────────
+    # ── A Regra da Origem (Story 8.9, migration 0064, design Onda 2 §3.3) ────────────────────
     # As duas colunas nascem NULL e **nenhum caminho de produção as escreve nesta story**: a Story
     # 8.9 entrega o contrato, e a **8.12** liga `apply_paid` a ele. Sem FK dura (padrão do
     # projeto, igual a `cost_center_id`/`chart_account_id`): a integridade é validada no service,

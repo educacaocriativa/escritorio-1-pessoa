@@ -1,18 +1,28 @@
 """A Regra da Origem: chave de origem + os ponteiros de negócio (plano 3) — Story 8.9
 
-Revision ID: 0061
-Revises: 0060
+Revision ID: 0064
+Revises: 0063
 Create Date: 2026-07-30
 
-Primeiro elo da **Onda 2** do Epic 8 (a origem do movimento bancário). down_revision=**0060**.
+Primeiro elo da **Onda 2** do Epic 8 (a origem do movimento bancário).
 
-  NOTA DE ENCADEAMENTO: o head foi CONFIRMADO programaticamente no momento da implementação
-  (`ScriptDirectory.get_heads() == ['0060']`, 2026-07-30), não deduzido do design nem da story —
-  mesma disciplina da `0058`/`0059`/`0060` e a lição escrita na `0049_investments.py`. **O epic não
-  fixa número; o head real é lei.** Encadear num revision antigo cria MÚLTIPLOS heads,
-  `alembic upgrade head` falha com "multiple heads" e a suíte `rls_e2e` INTEIRA cai junto — não só
-  esta story. A Story 8.18 (transferências) também tem migration própria e o epic §6.1 manda
-  mergeá-la **por último**, exatamente para não disputar head com esta.
+  ⚠️ **RENUMERADA de `0061` para `0064` no merge do PR da Onda 2** (2026-08-04). No momento em que
+  esta migration foi escrita, `ScriptDirectory.get_heads() == ['0060']` era verdade — mas uma frente
+  paralela (WhatsApp Evolution, PRs #62-#70) numerou `0061_whatsapp_provider_session` e
+  `0062_notification_purpose_expiry` de forma independente e chegou a `main` primeiro. O git mergeou
+  os arquivos sem conflito (nomes de arquivo diferentes) — a colisão era **semântica**
+  (`revision="0061"` duplicado) e só apareceu no CI, como "multiple heads". Como as migrations de
+  `main` provavelmente já rodaram em produção pela outra frente, a renumeração ficou do lado de cá.
+  **A lição não muda:** o head real é lei, não o número que o epic ou a story previa; só que agora a
+  verificação precisa ser feita de novo a cada merge de `main`, não só uma vez na escrita.
+
+  NOTA DE ENCADEAMENTO ORIGINAL: o head foi CONFIRMADO programaticamente no momento da
+  implementação (`ScriptDirectory.get_heads() == ['0060']`, 2026-07-30), não deduzido do design nem
+  da story — mesma disciplina da `0058`/`0059`/`0060` e a lição escrita na `0049_investments.py`.
+  Encadear num revision antigo cria MÚLTIPLOS heads, `alembic upgrade head` falha com "multiple
+  heads" e a suíte `rls_e2e` INTEIRA cai junto — não só esta story. A Story 8.18 (transferências)
+  também tem migration própria e o epic §6.1 manda mergeá-la **por último**, exatamente para não
+  disputar head com esta.
 
 Estritamente ADITIVA: **5 `ADD COLUMN` nullable e 2 `CREATE INDEX`**. Nenhuma tabela é criada,
 nenhuma policy de RLS é tocada (as três tabelas envolvidas já têm RLS `FORCE` — `payables` na 0011,
@@ -72,8 +82,8 @@ from collections.abc import Sequence
 import sqlalchemy as sa
 from alembic import op
 
-revision: str = "0061"
-down_revision: str | None = "0060"
+revision: str = "0064"
+down_revision: str | None = "0063"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 

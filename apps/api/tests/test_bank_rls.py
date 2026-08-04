@@ -954,8 +954,8 @@ def test_corte_de_data_sob_rls_cross_tenant(app_url: str) -> None:
 # > arquivo de testcontainer"*), a 8.5 seguiu-a e registrou o mesmo desvio, e a 8.9 é a terceira a
 # > chegar. Seguimos o padrão real do repositório; registrado em Completion Notes.
 #
-# A fixture `app_url` passa a exercitar também a migration **0061** (a coluna `origin_id`, as duas
-# colunas de `payables` e de `charges` e os dois índices novos) na cadeia …→0059→0060→**0061**.
+# A fixture `app_url` passa a exercitar também a migration **0064** (a coluna `origin_id`, as duas
+# colunas de `payables` e de `charges` e os dois índices novos) na cadeia …→0059→0060→0063→**0064**.
 
 
 def _sync_origem(app_url: str, tenant_id: str, **over) -> str | None:
@@ -984,7 +984,7 @@ def _sync_origem(app_url: str, tenant_id: str, **over) -> str | None:
 def test_indice_unico_de_origem_no_postgres_real(app_url: str) -> None:
     """**AC2 — as duas metades do índice único PARCIAL, no banco que a produção roda.**
 
-    Esta é a prova autoritativa: é aqui que a migration 0061 cria o índice de verdade, com o
+    Esta é a prova autoritativa: é aqui que a migration 0064 cria o índice de verdade, com o
     `WHERE origin_id IS NOT NULL` do dialeto Postgres. O SQLite dos unitários exercita um
     equivalente (`sqlite_where`), mas quem decide em produção é este.
 
@@ -1118,7 +1118,7 @@ def test_sync_origin_movement_isolamento_cross_tenant(app_url: str) -> None:
             == 100_000 - 120_00
         )
 
-    # ── (3) As COLUNAS NOVAS de payables/charges também não vazam (migration 0061) ───────────
+    # ── (3) As COLUNAS NOVAS de payables/charges também não vazam (migration 0064) ───────────
     with _session_for(app_url, tenant_b) as sb:
         p_b = Payable(
             tenant_id=tenant_b, description="conta de B", category="Geral", supplier="Forn",
@@ -1660,7 +1660,7 @@ def test_promocao_de_cobrancas_agendadas_isolamento_cross_tenant(app_url: str) -
         )
 
 
-# ── Story 8.18 — `bank_transfers`: a migration 0062 e o FORCE RLS da tabela nova ───────────────
+# ── Story 8.18 — `bank_transfers`: a migration 0065 e o FORCE RLS da tabela nova ───────────────
 #
 # > **[@dev 8.18] Desvio documentado das File Locations da Story 8.18.** A story previa um arquivo
 # > novo, `tests/test_bank_transfers_rls.py`. Ele exigiria um **segundo** `PostgresContainer` (a
@@ -1669,12 +1669,12 @@ def test_promocao_de_cobrancas_agendadas_isolamento_cross_tenant(app_url: str) -
 # > topo deste arquivo (*"acrescente casos AQUI"*) é a mais recente e a mais informada, e a 8.5 já
 # > abriu o precedente com a mesma justificativa. Divergência registrada em Completion Notes.
 #
-# ⚠️ **É aqui — e SÓ aqui — que a migration 0062 é de fato exercida.** O SQLite dos testes
+# ⚠️ **É aqui — e SÓ aqui — que a migration 0065 é de fato exercida.** O SQLite dos testes
 # unitários cria a tabela por `Base.metadata.create_all` e **não conhece RLS**: lá `FORCE ROW LEVEL
 # SECURITY` e a policy `tenant_isolation` simplesmente não existem, e um `WITH CHECK` esquecido
 # passaria verde em 1400 testes. `_run_migrations_as_app` roda a cadeia inteira como o papel
 # NÃO-superusuário `e1p_app` (superusuário faz bypass **mesmo com FORCE**), então um
-# `down_revision` errado na 0062 aparece aqui como "multiple heads" e derruba o job inteiro.
+# `down_revision` errado na 0065 aparece aqui como "multiple heads" e derruba o job inteiro.
 
 
 def test_bank_transfer_isolamento_cross_tenant(app_url: str) -> None:
@@ -1867,7 +1867,7 @@ def test_delete_de_transferencia_apaga_as_DUAS_pernas_no_postgres_real(app_url: 
 
 
 def test_a_tabela_nova_tem_FORCE_RLS_e_a_policy_com_USING_e_WITH_CHECK(app_url: str) -> None:
-    """**Asserção ESTRUTURAL sobre a migration 0062** — lida do catálogo do Postgres.
+    """**Asserção ESTRUTURAL sobre a migration 0065** — lida do catálogo do Postgres.
 
     Os testes acima medem o comportamento; este mede a **forma**, e as duas coisas falham de jeitos
     diferentes. Sem `FORCE`, o papel dono da tabela (`e1p_app`, que é quem roda a app) faz bypass da
@@ -1883,7 +1883,7 @@ def test_a_tabela_nova_tem_FORCE_RLS_e_a_policy_com_USING_e_WITH_CHECK(app_url: 
                     "WHERE relname = 'bank_transfers'"
                 )
             ).one()
-            assert rls is True, "a 0062 não habilitou ROW LEVEL SECURITY em bank_transfers"
+            assert rls is True, "a 0065 não habilitou ROW LEVEL SECURITY em bank_transfers"
             assert force is True, (
                 "faltou FORCE ROW LEVEL SECURITY: o papel DONO da tabela ignoraria a policy, e a "
                 "app roda exatamente como esse papel (`CLAUDE.md` Regra de Ouro nº 1)"

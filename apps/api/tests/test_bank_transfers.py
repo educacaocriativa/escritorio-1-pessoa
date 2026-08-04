@@ -25,7 +25,7 @@ A **Regra da Neutralidade** (a DRE/Lucratividade/Projeção não se movem) tem a
 
 RLS/isolamento cross-tenant **não** é exercido aqui (SQLite — ver `conftest.py`): no banco dos
 testes unitários todas as linhas são visíveis a todas as sessões. Isso vive em `test_bank_rls.py`
-(`rls_e2e`), que esta story estendeu — é lá, e só lá, que a migration 0062 e o `FORCE ROW LEVEL
+(`rls_e2e`), que esta story estendeu — é lá, e só lá, que a migration 0065 e o `FORCE ROW LEVEL
 SECURITY` da tabela nova são de fato exercidos.
 """
 from __future__ import annotations

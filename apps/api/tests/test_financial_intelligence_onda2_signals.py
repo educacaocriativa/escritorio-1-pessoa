@@ -28,6 +28,8 @@ import pathlib
 import re
 from datetime import date
 
+import pytest
+
 from app.modules.financial_intelligence.engine import (
     _DEBITO_MATCH_DIVISOR,
     _DEBITO_MATCH_FLOOR_CENTS,
@@ -53,15 +55,6 @@ ENGINE_PATH = (
     / "modules"
     / "financial_intelligence"
     / "engine.py"
-)
-DIAGNOSTICO_TS = (
-    pathlib.Path(__file__).resolve().parents[3]
-    / "apps"
-    / "web"
-    / "src"
-    / "features"
-    / "financeiro"
-    / "diagnostico.ts"
 )
 
 
@@ -369,9 +362,23 @@ def test_o_rotulo_do_frontend_tambem_perdeu_o_adjetivo() -> None:
 
     Varredura do arquivo real do frontend a partir do backend, de propósito: a renomeação atravessa
     as duas pontas e um teste em cada lado deixaria a metade não coberta passar sozinha.
+
+    Pula (em vez de falhar) quando `apps/web` não está presente: o backend precisa poder rodar
+    sozinho num container sem o frontend (mesmo padrão de
+    `test_bank_contagem_dupla.py::test_vocabulario_sugerido_bate_com_a_ui`). O cálculo do caminho
+    fica DENTRO da função, não em escopo de módulo: `parents[3]` levanta `IndexError` — não apenas
+    "arquivo ausente" — dentro da imagem de produção, onde o contexto de build é só `apps/api` e a
+    árvore de diretórios é mais rasa do que no checkout completo.
     """
-    assert DIAGNOSTICO_TS.exists(), DIAGNOSTICO_TS
-    bruto = DIAGNOSTICO_TS.read_text(encoding="utf-8")
+    parents = pathlib.Path(__file__).resolve().parents
+    if len(parents) <= 3:
+        pytest.skip("apps/web não está presente nesta árvore")
+    diagnostico_ts = (
+        parents[3] / "apps" / "web" / "src" / "features" / "financeiro" / "diagnostico.ts"
+    )
+    if not diagnostico_ts.exists():
+        pytest.skip("apps/web não está presente nesta árvore")
+    bruto = diagnostico_ts.read_text(encoding="utf-8")
     assert '"Saídas"' in bruto, "o rótulo de `debito_nao_confirmado` tem de ser 'Saídas'"
     # Só as STRINGS do código, e nunca os comentários nem os identificadores. O comentário precisa
     # poder citar a palavra proibida para explicar a proibição (mesma separação docstring × código

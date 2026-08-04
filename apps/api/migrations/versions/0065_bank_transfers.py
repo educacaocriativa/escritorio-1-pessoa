@@ -1,18 +1,23 @@
 """bank_transfers: transferência entre contas próprias (duas pernas, um lançamento) — Story 8.18
 
-Revision ID: 0062
-Revises: 0061
+Revision ID: 0065
+Revises: 0064
 Create Date: 2026-08-03
 
-Segundo elo da **Onda 2** do Epic 8 (a origem do movimento bancário). down_revision=**0061**.
+Segundo elo da **Onda 2** do Epic 8 (a origem do movimento bancário).
 
-  NOTA DE ENCADEAMENTO: o head foi CONFIRMADO programaticamente no momento da implementação
-  (`ScriptDirectory.get_heads() == ['0061']`, 2026-08-03), não lido do texto da story (que ainda
-  citava **0060**, o head de antes da 8.9) nem do epic — mesma disciplina da `0058`/`0059`/`0060`/
-  `0061` e a lição escrita na `0049_investments.py`. **O epic não fixa número; o head real é lei.**
-  Encadear num revision antigo cria MÚLTIPLOS heads, `alembic upgrade head` falha com
-  "multiple heads" e a suíte `rls_e2e` INTEIRA cai junto — não só esta story. O epic §6.1 manda
-  mergear esta story **por último** exatamente para não disputar head com a 8.9 (a 0061).
+  ⚠️ **RENUMERADA de `0062` para `0065` no merge do PR da Onda 2** (2026-08-04), junto com a
+  renumeração de `0061_origin_movement` → `0064` (ver a nota completa naquele arquivo). Mesma causa:
+  a frente de WhatsApp Evolution (PRs #62-#70) numerou `0062_notification_purpose_expiry` de forma
+  independente e chegou a `main` primeiro. `down_revision` passa a ser `0064` (a 8.9 renumerada).
+
+  NOTA DE ENCADEAMENTO ORIGINAL: o head foi CONFIRMADO programaticamente no momento da
+  implementação (`ScriptDirectory.get_heads() == ['0061']`, 2026-08-03), não lido do texto da story
+  (que ainda citava **0060**, o head de antes da 8.9) nem do epic — mesma disciplina da
+  `0058`/`0059`/`0060`/`0061` e a lição escrita na `0049_investments.py`. Encadear num revision
+  antigo cria MÚLTIPLOS heads, `alembic upgrade head` falha com "multiple heads" e a suíte `rls_e2e`
+  INTEIRA cai junto — não só esta story. O epic §6.1 manda mergear esta story **por último**
+  exatamente para não disputar head com a 8.9.
 
 Estritamente ADITIVA: cria UMA tabela nova (com RLS `FORCE`). NÃO altera nenhuma tabela existente
 e **ZERO linhas são lidas ou escritas**: sem `UPDATE`, sem `SELECT`, sem backfill.
@@ -60,8 +65,8 @@ from collections.abc import Sequence
 import sqlalchemy as sa
 from alembic import op
 
-revision: str = "0062"
-down_revision: str | None = "0061"
+revision: str = "0065"
+down_revision: str | None = "0064"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 

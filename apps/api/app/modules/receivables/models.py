@@ -91,7 +91,7 @@ class Charge(Base, TenantMixin, TimestampMixin):
     gateway_charge_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
     gateway_status_raw: Mapped[str | None] = mapped_column(String(40), nullable=True)
 
-    # ── A Regra da Origem (Story 8.9, migration 0061, design Onda 2 §3.4) ────────────────────
+    # ── A Regra da Origem (Story 8.9, migration 0064, design Onda 2 §3.4) ────────────────────
     # As duas colunas nascem NULL e **nenhum caminho de produção as escreve nesta story**: a Story
     # 8.9 entrega o contrato, e a **8.15** (recebimento fora do trilho, `settle_off_rail`) liga o
     # fluxo a ele. Sem FK dura (padrão do projeto, igual a `client_id`).
