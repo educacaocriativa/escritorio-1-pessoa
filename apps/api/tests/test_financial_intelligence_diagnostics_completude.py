@@ -23,7 +23,7 @@ import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy.orm import Session
 
-from app.modules.financial_intelligence import ai_narrator, diagnostics
+from app.modules.financial_intelligence import ai_narrator, diagnostics, engine
 from app.modules.payables import service as payables_service
 from app.modules.payables.models import Payable
 from app.modules.receivables.models import Charge
@@ -52,14 +52,21 @@ def headers(client: TestClient) -> dict[str, str]:
     return {"Authorization": f"Bearer {token}"}
 
 
-def _account(client: TestClient, headers, *, name: str, opening: int = 1_000_000) -> dict:
+def _account(
+    client: TestClient,
+    headers,
+    *,
+    name: str,
+    opening: int = 1_000_000,
+    opening_date: date = START,
+) -> dict:
     resp = client.post(
         "/bank/accounts",
         json={
             "name": name,
             "kind": "checking",
             "opening_balance_cents": opening,
-            "opening_date": START.isoformat(),
+            "opening_date": opening_date.isoformat(),
         },
         headers=headers,
     )
@@ -120,7 +127,13 @@ def test_conta_sem_checkpoint_diz_que_nao_sabe_sem_inventar_numero(
     assert len(sinais) == 1, f"1 conta = no máximo 1 🟡 de 'não sei': {sinais}"
     assert sinais[0]["level"] == "amarelo"
     assert "Itaú PJ" in sinais[0]["explanation"]
-    assert "nunca confirmado" in sinais[0]["explanation"]
+    assert "sem comparação avaliável no período" in sinais[0]["explanation"]
+    # Story 8.19 — o motivo "nunca confirmado" SAIU: a conta tem saldo de partida declarado no
+    # cadastro (`opening_date` = START, 20 dias atrás), então o bloco 4 conta 20 e não `None`. O 🟡
+    # continua saindo, e continua sendo UM só — muda o motivo escrito nele, não o sinal.
+    assert "nunca confirmado" not in sinais[0]["explanation"], (
+        "o diagnóstico voltou a dizer 'nunca confirmado' a quem informou o saldo de abertura"
+    )
     # `None` não virou zero em lugar nenhum do caminho: nada afirma que está batendo.
     assert "batendo" not in sinais[0]["explanation"]
 
@@ -217,6 +230,79 @@ def test_saldo_declarado_na_data_de_abertura_nao_produz_verde_de_completude(
     )
 
 
+# ── Story 8.19 — o 🟢 NÃO nasce do bloco 4 passar a contar a partir da abertura ───────────────
+#
+# **O teste de maior valor da Story 8.19**, porque é o único modo de falha caro que ela poderia
+# introduzir. O AC1 troca `dias_desde_ultima_conferencia` de `None` para um número, e o `todas_
+# batendo` de `engine._completeness_signals` testa `dias is not None and dias <= 45` — de fora, isso
+# parece exatamente o passo que libera o verde. **Não libera**: a guarda que segura o 🟢 é
+# `divergencia_cents is not None`, e essa continua `None` sem checkpoint na janela.
+#
+# É a mesma família do 🟢 falso que a Story 8.20 fechou (`test_saldo_declarado_na_data_de_abertura_
+# nao_produz_verde_de_completude`, acima), e a diferença entre os dois cenários é o que prova que
+# esta story não o reabre: lá **havia** checkpoint e o defeito era a COMPARAÇÃO ser tautológica;
+# aqui não há checkpoint nenhum, `derived_balance` nem é chamada, e o saldo de abertura entra só
+# como DATA.
+
+
+def test_conta_recem_cadastrada_sem_checkpoint_nao_produz_verde_de_completude(
+    client: TestClient, headers
+) -> None:
+    """Conta aberta ONTEM, zero checkpoint: 🟡 e **nenhum** 🟢 — no dia seguinte ao cadastro.
+
+    Com `dias = 1` (bem dentro dos 45 de frescor), os dois últimos termos do `todas_batendo` são
+    verdadeiros. Se o verde saísse daqui, todo tenant novo receberia *"Está tudo batendo"* na
+    primeira semana de uso, sobre um razão bancário vazio.
+    """
+    _account(client, headers, name="C6 PJ", opening=0, opening_date=TODAY - timedelta(days=1))
+
+    sinais = _completude(_diagnostics(client, headers))
+    assert [s for s in sinais if s["level"] == "verde"] == [], (
+        "o 🟢 'está tudo batendo' apareceu numa conta que nunca foi conferida — o bloco 4 passar a "
+        "contar a partir da abertura não pode virar lastro para o bloco 1"
+    )
+    assert len(sinais) == 1, f"1 conta = no máximo 1 🟡 de 'não sei': {sinais}"
+    assert sinais[0]["level"] == "amarelo"
+    assert "C6 PJ" in sinais[0]["explanation"]
+    assert "sem comparação avaliável no período" in sinais[0]["explanation"]
+    # O motivo "nunca confirmado" saiu: ela FOI confirmada, no cadastro, há 1 dia.
+    assert "nunca confirmado" not in sinais[0]["explanation"]
+
+
+def test_o_verde_e_segurado_pela_divergencia_e_nao_pelo_contador_de_dias() -> None:
+    """A **verificação de que o teste acima não é vazio** — feita sem mutar código de produção.
+
+    O cenário do teste anterior, reproduzido como entrada pura do motor: `divergencia_cents=None`
+    (sem checkpoint) e `dias=1` (abertura de ontem). Removida a guarda `divergencia_cents is not
+    None` do `todas_batendo`, os três termos restantes ficam **todos verdadeiros** — e o 🟢 sairia.
+    É exatamente essa guarda, e só ela, que segura o verde no cenário desta story.
+
+    O predicado abaixo é uma **cópia declarada** do `todas_batendo` de `engine.py` sem o primeiro
+    termo: replicá-lo aqui prova a mesma coisa que editar o arquivo de produção e reverter, sem o
+    risco de a reversão falhar e o gate ficar morto no repositório.
+    """
+    conta = engine.CompletenessAccountInput(
+        account_name="C6 PJ", divergencia_cents=None, tolerancia_cents=5_000,
+        dias_desde_ultima_conferencia=1,
+    )
+    entrada = engine.CompletenessInput(contas=[conta])
+
+    # Com a guarda (o código real): nenhum verde.
+    niveis = [s.level for s in engine._completeness_signals(entrada)]
+    assert "verde" not in niveis and niveis == ["amarelo"]
+
+    # Sem a guarda (a mutação): os termos restantes passam todos — o verde sairia.
+    sem_a_guarda = (
+        abs(conta.divergencia_cents or 0) <= conta.tolerancia_cents
+        and conta.dias_desde_ultima_conferencia is not None
+        and conta.dias_desde_ultima_conferencia <= engine._COMPLETENESS_STALE_DAYS
+    )
+    assert sem_a_guarda, (
+        "o teste acima é VAZIO: sem a guarda de `divergencia_cents` o cenário já não produziria "
+        "verde por outro motivo, então ele não estaria provando nada sobre esta story"
+    )
+
+
 # ── IV4 (d) — sem `ANTHROPIC_API_KEY`: os sinais são os mesmos ────────────────────────────────
 
 
@@ -260,7 +346,9 @@ def test_completeness_mapeia_uma_entrada_por_conta_sem_agregar(
     assert itau.divergencia_cents == 0 and itau.dias_desde_ultima_conferencia == 2
     # A conta sem checkpoint fica NÃO AVALIÁVEL — e não "zero, batendo".
     assert bradesco.divergencia_cents is None
-    assert bradesco.dias_desde_ultima_conferencia is None
+    # Story 8.19 — o bloco 4 dela conta a partir da DATA DE ABERTURA (START), não `None`. O bloco 1
+    # (a linha acima) não se moveu: declaração e comparação são coisas diferentes.
+    assert bradesco.dias_desde_ultima_conferencia == (END - START).days == 20
     # A banda vem PRONTA da 8.5 (max(R$ 50; 0,5% de R$ 10.000) = R$ 50,00).
     assert itau.tolerancia_cents == 5_000
     # AC6 — dormente na Onda 1, e é 0 LITERAL (nunca uma aproximação por "movimentos unmatched").
