@@ -16,6 +16,7 @@ import logging
 import httpx
 
 from app.config import settings
+from app.core.whatsapp.inbound import InboundMessage
 
 logger = logging.getLogger("e1p.whatsapp")
 
@@ -270,3 +271,39 @@ def send_media(
     except Exception:
         logger.exception("[whatsapp:failed] mídia para=%s kind=%s", to, kind)
         return "failed"
+
+
+def parse_inbound(payload: dict) -> list[InboundMessage]:
+    """Extrai as mensagens do formato aninhado do payload da Meta. Payload não confiável (a
+    Meta não garante o shape interno) — captura a classe inteira de erro de shape inesperado."""
+    out: list[InboundMessage] = []
+    try:
+        for entry in payload.get("entry", []):
+            for change in entry.get("changes", []):
+                value = change.get("value", {})
+                contacts = value.get("contacts", [])
+                push_name = contacts[0]["profile"]["name"] if contacts else ""
+                for msg in value.get("messages", []):
+                    if not isinstance(msg, dict):
+                        continue
+                    wa_message_id = msg.get("id", "")
+                    from_phone = msg.get("from") or None
+                    kind = msg.get("type", "text")
+                    text_body = ""
+                    media_ref = None
+                    if kind == "text":
+                        text_body = msg.get("text", {}).get("body", "")
+                    elif kind in ("image", "audio", "document", "video"):
+                        media_obj = msg.get(kind, {})
+                        text_body = media_obj.get("caption", "")
+                        media_ref = media_obj.get("id")
+                    else:
+                        kind = "text"
+                        text_body = "[tipo de mensagem não suportado]"
+                    out.append(InboundMessage(
+                        wa_message_id=wa_message_id, from_phone=from_phone, kind=kind,
+                        text_body=text_body, media_ref=media_ref, push_name=push_name,
+                    ))
+    except (AttributeError, TypeError, KeyError):
+        return []
+    return out

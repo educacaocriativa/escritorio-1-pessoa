@@ -15,6 +15,7 @@ import logging
 import httpx
 
 from app.config import settings
+from app.core.whatsapp.inbound import InboundMessage
 
 logger = logging.getLogger("e1p.whatsapp.evolution")
 
@@ -120,3 +121,34 @@ def download_media(**_kwargs: object) -> bytes:
         "Evolution API entrega mídia inline no payload do webhook, sem endpoint de download "
         "separado (ver Onda 3 da spec)"
     )
+
+
+def parse_inbound(payload: dict) -> list[InboundMessage]:
+    """Extrai a mensagem do formato da Evolution API (evento `messages.upsert`). `@lid` no
+    lugar do telefone → `from_phone=None` — NUNCA adivinhado por heurística (ver bandeja "Não
+    identificados", Onda 3).
+
+    Mídia inbound (imagem/áudio/documento) não é parseada ainda — só texto (dívida registrada
+    na spec §12: o shape exato varia por tipo e exige payload de exemplo real).
+    """
+    try:
+        data = payload.get("data", payload)
+        key = data.get("key", {})
+        remote_jid = key.get("remoteJid", "")
+        wa_message_id = key.get("id", "")
+        if not wa_message_id:
+            return []
+        from_phone = None
+        if remote_jid.endswith("@s.whatsapp.net"):
+            from_phone = remote_jid.split("@")[0]
+        push_name = data.get("pushName", "")
+        message = data.get("message", {})
+        text_body = message.get("conversation", "") or message.get(
+            "extendedTextMessage", {}
+        ).get("text", "")
+        return [InboundMessage(
+            wa_message_id=wa_message_id, from_phone=from_phone, kind="text",
+            text_body=text_body, media_ref=None, push_name=push_name,
+        )]
+    except (AttributeError, TypeError, KeyError):
+        return []
