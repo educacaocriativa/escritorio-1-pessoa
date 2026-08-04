@@ -80,3 +80,50 @@ describe("CrmPage — Novo cliente (Story 7.15, Task 1)", () => {
     expect(screen.getByRole("button", { name: "Criar cliente" })).toBeEnabled();
   });
 });
+
+/** Board com um card só, para exercitar a linha da última interação. */
+function boardComCard(lastInteractionAt: string | null) {
+  return {
+    columns: [
+      {
+        stage: {
+          id: "s1", name: "Entrada", position: 0,
+          is_won: false, is_lost: false, is_archived: false,
+        },
+        clients: [
+          {
+            id: "c1", tenant_id: "t1", name: "Flavio Kato", email: null, phone: null,
+            document: null, gender: "unspecified", birthdate: null, notes: "",
+            tags: [], source: "landing", stage_id: "s1",
+            created_at: "2026-07-01T10:00:00Z",
+            last_interaction_at: lastInteractionAt,
+          },
+        ],
+      },
+    ],
+  };
+}
+
+function mockarBoard(lastInteractionAt: string | null) {
+  vi.mocked(api.get).mockImplementation((url: string) => {
+    if (url === "/crm/board") {
+      return Promise.resolve({ data: boardComCard(lastInteractionAt) } as never);
+    }
+    return Promise.resolve({ data: [] } as never);
+  });
+}
+
+describe("CrmPage — última interação no card", () => {
+  it("mostra a data quando o contato já teve interação", async () => {
+    mockarBoard("2026-08-04T14:32:00Z");
+    renderPage();
+    expect(await screen.findByText(/última interação: 04\/08/i)).toBeInTheDocument();
+  });
+
+  it("card sem interação nenhuma não mostra rótulo vazio", async () => {
+    mockarBoard(null);
+    renderPage();
+    await screen.findByText("Flavio Kato");
+    expect(screen.queryByText(/última interação/i)).not.toBeInTheDocument();
+  });
+});

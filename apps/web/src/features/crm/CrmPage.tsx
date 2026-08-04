@@ -1,4 +1,4 @@
-import type { Board, BoardColumn, Client, PipelineStage } from "@e1p/shared-types";
+import type { Board, BoardClient, BoardColumn, PipelineStage } from "@e1p/shared-types";
 import { Archive, ArrowUpRight, GripVertical, Plus } from "lucide-react";
 import { useCallback, useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
@@ -99,7 +99,7 @@ export default function CrmPage() {
 }
 
 function optimisticMove(board: Board, clientId: string, stageId: string): Board {
-  let moved: Client | undefined;
+  let moved: BoardClient | undefined;
   const stripped = board.columns.map((c) => {
     const found = c.clients.find((cl) => cl.id === clientId);
     if (found) moved = { ...found, stage_id: stageId };
@@ -178,7 +178,7 @@ function Column({
   );
 }
 
-function Card({ client, stageId }: { client: Client; stageId: string }) {
+function Card({ client, stageId }: { client: BoardClient; stageId: string }) {
   const navigate = useNavigate();
   return (
     <div
@@ -201,6 +201,15 @@ function Card({ client, stageId }: { client: Client; stageId: string }) {
               </span>
             ))}
           </div>
+        )}
+        {client.last_interaction_at && (
+          <p className="mt-1 text-[10px] text-neutral-400">
+            última interação:{" "}
+            {new Date(client.last_interaction_at).toLocaleDateString("pt-BR", {
+              day: "2-digit",
+              month: "2-digit",
+            })}
+          </p>
         )}
       </div>
       <button
