@@ -47,6 +47,12 @@ function report(over: Partial<ConferenciaReport> = {}): ConferenciaReport {
     contas_sem_checkpoint: 0,
     contas_fora_da_banda: [],
     notes: [],
+    // Story 8.16 — os termos da pré-condição do gate. Zero no default: o cenário limpo é o
+    // silêncio, e cada teste liga só o termo que quer exercitar.
+    lancamentos_sem_conta_informada: 0,
+    valor_sem_conta_informada_cents: 0,
+    rendimentos_sem_perna_bancaria: 0,
+    valor_rendimentos_sem_perna_cents: 0,
     ...over,
   };
 }
@@ -110,6 +116,59 @@ describe("fraseConferencia — os quatro casos do AC4", () => {
     // exatamente o que o e1p não tem lastro para dizer. (O nome da conta não tem dígito.)
     expect(f.texto).not.toMatch(/\d/);
     expect(f.texto).not.toContain("R$");
+  });
+
+  it("Story 8.20 — saldo informado na DATA DE ABERTURA: não manda declarar de novo", () => {
+    // O caso degenerado: houve declaração (`saldo_banco_data` preenchido) e mesmo assim a
+    // comparação não decide nada. Pedir "declare o saldo para eu conferir" aqui mandaria o dono
+    // repetir exatamente o ato que ele acabou de fazer — em laço.
+    const f = fraseConferencia(
+      conta({
+        bank_account_name: "C6 PJ",
+        saldo_banco_cents: null,
+        saldo_banco_origem: "indisponivel",
+        saldo_banco_fonte: null,
+        saldo_banco_data: "2026-07-30",
+        saldo_sistema_cents: null,
+        divergencia_cents: null,
+        dentro_da_tolerancia: null,
+        tolerancia_cents: 0,
+        dias_desde_ultima_conferencia: 0,
+      }),
+    );
+    expect(f.tom).toBe("desconhecido");
+    expect(f.texto).toContain("C6 PJ");
+    expect(f.texto).toContain("30/07/2026");
+    expect(f.texto).toContain("mesmo dia em que ela foi aberta no e1p");
+    expect(f.texto).toContain("dia posterior");
+    // ⚠️ A asserção NEGATIVA é o ponto do teste.
+    expect(f.texto).not.toContain("declare o saldo para eu conferir");
+    expect(f.texto).not.toContain("Não sei o saldo da conta");
+    // Nenhum tom novo, nenhuma cor nova, nenhum ícone de alerta (AC5 da 8.7, intacto).
+    expect(tomVisual(f.tom).alerta).toBe(false);
+    expect(tomVisual(f.tom).emoji).toBe("⚪");
+  });
+
+  it("Story 8.20 — os DOIS ramos do 'não sei' têm o MESMO tom, e textos diferentes", () => {
+    const base = {
+      saldo_banco_cents: null,
+      saldo_banco_origem: "indisponivel",
+      saldo_sistema_cents: null,
+      divergencia_cents: null,
+      dentro_da_tolerancia: null,
+      tolerancia_cents: 0,
+    } as const;
+    const semDeclaracao = fraseConferencia(
+      conta({ ...base, saldo_banco_fonte: null, saldo_banco_data: null }),
+    );
+    const degenerada = fraseConferencia(
+      conta({ ...base, saldo_banco_fonte: null, saldo_banco_data: "2026-07-30" }),
+    );
+    expect(semDeclaracao.tom).toBe("desconhecido");
+    expect(degenerada.tom).toBe("desconhecido");
+    expect(semDeclaracao.texto).not.toBe(degenerada.texto);
+    // O ramo comum continua convidando a declarar — a correção não pode custar esse convite.
+    expect(semDeclaracao.texto).toContain("declare o saldo para eu conferir");
   });
 
   it("divergência ZERO avaliada é 'batendo', não 'não sei' (0 ≠ ausência)", () => {
@@ -205,10 +264,23 @@ describe("AC6 — o consolidado nunca é veredito (cenário das três contas do 
 
   it("avisoTotalParcial fala quando o total NÃO cobre todas as contas", () => {
     expect(avisoTotalParcial(report({ contas_sem_checkpoint: 0 }))).toBeNull();
-    expect(avisoTotalParcial(report({ contas_sem_checkpoint: 1 }))).toContain("1 conta está");
+    const um = avisoTotalParcial(report({ contas_sem_checkpoint: 1 }));
+    expect(um).toContain("1 conta não foi avaliada");
     const dois = avisoTotalParcial(report({ contas_sem_checkpoint: 2 }));
-    expect(dois).toContain("2 contas estão");
+    expect(dois).toContain("2 contas não foram avaliadas");
     expect(dois).toContain("ficaram de fora");
+  });
+
+  it("Story 8.20 — o aviso NÃO afirma o motivo: 'sem saldo informado' seria falso", () => {
+    // Existem dois motivos para uma conta ficar de fora do total (nenhum saldo informado × saldo
+    // informado na data de abertura). O agregado não sabe qual é — afirmar um deles moveria a
+    // mentira de lugar em vez de removê-la. O motivo está na nota de cada conta.
+    for (const n of [1, 2, 7]) {
+      const aviso = avisoTotalParcial(report({ contas_sem_checkpoint: n })) ?? "";
+      expect(aviso).not.toContain("sem saldo informado");
+      expect(aviso).not.toContain("sem saldo declarado");
+      expect(aviso).toContain("não cobre todas as suas contas");
+    }
   });
 });
 
@@ -315,5 +387,75 @@ describe("avisoUltimaConferencia — o contador de abandono (bloco 4 da 8.5)", (
     expect(avisoUltimaConferencia(conta({ dias_desde_ultima_conferencia: 47 }))).toContain(
       "47 dias",
     );
+  });
+});
+
+describe("Story 8.16 — as notas do bloco 4: a tela ANOTA, nunca recalcula", () => {
+  const comTermos = report({
+    contas: [conta({ divergencia_cents: 70_000, dentro_da_tolerancia: false })],
+    total_divergencia_cents: 70_000,
+    contas_avaliadas: 1,
+    lancamentos_sem_conta_informada: 7,
+    valor_sem_conta_informada_cents: 312_000,
+    rendimentos_sem_perna_bancaria: 3,
+    valor_rendimentos_sem_perna_cents: 48_000,
+    notes: [
+      "7 lançamentos deste período não informam de qual conta saiu ou entrou (R$ 3.120,00). A divergência abaixo **inclui** esse valor. Este termo fecha na Onda 2: assim que todo lançamento informar a conta, ele vai a zero sozinho.",
+      "3 rendimentos de aplicação deste período (R$ 480,00) ainda não geram movimento bancário. A divergência abaixo **inclui** esse valor. Este termo só fecha na Onda 2b — não há o que corrigir à mão.",
+    ],
+  });
+
+  it("a frase da conta é IDÊNTICA com e sem os termos do gate (ANOTA, NUNCA SUBTRAI)", () => {
+    // Descontar o termo conhecido da divergência seria o checkpoint corrigindo o saldo derivado
+    // com outra roupa: a divergência iria a zero por construção sempre que o sistema soubesse
+    // explicar a diferença, e a métrica primária do épico morreria (Regra 5 do CLAUDE.md).
+    const semTermos = report({
+      contas: comTermos.contas,
+      total_divergencia_cents: 70_000,
+      contas_avaliadas: 1,
+    });
+    expect(semTermos.lancamentos_sem_conta_informada).toBe(0);
+    expect(fraseConferencia(comTermos.contas[0])).toEqual(
+      fraseConferencia(semTermos.contas[0]),
+    );
+    expect(comTermos.total_divergencia_cents).toBe(semTermos.total_divergencia_cents);
+    expect(comTermos.contas_fora_da_banda).toEqual(semTermos.contas_fora_da_banda);
+  });
+
+  it("o aviso de total parcial não conhece os termos do gate", () => {
+    // `avisoTotalParcial` fala de CONTAS não avaliadas; os termos do gate falam de LANÇAMENTOS sem
+    // conta informada. Misturar as duas frases faria a tela dizer que o total é parcial por um
+    // motivo que não é o dele.
+    expect(avisoTotalParcial(comTermos)).toBeNull();
+  });
+
+  it("as notas do backend chegam prontas — a tela não monta frase nenhuma", () => {
+    // Uma redação, um lugar (o mesmo bloco de `_NOTE_SEM_CHECKPOINT`, no backend). Duas redações
+    // do mesmo fato viram duas frases diferentes conforme o caminho.
+    expect(comTermos.notes).toHaveLength(2);
+    expect(comTermos.notes[0]).toContain("Onda 2:");
+    expect(comTermos.notes[1]).toContain("Onda 2b");
+  });
+
+  it("cada nota nomeia a ONDA que a fecha, e elas são diferentes", () => {
+    // P1/P2 somem quando o dono terminar de corrigir os lançamentos; P3 NÃO some nesta onda. Uma
+    // nota que promete "isso some quando você terminar o mutirão" sobre um termo que não some é a
+    // mesma afirmação sem lastro que a Onda 0 removeu da Projeção.
+    expect(comTermos.notes[0]).not.toContain("Onda 2b");
+    expect(comTermos.notes[1]).toContain("não há o que corrigir à mão");
+  });
+
+  it("UX-001: as notas novas não reusam 'no banco' nem os rótulos de saldo vizinhos", () => {
+    const texto = comTermos.notes.join(" ").toLowerCase();
+    expect(texto).not.toContain(ROTULO_BANCO.toLowerCase());
+    expect(texto).not.toContain(TOTAL_EM_CONTAS_LABEL.toLowerCase());
+    expect(texto).not.toContain(DISPONIVEL_CAIXA_LABEL.toLowerCase());
+  });
+
+  it("zero termo não-zero ⇒ zero nota (o silêncio que diz 'o gate pode ser lido')", () => {
+    const limpo = report({ contas: [conta()], contas_avaliadas: 1 });
+    expect(limpo.notes).toEqual([]);
+    expect(limpo.lancamentos_sem_conta_informada).toBe(0);
+    expect(limpo.rendimentos_sem_perna_bancaria).toBe(0);
   });
 });

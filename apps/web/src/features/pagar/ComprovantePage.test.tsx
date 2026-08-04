@@ -1,4 +1,4 @@
-import { render, screen, waitFor, within } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter, Route, Routes } from "react-router-dom";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -6,7 +6,7 @@ import { api } from "../../lib/api";
 import ComprovantePage from "./ComprovantePage";
 
 vi.mock("../../lib/api", () => ({
-  api: { get: vi.fn(), post: vi.fn(), delete: vi.fn() },
+  api: { get: vi.fn(), post: vi.fn(), patch: vi.fn(), delete: vi.fn() },
   apiErrorMessage: (e: unknown) => String(e),
 }));
 
@@ -19,7 +19,20 @@ const PAGA = {
   due_date: "2099-01-05", status: "paid", is_overdue: false, paid_at: "2026-07-20T10:00:00Z",
 };
 
-function mockApi(candidates = [ABERTA, PAGA]) {
+/** Story 8.13 — a conta bancária de onde o dinheiro saiu (obrigatória na baixa desde a 8.12). */
+const CONTA = {
+  id: "acc-1", name: "Itaú PJ", kind: "checking", is_primary: true, archived_at: null,
+  opening_balance_cents: 0, opening_date: "2026-01-01",
+  saldo_derivado_cents: 0, saldo_derivado_origem: "banco",
+};
+
+/** Hoje como data de calendário LOCAL — a mesma regra de `localToday`/`hojeISO`. */
+function hoje(): string {
+  const d = new Date();
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+}
+
+function mockApi(candidates = [ABERTA, PAGA], contas: unknown[] = [CONTA]) {
   vi.mocked(api.get).mockImplementation((url: string) => {
     if (url.startsWith("/payables/receipts/candidates")) {
       return Promise.resolve({ data: candidates });
@@ -30,6 +43,7 @@ function mockApi(candidates = [ABERTA, PAGA]) {
                  size: 1024, created_at: "2026-07-28T10:00:00Z" }],
       });
     }
+    if (url === "/bank/accounts") return Promise.resolve({ data: contas });
     return Promise.resolve({ data: [] });
   });
 }
@@ -106,7 +120,7 @@ describe("ComprovantePage", () => {
 
     await userEvent.click(screen.getByText("Energia"));
     const check = screen.getByRole("checkbox", { name: /marcar como paga/i });
-    const anexar = screen.getByRole("button", { name: /^anexar$/i });
+    const anexar = screen.getByRole("button", { name: /^anexar/i });
     const footer = anexar.parentElement as HTMLElement;
     expect(check.closest("div")?.parentElement).toBe(footer);
 
@@ -123,16 +137,17 @@ describe("ComprovantePage", () => {
     await waitFor(() => screen.getByText("Energia"));
 
     await userEvent.click(screen.getByText("Energia"));
-    await userEvent.click(screen.getByRole("button", { name: /^anexar$/i }));
+    await userEvent.click(screen.getByRole("button", { name: /^anexar/i }));
 
     await waitFor(() => expect(api.post).toHaveBeenCalled());
     expect(vi.mocked(api.post).mock.calls[0][0]).toBe("/payables/receipts/r-1/link");
+    // Story 8.13: a conta bancária e o dia viajam junto — sem eles o backend responde 422.
     expect(vi.mocked(api.post).mock.calls[0][1]).toEqual({
-      bill_id: "b-aberta", mark_paid: true,
+      bill_id: "b-aberta", mark_paid: true, bank_account_id: "acc-1", paid_on: hoje(),
     });
   });
 
-  it("envia mark_paid false quando o usuario desmarca", async () => {
+  it("envia mark_paid false quando o usuario desmarca — e SEM conta bancária", async () => {
     mockApi();
     vi.mocked(api.post).mockResolvedValue({ data: { id: "b-aberta" } } as never);
     renderPage();
@@ -140,9 +155,11 @@ describe("ComprovantePage", () => {
 
     await userEvent.click(screen.getByText("Energia"));
     await userEvent.click(screen.getByRole("checkbox", { name: /marcar como paga/i }));
-    await userEvent.click(screen.getByRole("button", { name: /^anexar$/i }));
+    await userEvent.click(screen.getByRole("button", { name: /^anexar/i }));
 
     await waitFor(() => expect(api.post).toHaveBeenCalled());
+    // Anexar sem dar baixa não afirma que dinheiro saiu de lugar nenhum: mandar a conta aqui seria
+    // gravar meia afirmação. O backend também não exige (`mark_paid=false` ignora o campo).
     expect(vi.mocked(api.post).mock.calls[0][1]).toEqual({
       bill_id: "b-aberta", mark_paid: false,
     });
@@ -259,11 +276,11 @@ describe("ComprovantePage", () => {
     renderPage();
     await waitFor(() => screen.getByText("Energia"));
 
-    expect(screen.getByRole("button", { name: /^anexar$/i })).toBeTruthy();
+    expect(screen.getByRole("button", { name: /^anexar/i })).toBeTruthy();
 
     await userEvent.click(screen.getByRole("button", { name: /criar conta nova/i }));
 
-    expect(screen.queryByRole("button", { name: /^anexar$/i })).toBeNull();
+    expect(screen.queryByRole("button", { name: /^anexar/i })).toBeNull();
   });
 
   // Revisão final de branch (Finding 6): antes, uma vez escolhida uma candidata não havia como
@@ -280,12 +297,12 @@ describe("ComprovantePage", () => {
     const card = () => screen.getAllByText("Energia")[0];
 
     await userEvent.click(card());
-    expect(screen.getByRole("button", { name: /^anexar$/i })).not.toBeDisabled();
+    expect(screen.getByRole("button", { name: /^anexar/i })).not.toBeDisabled();
     expect(screen.queryByRole("button", { name: /criar conta nova/i })).toBeNull();
 
     await userEvent.click(card());
 
-    expect(screen.getByRole("button", { name: /^anexar$/i })).toBeDisabled();
+    expect(screen.getByRole("button", { name: /^anexar/i })).toBeDisabled();
     expect(screen.getByRole("button", { name: /criar conta nova/i })).toBeTruthy();
   });
 
@@ -300,11 +317,196 @@ describe("ComprovantePage", () => {
     await waitFor(() => screen.getByText("Energia"));
 
     await userEvent.click(screen.getByRole("button", { name: /criar conta nova/i }));
-    expect(screen.queryByRole("button", { name: /^anexar$/i })).toBeNull();
+    expect(screen.queryByRole("button", { name: /^anexar/i })).toBeNull();
 
     await userEvent.click(screen.getByText("Energia"));
 
-    expect(screen.getByRole("button", { name: /^anexar$/i })).toBeTruthy();
+    expect(screen.getByRole("button", { name: /^anexar/i })).toBeTruthy();
     expect(screen.queryByPlaceholderText(/descrição/i)).toBeNull();
+  });
+});
+
+/**
+ * **Story 8.13 — o seletor de conta dentro da barra fixa.**
+ *
+ * O AC4 é a linha que reprova a story: *"é proibido pôr o seletor em qualquer bloco que exija
+ * rolagem para ser visto"*. Dois PRs de fix de campo (#56, #58) já foram pagos exatamente por isso,
+ * um deles com uma conta real marcada paga sem o usuário conseguir ver o que confirmava.
+ */
+describe("ComprovantePage — a escolha da baixa (Story 8.13)", () => {
+  beforeEach(() => vi.clearAllMocks());
+
+  const seletor = () => screen.getByLabelText(/conta bancária de onde o dinheiro saiu/i);
+  const campoDia = () => screen.getByLabelText(/dia em que o dinheiro saiu/i) as HTMLInputElement;
+
+  async function escolherCandidata() {
+    mockApi();
+    renderPage();
+    await waitFor(() => screen.getByText("Energia"));
+    await userEvent.click(screen.getByText("Energia"));
+  }
+
+  it("⚠️ AC4 — o seletor de conta e o dia ficam na MESMA barra fixa do botão", async () => {
+    await escolherCandidata();
+
+    const anexar = screen.getByRole("button", { name: /^anexar/i });
+    const barra = anexar.closest(".fixed");
+    expect(barra).not.toBeNull();
+    // A propriedade que importa não é "os dois existem na página": é que estão no MESMO bloco
+    // fixo, então NÃO PODE haver rolagem entre um e outro. Mover o seletor para fora da barra
+    // (um modal, um "expandir", uma seção acima) faz este teste cair — é essa a intenção.
+    expect(seletor().closest(".fixed")).toBe(barra);
+    expect(campoDia().closest(".fixed")).toBe(barra);
+    // ...e o checkbox de baixa continua lá também (a garantia do PR #58 não regrediu).
+    expect(screen.getByRole("checkbox", { name: /marcar como paga/i }).closest(".fixed")).toBe(barra);
+  });
+
+  it("a conta primária vem pré-selecionada e o nome dela aparece NO BOTÃO", async () => {
+    await escolherCandidata();
+
+    expect((seletor() as HTMLSelectElement).value).toBe("acc-1");
+    expect(screen.getByRole("button", { name: /anexar e dar baixa · sai do Itaú PJ/i })).toBeTruthy();
+  });
+
+  it("a data padrão da BANDEJA é hoje (não o vencimento) — e [8.14] não há mais teto", async () => {
+    await escolherCandidata();
+
+    // Aqui, diferente de PagarPage/Fila, o default é HOJE: o comprovante chega pelo share sheet no
+    // instante do pagamento. **O default não mudou** — o que mudou foi o teto.
+    expect(campoDia().value).toBe(hoje());
+    // ⚠️ **[Story 8.14] mudança de expectativa, e ela é a CORREÇÃO.** Este teste afirmava
+    // `max === hoje()`. O teto era faseamento (garantir que não existisse `paid` com data futura
+    // enquanto `scheduled` não existisse) e saiu no commit em que `scheduled` nasceu. A bandeja
+    // herdou a mudança **sem ser editada**: as três telas de baixa compartilham `baixa.ts`, e é
+    // esse o retorno de ter uma implementação só.
+    expect(campoDia().getAttribute("max")).toBeNull();
+  });
+
+  it("o dia é EDITÁVEL e é o valor editado que viaja", async () => {
+    await escolherCandidata();
+    vi.mocked(api.post).mockResolvedValue({ data: { id: "b-aberta" } } as never);
+
+    fireEvent.change(campoDia(), { target: { value: "2026-07-01" } });
+    await userEvent.click(screen.getByRole("button", { name: /^anexar/i }));
+
+    await waitFor(() => expect(api.post).toHaveBeenCalled());
+    expect(vi.mocked(api.post).mock.calls[0][1]).toMatchObject({ paid_on: "2026-07-01" });
+  });
+
+  it("SEM conta primária nada é pré-selecionado e o Anexar fica DESABILITADO", async () => {
+    mockApi([ABERTA, PAGA], [
+      { ...CONTA, id: "a", name: "Conta A", is_primary: false },
+      { ...CONTA, id: "b", name: "Conta B", is_primary: false },
+    ]);
+    renderPage();
+    await waitFor(() => screen.getByText("Energia"));
+    await userEvent.click(screen.getByText("Energia"));
+
+    expect((seletor() as HTMLSelectElement).value).toBe("");
+    expect(screen.getByRole("button", { name: /^anexar/i })).toBeDisabled();
+  });
+
+  it("conta JÁ PAGA não pede conta bancária (não há baixa a dar)", async () => {
+    mockApi();
+    renderPage();
+    await waitFor(() => screen.getByText("Internet"));
+
+    await userEvent.click(screen.getByText("Internet"));
+
+    expect(screen.queryByLabelText(/conta bancária de onde o dinheiro saiu/i)).toBeNull();
+    expect(screen.getByRole("button", { name: /^anexar$/i })).not.toBeDisabled();
+  });
+
+  it("desmarcar 'marcar como paga' esconde o seletor — o campo deixa de ser exigido", async () => {
+    await escolherCandidata();
+    expect(seletor()).toBeTruthy();
+
+    await userEvent.click(screen.getByRole("checkbox", { name: /marcar como paga/i }));
+
+    expect(screen.queryByLabelText(/conta bancária de onde o dinheiro saiu/i)).toBeNull();
+    expect(screen.getByRole("button", { name: /^anexar$/i })).not.toBeDisabled();
+  });
+
+  it("409 acionável → cadastro embutido → retoma, SEM perder a candidata escolhida", async () => {
+    mockApi();
+    const mensagem409 = "Cadastre a sua conta bancária uma vez e o pagamento segue normalmente.";
+    vi.mocked(api.post).mockImplementation((url: string) => {
+      if (url === "/bank/accounts") {
+        return Promise.resolve({ data: { ...CONTA, id: "acc-nova", name: "Nubank PJ" } } as never);
+      }
+      const jaCadastrou = vi
+        .mocked(api.post)
+        .mock.calls.some(([u]) => String(u) === "/bank/accounts");
+      if (jaCadastrou) return Promise.resolve({ data: { id: "b-aberta" } } as never);
+      return Promise.reject({
+        response: { data: { detail: { acao: "cadastrar_conta", mensagem: mensagem409 } } },
+      });
+    });
+
+    renderPage();
+    await waitFor(() => screen.getByText("Energia"));
+    await userEvent.click(screen.getByText("Energia"));
+    await userEvent.click(screen.getByRole("button", { name: /^anexar/i }));
+
+    expect(await screen.findByText(mensagem409)).toBeTruthy();
+    expect(screen.getByRole("heading", { name: "Nova conta" })).toBeTruthy();
+
+    await userEvent.type(screen.getByLabelText("Nome da conta"), "Nubank PJ");
+    await userEvent.click(screen.getByRole("button", { name: "Cadastrar conta" }));
+
+    // A candidata continua escolhida (a tela nunca foi desmontada) e a conta nova está selecionada.
+    const retomar = await screen.findByRole("button", { name: /sai do Nubank PJ/i });
+    await userEvent.click(retomar);
+
+    await waitFor(() =>
+      expect(
+        vi.mocked(api.post).mock.calls.filter(([u]) => String(u) === "/payables/receipts/r-1/link"),
+      ).toHaveLength(2),
+    );
+    const ultima = vi
+      .mocked(api.post)
+      .mock.calls.filter(([u]) => String(u) === "/payables/receipts/r-1/link")
+      .at(-1);
+    expect(ultima?.[1]).toMatchObject({ bill_id: "b-aberta", bank_account_id: "acc-nova" });
+  });
+
+  it("o formulário de conta nova também pede a conta — ele TAMBÉM dá baixa", async () => {
+    mockApi();
+    vi.mocked(api.post).mockResolvedValue({ data: { id: "b-novo" } } as never);
+    renderPage();
+    await waitFor(() => screen.getByText("Energia"));
+
+    await userEvent.click(screen.getByRole("button", { name: /criar conta nova/i }));
+    await userEvent.type(screen.getByPlaceholderText(/descrição/i), "Estacionamento");
+    await userEvent.type(screen.getByPlaceholderText(/valor/i), "45,00");
+    await userEvent.click(screen.getByRole("button", { name: /criar e anexar/i }));
+
+    await waitFor(() => expect(api.post).toHaveBeenCalled());
+    expect(vi.mocked(api.post).mock.calls[0][1]).toMatchObject({
+      mark_paid: true, bank_account_id: "acc-1",
+    });
+  });
+
+  /**
+   * **Auditoria estrutural de ~360px (AC9).** Amarra a aritmética de `baixa.ts` ao DOM real: as
+   * constantes só valem enquanto a barra usar estas classes. Se alguém trocar `p-4` por `p-6` ou
+   * `grid-cols-2` por `grid-cols-3`, este teste cai antes do aparelho.
+   */
+  it("a barra fixa usa as classes que alimentam a aritmética de 360px", async () => {
+    await escolherCandidata();
+
+    const barra = screen.getByRole("button", { name: /^anexar/i }).closest(".fixed") as HTMLElement;
+    expect(barra.className).toContain("p-4"); // PADDING_DA_BARRA = 16
+    expect(barra.className).toContain("space-y-3"); // 12px entre resumo, campos e botão
+    expect(barra.className).toContain("inset-x-0"); // largura da viewport, sem overflow lateral
+
+    const grade = seletor().closest("div.grid") as HTMLElement;
+    expect(grade.className).toContain("grid-cols-2"); // 2 colunas → 160px por campo em 360px
+    expect(grade.className).toContain("gap-2"); // GAP_ENTRE_CAMPOS = 8
+
+    // E a página reserva espaço embaixo para a barra (que cresceu): o último cartão da lista não
+    // fica escondido atrás dela. `pb-52` = 208px ≥ ALTURA_DA_BARRA.
+    const pagina = barra.parentElement as HTMLElement;
+    expect(pagina.className).toContain("pb-52");
   });
 });

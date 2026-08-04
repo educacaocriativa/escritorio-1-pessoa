@@ -13,6 +13,7 @@ from app.modules.bank.models import (  # noqa: F401
     BankAccount,
     BankBalanceCheckpoint,
     BankTransaction,
+    BankTransfer,
 )
 from app.modules.chart_of_accounts.models import ChartAccount  # noqa: F401
 from app.modules.contracts.models import (  # noqa: F401

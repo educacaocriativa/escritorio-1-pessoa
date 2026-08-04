@@ -3,6 +3,12 @@ import { ChevronLeft, FileText, Trash2 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
 import { api, apiErrorMessage } from "../../lib/api";
+import {
+  CadastroDeContaEmbutido,
+  EscolhaDaBaixa,
+  type EscolhaDaBaixaState,
+  useEscolhaDaBaixa,
+} from "./EscolhaDaBaixa";
 
 /** O que a bandeja devolve por comprovante (`GET /payables/receipts`). */
 interface ReceiptInfo {
@@ -57,6 +63,22 @@ export default function ComprovantePage() {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [receipt, setReceipt] = useState<ReceiptInfo | null>(null);
+
+  /**
+   * A escolha da baixa (Story 8.13) — **hoje** como data padrão, e não o `due_date` da conta
+   * escolhida como nas outras duas telas.
+   *
+   * Não é inconsistência: o comprovante chega pelo share sheet **no instante do pagamento**, então
+   * a data de caixa honesta desta porta é o dia de hoje — e era exatamente isso que o backend já
+   * gravava antes desta story (IV1: a bandeja não muda de comportamento). O `due_date`, aqui,
+   * também seria uma escolha pior: a lista de candidatas é ordenada por vencimento e quase sempre
+   * traz contas a vencer, cujo `due_date` futuro bateria no teto de hoje com um 422 numa porta que
+   * hoje funciona.
+   *
+   * O que mudou é que "hoje" deixou de ser decisão invisível do backend: virou um campo **visível
+   * e editável**, dentro da barra fixa, ao lado do botão. O usuário confirma; não constrói.
+   */
+  const escolha = useEscolhaDaBaixa(localToday());
 
   // Identifica QUAL comprovante está na tela. Não existe `GET /payables/receipts/{id}`, mas a
   // bandeja é curta por construção (teto de 30), então filtrar a lista basta e evita rota nova.
@@ -131,6 +153,11 @@ export default function ComprovantePage() {
     setShowNew(true);
   }
 
+  // Vai haver baixa nesta submissão? Conta já paga não mostra o checkbox (não faz sentido "dar
+  // baixa" de novo) e, nesse caso, **a conta bancária também não é exigida** — nem pela tela nem
+  // pelo backend, cujo campo é obrigatório apenas quando `mark_paid=True`.
+  const daBaixa = chosen !== null && chosen.status === "open" && markPaid;
+
   async function link() {
     if (!chosen) return;
     setBusy(true);
@@ -138,12 +165,17 @@ export default function ComprovantePage() {
     try {
       await api.post(`/payables/receipts/${id}/link`, {
         bill_id: chosen.id,
-        // conta já paga não mostra o checkbox — não faz sentido "dar baixa" de novo
-        mark_paid: chosen.status === "open" ? markPaid : false,
+        mark_paid: daBaixa,
+        // Story 8.13: os dois campos só viajam quando há baixa. Mandá-los com `mark_paid=false`
+        // seria afirmar de qual conta saiu um dinheiro que o usuário não disse ter saído.
+        ...(daBaixa ? escolha.corpo() : {}),
       });
       navigate("/pagar", { replace: true });
     } catch (err) {
-      setError(apiErrorMessage(err));
+      // 409 acionável → abre o cadastro de conta embutido, com a mensagem do backend. A tela NÃO é
+      // desmontada: ao salvar a conta, a baixa é retomada com a conta nova já selecionada e a
+      // candidata escolhida continua na tela — o usuário não perde de vista o que estava pagando.
+      setError(escolha.tratarErro(err) ?? apiErrorMessage(err));
     } finally {
       setBusy(false);
     }
@@ -161,7 +193,10 @@ export default function ComprovantePage() {
   }
 
   return (
-    <div className="mx-auto max-w-lg space-y-4 pb-28">
+    // `pb-52` (208px) e não `pb-28`: a barra fixa cresceu com o seletor de conta e o dia, e o
+    // último cartão da lista não pode ficar EMBAIXO dela. A aritmética (altura da barra × padding)
+    // está em `baixa.ts` e é conferida por teste — ver `ALTURA_DA_BARRA`.
+    <div className="mx-auto max-w-lg space-y-4 pb-52">
       <header className="space-y-3 rounded-2xl bg-white p-4 shadow-sm">
         {/* Esta tela roda FORA do shell (sem sidebar/topbar), então a saída mora aqui. "Cancelar"
             só sai — o comprovante continua na bandeja e o aviso em Contas a Pagar aponta pra ele.
@@ -251,7 +286,7 @@ export default function ComprovantePage() {
           podem ficar false ao mesmo tempo e nenhum caminho de envio renderiza. */}
       {!chosen && (
         showNew ? (
-          <NewBillForm receiptId={id} onError={setError} />
+          <NewBillForm receiptId={id} onError={setError} escolha={escolha} />
         ) : (
           <button
             onClick={openNewBillForm}
@@ -268,7 +303,12 @@ export default function ComprovantePage() {
               na página, quem tocava numa conta e ia direto no Anexar (sem rolar) NUNCA via o
               checkbox — a baixa acontecia com o padrão (marcado) sem confirmação visível. Fica
               aqui dentro, colado no botão que comete a ação: fisicamente não dá pra tocar em
-              Anexar sem ver o que está sendo confirmado. */}
+              Anexar sem ver o que está sendo confirmado.
+
+              ⚠️ **Story 8.13 (AC4): o seletor de conta e o dia entram AQUI DENTRO, pelo mesmo
+              motivo.** É a terceira coisa que o botão comete — de qual conta o dinheiro saiu — e
+              seria a terceira a ficar fora da área visível se morasse noutro bloco. Não mova para
+              um modal, um "expandir", ou qualquer lugar que exija rolagem. */}
           {chosen && (
             <div className="mx-auto flex max-w-lg items-center justify-between gap-3">
               <div className="min-w-0">
@@ -290,26 +330,49 @@ export default function ComprovantePage() {
               )}
             </div>
           )}
+          {daBaixa && (
+            <div className="mx-auto max-w-lg">
+              <EscolhaDaBaixa estado={escolha} compact />
+            </div>
+          )}
           <button
             onClick={link}
-            disabled={!chosen || busy}
+            // Sem conta escolhida (tenant sem primária, estado válido) a ação fica DESABILITADA —
+            // silêncio, nunca um palpite sobre para onde vai o dinheiro do dono (AC5).
+            disabled={!chosen || busy || (daBaixa && !escolha.pronto)}
             className="mx-auto block w-full max-w-lg rounded-pill bg-accent-400 py-3 font-semibold text-white hover:bg-accent-500 disabled:opacity-50"
           >
-            {busy ? "Anexando..." : "Anexar"}
+            {busy
+              ? "Anexando..."
+              : daBaixa
+                ? escolha.rotulo("Anexar e dar baixa")
+                : "Anexar"}
           </button>
         </div>
       )}
+
+      {/* O cadastro embutido do 409 acionável: abre POR CIMA desta tela, que continua montada. */}
+      <CadastroDeContaEmbutido estado={escolha} />
     </div>
   );
 }
 
-/** Formulário curto: o mínimo para registrar agora e refinar depois no computador. */
+/**
+ * Formulário curto: o mínimo para registrar agora e refinar depois no computador.
+ *
+ * ⚠️ Ele **também** dá baixa (`mark_paid: true`), então **também** precisa da conta bancária desde
+ * a Story 8.12 — sem ela o backend responde 422. A escolha vem do MESMO estado da tela (a barra
+ * fixa some enquanto este formulário está aberto, e os dois caminhos são mutuamente exclusivos), e
+ * fica dentro do MESMO cartão do botão "Criar e anexar", pela regra do AC4.
+ */
 function NewBillForm({
   receiptId,
   onError,
+  escolha,
 }: {
   receiptId: string;
   onError: (m: string | null) => void;
+  escolha: EscolhaDaBaixaState;
 }) {
   const navigate = useNavigate();
   const [description, setDescription] = useState("");
@@ -331,10 +394,11 @@ function NewBillForm({
       await api.post(`/payables/receipts/${receiptId}/new-bill`, {
         description, supplier, category, amount_cents: cents,
         due_date: dueDate, mark_paid: true,
+        ...escolha.corpo(),
       });
       navigate("/pagar", { replace: true });
     } catch (err) {
-      onError(apiErrorMessage(err));
+      onError(escolha.tratarErro(err) ?? apiErrorMessage(err));
     } finally {
       setBusy(false);
     }
@@ -357,12 +421,13 @@ function NewBillForm({
         onChange={(e) => setDueDate(e.target.value)}
         className={input}
       />
+      <EscolhaDaBaixa estado={escolha} />
       <button
         onClick={submit}
-        disabled={busy}
+        disabled={busy || !escolha.pronto}
         className="w-full rounded-pill bg-primary-500 py-2.5 font-semibold text-white hover:bg-primary-600 disabled:opacity-50"
       >
-        {busy ? "Criando..." : "Criar e anexar"}
+        {busy ? "Criando..." : escolha.rotulo("Criar e anexar")}
       </button>
     </div>
   );

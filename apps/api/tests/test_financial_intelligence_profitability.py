@@ -518,3 +518,44 @@ def test_ledger_unknown_contract_is_404(client: TestClient, headers):
         headers=headers,
     )
     assert r.status_code == 404
+
+
+# ── Story 8.14 (AC14) — a Lucratividade por contrato tambem nao se mexe ───────────────────────
+
+
+def test_AC14_lucratividade_IDENTICA_com_e_sem_conta_agendada(client: TestClient, headers):
+    """A DRE do contrato agrega por **competencia**, como a DRE geral — `scheduled` passa direto.
+
+    O custo do contrato continua sendo o custo do contrato: **quando** o dinheiro sai da conta nao
+    muda a que periodo aquele custo pertence. Snapshot campo a campo.
+    """
+    from datetime import UTC, datetime, timedelta
+
+    c = _contract(client, headers)
+    _payable(client, headers, amount=80_000, competence="2026-07-12", contract_id=c["id"])
+    _charge(client, headers, amount=200_000, competence="2026-07-03", contract_id=c["id"])
+    antes = _dre(client, headers, c["id"])
+
+    conta = client.post(
+        "/bank/accounts",
+        json={
+            "name": "Itau PJ",
+            "kind": "checking",
+            "opening_balance_cents": 100_000_00,
+            "opening_date": (datetime.now(UTC).date() - timedelta(days=400)).isoformat(),
+        },
+        headers=headers,
+    ).json()
+    bill = client.get("/payables/bills", headers=headers).json()[0]
+    futuro = datetime.now(UTC).date() + timedelta(days=20)
+    resp = client.post(
+        f"/payables/bills/{bill['id']}/pay",
+        json={"bank_account_id": conta["id"], "paid_on": futuro.isoformat()},
+        headers=headers,
+    )
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["status"] == "scheduled", "pre-condicao: a conta tinha de nascer agendada"
+
+    assert _dre(client, headers, c["id"]) == antes, (
+        "a Lucratividade mudou porque uma conta virou `scheduled` — o AC14 declara impacto ZERO"
+    )

@@ -12,6 +12,23 @@
 > **Parecer de ratificação (2026-07-29):**
 > [`controle-bancario-design-ratificacao.md`](controle-bancario-design-ratificacao.md) — julga sete
 > desvios levantados pelo @sm e registra o que mudou neste documento e por quê.
+>
+> ---
+>
+> ⚠️ **SUPERSEDE PARCIAL (2026-07-30) — leia antes de usar a §8 (faseamento).**
+> [`controle-bancario-onda2-design.md`](controle-bancario-onda2-design.md) corrige uma **falha de
+> escopo deste documento**: aqui só foi modelado o fluxo **extrato → sistema** (importar e casar).
+> A direção **sistema → banco** — a baixa de Contas a Pagar, o recebimento fora do trilho, o
+> rendimento e o payout gerando o movimento bancário — **não foi modelada**, embora seja a que já
+> tem os dados. Consequência: a §6.7 rebaixou `payables.bank_account_id` a "otimização de match,
+> onda posterior" quando ele é a **origem do movimento**, e o razão bancário nasce vazio.
+> **O que continua valendo integralmente:** §1 (Regra dos Planos e os dois eixos), §2 (modelo), §3
+> (saldo derivado), §5 (conferência), §7 (rastreabilidade tributária).
+> **O que está SUPERSEDIDO:** a §6.7 (a coluna é obrigatória, não opcional), a §3.4(b) e a §6.6
+> (mudam de onda) e **a ordem das ondas da §8** — ver a §10 do documento novo.
+>
+> ---
+>
 > **ADR associado:** [`docs/decisions/0003-controle-bancario-nativo.md`](../decisions/0003-controle-bancario-nativo.md)
 > **Estudo antecedente:** [`docs/research/2026-07-29-conta-bancaria-conciliacao-brainstorm.md`](../research/2026-07-29-conta-bancaria-conciliacao-brainstorm.md)
 
@@ -310,8 +327,17 @@ CREATE UNIQUE INDEX uq_bank_transactions_dedup
   bateu" num índice parcial. Recalcular por `NOT EXISTS` a cada leitura é correto mas transforma o
   índice em inútil. Mitigação de consistência: `status` **só** é escrito pela função
   `_refresh_status(bank_transaction_id)` do service de conciliação, chamada em toda mutação de
-  vínculo, na mesma transação — e existe um comando de auditoria (`python -m app.scripts.bank_audit`)
-  que recalcula e reporta divergência sem corrigir em silêncio.
+  vínculo, na mesma transação — e um comando de auditoria (`python -m app.scripts.bank_audit`) que
+  recalcula e reporta divergência sem corrigir em silêncio.
+  > ⚠️ **CORREÇÃO 2026-07-30 (ratificação da Onda 2, C-4): `app/scripts/bank_audit.py` NÃO EXISTE, e
+  > `_refresh_status` também não.** Os dois são artefatos da **onda de conciliação (Onda 5 na
+  > numeração nova)**, e este parágrafo os descreve no presente como se já existissem — a afirmação
+  > foi propagada ao ADR 0003 (Consequência 4) e ao epic, que chegou a listar `bank_audit` entre os
+  > *"ativos entregues pelas Ondas 0 e 1 — **não recriar**"*. **Nenhuma story pode citá-lo como
+  > existente.** O script é **pré-requisito da Onda 5**, e é lá que ele passa a ser necessário: é
+  > quando a divergência vira alcançável **sem bug** (matcher concorrente, vínculo parcial). Onde a
+  > condição só é alcançável por bug — como o cache `payables.bank_transaction_id` da Onda 2 —, a
+  > garantia é **teste**, não script: ver `controle-bancario-onda2-design.md` §3.3.
 - **`transfer_id` sem FK dura**, coerente com o resto do projeto.
 
 ### 2.3 `bank_reconciliations` — o vínculo (tabela de ligação, não coluna)
@@ -361,7 +387,8 @@ contrapartida" na conferência — ou seja, o furo falso mais comum seria criado
 ```
 
 Não vira `CHECK` porque depende de agregação sobre outra tabela. Vira: guarda no service +
-teste + o `bank_audit` da §2.2. Igual à decisão do projeto de não usar FK dura: **a integridade
+teste + o `bank_audit` da §2.2 (⚠️ **que não existe ainda** — é pré-requisito da onda de conciliação;
+ver a correção na §2.2). Igual à decisão do projeto de não usar FK dura: **a integridade
 mora no service, sob RLS.** Se a soma for menor que o total, o movimento fica `partial` — e
 `partial` é um estado legítimo e visível (o furo é o resto).
 
@@ -1306,7 +1333,8 @@ de aporte ou resgate. É o ponto cego total que o R3 aponta.
 **Invariante verificável pós-migração:** para toda conta,
 `saldo_derivado(bank_account) == principal_cents + accrued_yield_cents` **antes** de qualquer resgate.
 Um script `python -m app.scripts.bank_audit --investments` reporta divergências sem corrigir em
-silêncio.
+silêncio. ⚠️ **O script não existe** (ver §2.2): quem o escrever, escreve-o **junto** desta onda —
+ele não é reuso de um ativo entregue, é entrega dela.
 
 ⚠️ Este é o **único** backfill deste design que toca dado existente — logo é o único exposto à
 armadilha do FORCE RLS (§2). Ele roda sob a mesma disciplina da migration 0046.
@@ -1442,6 +1470,18 @@ não-usuário, coletado por via indireta. Consequências operacionais:
 
 ## 8. Faseamento — ondas com valor próprio
 
+> ⚠️ **A ORDEM DESTA SEÇÃO ESTÁ SUPERSEDIDA (2026-07-30).** A ordem corrente está em
+> [`controle-bancario-onda2-design.md`](controle-bancario-onda2-design.md) §10. Resumo do que mudou:
+> uma **Onda 2 nova** (a origem do movimento: `payable`→banco, recebimento fora do trilho, data de
+> baixa editável, manual curado, transferência entre contas próprias) entra logo após a Onda 1; a
+> Onda 2 antiga vira **2b** (só a parte de aplicação/`principal_cents`, que carrega o único
+> backfill); o payout (era 6) sobe para **3**, porque passa a ser o mesmo mecanismo; a importação
+> (era 3) desce para **4**. Critério de ordenação: **dependência externa crescente** — 2, 2b e 3 não
+> dependem de nada fora do repositório; a importação depende da verificação de OFX real (D6) e do
+> gate §3.1. E a Onda 2 é **pré-requisito da métrica do gate**: medida antes dela, a divergência
+> mede a ausência da porta, não o furo. As **estimativas e o conteúdo** de cada onda abaixo
+> continuam válidos; só a ordem e o corte da 2 mudaram.
+>
 > Cada onda entrega valor sozinha e pode parar ali sem deixar o produto pela metade.
 > Estimativa em **ondas de trabalho**, calibrada contra módulos já entregues (não em horas — não há
 > velocity confiável). **Migrations: ver §2 — este design não fixa número de revision; a coluna
@@ -1495,7 +1535,8 @@ não-usuário, coletado por via indireta. Consequências operacionais:
   2. Resgate: mesmo, invertido, e **nenhuma receita** aparece em lugar nenhum.
   3. Rendimento lançado: aparece na DRE (grupo FINANCEIRO) **e** aumenta o saldo da aplicação.
   4. Contas de investimento pré-existentes migradas: `saldo_derivado == principal + accrued_yield`.
-  5. `bank_audit --investments` reporta zero divergência.
+  5. `bank_audit --investments` reporta zero divergência (⚠️ o script é **entrega desta onda**, não
+     ativo existente — §2.2).
 - **Esforço:** ~1,5 onda. **Atende integralmente o R3.**
 
 ### Onda 3 — Importação de extrato (parser plugável, sem match automático)

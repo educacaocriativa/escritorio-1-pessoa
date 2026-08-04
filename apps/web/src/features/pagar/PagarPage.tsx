@@ -10,6 +10,7 @@ import ChartAccountSelect from "../financeiro/ChartAccountSelect";
 import type { CostCenter } from "../financeiro/costCenters";
 import CostCenterSelect from "../financeiro/CostCenterSelect";
 import { type ChartAccount, GRUPOS_DRE } from "../financeiro/planoContas";
+import { DialogDeBaixa } from "./EscolhaDaBaixa";
 
 /** Grupos DRE cabíveis numa DESPESA (Contas a Pagar nunca lança em Receita). */
 const EXPENSE_GROUPS = GRUPOS_DRE.filter((g) => g !== "RECEITA");
@@ -51,8 +52,22 @@ const RECUR = [
   ["yearly", "Anual"],
 ] as const;
 
+/** "2026-08-20T00:00:00Z" → "20/08". Fatiamento de string, nunca `new Date` (bug de fuso §6.0). */
+function diaDoDebito(paidAt: string | null): string {
+  if (!paidAt) return "";
+  const [, mes, dia] = paidAt.slice(0, 10).split("-");
+  return dia && mes ? `${dia}/${mes}` : "";
+}
+
 function statusInfo(p: Payable): { label: string; cls: string } {
   if (p.status === "paid") return { label: "Pago", cls: "bg-accent-50 text-accent-700" };
+  // ⚠️ **[Story 8.14] `scheduled` tem RÓTULO PRÓPRIO — não é "Pago" nem "A pagar".**
+  //
+  // Mostrá-la como "Pago" diria que o dinheiro saiu (não saiu); como "A pagar", pediria uma ação
+  // que o dono já tomou. O estado existe justamente porque não cabe em nenhum dos dois, e o rótulo
+  // tem de refletir isso. A **data do débito** vai junto (ver a coluna Status), porque a pergunta
+  // seguinte do dono é sempre *"em que dia sai?"* — e essa data não é o vencimento.
+  if (p.status === "scheduled") return { label: "Agendada", cls: "bg-sky-50 text-sky-700" };
   if (p.status === "canceled") return { label: "Cancelado", cls: "bg-neutral-100 text-neutral-500" };
   if (p.is_overdue) return { label: "Atrasado", cls: "bg-red-50 text-danger" };
   return { label: "A pagar", cls: "bg-amber-50 text-amber-700" };
@@ -65,6 +80,8 @@ export default function PagarPage() {
     week_cents: 0,
     month_cents: 0,
     paid_month_cents: 0,
+    // Story 8.14 — o resumo ganhou o campo; os cinco antigos não mudaram de definição.
+    scheduled_cents: 0,
   };
   const [summary, setSummary] = useState<PayablesSummary>(empty);
   const [bills, setBills] = useState<Payable[]>([]);
@@ -73,6 +90,9 @@ export default function PagarPage() {
   const [open, setOpen] = useState(false);
   const [attach, setAttach] = useState<Payable | null>(null);
   const [edit, setEdit] = useState<Payable | null>(null);
+  // A conta cuja baixa está sendo confirmada (Story 8.13): "Marcar paga" deixou de ser um clique
+  // que comete a ação e passou a abrir a escolha de conta bancária + dia.
+  const [pagando, setPagando] = useState<Payable | null>(null);
   // Comprovantes que chegaram pelo celular e ainda não foram vinculados a nenhuma conta.
   const [inbox, setInbox] = useState<{ id: string }[]>([]);
 
@@ -114,17 +134,25 @@ export default function PagarPage() {
 
   usePrimaryAction("Nova conta", useCallback(() => setOpen(true), []));
 
-  async function pay(id: string) {
-    await api.post(`/payables/bills/${id}/pay`);
-    load();
-  }
   async function cancel(id: string) {
     if (!confirm("Cancelar esta conta?")) return;
     await api.post(`/payables/bills/${id}/cancel`);
     load();
   }
-  async function reverse(id: string) {
-    if (!confirm('Estornar esta conta? Ela volta para "A pagar" e pode ser editada de novo.')) return;
+  /**
+   * Estorno — **e o cancelamento de agendamento é a MESMA rota** (Story 8.14 AC9).
+   *
+   * A confirmação muda de frase porque os dois gestos não são o mesmo fato para o dono: estornar
+   * desfaz um pagamento que aconteceu; cancelar um agendamento impede um que ainda vai acontecer.
+   * A consequência no sistema, essa sim, é idêntica: a conta volta para "A pagar", reaparece na
+   * Fila e o movimento bancário é apagado.
+   */
+  async function reverse(id: string, agendada = false) {
+    const pergunta = agendada
+      ? "Cancelar o agendamento desta conta? O débito programado deixa de ser contado e ela volta " +
+        'para "A pagar".'
+      : 'Estornar esta conta? Ela volta para "A pagar" e pode ser editada de novo.';
+    if (!confirm(pergunta)) return;
     await api.post(`/payables/bills/${id}/reverse`);
     load();
   }
@@ -164,7 +192,13 @@ export default function PagarPage() {
             Nenhuma conta. Clique em "Nova conta".
           </p>
         ) : (
-          <table className="w-full text-sm">
+          <table
+            // `min-w-[48rem]`: sem uma largura mínima, `overflow-x-auto` não rola — a tabela se
+            // espreme dentro dos 360px e as 7 colunas viram tiras ilegíveis (o mesmo par
+            // `overflow-x-auto` + `min-w` que `ContasSaldosPage` usa). Rolar é o comportamento
+            // desejado; espremer só troca "cortado" por "ilegível".
+            className="w-full min-w-[48rem] text-sm"
+          >
             <thead>
               <tr className="border-b border-neutral-100 text-left text-xs uppercase text-neutral-400">
                 <th className="px-4 py-3 font-medium">Conta</th>
@@ -199,6 +233,13 @@ export default function PagarPage() {
                     <td className="px-4 py-3 font-medium tabular-nums">{brl(p.amount_cents)}</td>
                     <td className="px-4 py-3">
                       <span className={`rounded-pill px-2 py-0.5 text-xs ${st.cls}`}>{st.label}</span>
+                      {/* A data do DÉBITO, não o vencimento: numa agendada as duas divergem por
+                          construção, e é a do débito que responde "quando o dinheiro sai?". */}
+                      {p.status === "scheduled" && p.paid_at && (
+                        <span className="block text-[11px] text-neutral-400">
+                          sai {diaDoDebito(p.paid_at)}
+                        </span>
+                      )}
                     </td>
                     <td className="px-4 py-3 text-right">
                       <div className="flex items-center justify-end gap-3">
@@ -217,7 +258,7 @@ export default function PagarPage() {
                             <button onClick={() => setEdit(p)} className="text-xs font-medium text-neutral-500 hover:text-primary-600">
                               Editar
                             </button>
-                            <button onClick={() => pay(p.id)} className="text-xs font-medium text-accent-600 hover:underline">
+                            <button onClick={() => setPagando(p)} className="text-xs font-medium text-accent-600 hover:underline">
                               Marcar paga
                             </button>
                             <button onClick={() => cancel(p.id)} className="text-xs text-neutral-400 hover:text-danger">
@@ -230,6 +271,16 @@ export default function PagarPage() {
                             Estornar
                           </button>
                         )}
+                        {/* ⚠️ **[Story 8.14] Mesma ação, rótulo diferente.** No backend é o MESMO
+                            `POST /reverse` — não há verbo novo, porque `reverse` sempre significou
+                            "esta saída não vai acontecer" e isso serve igualmente para uma saída
+                            que ainda não aconteceu. Na tela o nome precisa ser outro: "Estornar"
+                            uma conta que nunca foi paga não é frase que o dono reconheça. */}
+                        {p.status === "scheduled" && (
+                          <button onClick={() => reverse(p.id, true)} className="text-xs font-medium text-neutral-400 hover:text-danger">
+                            Cancelar agendamento
+                          </button>
+                        )}
                       </div>
                     </td>
                   </tr>
@@ -239,6 +290,24 @@ export default function PagarPage() {
           </table>
         )}
       </div>
+
+      {/* A baixa passa por aqui desde a Story 8.13: a conta bancária de onde o dinheiro saiu é
+          obrigatória no backend (8.12) e o dia é escolhido junto, no MESMO container do botão que
+          comete a ação. O 409 acionável abre o cadastro de conta embutido e volta para cá. */}
+      {pagando && (
+        <DialogDeBaixa
+          titulo="Dar baixa nesta conta"
+          descricao={pagando.description || pagando.supplier || "Conta"}
+          valor={`${brl(pagando.amount_cents)} · vence ${new Date(pagando.due_date + "T00:00").toLocaleDateString("pt-BR")}`}
+          dataPadrao={pagando.due_date}
+          onClose={() => setPagando(null)}
+          onPago={async (corpo) => {
+            await api.post(`/payables/bills/${pagando.id}/pay`, corpo);
+            setPagando(null);
+            load();
+          }}
+        />
+      )}
 
       <NewBillModal open={open} onClose={() => setOpen(false)} onCreated={load} />
       {edit && (

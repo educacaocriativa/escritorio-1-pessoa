@@ -26,7 +26,20 @@ ALL_METHODS = {METHOD_PIX, METHOD_BOLETO, METHOD_CARD}
 STATUS_OPEN = "open"
 STATUS_PAID = "paid"
 STATUS_CANCELED = "canceled"
-ALL_STATUSES = {STATUS_OPEN, STATUS_PAID, STATUS_CANCELED}
+# ⚠️ **[Story 8.15] `scheduled` — o Pix que o cliente AGENDOU e ainda não caiu.** Espelho exato do
+# `payables.STATUS_SCHEDULED` da 8.14: o estado é **derivado da data** (`received_on > hoje ⇒
+# scheduled`) por `app.core.scheduling.status_por_data`, nunca escolhido — nenhum schema de entrada
+# deste módulo tem campo `status`.
+#
+# **Cabe sem migration de tipo:** `charges.status` é `String(12)` e `"scheduled"` tem 9 caracteres
+# (asserção estrutural em `tests/test_receivables_off_rail.py`). A story 8.15 não cria migration.
+#
+# ⚠️ Ele só nasce pelo caminho **fora do trilho** (`settle_off_rail`): o caminho do gateway
+# (`mark_paid`/webhook) crava `paid_at = now()` e continua sem estado agendado — *"é fato externo,
+# atestado por terceiro, e editá-lo transformaria uma testemunha em opinião"*. A assimetria com
+# `payables` é a informação, não um esquecimento.
+STATUS_SCHEDULED = "scheduled"
+ALL_STATUSES = {STATUS_OPEN, STATUS_SCHEDULED, STATUS_PAID, STATUS_CANCELED}
 
 
 class Charge(Base, TenantMixin, TimestampMixin):
@@ -77,3 +90,27 @@ class Charge(Base, TenantMixin, TimestampMixin):
     gateway_provider: Mapped[str | None] = mapped_column(String(20), nullable=True)
     gateway_charge_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
     gateway_status_raw: Mapped[str | None] = mapped_column(String(40), nullable=True)
+
+    # ── A Regra da Origem (Story 8.9, migration 0064, design Onda 2 §3.4) ────────────────────
+    # As duas colunas nascem NULL e **nenhum caminho de produção as escreve nesta story**: a Story
+    # 8.9 entrega o contrato, e a **8.15** (recebimento fora do trilho, `settle_off_rail`) liga o
+    # fluxo a ele. Sem FK dura (padrão do projeto, igual a `client_id`).
+    #
+    # **REGRA DE AUTORIDADE**, idêntica à de `Payable` (ver a docstring lá, que é a longa):
+    #   `bank_account_id`     → **DECISÃO DO USUÁRIO, AUTORITATIVA** — em qual conta o Pix caiu.
+    #   `bank_transaction_id` → **CACHE DE LEITURA.** Divergiu do movimento com
+    #                           `origin_id = charge.id`? **Quem manda é o `origin_id`.**
+    #
+    # ⚠️ **Estes dois ponteiros são criados aqui, mas a INVARIANTE DO TRILHO não é implementada
+    # nesta story** (design §3.4; é escopo da 8.15): *para toda `Charge` com `status='paid'`,
+    # exatamente um de `transaction_id` e `bank_account_id` é não-nulo.* `transaction_id` ⇒ entrou
+    # pelo **trilho** (plano 1: split, `PlatformEarning`, nenhum movimento bancário);
+    # `bank_account_id` ⇒ entrou **fora do trilho** (plano 3: nenhuma `Transaction`, nenhum
+    # `PlatformEarning`, um movimento de crédito). Hoje ela é insatisfazível por construção —
+    # `settle_off_rail` não existe, logo não há charge fora do trilho para varrer.
+    #
+    # ⚠️ **NÃO existe (nem deve existir) coluna `payment_route`.** A rota é **DERIVADA** dos dois
+    # ponteiros (`"trilho" if transaction_id else "banco"`); um rótulo separado pode divergir do
+    # fato e vira a terceira fonte de verdade — o defeito D-3 pela terceira vez.
+    bank_account_id: Mapped[str | None] = mapped_column(String(36), nullable=True)
+    bank_transaction_id: Mapped[str | None] = mapped_column(String(36), nullable=True)

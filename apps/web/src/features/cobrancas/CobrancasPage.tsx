@@ -7,9 +7,13 @@ import { api, apiErrorMessage, publicApi } from "../../lib/api";
 import { pluralize } from "../../lib/pluralize";
 import { usePrimaryAction } from "../../store/pageActions";
 import ChartAccountSelect from "../financeiro/ChartAccountSelect";
+import { type BankAccount, hojeISO } from "../financeiro/contas";
 import type { CostCenter } from "../financeiro/costCenters";
 import CostCenterSelect from "../financeiro/CostCenterSelect";
 import { type ChartAccount, GRUPOS_DRE } from "../financeiro/planoContas";
+import { VOCAB_ENTRADA } from "../pagar/baixa";
+import { DialogDeBaixa } from "../pagar/EscolhaDaBaixa";
+import { rotuloDaRota } from "./rota";
 
 /** Grupos DRE cabíveis numa RECEITA (Cobranças nunca lança em Despesa/Tributo/Investimento). */
 const REVENUE_GROUPS = GRUPOS_DRE.filter((g) => g === "RECEITA");
@@ -29,6 +33,11 @@ const METHODS = [
 
 function statusInfo(c: Charge): { label: string; cls: string } {
   if (c.status === "paid") return { label: "Recebido", cls: "bg-accent-50 text-accent-700" };
+  // ⚠️ **[Story 8.15] `scheduled` tem RÓTULO PRÓPRIO — não é "Recebido" nem "A vencer".**
+  // "Recebido" diria que o dinheiro caiu (não caiu); "A vencer" pediria uma cobrança que o dono já
+  // sabe que está resolvida — e a régua voltaria a alcançar quem já pagou, que é o defeito inteiro
+  // que esta story fecha.
+  if (c.status === "scheduled") return { label: "Agendado", cls: "bg-amber-50 text-amber-700" };
   if (c.status === "canceled") return { label: "Cancelado", cls: "bg-neutral-100 text-neutral-500" };
   if (c.is_overdue) return { label: "Vencido", cls: "bg-red-50 text-danger" };
   return { label: "A vencer", cls: "bg-blue-50 text-blue-700" };
@@ -41,14 +50,18 @@ export default function CobrancasPage() {
     paid_cents: 0,
     open_count: 0,
     overdue_count: 0,
+    scheduled_cents: 0,
   };
   const [summary, setSummary] = useState<ChargesSummary>(empty);
   const [charges, setCharges] = useState<Charge[]>([]);
   const [chartAccounts, setChartAccounts] = useState<ChartAccount[]>([]);
   const [costCenters, setCostCenters] = useState<CostCenter[]>([]);
+  const [bankAccounts, setBankAccounts] = useState<BankAccount[]>([]);
   const [open, setOpen] = useState(false);
   const [docs, setDocs] = useState<Charge | null>(null);
   const [edit, setEdit] = useState<Charge | null>(null);
+  // [8.15] A cobrança para a qual o dono está declarando "recebi direto na conta".
+  const [recebendo, setRecebendo] = useState<Charge | null>(null);
   const [toast, setToast] = useState<{ msg: string; type: "ok" | "err" } | null>(null);
 
   const notify = useCallback((msg: string, type: "ok" | "err" = "ok") => {
@@ -65,12 +78,16 @@ export default function CobrancasPage() {
     setCharges(c.data);
     // Rótulos são só um complemento de exibição — se o usuário não tiver acesso a esses módulos
     // (require_module), a lista de cobranças continua funcionando normalmente.
-    const [ca, cc] = await Promise.all([
+    const [ca, cc, ba] = await Promise.all([
       api.get<ChartAccount[]>("/chart-of-accounts").catch(() => ({ data: [] as ChartAccount[] })),
       api.get<CostCenter[]>("/cost-centers").catch(() => ({ data: [] as CostCenter[] })),
+      // [8.15] Só para NOMEAR a conta que recebeu na linha liquidada fora do trilho. A escolha da
+      // conta no registro é do `DialogDeBaixa`, que carrega a própria lista.
+      api.get<BankAccount[]>("/bank/accounts").catch(() => ({ data: [] as BankAccount[] })),
     ]);
     setChartAccounts(ca.data);
     setCostCenters(cc.data);
+    setBankAccounts(ba.data);
   }, []);
 
   useEffect(() => {
@@ -85,6 +102,10 @@ export default function CobrancasPage() {
     () => Object.fromEntries(costCenters.map((c) => [c.id, c.name])),
     [costCenters],
   );
+  const nomeDaContaBancaria = useMemo(() => {
+    const mapa = Object.fromEntries(bankAccounts.map((a) => [a.id, a.name]));
+    return (id: string) => mapa[id] ?? "";
+  }, [bankAccounts]);
 
   usePrimaryAction("Nova cobrança", useCallback(() => setOpen(true), []));
 
@@ -128,6 +149,18 @@ export default function CobrancasPage() {
         <Stat label="A vencer" value={brl(summary.open_cents)} hint={`${summary.open_count} ${pluralize(summary.open_count, "cobrança", "cobranças")}`} tone="text-blue-700" />
         <Stat label="Vencido" value={brl(summary.overdue_cents)} hint={`${summary.overdue_count} em atraso`} tone="text-danger" />
         <Stat label="Recebido" value={brl(summary.paid_cents)} hint="total" tone="text-accent-700" />
+        {/* [8.15] O agendado tem cartão PRÓPRIO e **some quando é zero** — mesmo tratamento do
+            "Agendado para entrar" da 8.14. Sem ele, a cobrança agendada não apareceria em nenhum
+            dos três cartões (nem "a vencer", nem "vencido", nem "recebido"): o modo de falha "o
+            dinheiro some da tela" que esta onda existe para eliminar. */}
+        {summary.scheduled_cents > 0 && (
+          <Stat
+            label="Agendado para entrar"
+            value={brl(summary.scheduled_cents)}
+            hint="recebido fora do trilho, com dia marcado"
+            tone="text-amber-700"
+          />
+        )}
       </div>
 
       <div className="overflow-hidden rounded-2xl bg-white shadow-sm">
@@ -182,6 +215,13 @@ export default function CobrancasPage() {
                     <td className="px-4 py-3 font-medium tabular-nums">{brl(c.amount_cents)}</td>
                     <td className="px-4 py-3">
                       <span className={`rounded-pill px-2 py-0.5 text-xs ${st.cls}`}>{st.label}</span>
+                      {/* [8.15] A linha liquidada FORA DO TRILHO diz QUAL conta recebeu e QUANDO.
+                          O rótulo é DERIVADO dos dois ponteiros (`rota.ts`), nunca persistido. */}
+                      {rotuloDaRota(c, nomeDaContaBancaria) && (
+                        <span className="mt-0.5 block text-[11px] text-neutral-400">
+                          {rotuloDaRota(c, nomeDaContaBancaria)}
+                        </span>
+                      )}
                     </td>
                     <td className="px-4 py-3 text-right">
                       <div className="flex items-center justify-end gap-3">
@@ -192,6 +232,19 @@ export default function CobrancasPage() {
                           <>
                             <button onClick={() => setEdit(c)} className="text-xs font-medium text-neutral-500 hover:text-primary-600">
                               Editar
+                            </button>
+                            {/* ⚠️ **[Story 8.15] O rótulo é o FATO, não o mecanismo — e NÃO é
+                                "Marcar paga".** Aquele botão foi removido de propósito (só o
+                                webhook do gateway marca pago) e a diferença importa: aqui o dono
+                                declara um fato sobre a conta bancária DELE. Convive com o
+                                "simular pgto" ao lado sem ambiguidade: aquele finge o gateway,
+                                este registra o que aconteceu fora dele. */}
+                            <button
+                              onClick={() => setRecebendo(c)}
+                              title="Recebi este valor direto na minha conta bancária, fora da cobrança do e1p"
+                              className="text-xs font-medium text-neutral-500 hover:text-accent-600"
+                            >
+                              Recebi direto na conta
                             </button>
                             <button onClick={() => simulatePayment(c)} title="Apenas teste do gateway — em produção o pagamento entra sozinho" className="text-[11px] text-neutral-300 hover:text-accent-600">
                               simular pgto
@@ -210,6 +263,33 @@ export default function CobrancasPage() {
           </table>
         )}
       </div>
+
+      {/* [8.15] O MESMO componente da baixa de Contas a Pagar (8.13), com o vocabulário das
+          ENTRADAS: seletor de conta e dia **dentro do container do botão** que comete a ação, 409
+          acionável abrindo o cadastro embutido e retomando o registro. A lição dos PRs #56/#58
+          vale igual aqui — terceira vez seria imperdoável. */}
+      {recebendo && (
+        <DialogDeBaixa
+          titulo="Recebi direto na conta"
+          descricao={recebendo.client_name || recebendo.description || "Cobrança"}
+          valor={`${brl(recebendo.amount_cents)} · vence ${new Date(recebendo.due_date + "T00:00").toLocaleDateString("pt-BR")}`}
+          // Default = HOJE (não o vencimento): o gesto aqui é "caiu na minha conta", um fato que o
+          // dono está observando agora — a assimetria com a baixa de Contas a Pagar é deliberada.
+          dataPadrao={hojeISO()}
+          vocab={VOCAB_ENTRADA}
+          acao="Confirmar recebimento"
+          acaoEmCurso="Registrando…"
+          onClose={() => setRecebendo(null)}
+          onPago={async (corpo) => {
+            await api.post(`/receivables/charges/${recebendo.id}/settle-externally`, {
+              bank_account_id: corpo.bank_account_id,
+              received_on: corpo.paid_on,
+            });
+            setRecebendo(null);
+            load();
+          }}
+        />
+      )}
 
       <NewChargeModal open={open} onClose={() => setOpen(false)} onCreated={load} />
       {edit && (

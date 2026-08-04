@@ -36,7 +36,7 @@ dedicado do CI (`cross-tenant-rls`) ou manualmente com Docker (`pytest -m rls_e2
 from __future__ import annotations
 
 from collections.abc import Iterator
-from datetime import date
+from datetime import date, timedelta
 from pathlib import Path
 from uuid import uuid4
 
@@ -45,7 +45,7 @@ import pytest
 pytest.importorskip("testcontainers.postgres")
 
 from sqlalchemy import create_engine, text  # noqa: E402
-from sqlalchemy.exc import ProgrammingError  # noqa: E402
+from sqlalchemy.exc import IntegrityError, ProgrammingError  # noqa: E402
 from sqlalchemy.orm import Session  # noqa: E402
 from sqlalchemy.pool import NullPool  # noqa: E402
 from testcontainers.postgres import PostgresContainer  # noqa: E402
@@ -119,7 +119,28 @@ def _session_for(app_url: str, tenant_id: str | None):
     return _ctx()
 
 
-def _seed_account(app_url: str, tenant_id: str, *, name: str, opening: int, number: str) -> str:
+def _hoje_utc() -> date:
+    """A MESMA âncora de `bank.service._today()` e de `payables` — UTC, nunca local."""
+    from app.modules.bank import service as bank_service
+
+    return bank_service._today()
+
+
+def _seed_account(
+    app_url: str,
+    tenant_id: str,
+    *,
+    name: str,
+    opening: int,
+    number: str,
+    opening_date: date = date(2026, 7, 1),
+) -> str:
+    """⚠️ **[Story 8.14] `opening_date` virou parâmetro, com o MESMO default de antes.**
+
+    Os casos de agendamento precisam de datas ancoradas em "hoje" (o estado `scheduled` é derivado
+    do relógio real), e uma abertura fixa em 2026-07-01 barraria a baixa pelo piso assim que o
+    calendário passasse dela. Nenhum chamador existente muda de comportamento.
+    """
     from app.modules.bank.models import BankAccount
 
     with _session_for(app_url, tenant_id) as session:
@@ -132,7 +153,7 @@ def _seed_account(app_url: str, tenant_id: str, *, name: str, opening: int, numb
             branch="0001",
             number=number,
             opening_balance_cents=opening,
-            opening_date=date(2026, 7, 1),
+            opening_date=opening_date,
             is_primary=True,
         )
         session.add(acc)
@@ -716,3 +737,1168 @@ def test_conferencia_isolamento_cross_tenant(app_url: str) -> None:
             "batendo"
         )
         assert vazio.contas_avaliadas == 0 and vazio.contas_fora_da_banda == []
+
+
+# ── Story 8.11 — a guarda do recuo e o agregado do aviso, sob RLS real ────────────────────────
+
+
+def test_recuo_do_opening_date_sob_rls(app_url: str) -> None:
+    """Os **+2 casos do design §4.3** no Postgres real: recuo com saldo → 200; sem saldo → 422.
+
+    Vale rodar aqui, e não só no SQLite, por dois motivos: a guarda compara uma coluna `DATE` do
+    Postgres (que volta como `datetime.date`, e não como texto) e o caminho de escrita passa pelo
+    `commit`/`refresh` sob RLS — onde um `db.refresh()` sem a GUC já derrubou o produto inteiro
+    antes (`CLAUDE.md` §6.0, o bug do refresh pós-commit).
+    """
+    from app.modules.bank import service as bank_service
+    from app.modules.bank.schemas import BankAccountUpdate
+
+    tenant = str(uuid4())
+    acc = _seed_account(app_url, tenant, name="Recuo", opening=100_000, number="9911-1")
+
+    # (a) Recuo SEM redeclarar o saldo → 422, e nada é gravado (nem a data).
+    with _session_for(app_url, tenant) as s:
+        with pytest.raises(bank_service.BankError) as exc:
+            bank_service.update_account(
+                s, account_id=acc, tenant_id=tenant, actor="dono",
+                data=BankAccountUpdate(opening_date=date(2026, 6, 1)),
+            )
+        assert exc.value.status_code == 422
+        assert "2026-07-01" in str(exc.value) and "2026-06-01" in str(exc.value)
+
+    with _session_for(app_url, tenant) as s:
+        conta = bank_service.get_account(s, acc)
+        assert conta.opening_date == date(2026, 7, 1), "o 422 gravou a data pela metade"
+        assert conta.opening_balance_cents == 100_000
+
+    # (b) Recuo COM o saldo daquele dia → 200, e o saldo derivado parte do valor REDECLARADO.
+    with _session_for(app_url, tenant) as s:
+        atualizada = bank_service.update_account(
+            s, account_id=acc, tenant_id=tenant, actor="dono",
+            data=BankAccountUpdate(opening_date=date(2026, 6, 1), opening_balance_cents=340_000),
+        )
+        assert atualizada.opening_date == date(2026, 6, 1)
+        assert atualizada.opening_balance_cents == 340_000
+        assert bank_service.derived_balance(s, bank_account_id=acc) == 340_000
+
+
+def test_paid_before_isolamento_cross_tenant(app_url: str) -> None:
+    """`GET /payables/bills/paid-before` (Story 8.11): A nunca conta as contas pagas de B.
+
+    O modo de falha aqui é **o aviso do vizinho**: o cadastro da conta bancária de A diria "você
+    tem N contas pagas entre X e Y" com dados que não são dele — e a data sugerida, que ele vai
+    usar como `opening_date` real, viria do histórico de outro escritório. Vazamento de PII de
+    negócio **e** um número errado no exato campo que a Regra 5 protege.
+
+    Também exercita o fail-closed: sem a GUC, o agregado é zero e as datas são `None` — nunca a
+    soma de todo mundo. Um agregado que vaze não devolve "uma linha estranha", devolve um TOTAL —
+    a forma mais silenciosa possível de vazamento.
+    """
+    from datetime import datetime
+
+    from app.modules.payables import service as payables_service
+    from app.modules.payables.models import STATUS_PAID, Payable
+
+    tenant_a = str(uuid4())
+    tenant_b = str(uuid4())
+
+    def _pagar(tenant_id: str, *, amount: int, dia: str) -> None:
+        with _session_for(app_url, tenant_id) as s:
+            s.add(
+                Payable(
+                    tenant_id=tenant_id,
+                    description="conta",
+                    category="Geral",
+                    supplier="Fornecedor",
+                    amount_cents=amount,
+                    due_date=date.fromisoformat(dia),
+                    status=STATUS_PAID,
+                    paid_at=datetime.fromisoformat(f"{dia}T12:00:00+00:00"),
+                )
+            )
+            s.commit()
+
+    _pagar(tenant_a, amount=120_000, dia="2026-05-03")
+    _pagar(tenant_a, amount=80_000, dia="2026-06-20")
+    _pagar(tenant_b, amount=999_999, dia="2026-01-09")
+
+    corte = date(2026, 7, 30)
+
+    with _session_for(app_url, tenant_a) as sa:
+        agregado = payables_service.paid_before(sa, date_=corte)
+        assert agregado["count"] == 2, f"A contou conta paga de B: {agregado}"
+        assert agregado["total_cents"] == 200_000, "o valor pago de B entrou no total de A"
+        assert agregado["oldest_paid_on"] == date(2026, 5, 3), (
+            "a data mais antiga veio do histórico de OUTRO tenant — é ela que o dono usaria como "
+            "`opening_date` da conta bancária dele"
+        )
+        assert agregado["newest_paid_on"] == date(2026, 6, 20)
+
+    with _session_for(app_url, tenant_b) as sb:
+        assert payables_service.paid_before(sb, date_=corte) == {
+            "count": 1,
+            "total_cents": 999_999,
+            "oldest_paid_on": date(2026, 1, 9),
+            "newest_paid_on": date(2026, 1, 9),
+        }
+
+    # ── Sem GUC: fail-closed. Zero, e NUNCA a soma de todos os tenants ───────────────────────
+    with _session_for(app_url, None) as sn:
+        assert payables_service.paid_before(sn, date_=corte) == {
+            "count": 0,
+            "total_cents": 0,
+            "oldest_paid_on": None,
+            "newest_paid_on": None,
+        }, (
+            "FAIL-CLOSED falhou: sem `app.current_tenant_id` o agregado devolveu números. Num "
+            "agregado o vazamento não aparece como linha estranha — aparece como um TOTAL."
+        )
+
+
+# ── Story 8.10 — o corte de data sob RLS ─────────────────────────────────────────────────────
+
+
+def test_corte_de_data_sob_rls_cross_tenant(app_url: str) -> None:
+    """O corte de `until=None` → **hoje** (Story 8.10) vale no Postgres real, e não vaza.
+
+    Vale rodar aqui, e não só no SQLite, por dois motivos concretos:
+
+    1. **A mudança altera a cláusula `WHERE` efetiva de uma query que roda sob RLS.** Uma condição a
+       mais no `WHERE` de uma policy `FORCE` é exatamente o tipo de coisa que passa no SQLite e cai
+       no Postgres — e o sintoma seria um saldo errado, não um erro.
+    2. **`SEM_CORTE` é `date.max`.** No SQLite a comparação de `DATE` é textual (`'9999-12-31'`
+       ordena bem por acidente do formato ISO); no Postgres é uma comparação de `date` de verdade,
+       no limite superior do tipo. Se `date.max` estourasse o binding em algum dialeto, seria aqui.
+
+    O cenário é montado **direto pelo model** porque `_validate_posted_at` recusa `posted_at` futuro
+    pela porta manual — e continua recusando (quem afrouxa isso para o caminho de ORIGEM é a
+    8.12/8.14). Ver a mesma justificativa em `tests/test_bank_corte_de_data.py`.
+    """
+    from datetime import timedelta
+
+    from app.modules.bank import service as bank_service
+    from app.modules.bank.models import BankTransaction
+
+    hoje = bank_service._today()
+    tenant_a = str(uuid4())
+    tenant_b = str(uuid4())
+    acc_a = _seed_account(app_url, tenant_a, name="A corte", opening=100_000, number="7710-1")
+    acc_b = _seed_account(app_url, tenant_b, name="B corte", opening=500_000, number="7710-2")
+
+    # Movimento PASSADO em cada um (pela porta normal) + um AGENDADO só no tenant A.
+    _lancar(app_url, tenant_a, acc_a, amount_cents=20_000, posted_at=hoje - timedelta(days=2))
+    _lancar(app_url, tenant_b, acc_b, amount_cents=-5_000, posted_at=hoje - timedelta(days=2))
+
+    with _session_for(app_url, tenant_a) as sa:
+        sa.add(
+            BankTransaction(
+                tenant_id=tenant_a,
+                bank_account_id=acc_a,
+                posted_at=hoje + timedelta(days=10),
+                amount_cents=-90_000,
+                raw_description="Agendado (como a 8.14 fara)",
+                dedup_hash=f"agendado-{acc_a}",
+                source="manual",
+                status="unmatched",
+            )
+        )
+        sa.commit()
+
+    # ── A: o agendado existe, e NÃO entra no saldo corrente ──────────────────────────────────
+    with _session_for(app_url, tenant_a) as sa:
+        assert len(bank_service.list_transactions(sa)) == 2, (
+            "o movimento agendado sumiu da LISTA — ele tem de continuar visível; o que a 8.10 faz "
+            "é tirá-lo do SALDO, não escondê-lo"
+        )
+        assert bank_service.derived_balance(sa, bank_account_id=acc_a) == 120_000
+        assert bank_service.derived_balances_as_of(sa) == {acc_a: 120_000}
+        # E a saída de emergência funciona no limite superior do tipo `date` do Postgres.
+        assert (
+            bank_service.derived_balance(
+                sa, bank_account_id=acc_a, until=bank_service.SEM_CORTE
+            )
+            == 30_000
+        )
+        assert bank_service.derived_balances_as_of(sa, as_of=bank_service.SEM_CORTE) == {
+            acc_a: 30_000
+        }
+
+    # ── B: nada do agendado de A o alcança, por nenhum dos dois cortes ───────────────────────
+    with _session_for(app_url, tenant_b) as sb:
+        assert bank_service.derived_balance(sb, bank_account_id=acc_b) == 495_000
+        assert bank_service.derived_balances_as_of(sb) == {acc_b: 495_000}
+        assert bank_service.derived_balances_as_of(sb, as_of=bank_service.SEM_CORTE) == {
+            acc_b: 495_000
+        }, (
+            "o movimento AGENDADO do tenant A entrou no histórico de B. `SEM_CORTE` amplia a "
+            "janela de DATAS, nunca o escopo de tenant — se ampliou, a RLS foi contornada pela "
+            "condição nova do WHERE"
+        )
+
+    # ── Sem GUC: fail-closed, inclusive com o corte mais permissivo que existe ───────────────
+    with _session_for(app_url, None) as sn:
+        assert bank_service.derived_balances_as_of(sn) == {}
+        assert bank_service.derived_balances_as_of(sn, as_of=bank_service.SEM_CORTE) == {}, (
+            "FAIL-CLOSED falhou: sem `app.current_tenant_id`, pedir o histórico inteiro devolveu "
+            "saldo. O estado seguro é 'não vejo nada', nunca 'vejo tudo'."
+        )
+
+
+# ── Story 8.9 — a REGRA DA ORIGEM (AC2, AC11) ────────────────────────────────────────────────
+#
+# > **[@dev 8.9] Desvio documentado das File Locations da Story 8.9.** A story previa um arquivo
+# > novo, `tests/test_bank_origin_rls.py`. Ele exigiria um **segundo** `PostgresContainer` (a
+# > fixture `app_url` tem escopo de MÓDULO) e, com ele, um segundo `alembic upgrade head` — minutos
+# > de CI para exercitar exatamente as mesmas tabelas já preparadas aqui. **A instrução escrita no
+# > topo deste arquivo pela 8.3 é explícita** (*"acrescente casos AQUI em vez de criar mais um
+# > arquivo de testcontainer"*), a 8.5 seguiu-a e registrou o mesmo desvio, e a 8.9 é a terceira a
+# > chegar. Seguimos o padrão real do repositório; registrado em Completion Notes.
+#
+# A fixture `app_url` passa a exercitar também a migration **0064** (a coluna `origin_id`, as duas
+# colunas de `payables` e de `charges` e os dois índices novos) na cadeia …→0059→0060→0063→**0064**.
+
+
+def _sync_origem(app_url: str, tenant_id: str, **over) -> str | None:
+    """`sync_origin_movement` numa sessão com a GUC do tenant fixada. Commita ao sair."""
+    from app.modules.bank.models import SOURCE_PAYABLE
+    from app.modules.bank.origin import sync_origin_movement
+
+    kwargs = {
+        "tenant_id": tenant_id,
+        "actor": "dono",
+        "source": SOURCE_PAYABLE,
+        "origin_id": str(uuid4()),
+        "bank_account_id": None,
+        "posted_at": date(2026, 7, 10),
+        "amount_cents": -120_00,
+        "description": "Aluguel",
+    }
+    kwargs.update(over)
+    with _session_for(app_url, tenant_id) as session:
+        movimento = sync_origin_movement(session, **kwargs)
+        movimento_id = movimento.id if movimento is not None else None
+        session.commit()
+        return movimento_id
+
+
+def test_indice_unico_de_origem_no_postgres_real(app_url: str) -> None:
+    """**AC2 — as duas metades do índice único PARCIAL, no banco que a produção roda.**
+
+    Esta é a prova autoritativa: é aqui que a migration 0064 cria o índice de verdade, com o
+    `WHERE origin_id IS NOT NULL` do dialeto Postgres. O SQLite dos unitários exercita um
+    equivalente (`sqlite_where`), mas quem decide em produção é este.
+
+    ⚠️ **A idempotência da Onda 2 inteira é este índice, não o `dedup_hash`.** Um retry de request,
+    um reprocessamento de baixa ou um segundo caminho de escrita aberto por engano param aqui —
+    fail-closed, no espírito da RLS.
+    """
+    from app.modules.bank.models import SOURCE_PAYABLE, STATUS_MATCHED, BankTransaction
+
+    tenant = str(uuid4())
+    acc = _seed_account(app_url, tenant, name="Origem", opening=100_000, number="6111-1")
+    origin_id = str(uuid4())
+
+    assert _sync_origem(app_url, tenant, origin_id=origin_id, bank_account_id=acc) is not None
+
+    # (a) mesma `(tenant, source, origin_id)` → o BANCO recusa a segunda linha. Escrito
+    #     CONTORNANDO o sincronizador de propósito: o que precisa estar provado é que a garantia
+    #     sobrevive a um segundo caminho de escrita, não que a função tem um `if`.
+    with _session_for(app_url, tenant) as s:
+        s.add(
+            BankTransaction(
+                tenant_id=tenant,
+                bank_account_id=acc,
+                posted_at=date(2026, 7, 11),
+                amount_cents=-1,
+                raw_description="a mesma origem, de novo",
+                dedup_hash="hash-diferente-de-proposito",
+                source=SOURCE_PAYABLE,
+                origin_id=origin_id,
+                status=STATUS_MATCHED,
+            )
+        )
+        with pytest.raises(IntegrityError):
+            s.commit()
+        s.rollback()
+
+    # (b) duas linhas com `origin_id IS NULL` na mesma conta → **ambas passam**.
+    for i in (1, 2):
+        _lancar(
+            app_url, tenant, acc, amount_cents=-50_00, posted_at=date(2026, 7, 12),
+            description=f"Pix manual {i}",
+        )
+
+    with _session_for(app_url, tenant) as s:
+        assert s.query(BankTransaction).filter(BankTransaction.origin_id.is_(None)).count() == 2
+
+
+def test_indice_de_origem_nao_vaza_entre_tenants(app_url: str) -> None:
+    """`uq_bank_transactions_origin` é GLOBAL — `tenant_id` na frente é o que salva.
+
+    Dois tenants com a **mesma** `(source, origin_id)` precisam conviver. Sem `tenant_id` como
+    primeira coluna, o segundo levaria um erro de integridade causado por um dado que ele **não
+    pode nem ver**: bug **e** vazamento de existência — a mesma lição que
+    `uq_bank_accounts_tenant_ident` (8.2) e `uq_bank_transactions_dedup` (8.3) já pagaram.
+    """
+    from app.modules.bank.models import BankTransaction
+
+    tenant_a = str(uuid4())
+    tenant_b = str(uuid4())
+    acc_a = _seed_account(app_url, tenant_a, name="Org A", opening=100_000, number="6222-1")
+    acc_b = _seed_account(app_url, tenant_b, name="Org B", opening=100_000, number="6222-2")
+    mesmo_origin_id = str(uuid4())  # a MESMA chave de origem nos dois lados, de propósito
+
+    assert _sync_origem(app_url, tenant_a, origin_id=mesmo_origin_id, bank_account_id=acc_a)
+    assert _sync_origem(app_url, tenant_b, origin_id=mesmo_origin_id, bank_account_id=acc_b)
+
+    with _session_for(app_url, tenant_b) as sb:
+        assert (
+            sb.query(BankTransaction)
+            .filter(BankTransaction.origin_id == mesmo_origin_id)
+            .count()
+            == 1
+        ), "B enxergou o movimento de origem de A (ou o próprio em duplicidade)"
+
+
+def test_sync_origin_movement_isolamento_cross_tenant(app_url: str) -> None:
+    """**AC11 — A nunca alcança o movimento, o `payable` nem a `charge` de B.**
+
+    O modo de falha desta função é o mais grave do módulo, porque ela **escreve** no razão
+    bancário. Um vazamento aqui não apareceria como "vi uma linha que não é minha" — apareceria
+    como **dinheiro do vizinho entrando no meu extrato** (ou sumindo do dele), e portanto como uma
+    divergência inventada no único número que este produto vende como confiável.
+    """
+    from datetime import datetime
+
+    from app.modules.bank import service as bank_service
+    from app.modules.bank.models import SOURCE_PAYABLE, BankTransaction
+    from app.modules.bank.origin import sync_origin_movement
+    from app.modules.payables.models import STATUS_PAID, Payable
+    from app.modules.receivables.models import Charge
+
+    tenant_a = str(uuid4())
+    tenant_b = str(uuid4())
+    _seed_account(app_url, tenant_a, name="Sync A", opening=100_000, number="6333-1")
+    acc_b = _seed_account(app_url, tenant_b, name="Sync B", opening=100_000, number="6333-2")
+
+    origin_b = str(uuid4())
+    mov_b = _sync_origem(app_url, tenant_b, origin_id=origin_b, bank_account_id=acc_b)
+    assert mov_b is not None
+
+    # ── (1) A não escreve na conta de B: `get_account` é 404 fail-closed ─────────────────────
+    with _session_for(app_url, tenant_a) as sa:
+        with pytest.raises(bank_service.BankError) as exc:
+            sync_origin_movement(
+                sa, tenant_id=tenant_a, actor="a", source=SOURCE_PAYABLE,
+                origin_id=str(uuid4()), bank_account_id=acc_b,
+                posted_at=date(2026, 7, 10), amount_cents=-1_000, description="invasão",
+            )
+        assert exc.value.status_code == 404, "cross-tenant deve ser 404 fail-closed, não 403"
+
+    # ── (2) A "estorna" a origem de B: não acha nada, não apaga nada ─────────────────────────
+    with _session_for(app_url, tenant_a) as sa:
+        assert (
+            sync_origin_movement(
+                sa, tenant_id=tenant_a, actor="a", source=SOURCE_PAYABLE, origin_id=origin_b,
+                bank_account_id=None, posted_at=None, amount_cents=None, description="",
+            )
+            is None
+        )
+        sa.commit()
+
+    with _session_for(app_url, tenant_b) as sb:
+        sobrevivente = sb.get(BankTransaction, mov_b)
+        assert sobrevivente is not None, (
+            "RLS falhou: A apagou o movimento de origem de B — o extrato do vizinho perdeu uma "
+            "linha, e o saldo dele mudou sem que nada no sistema DELE tivesse acontecido"
+        )
+        assert sobrevivente.origin_id == origin_b
+        assert (
+            bank_service.derived_balance(sb, bank_account_id=acc_b, until=date(2026, 7, 31))
+            == 100_000 - 120_00
+        )
+
+    # ── (3) As COLUNAS NOVAS de payables/charges também não vazam (migration 0064) ───────────
+    with _session_for(app_url, tenant_b) as sb:
+        p_b = Payable(
+            tenant_id=tenant_b, description="conta de B", category="Geral", supplier="Forn",
+            amount_cents=120_00, due_date=date(2026, 7, 10), status=STATUS_PAID,
+            paid_at=datetime.fromisoformat("2026-07-10T12:00:00+00:00"),
+            bank_account_id=acc_b, bank_transaction_id=mov_b,
+        )
+        c_b = Charge(
+            tenant_id=tenant_b, description="cobrança de B", kind="service", method="pix",
+            amount_cents=300_00, due_date=date(2026, 7, 10), bank_account_id=acc_b,
+        )
+        sb.add_all([p_b, c_b])
+        sb.commit()
+        payable_b, charge_b = p_b.id, c_b.id
+
+    with _session_for(app_url, tenant_a) as sa:
+        assert sa.get(Payable, payable_b) is None, "A leu a conta a pagar de B"
+        assert sa.get(Charge, charge_b) is None, "A leu a cobrança de B"
+
+    # ── (4) Escrita com `tenant_id` alheio: barrada pelo WITH CHECK ──────────────────────────
+    with _session_for(app_url, tenant_a) as sa:
+        sa.add(
+            BankTransaction(
+                tenant_id=tenant_b,  # ← o ataque: plantar um movimento de origem no vizinho
+                bank_account_id=acc_b,
+                posted_at=date(2026, 7, 13),
+                amount_cents=999_999,
+                raw_description="Plantado por A",
+                dedup_hash="hash-plantado-origem",
+                source=SOURCE_PAYABLE,
+                origin_id=str(uuid4()),
+                status="matched",
+            )
+        )
+        with pytest.raises(ProgrammingError):
+            sa.commit()
+        sa.rollback()
+
+    # ── (5) Sem GUC: fail-closed. A busca da origem não acha, e nada é apagado ───────────────
+    with _session_for(app_url, None) as sn:
+        assert (
+            sync_origin_movement(
+                sn, tenant_id=tenant_b, actor="ninguem", source=SOURCE_PAYABLE,
+                origin_id=origin_b, bank_account_id=None, posted_at=None, amount_cents=None,
+                description="",
+            )
+            is None
+        )
+        sn.commit()
+
+    with _session_for(app_url, tenant_b) as sb:
+        assert sb.get(BankTransaction, mov_b) is not None, (
+            "FAIL-CLOSED falhou: sem `app.current_tenant_id` o sincronizador alcançou (e apagou) "
+            "o movimento de um tenant. O estado seguro é não ver nada."
+        )
+
+
+# ── Story 8.12 — a BAIXA de Contas a Pagar escrevendo o razão bancário (AC13) ─────────────────
+#
+# > **[@dev 8.12] Desvio documentado das File Locations da Story 8.12.** A story previa um arquivo
+# > novo, `tests/test_payables_bank_origin_rls.py`. Ele exigiria um **segundo** `PostgresContainer`
+# > (a fixture `app_url` tem escopo de MÓDULO) e, com ele, um segundo `alembic upgrade head` —
+# > minutos de CI para exercitar exatamente as mesmas tabelas já preparadas aqui. A instrução no
+# > topo deste arquivo é explícita (*"acrescente casos AQUI em vez de criar mais um arquivo de
+# > testcontainer"*); a 8.5 e a 8.9 seguiram-na e registraram o mesmo desvio. Somos os quartos.
+#
+# Diferença em relação ao bloco da 8.9 acima: lá o sincronizador era chamado **direto**; aqui quem
+# o chama é o **fluxo de negócio real** (`payables.service.apply_paid`), que é o que a 8.12 liga.
+
+
+def _seed_payable(app_url: str, tenant_id: str, *, amount_cents: int, due: date) -> str:
+    from app.modules.payables.models import Payable
+
+    with _session_for(app_url, tenant_id) as session:
+        p = Payable(
+            tenant_id=tenant_id,
+            description="Aluguel",
+            category="Estrutura",
+            supplier="Imobiliária Central",
+            amount_cents=amount_cents,
+            due_date=due,
+            competence_date=due,
+        )
+        session.add(p)
+        session.commit()
+        return p.id
+
+
+def test_baixa_de_payable_isolamento_cross_tenant(app_url: str) -> None:
+    """**AC13 — a baixa de A nunca alcança a conta bancária de B; o movimento nasce no dono certo.**
+
+    O modo de falha aqui é o mais grave da onda: a baixa **escreve** no razão bancário. Um
+    vazamento não apareceria como "vi uma linha que não é minha" — apareceria como **uma despesa
+    minha saindo da conta do vizinho**, e portanto como divergência inventada no único número que
+    este produto vende como confiável.
+    """
+    from app.modules.bank import service as bank_service
+    from app.modules.bank.models import SOURCE_PAYABLE, STATUS_MATCHED, BankTransaction
+    from app.modules.payables import service as payables_service
+    from app.modules.payables.models import Payable
+
+    tenant_a = str(uuid4())
+    tenant_b = str(uuid4())
+    acc_a = _seed_account(app_url, tenant_a, name="Baixa A", opening=100_000, number="6444-1")
+    acc_b = _seed_account(app_url, tenant_b, name="Baixa B", opening=100_000, number="6444-2")
+    due = date(2026, 7, 10)
+    bill_a = _seed_payable(app_url, tenant_a, amount_cents=120_00, due=due)
+
+    # ── (1) A tenta pagar a conta DELE debitando a conta bancária de B → 404, nunca 409 ──────
+    with _session_for(app_url, tenant_a) as sa:
+        with pytest.raises(payables_service.PayableError) as exc:
+            payables_service.apply_paid(
+                sa, payable_id=bill_a, tenant_id=tenant_a, actor="a",
+                bank_account_id=acc_b, paid_on=due,
+            )
+        assert exc.value.status_code == 404, (
+            "cross-tenant deve ser 404 fail-closed. 409 (o erro acionável de 'cadastre uma conta') "
+            "confirmaria que a conta do vizinho existe."
+        )
+        sa.rollback()
+
+    # ── (2) A baixa legítima: o movimento nasce no tenant certo, conciliado e negativo ───────
+    with _session_for(app_url, tenant_a) as sa:
+        payables_service.mark_paid(
+            sa, payable_id=bill_a, tenant_id=tenant_a, actor="a",
+            bank_account_id=acc_a, paid_on=due,
+        )
+
+    with _session_for(app_url, tenant_a) as sa:
+        tx = sa.query(BankTransaction).filter(BankTransaction.origin_id == bill_a).one()
+        assert tx.tenant_id == tenant_a
+        assert tx.bank_account_id == acc_a
+        assert tx.amount_cents == -120_00 and tx.status == STATUS_MATCHED
+        saldo_a = bank_service.derived_balance(sa, bank_account_id=acc_a, until=due)
+        assert saldo_a == 100_000 - 120_00
+
+    # ── (3) B não enxerga nem o lançamento nem o movimento de A ──────────────────────────────
+    with _session_for(app_url, tenant_b) as sb:
+        assert sb.get(Payable, bill_a) is None, "B leu a conta a pagar de A"
+        assert sb.query(BankTransaction).filter(BankTransaction.origin_id == bill_a).count() == 0
+        assert bank_service.derived_balance(sb, bank_account_id=acc_b, until=due) == 100_000, (
+            "o saldo de B se moveu por causa de uma baixa de A"
+        )
+
+    # ── (4) O índice único parcial, exercitado pelo CAMINHO REAL: baixar de novo ─────────────
+    with _session_for(app_url, tenant_a) as sa:
+        payables_service.mark_paid(
+            sa, payable_id=bill_a, tenant_id=tenant_a, actor="a",
+            bank_account_id=acc_a, paid_on=due,
+        )
+        assert (
+            sa.query(BankTransaction).filter(BankTransaction.origin_id == bill_a).count() == 1
+        ), "a segunda baixa criou um segundo movimento — a idempotência do AC6 não sobreviveu"
+
+    # ── (5) O mesmo `origin_id` nos DOIS tenants convive (índice único é GLOBAL) ─────────────
+    #     Improvável por `uuid4`, mas é o cenário que `tenant_id` na frente da constraint protege:
+    #     sem ele, B levaria um erro de integridade por causa de um dado que não pode nem ver.
+    with _session_for(app_url, tenant_b) as sb:
+        sb.add(
+            BankTransaction(
+                tenant_id=tenant_b,
+                bank_account_id=acc_b,
+                posted_at=due,
+                amount_cents=-1_00,
+                raw_description="mesma chave de origem, outro dono",
+                dedup_hash="hash-do-b",
+                source=SOURCE_PAYABLE,
+                origin_id=bill_a,
+                status=STATUS_MATCHED,
+            )
+        )
+        sb.commit()
+
+    # ── (6) O estorno de A apaga SÓ o movimento de A ─────────────────────────────────────────
+    with _session_for(app_url, tenant_a) as sa:
+        payables_service.reverse_payable(
+            sa, payable_id=bill_a, tenant_id=tenant_a, actor="a"
+        )
+
+    with _session_for(app_url, tenant_a) as sa:
+        assert sa.query(BankTransaction).filter(BankTransaction.origin_id == bill_a).count() == 0
+        p = sa.get(Payable, bill_a)
+        assert p.bank_account_id is None and p.bank_transaction_id is None
+
+    with _session_for(app_url, tenant_b) as sb:
+        assert sb.query(BankTransaction).filter(BankTransaction.origin_id == bill_a).count() == 1, (
+            "o estorno de A apagou o movimento homônimo de B — o extrato do vizinho perdeu uma "
+            "linha por causa de um evento que não é dele"
+        )
+
+
+# ── Story 8.17 (IV5) — a guarda de contagem dupla NÃO enxerga o vizinho ───────────────────────
+#
+# É o teste mais valioso desta story em Postgres real, e o motivo é estrutural: a guarda faz `bank`
+# perguntar por uma entidade de OUTRO módulo, e a pergunta roda no caminho de escrita do lançamento
+# manual. Se o probe abrisse sessão própria (escapando da GUC do tenant), ou se alguém "otimizasse"
+# a busca com um filtro manual, o dono levaria um 409 apontando para uma conta a pagar do vizinho —
+# um vazamento de EXISTÊNCIA disfarçado de ajuda, no formato de uma frase que nomeia o fornecedor
+# e o valor de outra empresa. O SQLite não pega isso: lá todas as linhas são visíveis a todos.
+
+
+def test_guarda_de_contagem_dupla_isolamento_cross_tenant(app_url: str) -> None:
+    """**IV5 — tenant B lança R$ 380 no mesmo dia em que A tem uma conta a pagar de R$ 380.**
+
+    Esperado: **201**, sem 409, e sem que o `payable` de A apareça em lugar nenhum. O mesmo
+    lançamento dentro de A dá 409 — é o par membro/não-membro que prova que o teste mede algo.
+    """
+    from app.modules.bank import service as bank_service
+    from app.modules.bank.models import BankTransaction
+    from app.modules.bank.schemas import BankTransactionCreate
+    from app.modules.payables.service import probe_pagamento_duplicado
+
+    tenant_a = str(uuid4())
+    tenant_b = str(uuid4())
+    acc_a = _seed_account(app_url, tenant_a, name="Dupla A", opening=500_000, number="8177-1")
+    acc_b = _seed_account(app_url, tenant_b, name="Dupla B", opening=500_000, number="8177-2")
+    dia = date(2026, 7, 12)
+    bill_a = _seed_payable(app_url, tenant_a, amount_cents=380_00, due=dia)
+
+    # Pré-condição: dentro de A, a guarda ENCONTRA (se este 409 não acontecer, o teste de baixo
+    # estaria medindo o vazio — é o "membro" do par exigido pela regra da instanciação).
+    with _session_for(app_url, tenant_a) as sa:
+        assert probe_pagamento_duplicado(sa, amount_cents=-380_00, posted_at=dia) is not None
+        with pytest.raises(bank_service.DuplicataDePagamento) as exc:
+            bank_service.create_transaction(
+                sa,
+                bank_account_id=acc_a,
+                tenant_id=tenant_a,
+                actor="a",
+                data=BankTransactionCreate(
+                    posted_at=dia, amount_cents=-380_00, description="Aluguel"
+                ),
+            )
+        assert exc.value.candidato.referencia_id == bill_a
+        sa.rollback()
+
+    # ── O que a IV5 mede: em B, o MESMO lançamento passa, e nada de A escapa ─────────────────
+    with _session_for(app_url, tenant_b) as sb:
+        assert probe_pagamento_duplicado(sb, amount_cents=-380_00, posted_at=dia) is None, (
+            "a guarda de contagem dupla enxergou a conta a pagar de outro tenant — o probe está "
+            "abrindo sessão própria (fora da GUC) ou filtrando por fora da RLS"
+        )
+        tx = bank_service.create_transaction(
+            sb,
+            bank_account_id=acc_b,
+            tenant_id=tenant_b,
+            actor="b",
+            data=BankTransactionCreate(
+                posted_at=dia, amount_cents=-380_00, description="Outro pagamento"
+            ),
+        )
+        assert tx.tenant_id == tenant_b and tx.amount_cents == -380_00
+
+    # E o movimento de B não contaminou o saldo de A (nem o contrário).
+    with _session_for(app_url, tenant_a) as sa:
+        assert bank_service.derived_balance(sa, bank_account_id=acc_a, until=dia) == 500_000
+        assert sa.query(BankTransaction).filter(BankTransaction.id == tx.id).count() == 0
+
+
+# ── Story 8.14 (IV5) — a promoção `scheduled → paid` NÃO atravessa o tenant ───────────────────
+#
+# É o teste de maior valor da 8.14 em Postgres real, e o motivo é estrutural: `promote_scheduled`
+# roda **no worker**, fora de qualquer request HTTP, num laço que percorre TODOS os tenants — o
+# único lugar do sistema em que o mesmo processo abre sessão para um tenant depois do outro. Se a
+# varredura escapasse da GUC (sessão global, filtro manual esquecido, `SessionLocal` no lugar de
+# `tenant_session`), o sweep do tenant A promoveria as contas do tenant B **em silêncio**: nenhum
+# erro, nenhum 500, só o status do vizinho mudando sozinho de madrugada.
+#
+# O SQLite dos unitários não pega isso — lá todas as linhas são visíveis a todas as sessões.
+
+
+def test_promocao_de_agendadas_isolamento_cross_tenant(app_url: str) -> None:
+    """A varredura de A promove **só** as agendadas de A. B fica intacto, contador incluído."""
+    from app.modules.payables import service as payables_service
+    from app.modules.payables.models import STATUS_PAID, STATUS_SCHEDULED, Payable
+
+    tenant_a = str(uuid4())
+    tenant_b = str(uuid4())
+    # ⚠️ Datas ancoradas em HOJE, nunca fixas: o estado `scheduled` é derivado do relógio real
+    # (`apply_paid` compara `paid_on` com `datetime.now(UTC).date()`), então um `debito` fixo no
+    # calendário viraria `paid` no dia em que o repositório passasse por ele — e o teste passaria a
+    # exercitar outro cenário sem nunca ficar vermelho.
+    hoje = _hoje_utc()
+    abertura = hoje - timedelta(days=90)
+    acc_a = _seed_account(
+        app_url, tenant_a, name="Agenda A", opening=100_000, number="8140-1", opening_date=abertura
+    )
+    acc_b = _seed_account(
+        app_url, tenant_b, name="Agenda B", opening=100_000, number="8140-2", opening_date=abertura
+    )
+    debito = hoje + timedelta(days=10)
+    bill_a = _seed_payable(app_url, tenant_a, amount_cents=500_00, due=debito)
+    bill_b = _seed_payable(app_url, tenant_b, amount_cents=700_00, due=debito)
+
+    # Os dois tenants agendam para o MESMO dia futuro.
+    for tenant, acc, bill in ((tenant_a, acc_a, bill_a), (tenant_b, acc_b, bill_b)):
+        with _session_for(app_url, tenant) as s:
+            p = payables_service.apply_paid(
+                s, payable_id=bill, tenant_id=tenant, actor="dono",
+                bank_account_id=acc, paid_on=debito,
+            )
+            s.commit()
+            assert p.status == STATUS_SCHEDULED, (
+                "pré-condição: com `today` real anterior ao débito, a baixa nasce agendada"
+            )
+
+    # ⚠️ A varredura roda dentro da sessão de A, como o worker faz (`tenant_session(tenant_id)`).
+    with _session_for(app_url, tenant_a) as sa:
+        promovidas = payables_service.promote_scheduled(
+            sa, tenant_id=tenant_a, actor="system:worker", today=debito
+        )
+    assert promovidas == 1, (
+        f"a varredura de A promoveu {promovidas} contas. Se foi 2, ela enxergou o tenant B — a "
+        "sessão escapou da GUC `app.current_tenant_id` ou alguém trocou `tenant_session` por uma "
+        "sessão global."
+    )
+
+    with _session_for(app_url, tenant_a) as sa:
+        assert sa.get(Payable, bill_a).status == STATUS_PAID
+
+    with _session_for(app_url, tenant_b) as sb:
+        assert sb.get(Payable, bill_b).status == STATUS_SCHEDULED, (
+            "o sweep do tenant A promoveu a conta agendada do tenant B — o vizinho teve o estado "
+            "de um lançamento dele alterado por um processo que não é dele"
+        )
+
+    # E a varredura de B, quando rodar, promove a dele — e só a dele.
+    with _session_for(app_url, tenant_b) as sb:
+        assert payables_service.promote_scheduled(
+            sb, tenant_id=tenant_b, actor="system:worker", today=debito
+        ) == 1
+    with _session_for(app_url, tenant_b) as sb:
+        assert sb.get(Payable, bill_b).status == STATUS_PAID
+
+
+def test_movimento_agendado_nao_move_o_saldo_do_vizinho(app_url: str) -> None:
+    """O movimento com `posted_at` FUTURO respeita o corte de data **e** a RLS, ao mesmo tempo.
+
+    Os dois recortes são independentes e se compõem: A não vê a linha de B (RLS) e nenhum dos dois
+    vê o próprio futuro no saldo corrente (Story 8.10). Um teste que exercitasse só um dos dois
+    passaria com o outro quebrado.
+    """
+    from app.modules.bank import service as bank_service
+    from app.modules.payables import service as payables_service
+
+    tenant_a = str(uuid4())
+    tenant_b = str(uuid4())
+    hoje = _hoje_utc()
+    abertura = hoje - timedelta(days=90)
+    acc_a = _seed_account(
+        app_url, tenant_a, name="Futuro A", opening=100_000, number="8141-1", opening_date=abertura
+    )
+    acc_b = _seed_account(
+        app_url, tenant_b, name="Futuro B", opening=100_000, number="8141-2", opening_date=abertura
+    )
+    debito = hoje + timedelta(days=10)
+    bill_a = _seed_payable(app_url, tenant_a, amount_cents=900_00, due=debito)
+
+    with _session_for(app_url, tenant_a) as sa:
+        payables_service.mark_paid(
+            sa, payable_id=bill_a, tenant_id=tenant_a, actor="a",
+            bank_account_id=acc_a, paid_on=debito,
+        )
+
+    with _session_for(app_url, tenant_a) as sa:
+        # Antes do débito: o dinheiro ainda está lá (corte de data da 8.10).
+        assert bank_service.derived_balance(
+            sa, bank_account_id=acc_a, until=debito - timedelta(days=1)
+        ) == 100_000
+        # No dia: já saiu — sem worker nenhum ter rodado (F-D11).
+        assert (
+            bank_service.derived_balance(sa, bank_account_id=acc_a, until=debito)
+            == 100_000 - 900_00
+        )
+        # E o agendado da conta é o complemento exato, em módulo.
+        agendado = bank_service.agendado_sums(
+            sa, accounts=[bank_service.get_account(sa, acc_a)], today=debito - timedelta(days=1)
+        )
+        assert agendado[acc_a].saida_cents == 900_00
+        assert agendado[acc_a].entrada_cents == 0
+
+    with _session_for(app_url, tenant_b) as sb:
+        assert bank_service.derived_balance(sb, bank_account_id=acc_b, until=debito) == 100_000
+        agendado_b = bank_service.agendado_sums(
+            sb, accounts=[bank_service.get_account(sb, acc_b)], today=debito - timedelta(days=1)
+        )
+        assert agendado_b[acc_b].saida_cents == 0, (
+            "o 'Agendado para sair' de B enxergou o movimento futuro de A"
+        )
+
+
+# ── Story 8.15 (IV6) — o recebimento FORA DO TRILHO sob RLS real ──────────────────────────────
+#
+# > **[@dev 8.15] Desvio documentado das File Locations da Story 8.15.** Ela pede "rls_e2e: IV6"
+# > sem nomear arquivo; a instrução no topo DESTE arquivo é explícita (*"acrescente casos AQUI em
+# > vez de criar mais um arquivo de testcontainer"*) e a 8.5, a 8.9, a 8.12 e a 8.14 já a
+# > seguiram. Somos os quintos: um arquivo novo custaria um segundo `PostgresContainer` e um
+# > segundo `alembic upgrade head` para exercitar exatamente as mesmas tabelas.
+#
+# O modo de falha desta story é o espelho do da 8.12, e é igualmente grave: `settle_off_rail`
+# **escreve** no razão bancário. Um vazamento não apareceria como "vi uma linha que não é minha" —
+# apareceria como **uma receita minha caindo na conta do vizinho**, e portanto como um crédito
+# inventado no único número que este produto vende como confiável.
+
+
+def _seed_charge(app_url: str, tenant_id: str, *, amount_cents: int, due: date) -> str:
+    from app.modules.receivables.models import Charge
+
+    with _session_for(app_url, tenant_id) as session:
+        c = Charge(
+            tenant_id=tenant_id,
+            description="Consultoria",
+            kind="service",
+            method="pix",
+            amount_cents=amount_cents,
+            due_date=due,
+            competence_date=due,
+        )
+        session.add(c)
+        session.commit()
+        return c.id
+
+
+def test_settle_off_rail_isolamento_cross_tenant(app_url: str) -> None:
+    """**IV6 — A nunca credita a conta de B, e B não vê nem a cobrança nem o crédito.**
+
+    A conta de outro tenant recebe **404 fail-closed**, nunca 200 com movimento vazando e nunca o
+    409 acionável (que confirmaria a existência da linha do vizinho).
+    """
+    from app.modules.bank import service as bank_service
+    from app.modules.bank.models import SOURCE_CHARGE, STATUS_MATCHED, BankTransaction
+    from app.modules.receivables import service as receivables_service
+    from app.modules.receivables.models import STATUS_PAID, Charge
+
+    tenant_a = str(uuid4())
+    tenant_b = str(uuid4())
+    hoje = _hoje_utc()
+    abertura = hoje - timedelta(days=90)
+    acc_a = _seed_account(
+        app_url, tenant_a, name="Recebe A", opening=100_000, number="8150-1", opening_date=abertura
+    )
+    acc_b = _seed_account(
+        app_url, tenant_b, name="Recebe B", opening=100_000, number="8150-2", opening_date=abertura
+    )
+    charge_a = _seed_charge(app_url, tenant_a, amount_cents=340_00, due=hoje)
+
+    # ── (1) A tenta creditar a conta bancária de B → 404, nunca 409 ──────────────────────────
+    with _session_for(app_url, tenant_a) as sa:
+        with pytest.raises(receivables_service.ReceivableError) as exc:
+            receivables_service.settle_off_rail(
+                sa, charge_id=charge_a, tenant_id=tenant_a, actor="a",
+                bank_account_id=acc_b, received_on=hoje,
+            )
+        assert exc.value.status_code == 404, (
+            "cross-tenant deve ser 404 fail-closed. 409 (o erro acionável de 'cadastre uma conta') "
+            "confirmaria que a conta do vizinho existe."
+        )
+        sa.rollback()
+
+    # ── (2) O registro legítimo: crédito POSITIVO, no tenant certo, já conciliado ────────────
+    with _session_for(app_url, tenant_a) as sa:
+        charge = receivables_service.settle_off_rail(
+            sa, charge_id=charge_a, tenant_id=tenant_a, actor="a",
+            bank_account_id=acc_a, received_on=hoje,
+        )
+        assert charge.status == STATUS_PAID
+        assert charge.transaction_id is None, "fora do trilho NUNCA tem transação de carteira"
+
+    with _session_for(app_url, tenant_a) as sa:
+        tx = sa.query(BankTransaction).filter(BankTransaction.origin_id == charge_a).one()
+        assert tx.tenant_id == tenant_a and tx.bank_account_id == acc_a
+        assert tx.amount_cents == 340_00 and tx.source == SOURCE_CHARGE
+        assert tx.status == STATUS_MATCHED
+        saldo = bank_service.derived_balance(sa, bank_account_id=acc_a, until=hoje)
+        assert saldo == 100_000 + 340_00
+
+    # ── (3) B não enxerga nem a cobrança, nem o movimento, nem o efeito no saldo dele ────────
+    with _session_for(app_url, tenant_b) as sb:
+        assert sb.get(Charge, charge_a) is None, "B leu a cobrança de A"
+        assert (
+            sb.query(BankTransaction).filter(BankTransaction.origin_id == charge_a).one_or_none()
+            is None
+        ), "B leu o movimento bancário gerado pela cobrança de A"
+        assert bank_service.derived_balance(sb, bank_account_id=acc_b, until=hoje) == 100_000, (
+            "o saldo de B mudou por causa de um recebimento do tenant A"
+        )
+
+
+def test_promocao_de_cobrancas_agendadas_isolamento_cross_tenant(app_url: str) -> None:
+    """A varredura de A promove **só** as cobranças agendadas de A (a mesma etapa 4 do worker).
+
+    `receivables.promote_scheduled` roda no worker, fora de qualquer request HTTP, num laço que
+    percorre TODOS os tenants — o mesmo risco estrutural que a 8.14 documentou para `payables`, e
+    o SQLite dos unitários não o exercita.
+    """
+    from app.modules.receivables import service as receivables_service
+    from app.modules.receivables.models import STATUS_PAID, STATUS_SCHEDULED, Charge
+
+    tenant_a = str(uuid4())
+    tenant_b = str(uuid4())
+    hoje = _hoje_utc()
+    abertura = hoje - timedelta(days=90)
+    acc_a = _seed_account(
+        app_url, tenant_a, name="Agenda R A", opening=100_000, number="8151-1",
+        opening_date=abertura,
+    )
+    acc_b = _seed_account(
+        app_url, tenant_b, name="Agenda R B", opening=100_000, number="8151-2",
+        opening_date=abertura,
+    )
+    credito = hoje + timedelta(days=10)
+    charge_a = _seed_charge(app_url, tenant_a, amount_cents=500_00, due=hoje)
+    charge_b = _seed_charge(app_url, tenant_b, amount_cents=700_00, due=hoje)
+
+    for tenant, acc, charge_id in ((tenant_a, acc_a, charge_a), (tenant_b, acc_b, charge_b)):
+        with _session_for(app_url, tenant) as s:
+            c = receivables_service.settle_off_rail(
+                s, charge_id=charge_id, tenant_id=tenant, actor="dono",
+                bank_account_id=acc, received_on=credito,
+            )
+            assert c.status == STATUS_SCHEDULED, (
+                "pré-condição: com `today` real anterior ao crédito, o registro nasce agendado"
+            )
+
+    with _session_for(app_url, tenant_a) as sa:
+        promovidas = receivables_service.promote_scheduled(
+            sa, tenant_id=tenant_a, actor="system:worker", today=credito
+        )
+    assert promovidas == 1, (
+        f"a varredura de A promoveu {promovidas} cobranças. Se foi 2, ela enxergou o tenant B — a "
+        "sessão escapou da GUC `app.current_tenant_id`."
+    )
+
+    with _session_for(app_url, tenant_a) as sa:
+        assert sa.get(Charge, charge_a).status == STATUS_PAID
+    with _session_for(app_url, tenant_b) as sb:
+        assert sb.get(Charge, charge_b).status == STATUS_SCHEDULED, (
+            "o sweep do tenant A promoveu a cobrança agendada do tenant B"
+        )
+
+
+# ── Story 8.18 — `bank_transfers`: a migration 0065 e o FORCE RLS da tabela nova ───────────────
+#
+# > **[@dev 8.18] Desvio documentado das File Locations da Story 8.18.** A story previa um arquivo
+# > novo, `tests/test_bank_transfers_rls.py`. Ele exigiria um **segundo** `PostgresContainer` (a
+# > fixture `app_url` tem escopo de MÓDULO) e, com ele, um segundo `alembic upgrade head` — minutos
+# > de CI para exercitar exatamente as mesmas tabelas já preparadas aqui. A instrução escrita no
+# > topo deste arquivo (*"acrescente casos AQUI"*) é a mais recente e a mais informada, e a 8.5 já
+# > abriu o precedente com a mesma justificativa. Divergência registrada em Completion Notes.
+#
+# ⚠️ **É aqui — e SÓ aqui — que a migration 0065 é de fato exercida.** O SQLite dos testes
+# unitários cria a tabela por `Base.metadata.create_all` e **não conhece RLS**: lá `FORCE ROW LEVEL
+# SECURITY` e a policy `tenant_isolation` simplesmente não existem, e um `WITH CHECK` esquecido
+# passaria verde em 1400 testes. `_run_migrations_as_app` roda a cadeia inteira como o papel
+# NÃO-superusuário `e1p_app` (superusuário faz bypass **mesmo com FORCE**), então um
+# `down_revision` errado na 0065 aparece aqui como "multiple heads" e derruba o job inteiro.
+
+
+def test_bank_transfer_isolamento_cross_tenant(app_url: str) -> None:
+    """A transferência de A e as **duas pernas** dela são invisíveis e intocáveis para B.
+
+    Cobre o que o SQLite não alcança:
+    - **leitura:** B não lista nem lê a transferência de A (`db.get` → None → 404 fail-closed);
+    - **escrita:** `INSERT` com `tenant_id` alheio é barrado pelo `WITH CHECK` da policy — sem ele,
+      A conseguiria PLANTAR uma transferência dentro do tenant B, e leitura protegida com escrita
+      aberta é meia proteção;
+    - **`DELETE` cross-tenant:** A não apaga a transferência de B (404), e as pernas de B seguem lá;
+    - **fail-closed sem GUC:** sem `app.current_tenant_id` a leitura devolve ZERO linhas — o estado
+      seguro é "não vejo nada", nunca "vejo tudo". É a asserção que prova o `FORCE`: sem ele, o
+      papel DONO da tabela ignoraria a policy e veria as duas transferências.
+    """
+    from app.modules.bank import service as bank_service
+    from app.modules.bank import transfers as transfers_service
+    from app.modules.bank.models import SOURCE_TRANSFER, BankTransaction, BankTransfer
+    from app.modules.bank.schemas import BankTransferCreate
+
+    tenant_a = str(uuid4())
+    tenant_b = str(uuid4())
+    hoje = _hoje_utc()
+    abertura = hoje - timedelta(days=60)
+    dia = hoje - timedelta(days=1)
+
+    origem_a = _seed_account(
+        app_url, tenant_a, name="A origem", opening=1_000_00, number="8181-1",
+        opening_date=abertura,
+    )
+    destino_a = _seed_account(
+        app_url, tenant_a, name="A destino", opening=0, number="8181-2", opening_date=abertura
+    )
+    origem_b = _seed_account(
+        app_url, tenant_b, name="B origem", opening=1_000_00, number="8181-1",
+        opening_date=abertura,
+    )
+    destino_b = _seed_account(
+        app_url, tenant_b, name="B destino", opening=0, number="8181-2", opening_date=abertura
+    )
+
+    def _transferir(tenant: str, de: str, para: str, valor: int) -> str:
+        with _session_for(app_url, tenant) as s:
+            t = transfers_service.create_transfer(
+                s,
+                tenant_id=tenant,
+                actor="dono",
+                data=BankTransferCreate(
+                    from_account_id=de, to_account_id=para, amount_cents=valor,
+                    posted_at=dia, kind="own_transfer", description="entre contas",
+                ),
+            )
+            return t.id
+
+    transfer_a = _transferir(tenant_a, origem_a, destino_a, 300_00)
+    transfer_b = _transferir(tenant_b, origem_b, destino_b, 700_00)
+
+    # ── Leitura: cada um só enxerga o próprio ────────────────────────────────────────────────
+    with _session_for(app_url, tenant_a) as sa:
+        assert [t.id for t in transfers_service.list_transfers(sa)] == [transfer_a]
+        assert sa.get(BankTransfer, transfer_b) is None, "RLS falhou: A leu a transferência de B"
+        with pytest.raises(bank_service.BankError) as exc:
+            transfers_service.get_transfer(sa, transfer_b)
+        assert exc.value.status_code == 404, "cross-tenant deve ser 404 fail-closed, não 403"
+        # As duas pernas de A existem e são de A; as de B não aparecem.
+        pernas = [t for t in bank_service.list_transactions(sa) if t.source == SOURCE_TRANSFER]
+        assert len(pernas) == 2
+        assert {p.transfer_id for p in pernas} == {transfer_a}
+        assert sorted(p.amount_cents for p in pernas) == [-300_00, 300_00]
+        # O saldo de A é o de A — vazamento aqui viraria divergência inexplicável na conferência.
+        assert bank_service.derived_balance(sa, bank_account_id=origem_a, until=hoje) == 700_00
+        assert bank_service.derived_balance(sa, bank_account_id=destino_a, until=hoje) == 300_00
+
+    with _session_for(app_url, tenant_b) as sb:
+        assert [t.id for t in transfers_service.list_transfers(sb)] == [transfer_b]
+        assert bank_service.derived_balance(sb, bank_account_id=destino_b, until=hoje) == 700_00
+
+    # ── Escrita com tenant_id alheio: barrada pelo WITH CHECK da policy ──────────────────────
+    with _session_for(app_url, tenant_a) as sa:
+        sa.add(
+            BankTransfer(
+                tenant_id=tenant_b,  # ← o ataque: gravar dentro do tenant do vizinho
+                from_account_id=origem_b,
+                to_account_id=destino_b,
+                amount_cents=1,
+                posted_at=dia,
+                kind="own_transfer",
+                description="plantada por A",
+            )
+        )
+        with pytest.raises(ProgrammingError):
+            sa.commit()
+        sa.rollback()
+
+    with _session_for(app_url, tenant_b) as sb:
+        assert [t.id for t in transfers_service.list_transfers(sb)] == [transfer_b], (
+            "WITH CHECK falhou: A plantou uma transferência no tenant de B"
+        )
+
+    # ── DELETE cross-tenant: A não desfaz a transferência de B ───────────────────────────────
+    with _session_for(app_url, tenant_a) as sa:
+        with pytest.raises(bank_service.BankError) as exc:
+            transfers_service.delete_transfer(
+                sa, transfer_id=transfer_b, tenant_id=tenant_a, actor="a"
+            )
+        assert exc.value.status_code == 404
+
+    with _session_for(app_url, tenant_b) as sb:
+        assert sb.get(BankTransfer, transfer_b) is not None
+        pernas_b = [t for t in bank_service.list_transactions(sb) if t.source == SOURCE_TRANSFER]
+        assert len(pernas_b) == 2, "A apagou as pernas de B"
+
+    # ── Fail-closed sem GUC: é isto que prova o FORCE (o papel é DONO da tabela) ─────────────
+    with _session_for(app_url, None) as anon:
+        assert anon.query(BankTransfer).count() == 0, (
+            "sem a GUC `app.current_tenant_id` o SELECT devolveu linhas — ou a policy nao existe, "
+            "ou faltou `FORCE ROW LEVEL SECURITY` (o papel dono da tabela faz bypass sem ele)"
+        )
+        assert (
+            anon.query(BankTransaction)
+            .filter(BankTransaction.source == SOURCE_TRANSFER)
+            .count()
+            == 0
+        )
+
+
+def test_delete_de_transferencia_apaga_as_DUAS_pernas_no_postgres_real(app_url: str) -> None:
+    """AC8 no banco real: o `DELETE` do lançamento leva as duas pernas — e nada do vizinho.
+
+    O caminho de `delete_transfer` passa por `sync_origin_movement(bank_account_id=None)`, que faz
+    `db.delete(tx)` sob a policy. Se a GUC não estivesse fixada, o `DELETE` seria filtrado a **zero
+    linhas em silêncio** (a mesma armadilha da 0046, pela porta do runtime) e o lançamento sumiria
+    deixando as duas pernas órfãs no razão — sem erro nenhum.
+    """
+    from app.modules.bank import service as bank_service
+    from app.modules.bank import transfers as transfers_service
+    from app.modules.bank.models import SOURCE_TRANSFER, BankTransaction, BankTransfer
+    from app.modules.bank.schemas import BankTransferCreate
+
+    tenant_a = str(uuid4())
+    tenant_b = str(uuid4())
+    hoje = _hoje_utc()
+    abertura = hoje - timedelta(days=60)
+    dia = hoje - timedelta(days=1)
+
+    origem = _seed_account(
+        app_url, tenant_a, name="Del origem", opening=1_000_00, number="8182-1",
+        opening_date=abertura,
+    )
+    destino = _seed_account(
+        app_url, tenant_a, name="Del destino", opening=0, number="8182-2", opening_date=abertura
+    )
+    origem_b = _seed_account(
+        app_url, tenant_b, name="Viz origem", opening=1_000_00, number="8182-1",
+        opening_date=abertura,
+    )
+    destino_b = _seed_account(
+        app_url, tenant_b, name="Viz destino", opening=0, number="8182-2", opening_date=abertura
+    )
+
+    def _transferir(tenant, de, para):
+        with _session_for(app_url, tenant) as s:
+            return transfers_service.create_transfer(
+                s, tenant_id=tenant, actor="dono",
+                data=BankTransferCreate(
+                    from_account_id=de, to_account_id=para, amount_cents=250_00,
+                    posted_at=dia, kind="own_transfer", description="",
+                ),
+            ).id
+
+    alvo = _transferir(tenant_a, origem, destino)
+    vizinha = _transferir(tenant_b, origem_b, destino_b)
+
+    with _session_for(app_url, tenant_a) as sa:
+        transfers_service.delete_transfer(sa, transfer_id=alvo, tenant_id=tenant_a, actor="dono")
+
+    with _session_for(app_url, tenant_a) as sa:
+        assert sa.get(BankTransfer, alvo) is None
+        assert (
+            sa.query(BankTransaction).filter(BankTransaction.source == SOURCE_TRANSFER).count() == 0
+        ), "o lançamento sumiu e as pernas ficaram órfãs no razão"
+        assert bank_service.derived_balance(sa, bank_account_id=origem, until=hoje) == 1_000_00
+        assert bank_service.derived_balance(sa, bank_account_id=destino, until=hoje) == 0
+
+    with _session_for(app_url, tenant_b) as sb:
+        assert sb.get(BankTransfer, vizinha) is not None
+        assert (
+            sb.query(BankTransaction).filter(BankTransaction.source == SOURCE_TRANSFER).count() == 2
+        ), "o DELETE do tenant A alcançou as pernas do tenant B"
+
+
+def test_a_tabela_nova_tem_FORCE_RLS_e_a_policy_com_USING_e_WITH_CHECK(app_url: str) -> None:
+    """**Asserção ESTRUTURAL sobre a migration 0065** — lida do catálogo do Postgres.
+
+    Os testes acima medem o comportamento; este mede a **forma**, e as duas coisas falham de jeitos
+    diferentes. Sem `FORCE`, o papel dono da tabela (`e1p_app`, que é quem roda a app) faz bypass da
+    policy e **todo** teste de comportamento continuaria verde num banco novo, porque as sessões dos
+    testes sempre fixam a GUC. Sem `WITH CHECK`, a leitura fica protegida e a escrita não.
+    """
+    engine = create_engine(app_url, poolclass=NullPool)
+    try:
+        with engine.connect() as conn:
+            rls, force = conn.execute(
+                text(
+                    "SELECT relrowsecurity, relforcerowsecurity FROM pg_class "
+                    "WHERE relname = 'bank_transfers'"
+                )
+            ).one()
+            assert rls is True, "a 0065 não habilitou ROW LEVEL SECURITY em bank_transfers"
+            assert force is True, (
+                "faltou FORCE ROW LEVEL SECURITY: o papel DONO da tabela ignoraria a policy, e a "
+                "app roda exatamente como esse papel (`CLAUDE.md` Regra de Ouro nº 1)"
+            )
+            nome, using, check = conn.execute(
+                text(
+                    "SELECT polname, pg_get_expr(polqual, polrelid), "
+                    "pg_get_expr(polwithcheck, polrelid) FROM pg_policy "
+                    "WHERE polrelid = 'bank_transfers'::regclass"
+                )
+            ).one()
+            assert nome == "tenant_isolation"
+            assert using is not None and "app.current_tenant_id" in using
+            assert check is not None and "app.current_tenant_id" in check, (
+                "a policy tem USING e nao tem WITH CHECK — leitura protegida, escrita aberta"
+            )
+    finally:
+        engine.dispose()

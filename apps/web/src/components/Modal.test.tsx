@@ -1,7 +1,7 @@
 import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
-import { Field } from "./Modal";
+import Modal, { Field } from "./Modal";
 
 // Teste-piloto da infraestrutura de teste de componente (Story 7.3 — AC2).
 // Serve de MODELO para as Stories 7.4/7.5 e demais itens de cobertura de UI do catálogo:
@@ -40,5 +40,27 @@ describe("Field (teste-piloto de componente — Story 7.3)", () => {
     const input = screen.getByLabelText("Nome");
     expect(input).toHaveValue("");
     expect(onChange).not.toHaveBeenCalled();
+  });
+});
+
+// Achado de acessibilidade em 360px (Story 8.11): o painel do `Modal` não tinha `max-h`/
+// `overflow-y-auto`, então um modal com muitos campos (ex.: AccountModal de Contas & Saldos,
+// ~750-900px de conteúdo empilhado) transbordava SEM rolagem em telas pequenas, escondendo o
+// botão de salvar. Como `jsdom` não calcula layout real, o que dá para garantir aqui é a REGRA
+// ESTRUTURAL: o painel tem `overflow-y-auto` (rolagem quando necessário) e `max-h-[85vh]` (nunca
+// maior que a viewport), sem usar `overflow-hidden` (que CORTA em vez de rolar).
+describe("Modal (painel ganha rolagem em telas pequenas — Story de correção isolada)", () => {
+  it("o painel tem max-h-[85vh] e overflow-y-auto, e não usa overflow-hidden", () => {
+    render(
+      <Modal title="Conteúdo alto" open onClose={vi.fn()}>
+        <div style={{ height: "900px" }}>conteúdo bem alto</div>
+      </Modal>,
+    );
+
+    const panel = screen.getByText("Conteúdo alto").closest("div.rounded-2xl");
+    expect(panel).not.toBeNull();
+    expect(panel!.className).toContain("max-h-[85vh]");
+    expect(panel!.className).toContain("overflow-y-auto");
+    expect(panel!.className).not.toContain("overflow-hidden");
   });
 });

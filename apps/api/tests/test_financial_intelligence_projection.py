@@ -35,6 +35,7 @@ from sqlalchemy.orm import Session
 
 from app.core.money_planes import ORIGEM_PLATAFORMA, ORIGENS
 from app.modules.financial_intelligence import diagnostics as diagnostics_service
+from app.modules.financial_intelligence import projection as projection_service
 from app.modules.payables.models import Payable
 from app.modules.receivables.models import Charge
 from app.modules.wallet.models import Transaction
@@ -444,3 +445,453 @@ def test_projection_is_read_only(client: TestClient, headers, db: Session):
     _projection(client, headers)
     after = _snapshot(db)
     assert after == before, "projeção escreveu/alterou dados — viola IV1 (read-only)"
+
+
+# ══════════════════════════════════════════════════════════════════════════════════════════════
+# Story 8.14 — o pagamento AGENDADO entra na Projeção, e entra UMA VEZ SÓ
+# ══════════════════════════════════════════════════════════════════════════════════════════════
+#
+# ⚠️ **É a razão de a story existir.** Sem o `scheduled` em `_window_sums`, uma conta agendada não é
+# `open` (sai dos fluxos de saída) e o movimento bancário dela é futuro (não entra no
+# `saldo_inicial`, que usa `active_balance_total(until=today)`): os R$ 5.000 **somem por completo**
+# da Projeção. *"O saldo diz que você os tem, e nada diz que vão sair"* — a máquina de falso
+# negativo da Onda 0 ressuscitada na mesma tela que a Onda 0 consertou.
+#
+# E o recorte `paid_at::date > hoje` é a diferença entre consertar o falso negativo e trocá-lo por
+# um falso positivo do mesmo tamanho: no dia agendado, antes da varredura do worker, o movimento já
+# está no `saldo_inicial` **e** o `Payable` ainda está `scheduled`.
+
+
+ABERTURA_BANCO = TODAY - timedelta(days=60)
+SALDO_ABERTURA = 20_000_00
+
+
+def _conta_bancaria(client, headers, **over) -> dict:
+    payload = {
+        "name": "Itaú PJ",
+        "kind": "checking",
+        "opening_balance_cents": SALDO_ABERTURA,
+        "opening_date": ABERTURA_BANCO.isoformat(),
+    }
+    payload.update(over)
+    r = client.post("/bank/accounts", json=payload, headers=headers)
+    assert r.status_code == 201, r.text
+    return r.json()
+
+
+def _agendar(client, headers, bill_id: str, *, conta_id: str, quando) -> dict:
+    r = client.post(
+        f"/payables/bills/{bill_id}/pay",
+        json={"bank_account_id": conta_id, "paid_on": quando.isoformat()},
+        headers=headers,
+    )
+    assert r.status_code == 200, r.text
+    return r.json()
+
+
+def test_IV1_o_agendado_esta_na_projecao_e_fora_do_saldo_inicial(client: TestClient, headers):
+    """**IV1 — o cenário único, verificado nas TRÊS leituras ao mesmo tempo.**
+
+    Saldo de abertura + 1 conta AGENDADA para D+15 + 1 conta ABERTA vencendo em D+20:
+
+      (a) `saldo_inicial` **não** inclui o agendado (o movimento é futuro);
+      (b) `_window_sums` **inclui** o agendado na janela de 30 dias, pela data do débito;
+      (c) `saldo_projetado(D+30)` = saldo inicial − agendado − aberta.
+
+    Se (a) e (b) discordassem, o número estaria certo por acidente numa das duas.
+    """
+    conta = _conta_bancaria(client, headers)
+    agendada = _payable(client, headers, amount=5_000_00, due=_d(0))
+    _agendar(
+        client, headers, agendada["id"], conta_id=conta["id"], quando=TODAY + timedelta(days=15)
+    )
+    _payable(client, headers, amount=1_200_00, due=_d(20))
+
+    body = _projection(client, headers)
+
+    # (a) o saldo de partida é o saldo de abertura, limpo: o débito agendado ainda não saiu.
+    assert body["saldo_inicial_banco_cents"] == SALDO_ABERTURA, (
+        "o saldo inicial somou (ou subtraiu) um movimento FUTURO — `_saldo_inicial` deixou de "
+        "passar `until=today`, ou `active_balance_total` mudou de default"
+    )
+    # (b)+(c) as duas saídas estão na janela de 30 dias, e o agendado entrou pela data do DÉBITO.
+    esperado = body["saldo_inicial_cents"] - 5_000_00 - 1_200_00
+    assert _window(body, 30)["saldo_projetado_cents"] == esperado, (
+        "o pagamento AGENDADO sumiu da Projeção (ou entrou duas vezes). É o bug inteiro que a "
+        "Story 8.14 existe para impedir."
+    )
+    assert _window(body, 90)["saldo_projetado_cents"] == esperado
+
+
+def test_o_agendado_entra_pela_DATA_DO_DEBITO_nao_pelo_vencimento(client: TestClient, headers):
+    """A conta **vence hoje** e foi agendada para D+45: ela entra na janela de 60, não na de 30.
+
+    O dinheiro sai no dia agendado, não no dia do vencimento. Se `_window_sums` usasse `due_date`
+    para a população agendada, a saída apareceria 45 dias antes de acontecer — e a Projeção
+    passaria a apertar o caixa do dono num mês em que ele está folgado.
+    """
+    conta = _conta_bancaria(client, headers)
+    bill = _payable(client, headers, amount=3_000_00, due=_d(0))
+    _agendar(client, headers, bill["id"], conta_id=conta["id"], quando=TODAY + timedelta(days=45))
+
+    body = _projection(client, headers)
+    inicial = body["saldo_inicial_cents"]
+    assert _window(body, 30)["saldo_projetado_cents"] == inicial, "entrou na janela ERRADA (30)"
+    assert _window(body, 60)["saldo_projetado_cents"] == inicial - 3_000_00
+    assert _window(body, 90)["saldo_projetado_cents"] == inicial - 3_000_00
+
+
+def test_AC6_a_agendada_no_DIA_DO_DEBITO_nao_conta_duas_vezes(
+    client: TestClient, headers, db: Session
+):
+    """⚠️ **O TESTE MAIS VALIOSO DA STORY.** `status == scheduled` **e** `paid_at::date == hoje`.
+
+    Entre 00:00 do dia agendado e a varredura do worker, o `Payable` ainda está `scheduled` **e** o
+    `bank_transaction` já tem `posted_at <= hoje`, logo já entra em
+    `active_balance_total(db, until=today)`. Sem o recorte `paid_at::date > today`, a mesma conta
+    seria subtraída **duas vezes** da projeção — um falso positivo do mesmo tamanho do falso
+    negativo que a story veio consertar, e que dura um dia inteiro sem deixar rastro.
+
+    ⚠️ **Como o estado é MONTADO importa, e a primeira versão deste teste estava errada.** Agendar
+    "para hoje" **não** produz uma agendada: a derivação do AC2 devolve `paid` quando
+    `paid_on == hoje` (é a borda estrita). Um teste escrito assim passa — **pelo motivo errado**,
+    porque não há `scheduled` nenhum no banco e nada poderia ser contado duas vezes. O estado real
+    do dia D se monta agendando para **amanhã** e pedindo a projeção **de amanhã** (o `today` é
+    injetável desde a 5.7, justamente para isto). Nada é plantado à mão: a linha nasce pelo caminho
+    de produção, e a pré-condição do cenário é asserida antes de o número ser medido.
+    """
+    conta = _conta_bancaria(client, headers)
+    bill = _payable(client, headers, amount=5_000_00, due=_d(0))
+    amanha = TODAY + timedelta(days=1)
+    _agendar(client, headers, bill["id"], conta_id=conta["id"], quando=amanha)
+
+    # Pré-condição do cenário: chegou o dia D e o worker AINDA NÃO rodou.
+    assert (
+        client.get(f"/payables/bills/{bill['id']}", headers=headers).json()["status"]
+        == "scheduled"
+    )
+
+    proj = projection_service.cash_projection(db, today=amanha)
+    # O valor entra UMA vez, pelo saldo inicial (o movimento é do dia e o corte é inclusivo).
+    assert proj.saldo_inicial_banco_cents == SALDO_ABERTURA - 5_000_00
+    for w in proj.windows:
+        assert w.saldo_projetado_cents == proj.saldo_inicial_cents, (
+            f"janela de {w.days} dias subtraiu o débito do DIA uma segunda vez: ele já está dentro "
+            "do saldo inicial. O recorte `paid_at::date > today` de `_window_sums` sumiu."
+        )
+
+
+def test_AC6_o_numero_e_IDENTICO_com_e_sem_o_worker(client: TestClient, headers, db: Session):
+    """A outra metade do AC6, e a que prova a **equivalência**, não só a ausência de dobra.
+
+    Mesmo cenário do teste acima, medido duas vezes: com a conta ainda `scheduled` (worker parado) e
+    depois de `promote_scheduled` tê-la promovido. **Campo a campo, os dois resultados são iguais.**
+    Se um dia divergirem, a corretude da Projeção passou a depender de um processo em background —
+    e o dono que abrir a tela às 8h da manhã veria um número diferente do de quem abrir às 9h.
+    """
+    from dataclasses import asdict
+
+    from app.modules.payables import service as payables_service
+
+    conta = _conta_bancaria(client, headers)
+    bill = _payable(client, headers, amount=5_000_00, due=_d(0))
+    amanha = TODAY + timedelta(days=1)
+    _agendar(client, headers, bill["id"], conta_id=conta["id"], quando=amanha)
+    _payable(client, headers, amount=800_00, due=_d(20))
+
+    antes = asdict(projection_service.cash_projection(db, today=amanha))
+
+    tenant_id = client.get("/auth/me", headers=headers).json()["user"]["tenant_id"]
+    promovidas = payables_service.promote_scheduled(
+        db, tenant_id=tenant_id, actor="system:worker", today=amanha
+    )
+    assert promovidas == 1, "pré-condição: a varredura tinha de ter algo a promover"
+
+    depois = asdict(projection_service.cash_projection(db, today=amanha))
+    assert depois == antes, (
+        "a Projeção MUDOU depois de o worker rodar. O status é rótulo; a aritmética é função da "
+        "data (F-D11). Se isto quebrou, `_window_sums` voltou a depender do status materializado."
+    )
+
+
+def test_saldo_inicial_chama_active_balance_total_com_until_igual_a_hoje(
+    client: TestClient, headers, db: Session, monkeypatch
+):
+    """⚠️ **ASSERÇÃO OBRIGATÓRIA da IV1** (ratificação §C-7.3 / achado A-4). Espião sobre o kwarg.
+
+    O recorte do AC6 tira a agendada de `_window_sums` quando a data já chegou **confiando** que o
+    movimento está no `saldo_inicial`. Isso só é verdade porque `_saldo_inicial` passa
+    `until=today`. Trocado por `None` ou por `SEM_CORTE`, a agendada **futura** passaria a contar
+    nos DOIS lugares e a dupla contagem voltaria — agora pelo lado oposto, **em silêncio**, num
+    arquivo que a story declara não tocar.
+
+    O comentário que existe no código diz *por que* o argumento está lá (*"a MESMA âncora do resto
+    da projeção"*) e **não diz o que quebra** — e o que quebra agora é outra coisa. Este espião é o
+    que torna o AC6 auditável amanhã, e não só correto hoje.
+
+    Espião (e não varredura de texto) de propósito: um `until` calculado de outro jeito passaria
+    numa varredura por `"until=today"` e falha aqui, que é onde importa.
+    """
+    from app.modules.bank import service as bank_service
+
+    _conta_bancaria(client, headers)
+    capturado: list[object] = []
+    original = bank_service.active_balance_total
+
+    def _espiao(*args, **kwargs):
+        capturado.append(kwargs.get("until", "AUSENTE"))
+        return original(*args, **kwargs)
+
+    monkeypatch.setattr(bank_service, "active_balance_total", _espiao)
+    projection_service.cash_projection(db, today=TODAY)
+
+    assert capturado, "`_saldo_inicial` deixou de chamar `active_balance_total`"
+    assert capturado == [TODAY], (
+        f"`_saldo_inicial` chamou `active_balance_total(until={capturado!r})` em vez de "
+        f"`until={TODAY!r}`. Com `None` ou `SEM_CORTE` ali, o pagamento AGENDADO passa a contar no "
+        "saldo inicial E nos fluxos de saída — a dupla contagem do AC6 volta pela porta oposta, "
+        "sem nenhum teste de comportamento ficar vermelho."
+    )
+
+
+def test_conta_agendada_para_ALEM_de_90_dias_nao_entra_em_janela_nenhuma(
+    client: TestClient, headers
+):
+    """A borda superior: o agendado respeita o horizonte, como o `open` sempre respeitou."""
+    conta = _conta_bancaria(client, headers)
+    bill = _payable(client, headers, amount=9_000_00, due=_d(0))
+    _agendar(client, headers, bill["id"], conta_id=conta["id"], quando=TODAY + timedelta(days=120))
+
+    body = _projection(client, headers)
+    for dias in (30, 60, 90):
+        assert _window(body, dias)["saldo_projetado_cents"] == body["saldo_inicial_cents"]
+
+
+def test_agendada_nao_entra_em_overdue_outflow(client: TestClient, headers):
+    """`overdue_outflow_cents` é a parcela **vencida e em aberto**. Uma agendada nunca é vencida —
+    a data do débito é futura por construção —, e a conta que vencia há 30 dias deixa de ser
+    "atrasada" no instante em que ganha dia marcado. É o `status == open_status` explícito dentro
+    do `CASE` de `overdue_col`: sem ele, o agendado com vencimento passado cairia ali."""
+    conta = _conta_bancaria(client, headers)
+    bill = _payable(client, headers, amount=700_00, due=_d(-30))
+    assert _projection(client, headers)["overdue_outflow_cents"] == 700_00
+
+    _agendar(client, headers, bill["id"], conta_id=conta["id"], quando=TODAY + timedelta(days=5))
+    body = _projection(client, headers)
+    assert body["overdue_outflow_cents"] == 0, (
+        "a conta agendada apareceu como VENCIDA. `overdue_col` perdeu o filtro de status e passou "
+        "a olhar só a data."
+    )
+    # ...mas ela continua na projeção, pela data do débito.
+    assert _window(body, 30)["saldo_projetado_cents"] == body["saldo_inicial_cents"] - 700_00
+
+
+def test_conta_CANCELADA_e_conta_PAGA_continuam_fora_da_projecao(client: TestClient, headers):
+    """A população cresceu para `{open, scheduled}` — e **só** para isso. `canceled` e `paid`
+    continuam fora dos fluxos de saída, como sempre estiveram."""
+    conta = _conta_bancaria(client, headers)
+    cancelada = _payable(client, headers, amount=4_000_00, due=_d(10))
+    client.post(f"/payables/bills/{cancelada['id']}/cancel", headers=headers)
+    paga = _payable(client, headers, amount=2_000_00, due=_d(10))
+    _agendar(client, headers, paga["id"], conta_id=conta["id"], quando=TODAY - timedelta(days=1))
+
+    body = _projection(client, headers)
+    assert _window(body, 30)["saldo_projetado_cents"] == body["saldo_inicial_cents"], (
+        "conta cancelada ou já paga entrou nos fluxos de saída"
+    )
+
+
+def test_window_sums_SEM_os_parametros_de_agendado_se_comporta_como_antes_da_8_14(
+    client: TestClient, headers, db: Session
+):
+    """**O contrato da parametrização, em forma de teste** — omitidos, os parâmetros não mudam nada.
+
+    ⚠️ **[Story 8.15] Este teste mudou de NOME e de propósito, e a mudança é a correção.** Ele se
+    chamava `test_ENTRADAS_continuam_so_open_nesta_story` e era a delimitação de escopo da 8.14
+    (*"o lado do recebimento é a Story 8.15"*). A 8.15 chegou: `cash_projection` agora liga
+    `scheduled_status`/`scheduled_at` para `Charge` também (ver os testes abaixo), e manter o nome
+    antigo faria o arquivo afirmar o contrário do que o código faz.
+
+    O que continua valendo — e é o motivo de o teste **ficar** em vez de sumir — é o contrato da
+    parametrização: `_window_sums` **sem** os dois argumentos se comporta byte a byte como antes da
+    8.14. É essa propriedade que permite ligar/desligar a população 2 por chamador, em vez de um
+    `isinstance(model, Payable)` dentro da função.
+    """
+    from app.modules.receivables.models import STATUS_OPEN as CHARGE_OPEN
+    from app.modules.receivables.models import Charge
+
+    _charge(client, headers, amount=1_000_00, due=_d(10))
+    horizons = [TODAY + timedelta(days=w) for w in (30, 60, 90)]
+    somas, vencido = projection_service._window_sums(
+        db, Charge, open_status=CHARGE_OPEN, today=TODAY, horizons=horizons
+    )
+    assert somas == [1_000_00, 1_000_00, 1_000_00] and vencido == 0
+
+
+# ══════════════════════════════════════════════════════════════════════════════════════════════
+# Story 8.15 (AC6) — o lado das ENTRADAS herda o mesmo conserto
+# ══════════════════════════════════════════════════════════════════════════════════════════════
+#
+# Sem isto, o espelho EXATO do bug da 8.14 acontece do lado das entradas: um Pix agendado não é
+# `open` (sai das entradas) **e** o movimento bancário dele é futuro (não entra no `saldo_inicial`,
+# que usa `active_balance_total(until=today)`) → **some da Projeção**. O dono veria um caixa mais
+# apertado do que o real, e a tela que responde *"e quando o caixa aperta?"* mentiria por omissão —
+# na direção oposta, mas pela mesma mecânica.
+
+
+def _receber_fora_do_trilho(client, headers, charge_id: str, *, conta_id: str, quando) -> dict:
+    r = client.post(
+        f"/receivables/charges/{charge_id}/settle-externally",
+        json={"bank_account_id": conta_id, "received_on": quando.isoformat()},
+        headers=headers,
+    )
+    assert r.status_code == 200, r.text
+    return r.json()
+
+
+def test_AC6_o_recebimento_agendado_esta_na_projecao_e_fora_do_saldo_inicial(
+    client: TestClient, headers
+):
+    """O cenário único, nas TRÊS leituras ao mesmo tempo — espelho da IV1 da 8.14.
+
+    Saldo de abertura + 1 cobrança RECEBIDA-AGENDADA para D+15 + 1 cobrança ABERTA vencendo D+20:
+      (a) `saldo_inicial` **não** inclui o crédito agendado (o movimento é futuro);
+      (b) a janela de 30 dias **inclui** o agendado, pela data do CRÉDITO;
+      (c) `saldo_projetado(D+30)` = saldo inicial + agendado + aberta.
+    """
+    conta = _conta_bancaria(client, headers)
+    agendada = _charge(client, headers, amount=3_000_00, due=_d(0))
+    _receber_fora_do_trilho(
+        client, headers, agendada["id"], conta_id=conta["id"], quando=TODAY + timedelta(days=15)
+    )
+    _charge(client, headers, amount=1_200_00, due=_d(20))
+
+    body = _projection(client, headers)
+
+    assert body["saldo_inicial_banco_cents"] == SALDO_ABERTURA, (
+        "o saldo inicial somou um crédito FUTURO — `_saldo_inicial` deixou de passar `until=today`"
+    )
+    esperado = body["saldo_inicial_cents"] + 3_000_00 + 1_200_00
+    assert _window(body, 30)["saldo_projetado_cents"] == esperado, (
+        "o recebimento AGENDADO sumiu da Projeção (ou entrou duas vezes) — é o espelho exato do "
+        "bug que a Story 8.14 consertou do lado das saídas"
+    )
+    assert _window(body, 90)["saldo_projetado_cents"] == esperado
+
+
+def test_AC6_o_recebimento_agendado_entra_pela_DATA_DO_CREDITO_nao_pelo_vencimento(
+    client: TestClient, headers
+):
+    """A cobrança **vence hoje** e o Pix caiu para D+45: entra na janela de 60, não na de 30."""
+    conta = _conta_bancaria(client, headers)
+    charge = _charge(client, headers, amount=2_000_00, due=_d(0))
+    _receber_fora_do_trilho(
+        client, headers, charge["id"], conta_id=conta["id"], quando=TODAY + timedelta(days=45)
+    )
+
+    body = _projection(client, headers)
+    assert _window(body, 30)["saldo_projetado_cents"] == body["saldo_inicial_cents"]
+    assert _window(body, 60)["saldo_projetado_cents"] == body["saldo_inicial_cents"] + 2_000_00
+
+
+def test_AC6_o_recebimento_agendado_no_DIA_DO_CREDITO_nao_conta_duas_vezes(
+    client: TestClient, headers, db: Session
+):
+    """⚠️ **O recorte `paid_at::date > today`, do lado das entradas.**
+
+    Entre 00:00 do dia do crédito e a varredura do worker, a `Charge` ainda está `scheduled` **e**
+    o `bank_transaction` já tem `posted_at <= hoje` — logo já entra em `active_balance_total(db,
+    until=today)`, que semeia o `saldo_inicial`. Sem o recorte, o mesmo dinheiro seria **somado
+    duas vezes**.
+
+    ⚠️ O estado do dia D se monta agendando para **amanhã** e pedindo a projeção **de amanhã**:
+    registrar "para hoje" devolve `paid` (a borda é estrita) e o teste passaria pelo motivo errado,
+    sem nenhum `scheduled` no banco.
+    """
+    conta = _conta_bancaria(client, headers)
+    charge = _charge(client, headers, amount=3_000_00, due=_d(0))
+    amanha = TODAY + timedelta(days=1)
+    _receber_fora_do_trilho(client, headers, charge["id"], conta_id=conta["id"], quando=amanha)
+
+    # Pré-condição: chegou o dia D e o worker AINDA NÃO rodou.
+    assert (
+        client.get(f"/receivables/charges/{charge['id']}", headers=headers).json()["status"]
+        == "scheduled"
+    )
+
+    proj = projection_service.cash_projection(db, today=amanha)
+    assert proj.saldo_inicial_banco_cents == SALDO_ABERTURA + 3_000_00
+    for w in proj.windows:
+        assert w.saldo_projetado_cents == proj.saldo_inicial_cents, (
+            f"janela de {w.days} dias somou o crédito do DIA uma segunda vez: ele já está dentro "
+            "do saldo inicial. O recorte `paid_at::date > today` sumiu do lado das entradas."
+        )
+
+
+def test_AC6_ENTRADAS_o_numero_e_IDENTICO_com_e_sem_o_worker(
+    client: TestClient, headers, db: Session
+):
+    """A equivalência, não só a ausência de dobra — a prova do F-D11 do lado das entradas.
+
+    Mesmo cenário medido duas vezes: com a cobrança ainda `scheduled` (worker parado) e depois de
+    `receivables.promote_scheduled` tê-la promovido. **Campo a campo, iguais.** Se um dia
+    divergirem, a corretude da Projeção passou a depender de um processo em background.
+    """
+    from dataclasses import asdict
+
+    from app.modules.receivables import service as receivables_service
+
+    conta = _conta_bancaria(client, headers)
+    charge = _charge(client, headers, amount=3_000_00, due=_d(0))
+    amanha = TODAY + timedelta(days=1)
+    _receber_fora_do_trilho(client, headers, charge["id"], conta_id=conta["id"], quando=amanha)
+    _charge(client, headers, amount=800_00, due=_d(20))
+
+    antes = asdict(projection_service.cash_projection(db, today=amanha))
+
+    tenant_id = client.get("/auth/me", headers=headers).json()["user"]["tenant_id"]
+    promovidas = receivables_service.promote_scheduled(
+        db, tenant_id=tenant_id, actor="system:worker", today=amanha
+    )
+    assert promovidas == 1, "pré-condição: a varredura tinha de ter algo a promover"
+
+    depois = asdict(projection_service.cash_projection(db, today=amanha))
+    assert depois == antes, (
+        "a Projeção MUDOU depois de o worker rodar. O status é rótulo; a aritmética é função da "
+        "data (F-D11)."
+    )
+
+
+def test_AC6_o_recebimento_agendado_nao_entra_em_overdue_inflow(client: TestClient, headers):
+    """Uma cobrança agendada nunca está vencida — nem quando o vencimento dela já passou.
+
+    É o `status == open_status` explícito dentro do `CASE` de `overdue_col`: sem ele, o agendado
+    com vencimento passado cairia em `overdue_inflow_cents` e a régua de cobrança teria um número
+    para justificar um lembrete a quem já pagou.
+    """
+    conta = _conta_bancaria(client, headers)
+    charge = _charge(client, headers, amount=900_00, due=_d(-30))
+    assert _projection(client, headers)["overdue_inflow_cents"] == 900_00
+
+    _receber_fora_do_trilho(
+        client, headers, charge["id"], conta_id=conta["id"], quando=TODAY + timedelta(days=5)
+    )
+    body = _projection(client, headers)
+    assert body["overdue_inflow_cents"] == 0
+    assert _window(body, 30)["saldo_projetado_cents"] == body["saldo_inicial_cents"] + 900_00
+
+
+def test_AC6_cobranca_CANCELADA_e_RECEBIDA_continuam_fora_das_entradas(client: TestClient, headers):
+    """A população de entradas cresceu para `{open, scheduled}` — e **só** para isso."""
+    conta = _conta_bancaria(client, headers)
+    cancelada = _charge(client, headers, amount=4_000_00, due=_d(10))
+    client.post(f"/receivables/charges/{cancelada['id']}/cancel", headers=headers)
+    recebida = _charge(client, headers, amount=2_000_00, due=_d(10))
+    _receber_fora_do_trilho(
+        client, headers, recebida["id"], conta_id=conta["id"], quando=TODAY - timedelta(days=1)
+    )
+
+    body = _projection(client, headers)
+    assert _window(body, 30)["saldo_projetado_cents"] == body["saldo_inicial_cents"], (
+        "cobrança cancelada ou já recebida entrou nos fluxos de entrada"
+    )

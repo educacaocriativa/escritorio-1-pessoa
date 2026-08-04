@@ -77,17 +77,39 @@ O **plano 3 do dinheiro** (o extrato real da conta do usuário) como entidade de
 **derivado** dos movimentos, e uma **conferência que localiza furos**: saldo do banco × saldo do sistema, **por
 conta**, resumido em uma frase. Nasce da assimetria estrutural entre receber (três testemunhas independentes:
 gateway, webhook, dinheiro entrando) e pagar (nenhuma). Sem agregador de Open Finance e sem custo recorrente novo.
-Design: [`../architecture/controle-bancario-design.md`](../architecture/controle-bancario-design.md);
-ADR: [`../decisions/0003-controle-bancario-nativo.md`](../decisions/0003-controle-bancario-nativo.md).
+Design-mãe: [`../architecture/controle-bancario-design.md`](../architecture/controle-bancario-design.md)
+(**parcialmente supersedido**); design da Onda 2:
+[`../architecture/controle-bancario-onda2-design.md`](../architecture/controle-bancario-onda2-design.md);
+ADR: [`../decisions/0003-controle-bancario-nativo.md`](../decisions/0003-controle-bancario-nativo.md)
+(**Adendo 4**).
 
 | Epic | Arquivo | Classificação | Stories |
 |---|---|---|---|
-| Epic 8 — Controle Bancário e Conferência | [epic-8-controle-bancario.md](./epic-8-controle-bancario.md) | FEATURE NOVA (pós-go-live) | 8 (Ondas 0–1) |
+| Epic 8 — Controle Bancário e Conferência | [epic-8-controle-bancario.md](./epic-8-controle-bancario.md) | FEATURE NOVA (pós-go-live) | 18 (8 ✅ Ondas 0–1 · 10 delimitadas na Onda 2) |
 
-**Escopo liberado:** apenas **Onda 0 + Onda 1** (decisão do fundador, 2026-07-29). Ondas 2, 3, 4 e 6 são escopo
-**planejado, não liberado**; **Onda 5 está bloqueada** pelo pré-requisito `platform_earnings → transaction`.
-**Sequenciamento:** depende do Epic 5 (entregue) — estende `financial_intelligence` e `investments`; independente
-dos Epics 6 e 7. Interno: 8.1 (Onda 0) → 8.2 → 8.3 → 8.4 → 8.5 → 8.6 → 8.7 → 8.8.
-⚠️ As Ondas 3 e 4 **não são escopo automático**: a divergência medida na Onda 1 é o instrumento de decisão sobre
-liberá-las (§3.1 e §5.1 do epic). O epic também **supersede** o AC1 da Story 5.7 (saldo inicial da projeção) e,
-quando a Onda 2 for liberada, o AC1 da Story 5.6 (`principal_cents` vira derivado).
+**Estado (2026-07-30):** **Ondas 0 e 1 ✅ em produção** (PR #61, `7dba286`, migrations 0058/0059/0060).
+**Onda 2 — "a origem do movimento" — LIBERADA** pelo fundador em 2026-07-30, com 10 stories delimitadas
+(8.9–8.18). Onda 2b e Ondas 3–5 planejadas, não liberadas; **Onda 6 bloqueada** pelo pré-requisito
+`platform_earnings → transaction`.
+**Sequenciamento:** depende do Epic 5 (entregue) — estende `financial_intelligence`, `payables`, `receivables` e
+`investments`; independente dos Epics 6 e 7. Interno: 8.1 ✅ → 8.2–8.8 ✅ → **8.11 → 8.9 → 8.10 → 8.12 → 8.13 →
+8.14 → 8.15 → 8.16 → 8.17 → 8.18** (ordem de merge da §6.1 do epic).
+
+> ⚠️ **AS ONDAS FORAM RENUMERADAS EM 2026-07-30 — os números 2 a 6 mudaram de significado.** Tabela de-para na
+> §11.5 do epic. Uma **Onda 2 nova** (a origem do movimento) entra após a Onda 1; a Onda 2 antiga vira **2b**; o
+> payout sobe de 6 para **3**; a importação desce de 3 para **4**; o match vira **5**; a baixa de Receber
+> (bloqueada) vira **6**. Critério: **dependência externa crescente**.
+
+**Por que a Onda 2 existe:** o design modelou uma direção só — **extrato → sistema** — e nunca modelou
+**sistema → banco**. Quando o dono marca uma conta como paga, o e1p já sabe valor, data e fornecedor; faltava
+saber de qual conta saiu. Resultado em produção: 45 contas pagas, saldo derivado R$ 0,00, e o único caminho seria
+redigitar as 45. *"É um sistema integrado, não tem o motivo de tudo começar do zero"* (fundador).
+
+⚠️ **A §3.1 do epic foi CORRIGIDA:** ela definia a divergência da **Onda 1** como o instrumento do gate que libera
+ou mata as ondas caras. Medida **antes da Onda 2**, essa divergência é enorme **por construção** — porque mede a
+**ausência de uma porta**, não o furo — e teria argumentado, com número na mão, para liberar a onda mais cara.
+A leitura do gate só é válida **a partir do primeiro ciclo completo posterior à Onda 2**, com a pré-condição de
+que toda conta paga e toda cobrança recebida na janela tenham conta bancária informada.
+
+O epic **supersede** o AC1 da Story 5.7 (saldo inicial da projeção) e, quando a **Onda 2b** for liberada, o AC1
+da Story 5.6 (`principal_cents` vira derivado).

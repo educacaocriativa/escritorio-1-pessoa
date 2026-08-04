@@ -97,17 +97,19 @@ SOMENTE LEITURA (IV1): nenhuma escrita, nenhuma conta criada — só agrega e pr
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from datetime import UTC, date, datetime, timedelta
+from datetime import UTC, date, datetime, time, timedelta
 
-from sqlalchemy import case, func, select
+from sqlalchemy import and_, case, func, or_, select
 from sqlalchemy.orm import Session
 
 from app.core.money_planes import ORIGEM_MISTO, ORIGEM_PLATAFORMA
 from app.modules.bank import service as bank_service
 from app.modules.bank.models import KIND_INVESTMENT
 from app.modules.payables.models import STATUS_OPEN as PAYABLE_OPEN
+from app.modules.payables.models import STATUS_SCHEDULED as PAYABLE_SCHEDULED
 from app.modules.payables.models import Payable
 from app.modules.receivables.models import STATUS_OPEN as CHARGE_OPEN
+from app.modules.receivables.models import STATUS_SCHEDULED as CHARGE_SCHEDULED
 from app.modules.receivables.models import Charge
 from app.modules.wallet import service as wallet_service
 
@@ -335,6 +337,13 @@ def _saldo_inicial(db: Session, *, today: date) -> _SaldoInicial:
     )
 
 
+def _meia_noite(dia: date) -> datetime:
+    """A meia-noite UTC de `dia` — o limite de TIMESTAMP que substitui um `::date` que o SQLite não
+    tem. Mesma convenção de `payables.apply_paid` ao gravar `paid_at`, dos dois lados da mesma
+    comparação (data de calendário, nunca horário local — `CLAUDE.md` §6.0)."""
+    return datetime.combine(dia, time.min, tzinfo=UTC)
+
+
 def _window_sums(
     db: Session,
     model: type[Charge | Payable],
@@ -342,35 +351,111 @@ def _window_sums(
     open_status: str,
     today: date,
     horizons: list[date],
+    scheduled_status: str | None = None,
+    scheduled_at=None,
 ) -> tuple[list[int], int]:
-    """Soma CUMULATIVA de `amount_cents` de itens em aberto por horizonte, feita no BANCO.
+    """Soma CUMULATIVA de `amount_cents` por horizonte, feita no BANCO. **Duas populações.**
 
-    Para cada horizonte (today+30/60/90), soma os lançamentos `status=open` cujo `due_date` cai em
-    `(-∞, horizonte]` — cumulativo, não faixas isoladas (o saldo de 60 dias já embute o de 30).
-    NÃO há limite inferior: itens JÁ VENCIDOS (`due_date < today`) contam em TODAS as janelas, como
-    caixa esperado imediato (decisão do @architect — ver docstring do módulo). Uma única query por
-    modelo (SUM(CASE ...)) — não carrega linha nenhuma para a aplicação, mesmo padrão de
-    agregação-no-banco da DRE.
+    **1. Em aberto (desde a 5.7).** Para cada horizonte (today+30/60/90), soma os lançamentos
+    `status=open` cujo `due_date` cai em `(-∞, horizonte]` — cumulativo, não faixas isoladas (o
+    saldo de 60 dias já embute o de 30). NÃO há limite inferior: itens JÁ VENCIDOS
+    (`due_date < today`) contam em TODAS as janelas, como caixa esperado imediato (decisão do
+    @architect — ver docstring do módulo).
+
+    **2. Agendados (Story 8.14) — só quando `scheduled_status` é informado.** Lançamentos cujo
+    dinheiro já tem **dia marcado**, somados pela **DATA DO DÉBITO** (`scheduled_at`), nunca pelo
+    `due_date`: o dinheiro sai no dia agendado, e uma conta que vence dia 5 mas foi agendada para
+    o dia 20 sai do caixa no dia 20.
+
+    ── ⚠️ **POR QUE A POPULAÇÃO 2 EXISTE: sem ela o dinheiro agendado SOME da Projeção**
+
+    Uma conta agendada não é `open` (sairia dos fluxos de saída) **e** o movimento bancário dela é
+    futuro (não entra no `saldo_inicial`, que usa `active_balance_total(until=today)`). As duas
+    coisas juntas fazem R$ 5.000 com destino marcado desaparecerem da única tela que responde
+    *"e quando o caixa aperta?"*. *"O saldo diz que você os tem, e nada diz que vão sair"* — é a
+    máquina de falso negativo da Onda 0 ressuscitada **na mesma superfície que a Onda 0
+    consertou**.
+
+    ── ⚠️ **O RECORTE `scheduled_at::date > today`, E POR QUE ELE NÃO PODE SER "SIMPLIFICADO"**
+
+    O predicado do agendado **não** é só `status == scheduled`: é
+    `status == scheduled` **E** `data do débito > hoje`. A metade da data é obrigatória e evita uma
+    **subtração dupla** que dura um dia inteiro e não deixa rastro:
+
+        No dia agendado, entre 00:00 e a varredura do worker, o `Payable` ainda está `scheduled`
+        **e** o `bank_transaction` já tem `posted_at <= hoje` — logo ele **já entra** em
+        `active_balance_total(db, until=today)`, que semeia o `saldo_inicial`. Somar a mesma conta
+        aqui também a subtrairia **duas vezes**.
+
+    **A data manda, não o status materializado** — o mesmo princípio que faz `payment_queue`
+    calcular baldes na leitura *"sem precisar de job/cron"*. Consequência boa e deliberada: a
+    corretude desta função **não depende da frequência do worker**. Ele vira o que o F-D11 diz que
+    ele é — cosmética de status para a Fila e o resumo — em vez de um componente do qual a
+    aritmética depende.
+
+    ⚠️ **A outra metade desta invariante mora fora daqui, e é frágil:** `_saldo_inicial` precisa
+    chamar `active_balance_total` com **`until=today`**. Trocado por `None` ou `SEM_CORTE`, o
+    agendado **futuro** passaria a contar nos dois lugares e a dupla contagem voltaria pela porta
+    oposta, em silêncio. Há teste dedicado espionando aquele kwarg (`test_financial_intelligence_
+    projection.py`), porque o comentário que existe lá diz *por que* o argumento existe e não diz
+    *o que quebra*.
+
+    ── Parametrização
+
+    `scheduled_status` + `scheduled_at` são argumentos **nomeados e explícitos**, e não um
+    `isinstance(model, Payable)` dentro da função: ela é compartilhada entre entradas (`Charge`) e
+    saídas (`Payable`), e um `if` por tipo aqui dentro seria o começo de duas funções fingindo ser
+    uma. A Story 8.15 liga o **mesmo** par para `Charge` — é para isso que a parametrização existe.
+    `scheduled_at` é a coluna `DateTime(timezone=True)` da data de caixa (`Payable.paid_at`;
+    `Charge` na 8.15). Omitidos (`None`), a função se comporta **exatamente** como antes da 8.14.
+
+    Uma única query por modelo (`SUM(CASE ...)`) — não carrega linha nenhuma para a aplicação,
+    mesmo padrão de agregação-no-banco da DRE. As comparações de `scheduled_at` usam **limites de
+    TIMESTAMP** em vez de `::date` (dialeto-agnóstico: o SQLite dos testes não tem `::date`), o
+    mesmo padrão de `payables.paid_before` e `probe_pagamento_duplicado`.
 
     Retorna `(somas_por_horizonte, soma_vencida)`: a soma por horizonte (na mesma ordem) e a parcela
-    já vencida (`due_date < today`), que já está EMBUTIDA em cada horizonte e é devolvida só para
+    já vencida (`due_date < today`, **só da população 1** — um agendado nunca está vencido, sua data
+    de débito é futura por construção), que já está EMBUTIDA em cada horizonte e é devolvida só para
     exposição transparente."""
     max_horizon = horizons[-1]
-    horizon_cols = [
-        func.coalesce(
-            func.sum(case((model.due_date <= h, model.amount_cents), else_=0)),
-            0,
+
+    def _aberto_ate(h: date):
+        return and_(model.status == open_status, model.due_date <= h)
+
+    def _na_janela(h: date):
+        """A população inteira até o horizonte `h` — em aberto, mais os agendados (se houver)."""
+        if scheduled_status is None or scheduled_at is None:
+            return _aberto_ate(h)
+        return or_(
+            _aberto_ate(h),
+            and_(
+                model.status == scheduled_status,
+                # ⚠️ `> today` — o recorte que impede a dupla contagem do dia D. Em limites de
+                # timestamp: "depois de hoje" é ">= meia-noite UTC de amanhã".
+                scheduled_at >= _meia_noite(today + timedelta(days=1)),
+                # "<= h" (inclusivo, como o `due_date <= h` do outro ramo): "< meia-noite de h+1".
+                scheduled_at < _meia_noite(h + timedelta(days=1)),
+            ),
         )
+
+    horizon_cols = [
+        func.coalesce(func.sum(case((_na_janela(h), model.amount_cents), else_=0)), 0)
         for h in horizons
     ]
+    # O `status == open_status` é EXPLÍCITO aqui, e não herdado do `WHERE` externo: com a população
+    # 2 no `WHERE`, um agendado passaria pelo filtro externo e cairia neste `CASE` se ele olhasse
+    # só a data. Vencido é um estado de conta **em aberto**, nunca de conta agendada.
     overdue_col = func.coalesce(
-        func.sum(case((model.due_date < today, model.amount_cents), else_=0)),
+        func.sum(
+            case(
+                (and_(model.status == open_status, model.due_date < today), model.amount_cents),
+                else_=0,
+            )
+        ),
         0,
     )
-    stmt = select(*horizon_cols, overdue_col).where(
-        model.status == open_status,
-        model.due_date <= max_horizon,
-    )
+    stmt = select(*horizon_cols, overdue_col).where(_na_janela(max_horizon))
     row = db.execute(stmt).one()
     values = [int(v or 0) for v in row]
     return values[:-1], values[-1]
@@ -420,11 +505,36 @@ def cash_projection(
     partida = _saldo_inicial(db, today=today)
     saldo_inicial = partida.total_cents
     saldo_inicial_origem = partida.origem
+    # ⚠️ **[Story 8.15] Entradas: `open` (por vencimento) + `scheduled` (pela data do CRÉDITO, e só
+    # depois de hoje).** O par de parâmetros é o **mesmo** que a 8.14 criou para as saídas — nenhum
+    # `isinstance` dentro de `_window_sums`, que é exatamente para isto que a parametrização existe.
+    #
+    # Sem esta metade, o espelho exato do bug da 8.14 acontece do lado das entradas: um Pix
+    # agendado não é `open` (sai das entradas) **e** o movimento bancário dele é futuro (não entra
+    # no `saldo_inicial`, que usa `active_balance_total(until=today)`) → **some da Projeção**. O
+    # recorte `paid_at::date > today` é a outra metade obrigatória: no dia do crédito, entre 00:00
+    # e a varredura do worker, a cobrança ainda é `scheduled` e o movimento já tem
+    # `posted_at <= hoje` — somá-la aqui a contaria **duas vezes**.
     inflows, overdue_inflow = _window_sums(
-        db, Charge, open_status=CHARGE_OPEN, today=today, horizons=horizons
+        db,
+        Charge,
+        open_status=CHARGE_OPEN,
+        today=today,
+        horizons=horizons,
+        scheduled_status=CHARGE_SCHEDULED,
+        scheduled_at=Charge.paid_at,
     )
+    # Saídas: `open` (por vencimento) **+ `scheduled` (pela data do débito, e só depois de hoje)**.
+    # Sem a segunda metade, o pagamento agendado some da Projeção — ver a docstring de
+    # `_window_sums`, que é onde o porquê inteiro está escrito.
     outflows, overdue_outflow = _window_sums(
-        db, Payable, open_status=PAYABLE_OPEN, today=today, horizons=horizons
+        db,
+        Payable,
+        open_status=PAYABLE_OPEN,
+        today=today,
+        horizons=horizons,
+        scheduled_status=PAYABLE_SCHEDULED,
+        scheduled_at=Payable.paid_at,
     )
 
     # AC4b — o veredito de janela negativa é calado quando o saldo de partida não tem lastro. Sem
