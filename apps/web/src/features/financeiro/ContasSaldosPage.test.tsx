@@ -463,10 +463,10 @@ describe("⚠️ Story 8.11 — a metade da guarda que vive no FORMULÁRIO (AC2b
      * `input[type=date]` já não cabe), e o modal não usa `overflow-hidden` (que CORTA — a lição
      * dos PRs #56/#58, em que "Estornar" e o checkbox de baixa ficaram inalcançáveis).
      *
-     * ⚠️ A conferência de ALTURA em 360px não cabe aqui e está registrada no Dev Agent Record:
-     * `components/Modal.tsx` não tem `max-h`/`overflow-y-auto`, então um modal mais alto que a
-     * viewport transborda **sem rolagem**. É defeito pré-existente de componente compartilhado —
-     * reportado, não corrigido nesta story.
+     * ✅ **A altura foi CORRIGIDA** (commit `bf32a10`): `components/Modal.tsx` ganhou
+     * `max-h-[85vh]` + `overflow-y-auto`, então um modal mais alto que a viewport ROLA em vez de
+     * transbordar escondendo o botão de salvar. Este comentário dizia "pré-existente, não corrigido
+     * nesta story" e ficou desatualizado — a garantia da altura mora hoje em `Modal.test.tsx`.
      */
     await abrirEdicao();
     const container = document.body;

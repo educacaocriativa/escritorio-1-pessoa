@@ -1,9 +1,12 @@
 """Testes da bandeja de comprovantes (Contas a Pagar).
 
-⚠️ **Adaptado pela Story 8.12, não reescrito** (IV1). A baixa passou a gerar o movimento bancário e
-a exigir a conta de onde o dinheiro saiu; a bandeja usa a conta **primária** como substituto
-declarado até a Story 8.13 acrescentar o campo. Nenhum teste foi apagado — inclusive o que a própria
-suíte chama de *"guarda de regressão do refactor apply_paid/mark_paid"*.
+⚠️ **Adaptado pela Story 8.12 e de novo pela 8.13, nunca reescrito** (IV1). A baixa passou a gerar o
+movimento bancário e a exigir a conta de onde o dinheiro saiu; a 8.12 usou a conta **primária** como
+substituto declarado, e a **8.13 removeu esse substituto**: a conta e a data agora vêm do payload
+(`ReceiptLinkIn`/`ReceiptNewBillIn`), obrigatórias **só quando `mark_paid=True`**. Por isso os
+helpers `_link`/`_new_bill_payload` ganharam o parâmetro `conta` — a mudança é no corpo enviado, não
+no comportamento verificado. Nenhum teste foi apagado — inclusive o que a própria suíte chama de
+*"guarda de regressão do refactor apply_paid/mark_paid"*.
 """
 import io
 from datetime import UTC, date, datetime, timedelta
@@ -36,14 +39,16 @@ def headers(client: TestClient) -> dict[str, str]:
 
 @pytest.fixture(autouse=True)
 def conta_primaria(client: TestClient, headers) -> str:
-    """A conta bancária PRIMÁRIA do tenant. **Autouse desde a Story 8.12, e por um motivo.**
+    """A conta bancária do tenant. **Autouse desde a 8.12 — e continua, por outro motivo.**
 
-    A bandeja não tem (ainda) campo para informar a conta — quem o acrescenta é a Story 8.13. Até
-    lá, `receipts._conta_da_bandeja` usa a **primária** como substituto declarado
-    (`[SUPOSIÇÃO DO @SM]` + `TODO(8.13)`), e sem ela toda baixa por comprovante devolveria o 409
-    acionável. Autouse porque o tenant REAL que usa esta porta tem conta cadastrada — o cenário
-    "sem conta nenhuma" é exercido de propósito, e só, em
-    `test_bandeja_sem_conta_primaria_devolve_409_acionavel`.
+    Na 8.12 ela era o substituto que o backend elegia sozinho (`TODO(8.13)`). A **8.13 removeu essa
+    eleição**: quem escolhe é a tela, e o payload carrega a escolha. A fixture segue autouse porque
+    o tenant REAL que usa esta porta tem conta cadastrada, e porque quase todo teste daqui precisa
+    de um id de conta válido para mandar no corpo.
+
+    (O nome "primária" ficou por compatibilidade com os testes que a referenciam; ela é criada sem
+    `is_primary` — a pré-seleção pela primária é comportamento de TELA, exercido em
+    `EscolhaDaBaixa.test.tsx`, não de backend.)
     """
     resp = client.post(
         "/bank/accounts",
@@ -57,6 +62,11 @@ def conta_primaria(client: TestClient, headers) -> str:
     )
     assert resp.status_code == 201, resp.text
     return resp.json()["id"]
+
+
+def _hoje() -> str:
+    """Hoje em UTC — a mesma âncora do teto de `payables.service._valida_data_de_baixa`."""
+    return datetime.now(UTC).date().isoformat()
 
 
 def _pay(client: TestClient, headers, bill_id: str, conta: str, paid_on: str | None = None):
@@ -227,22 +237,42 @@ def test_candidates_limita_a_100_itens(client: TestClient, headers):
     assert len(itens) == 100
 
 
-def _link(client: TestClient, headers, rid: str, bill_id: str, mark_paid: bool = True):
-    return client.post(
-        f"/payables/receipts/{rid}/link",
-        json={"bill_id": bill_id, "mark_paid": mark_paid},
-        headers=headers,
-    )
+def _link(
+    client: TestClient,
+    headers,
+    rid: str,
+    bill_id: str,
+    mark_paid: bool = True,
+    conta: str | None = None,
+    paid_on: str | None = None,
+):
+    """`POST /receipts/{id}/link` com o corpo da Story 8.13.
+
+    `conta=None` **não** vira um default: o campo simplesmente não é enviado, que é como se exercita
+    o 422 condicional (`mark_paid=True` sem conta). Mesma disciplina de `paid_on`.
+    """
+    body: dict = {"bill_id": bill_id, "mark_paid": mark_paid}
+    if conta is not None:
+        body["bank_account_id"] = conta
+    if paid_on is not None:
+        body["paid_on"] = paid_on
+    return client.post(f"/payables/receipts/{rid}/link", json=body, headers=headers)
 
 
-def test_link_anexa_e_da_baixa(client: TestClient, headers):
+def test_link_anexa_e_da_baixa(client: TestClient, headers, conta_primaria):
     b = _bill(client, headers)
     rid = _upload(client, headers).json()["id"]
 
-    resp = _link(client, headers, rid, b["id"])
+    # `paid_on=hoje` é o que a TELA da bandeja manda (o comprovante chega no instante do
+    # pagamento). Sem ele o corpo cairia no default `due_date` de `apply_paid` — que aqui é 2099 e
+    # bateria no teto de hoje. Ver a nota em `receipts.link_receipt`.
+    resp = _link(client, headers, rid, b["id"], conta=conta_primaria, paid_on=_hoje())
     assert resp.status_code == 200, resp.text
     assert resp.json()["status"] == "paid"
     assert resp.json()["paid_at"] is not None
+    # A conta gravada é a que veio no PAYLOAD (8.13) — não uma escolhida pelo backend.
+    assert resp.json()["bank_account_id"] == conta_primaria
+    assert resp.json()["bank_transaction_id"] is not None
 
     # saiu da bandeja e virou anexo da conta, com o label certo
     assert client.get("/payables/receipts", headers=headers).json() == []
@@ -266,32 +296,174 @@ def test_link_em_conta_ja_paga_nao_altera_paid_at(client: TestClient, headers, c
     paga = _pay(client, headers, b["id"], conta_primaria).json()
     rid = _upload(client, headers).json()["id"]
 
-    resp = _link(client, headers, rid, b["id"], mark_paid=True)
+    resp = _link(client, headers, rid, b["id"], mark_paid=True, conta=conta_primaria)
     assert resp.status_code == 200
     assert resp.json()["paid_at"] == paga["paid_at"]  # baixa preservada, não re-datada
 
 
-def test_link_em_conta_cancelada_falha_e_mantem_na_bandeja(client: TestClient, headers):
+def test_link_em_conta_cancelada_falha_e_mantem_na_bandeja(
+    client: TestClient, headers, conta_primaria
+):
     b = _bill(client, headers)
     client.post(f"/payables/bills/{b['id']}/cancel", headers=headers)
     rid = _upload(client, headers).json()["id"]
 
-    resp = _link(client, headers, rid, b["id"])
+    resp = _link(client, headers, rid, b["id"], conta=conta_primaria, paid_on=_hoje())
     assert resp.status_code == 409
     # nada foi gravado: o comprovante continua na bandeja
     assert [i["id"] for i in client.get("/payables/receipts", headers=headers).json()] == [rid]
 
 
-def test_link_duas_vezes_da_409(client: TestClient, headers):
+def test_link_duas_vezes_da_409(client: TestClient, headers, conta_primaria):
     b = _bill(client, headers)
     rid = _upload(client, headers).json()["id"]
-    assert _link(client, headers, rid, b["id"]).status_code == 200
-    assert _link(client, headers, rid, b["id"]).status_code == 409
+    args = dict(conta=conta_primaria, paid_on=_hoje())
+    assert _link(client, headers, rid, b["id"], **args).status_code == 200
+    assert _link(client, headers, rid, b["id"], **args).status_code == 409
 
 
-def test_link_em_conta_inexistente_da_404(client: TestClient, headers):
+def test_link_em_conta_inexistente_da_404(client: TestClient, headers, conta_primaria):
     rid = _upload(client, headers).json()["id"]
-    assert _link(client, headers, rid, "nao-existe").status_code == 404
+    assert _link(client, headers, rid, "nao-existe", conta=conta_primaria).status_code == 404
+
+
+# ── Story 8.13 — a conta e a data vêm do payload ──────────────────────────────────────────────
+# Os QUATRO casos da validação condicional (`mark_paid` × conta presente/ausente), nos DOIS corpos
+# da bandeja. Parametrizados de propósito: um `and` de duas condições sobrevive a mutação quando um
+# único caso de teste satisfaz as duas metades ao mesmo tempo (lição da 8.9). Aqui cada metade cai
+# sozinha — tirar `self.mark_paid and` quebra as linhas `mark_paid=False`; tirar
+# `not bank_account_id` quebra as linhas `conta ausente`.
+
+
+def _movimentos(client: TestClient, headers, conta: str) -> list[dict]:
+    return client.get(
+        f"/bank/transactions?bank_account_id={conta}&limit=100", headers=headers
+    ).json()
+
+
+@pytest.mark.parametrize("mark_paid", [True, False])
+def test_link_conta_e_obrigatoria_apenas_quando_da_baixa(
+    client: TestClient, headers, conta_primaria, mark_paid
+):
+    """Sem conta: 422 quando dá baixa, 200 quando só anexa.
+
+    Anexar **sem** dar baixa é caso legítimo (a conta já foi paga antes, ou o dono só quer guardar
+    o arquivo) — exigir a conta bancária ali seria pedir um dado sobre um fato que não está sendo
+    afirmado.
+    """
+    b = _bill(client, headers)
+    rid = _upload(client, headers).json()["id"]
+
+    resp = _link(client, headers, rid, b["id"], mark_paid=mark_paid)
+
+    if mark_paid:
+        assert resp.status_code == 422, resp.text
+        # NADA foi gravado: o comprovante continua na bandeja e a conta continua aberta.
+        assert [i["id"] for i in client.get("/payables/receipts", headers=headers).json()] == [rid]
+        assert client.get(f"/payables/bills/{b['id']}", headers=headers).json()["status"] == "open"
+        assert _movimentos(client, headers, conta_primaria) == []
+    else:
+        assert resp.status_code == 200, resp.text
+        assert resp.json()["status"] == "open"
+
+
+def test_link_sem_baixa_ignora_a_conta_informada(client: TestClient, headers, conta_primaria):
+    """`mark_paid=False` **ignora** `bank_account_id` — não grava vínculo nem movimento.
+
+    O contrário (gravar a conta "para depois") criaria uma conta em aberto que já aponta para um
+    lugar de onde o dinheiro não saiu — meia afirmação, que é o que a Onda 2 existe para evitar.
+    """
+    b = _bill(client, headers)
+    rid = _upload(client, headers).json()["id"]
+
+    resp = _link(client, headers, rid, b["id"], mark_paid=False, conta=conta_primaria)
+
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["status"] == "open"
+    assert resp.json()["bank_account_id"] is None
+    assert resp.json()["bank_transaction_id"] is None
+    assert _movimentos(client, headers, conta_primaria) == []
+    # ...e o comprovante FOI anexado: ignorar a conta não é ignorar o pedido.
+    anexos = client.get(
+        f"/attachments?owner_type=payable&owner_id={b['id']}", headers=headers
+    ).json()
+    assert [a["label"] for a in anexos] == ["comprovante"]
+
+
+@pytest.mark.parametrize("mark_paid", [True, False])
+def test_new_bill_conta_e_obrigatoria_apenas_quando_da_baixa(
+    client: TestClient, headers, conta_primaria, mark_paid
+):
+    rid = _upload(client, headers).json()["id"]
+    payload = _new_bill_payload(mark_paid=mark_paid)  # conta AUSENTE
+
+    resp = client.post(f"/payables/receipts/{rid}/new-bill", json=payload, headers=headers)
+
+    if mark_paid:
+        assert resp.status_code == 422, resp.text
+        # A conta NÃO foi criada — a validação acontece antes de qualquer escrita.
+        assert client.get("/payables/bills", headers=headers).json() == []
+        assert [i["id"] for i in client.get("/payables/receipts", headers=headers).json()] == [rid]
+    else:
+        assert resp.status_code == 201, resp.text
+        assert resp.json()["status"] == "open"
+
+
+def test_link_grava_a_data_que_veio_no_payload(client: TestClient, headers, conta_primaria):
+    """A data de caixa é a que o usuário confirmou na tela — não `now()`, não `due_date`.
+
+    Este é o teste que reprova o retorno do `TODO(8.13)`: se o backend voltar a cravar `hoje`
+    (como fazia na 8.12), `paid_at` deixa de ser a data enviada.
+    """
+    ontem = (datetime.now(UTC).date() - timedelta(days=1)).isoformat()
+    # Vencimento HOJE e pagamento ONTEM: as duas datas plausíveis são diferentes, então a que for
+    # gravada identifica sem ambiguidade quem mandou nela.
+    b = _bill(client, headers, due_date=_hoje())
+    rid = _upload(client, headers).json()["id"]
+
+    resp = _link(client, headers, rid, b["id"], conta=conta_primaria, paid_on=ontem)
+
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["paid_at"].startswith(ontem)
+    assert [m["posted_at"] for m in _movimentos(client, headers, conta_primaria)] == [ontem]
+
+
+def test_link_sem_data_cai_no_default_due_date_do_apply_paid(
+    client: TestClient, headers, conta_primaria
+):
+    """`paid_on` ausente ⇒ `due_date` (fundador F10) — o default vive em `apply_paid`, e a bandeja
+    apenas **repassa** o `None`. Antes da 8.13 a bandeja cravava `hoje` aqui e este teste falharia.
+    """
+    ontem = (datetime.now(UTC).date() - timedelta(days=1)).isoformat()
+    b = _bill(client, headers, due_date=ontem)
+    rid = _upload(client, headers).json()["id"]
+
+    resp = _link(client, headers, rid, b["id"], conta=conta_primaria)
+
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["paid_at"].startswith(ontem)
+
+
+def test_service_recusa_baixa_sem_conta_mesmo_sem_passar_pelo_schema(
+    client: TestClient, headers, db: Session, conta_primaria
+):
+    """A **segunda barreira**, a única alcançável sem o schema (mutação: apagar o `if` de
+    `_attach_and_commit` não muda nenhuma resposta HTTP, porque o validador do payload responde
+    antes). Um chamador interno futuro precisa encontrar um erro, não uma baixa sem movimento.
+    """
+    from app.modules.attachments.models import Attachment
+    from app.modules.payables import receipts
+
+    b = _bill(client, headers)
+    rid = _upload(client, headers).json()["id"]
+    att = db.get(Attachment, rid)
+
+    with pytest.raises(receipts.ReceiptError) as exc:
+        receipts.link_receipt(
+            db, attachment_id=rid, user_id=att.owner_id, tenant_id=att.tenant_id,
+            actor=att.owner_id, bill_id=b["id"], mark_paid=True, bank_account_id=None,
+        )
+    assert exc.value.status_code == 422
 
 
 def test_mark_paid_continua_funcionando_apos_refactor(client: TestClient, headers, conta_primaria):
@@ -306,7 +478,8 @@ def test_mark_paid_continua_funcionando_apos_refactor(client: TestClient, header
     assert [e["status"] for e in eventos] == ["done"]
 
 
-def _new_bill_payload(**over):
+def _new_bill_payload(conta: str | None = None, **over):
+    """Corpo do formulário curto. `conta=None` = campo AUSENTE (exercita o 422 condicional)."""
     base = {
         "description": "Estacionamento",
         "category": "Geral",
@@ -315,18 +488,25 @@ def _new_bill_payload(**over):
         "due_date": "2099-05-05",
         "mark_paid": True,
     }
+    if conta is not None:
+        base["bank_account_id"] = conta
+        # A tela manda hoje; sem isso o default `due_date` (2099) bateria no teto.
+        base["paid_on"] = _hoje()
     return {**base, **over}
 
 
-def test_new_bill_cria_conta_paga_com_o_anexo(client: TestClient, headers):
+def test_new_bill_cria_conta_paga_com_o_anexo(client: TestClient, headers, conta_primaria):
     rid = _upload(client, headers).json()["id"]
     resp = client.post(
-        f"/payables/receipts/{rid}/new-bill", json=_new_bill_payload(), headers=headers
+        f"/payables/receipts/{rid}/new-bill",
+        json=_new_bill_payload(conta_primaria),
+        headers=headers,
     )
     assert resp.status_code == 201, resp.text
     b = resp.json()
     assert b["description"] == "Estacionamento"
     assert b["status"] == "paid"
+    assert b["bank_account_id"] == conta_primaria
 
     assert client.get("/payables/receipts", headers=headers).json() == []
     anexos = client.get(
@@ -345,10 +525,12 @@ def test_new_bill_sem_mark_paid_nasce_aberta(client: TestClient, headers):
     assert b["status"] == "open"
 
 
-def test_new_bill_injeta_evento_na_agenda(client: TestClient, headers):
+def test_new_bill_injeta_evento_na_agenda(client: TestClient, headers, conta_primaria):
     rid = _upload(client, headers).json()["id"]
     b = client.post(
-        f"/payables/receipts/{rid}/new-bill", json=_new_bill_payload(), headers=headers
+        f"/payables/receipts/{rid}/new-bill",
+        json=_new_bill_payload(conta_primaria),
+        headers=headers,
     ).json()
     eventos = [
         e for e in client.get("/agenda/events?limit=500", headers=headers).json()
@@ -358,11 +540,12 @@ def test_new_bill_injeta_evento_na_agenda(client: TestClient, headers):
     assert eventos[0]["kind"] == "cobranca_pagar"
 
 
-def test_new_bill_recusa_valor_zero(client: TestClient, headers):
+def test_new_bill_recusa_valor_zero(client: TestClient, headers, conta_primaria):
     rid = _upload(client, headers).json()["id"]
     resp = client.post(
         f"/payables/receipts/{rid}/new-bill",
-        json=_new_bill_payload(amount_cents=0),
+        # Conta informada de propósito: o ÚNICO motivo de recusa aqui tem de ser o valor.
+        json=_new_bill_payload(conta_primaria, amount_cents=0),
         headers=headers,
     )
     assert resp.status_code == 422  # PayableCreate exige amount_cents > 0
@@ -449,7 +632,7 @@ def test_link_continua_exigindo_sessao_web(client: TestClient, db: Session, head
     rid = _upload(client, headers).json()["id"]
     resp = client.post(
         f"/payables/receipts/{rid}/link",
-        json={"bill_id": b["id"], "mark_paid": True},
+        json={"bill_id": b["id"], "mark_paid": True, "bank_account_id": "qualquer"},
         headers={"X-E1P-Device-Token": raw},
     )
     assert resp.status_code == 401  # link exige Bearer, não conhece o header do dispositivo

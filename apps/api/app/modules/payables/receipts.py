@@ -154,33 +154,6 @@ def list_candidates(db: Session, *, q: str = "", paid_window_days: int = 30) -> 
     return (abertas + pagas)[:100]
 
 
-def _conta_da_bandeja(db: Session, bank_account_id: str | None) -> str:
-    """De qual conta bancária saiu o dinheiro do comprovante que acabou de chegar.
-
-    ⚠️ **[SUPOSIÇÃO DO @SM] TODO(8.13): a conta PRIMÁRIA é um substituto temporário da escolha do
-    usuário.** A bandeja não tem, hoje, campo nenhum para informar a conta — as rotas e os schemas
-    de `receipts_router` (`ReceiptLinkIn`/`ReceiptNewBillIn`) são escopo da **Story 8.13**, que
-    tira este `TODO`. Deixar a bandeja quebrada entre os dois merges violaria a IV1 ("não quebrar
-    o que funciona"): o share sheet do Android e o Atalho do iOS estão em produção e uma conta real
-    já os usa.
-
-    Sem conta primária → o **mesmo 409 acionável** do AC2 (`ContaBancariaNecessaria`), e não uma
-    escolha automática entre as contas existentes: escolher a conta de destino do dinheiro do
-    usuário sem ele pedir é o tipo de "ajuda" que só se descobre quando o dinheiro já foi para o
-    lugar errado (é a mesma razão de `bank.service.primary_account` devolver `None` explícito em
-    vez de eleger sucessora ao arquivar a primária).
-    """
-    from app.modules.bank import service as bank_service
-    from app.modules.payables.service import ContaBancariaNecessaria
-
-    if bank_account_id:
-        return bank_account_id
-    primaria = bank_service.primary_account(db)
-    if primaria is None:
-        raise ContaBancariaNecessaria()
-    return primaria.id
-
-
 def _attach_and_commit(
     db: Session,
     att: Attachment,
@@ -203,6 +176,12 @@ def _attach_and_commit(
     dois parâmetros novos. Os dois só são resolvidos quando a baixa vai mesmo acontecer: vincular
     um comprovante **sem** dar baixa (`mark_paid=False`) continua não exigindo conta bancária
     nenhuma.
+
+    ⚠️ **Story 8.13: os dois vêm do payload, sempre.** O substituto temporário da 8.12 (a conta
+    primária, escolhida pelo backend sob `TODO(8.13)`) foi **removido** — pré-preencher é papel da
+    tela, e a diferença importa: *"o que o pré-preenchimento evita é **construir**, não
+    **confirmar**"*. `paid_on=None` cai no default de `apply_paid` (`due_date`); a tela da bandeja
+    manda **hoje** explicitamente (ver `link_receipt`).
     """
     from app.core import audit
     from app.modules.payables import service as payables_service
@@ -214,21 +193,23 @@ def _attach_and_commit(
     # Conta já paga não é re-datada; `apply_paid` não commita, então a baixa, o vínculo do anexo e
     # o movimento bancário caem todos na MESMA transação.
     if mark_paid and p.status == STATUS_OPEN:
+        if not bank_account_id:
+            # **Segunda barreira, e não a primeira.** A primeira é o validador condicional de
+            # `BaixaDoComprovante` (422 antes de tocar no banco). Esta existe porque
+            # `_attach_and_commit` é o ÚNICO ponto por onde as duas portas da bandeja dão baixa: um
+            # chamador interno futuro que esqueça a conta encontra um erro, não uma baixa sem
+            # movimento bancário — que é exatamente o estado que a Onda 2 existe para tornar
+            # impossível. Mesmo status da primeira barreira (422): o fato é o mesmo.
+            raise ReceiptError(
+                "Informe de qual conta bancária o dinheiro saiu para dar a baixa.", 422
+            )
         payables_service.apply_paid(
             db,
             payable_id=p.id,
             tenant_id=tenant_id,
             actor=actor,
-            bank_account_id=_conta_da_bandeja(db, bank_account_id),
-            # ⚠️ **[SUPOSIÇÃO DO @DEV] TODO(8.13): HOJE, e não o default `due_date` de
-            # `apply_paid`.** O comprovante chega pelo share sheet **no instante do pagamento** —
-            # *"a captura mais barata do produto inteiro, fisicamente no instante do pagamento"* —,
-            # então a data de caixa honesta desta porta é o dia de hoje, que é também exatamente o
-            # que o `datetime.now(UTC)` fazia antes desta story (IV1: a bandeja não muda de
-            # comportamento). Herdar o default `due_date` teria mudado o fato de caixa em silêncio
-            # **e**, para conta com vencimento futuro, esbarrado no teto do AC3 — um 422 numa porta
-            # que hoje funciona. A escolha da data pelo usuário entra com a tela, na 8.13.
-            paid_on=paid_on if paid_on is not None else datetime.now(UTC).date(),
+            bank_account_id=bank_account_id,
+            paid_on=paid_on,
         )
 
     audit.record(
@@ -255,9 +236,19 @@ def link_receipt(
 
     Vincular é trocar owner_type/owner_id do Attachment: os bytes ficam onde estão.
 
-    `bank_account_id`/`paid_on` são **repassados** para a baixa (Story 8.12). Omitidos, caem nos
-    substitutos temporários documentados em `_conta_da_bandeja` e `_attach_and_commit` —
-    `TODO(8.13)`, que é quem acrescenta os campos ao `ReceiptLinkIn` e à tela.
+    `bank_account_id`/`paid_on` são **repassados** para a baixa (Story 8.12) e vêm do payload
+    (`ReceiptLinkIn`, Story 8.13) — sem substituto do backend.
+
+    ⚠️ **A data que a TELA da bandeja manda é HOJE, e isso é decisão de produto, não default de
+    função.** O comprovante chega pelo share sheet **no instante do pagamento** (*"a captura mais
+    barata do produto inteiro, fisicamente no instante do pagamento"*), então a data de caixa
+    honesta desta porta é o dia de hoje — e é também o que a bandeja já gravava antes da 8.13
+    (IV1: a porta não muda de comportamento). Herdar o default `due_date` de `apply_paid` mudaria o
+    fato de caixa em silêncio **e**, para conta com vencimento futuro — o caso mais comum na lista
+    de candidatas, ordenada por vencimento —, esbarraria no teto de hoje com um 422 numa porta que
+    hoje funciona. O que a 8.13 acrescenta é que esse "hoje" deixou de ser escolha invisível do
+    backend: ele é um campo **visível e editável** na barra fixa, ao lado do botão que comete a
+    ação. O usuário **confirma**, não constrói.
     """
     att = get_staged(db, attachment_id=attachment_id, user_id=user_id)
 
@@ -289,7 +280,8 @@ def new_bill_from_receipt(
 
     Para o caso de ter pago algo que ainda não estava cadastrado no sistema.
 
-    `bank_account_id`/`paid_on` são **repassados** para a baixa (Story 8.12) — ver `link_receipt`.
+    `bank_account_id`/`paid_on` são **repassados** para a baixa (Story 8.12/8.13) — ver
+    `link_receipt`, inclusive a nota sobre a data que a tela manda.
     """
     from app.modules.payables import service as payables_service
 

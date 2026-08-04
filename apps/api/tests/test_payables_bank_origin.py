@@ -20,8 +20,9 @@ Cobre:
   contra a conta de DESTINO; `PayableUpdate` intocado;
 - **AC8/AC9** estorno **APAGA** o movimento (linha sintética) e **desliga a origem** quando a linha
   já foi enriquecida pela importação; ciclo baixar → estornar → **baixar de novo**;
-- **AC10** a bandeja de comprovantes continua funcionando, com a conta primária como substituto
-  declarado até a 8.13;
+- **AC10** a bandeja de comprovantes continua funcionando — a conta vinha da primária como
+  substituto declarado até a 8.13, e a partir dela vem do **payload** (a mudança de expectativa
+  está explicada em `test_bandeja_usa_a_conta_do_payload_e_gera_o_movimento`);
 - **AC11/AC12** corpo obrigatório em `/pay`; `PayableOut` expõe o vínculo;
 - **IV** DRE/Lucratividade, Conferência (o checkpoint não é tocado), Carteira e a exclusão LGPD.
 
@@ -360,7 +361,11 @@ def test_baixa_pela_bandeja_seguida_da_baixa_pela_tela_nao_duplica(
     ).json()["id"]
     assert client.post(
         f"/payables/receipts/{rid}/link",
-        json={"bill_id": bill["id"], "mark_paid": True},
+        # Story 8.13: a conta e a data vêm do payload (a bandeja não elege mais a primária).
+        json={
+            "bill_id": bill["id"], "mark_paid": True,
+            "bank_account_id": conta["id"], "paid_on": VENCIMENTO.isoformat(),
+        },
         headers=headers,
     ).status_code == 200
 
@@ -583,19 +588,30 @@ def _upload(client: TestClient, headers) -> str:
     return resp.json()["id"]
 
 
-def test_bandeja_usa_a_conta_primaria_e_gera_o_movimento(client: TestClient, headers, conta, db):
+def test_bandeja_usa_a_conta_do_payload_e_gera_o_movimento(client: TestClient, headers, conta, db):
     """**AC10** — o share sheet do Android e o Atalho do iOS passam a alimentar o razão bancário
     **sem uma linha de tela nova**.
 
-    A conta primária é substituto declarado (`[SUPOSIÇÃO DO @SM]` + `TODO(8.13)`), e a data é
-    **hoje** — que é exatamente o que o `datetime.now(UTC)` fazia antes desta story, então a
-    bandeja não muda de comportamento (IV1).
+    ⚠️ **A expectativa mudou na Story 8.13, e a mudança É a correção — não uma regressão.** Este
+    teste chamava-se *"usa a conta primária"* e mandava um corpo **sem** conta, porque a 8.12 deixou
+    `receipts._conta_da_bandeja` elegendo a primária como substituto declarado (`[SUPOSIÇÃO DO @SM]`
+    + `TODO(8.13)`). A 8.13 removeu esse substituto: quem escolhe a conta é a **tela**, e o payload
+    carrega a escolha. O que o AC10 garante continua idêntico — a bandeja alimenta o razão, com o
+    valor negativo, na mesma transação. **Não "conserte" isto de volta** para um corpo sem conta:
+    é assim que um default invisível volta pela porta dos fundos.
+
+    A data também vem do payload: a tela da bandeja manda **hoje** (o comprovante chega no instante
+    do pagamento), que é o que o `datetime.now(UTC)` da 8.12 fazia — IV1, a porta não muda de
+    comportamento.
     """
     bill = _bill(client, headers)
     rid = _upload(client, headers)
     resp = client.post(
         f"/payables/receipts/{rid}/link",
-        json={"bill_id": bill["id"], "mark_paid": True},
+        json={
+            "bill_id": bill["id"], "mark_paid": True,
+            "bank_account_id": conta["id"], "paid_on": _hoje().isoformat(),
+        },
         headers=headers,
     )
     assert resp.status_code == 200, resp.text
@@ -607,19 +623,27 @@ def test_bandeja_usa_a_conta_primaria_e_gera_o_movimento(client: TestClient, hea
     assert tx.amount_cents == -120_00
 
 
-def test_bandeja_sem_conta_primaria_devolve_409_acionavel(client: TestClient, headers):
+def test_bandeja_sem_conta_cadastrada_devolve_o_mesmo_409_acionavel(client: TestClient, headers):
     """**O MESMO 409** da rota de pagamento — não um formato próprio da bandeja.
 
     Dois formatos de erro para a mesma situação obrigariam a UI da 8.13 a tratar cada porta de um
-    jeito. E não escolhemos uma conta qualquer no lugar da primária: escolher o destino do dinheiro
-    do usuário sem ele pedir é o tipo de "ajuda" que só se descobre quando o dinheiro já foi para o
-    lugar errado.
+    jeito.
+
+    ⚠️ **A Story 8.13 mudou o CAMINHO até aqui, não a garantia.** Antes o corpo não tinha campo de
+    conta e o 409 vinha da ausência de primária; agora o campo é obrigatório quando `mark_paid=True`
+    (422 do schema se faltar — `test_receipts.py`), e o 409 acionável é o que responde quando o
+    tenant **não tem conta nenhuma cadastrada** e portanto qualquer id que ele mande é de uma conta
+    que não existe. É a mesma ordem deliberada de `payables.service._conta_de_baixa`: tenant sem
+    contas responde "cadastre uma conta", nunca "esse id não existe" — e não vaza existência.
     """
     bill = _bill(client, headers)
     rid = _upload(client, headers)
     resp = client.post(
         f"/payables/receipts/{rid}/link",
-        json={"bill_id": bill["id"], "mark_paid": True},
+        json={
+            "bill_id": bill["id"], "mark_paid": True,
+            "bank_account_id": "id-de-conta-que-este-tenant-nao-tem",
+        },
         headers=headers,
     )
     assert resp.status_code == 409, resp.text

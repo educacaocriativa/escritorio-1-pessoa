@@ -1,4 +1,4 @@
-import { render, screen, fireEvent, waitFor } from "@testing-library/react";
+import { render, screen, fireEvent, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter } from "react-router-dom";
 import { beforeEach, describe, expect, it, vi } from "vitest";
@@ -18,6 +18,43 @@ vi.mock("../../lib/api", () => ({
     (err as { message?: string })?.message ??
     "Erro inesperado",
 }));
+
+/** Hoje como data de calendário local — a mesma regra de `contas.hojeISO`. */
+function hoje(): string {
+  const d = new Date();
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+}
+
+const CONTA = {
+  id: "acc-1",
+  name: "Itaú PJ",
+  kind: "checking",
+  is_primary: true,
+  archived_at: null,
+  opening_balance_cents: 0,
+  opening_date: "2026-01-01",
+  saldo_derivado_cents: 0,
+  saldo_derivado_origem: "banco",
+};
+
+const CONTA_ABERTA = {
+  id: "b-1", description: "Aluguel", category: "Estrutura", supplier: "Imobiliária",
+  amount_cents: 250000, due_date: "2026-06-10", status: "open", is_overdue: false,
+  paid_at: null, recurrence: "none", recurrence_count: 1, recurrence_group: null,
+  payment_code: "", attachment_url: "", created_at: "2026-01-01T00:00:00Z",
+  tenant_id: "t-1", competence_date: null, chart_account_id: null, contract_id: null,
+  cost_center_id: null,
+};
+
+/** Mocka a tela com uma conta a pagar em aberto e a lista de contas bancárias informada. */
+function mockComConta(contasBancarias: unknown[]) {
+  vi.mocked(api.get).mockImplementation((url: string) => {
+    if (url === "/payables/summary") return Promise.resolve({ data: emptySummary } as never);
+    if (url === "/payables/bills") return Promise.resolve({ data: [CONTA_ABERTA] } as never);
+    if (url === "/bank/accounts") return Promise.resolve({ data: contasBancarias } as never);
+    return Promise.resolve({ data: [] } as never);
+  });
+}
 
 const emptySummary = {
   open_cents: 0,
@@ -167,5 +204,201 @@ describe("PagarPage — bandeja de comprovantes (Task 11)", () => {
 
     await waitFor(() => expect(api.get).toHaveBeenCalled());
     expect(screen.queryByText(/aguardando/i)).toBeNull();
+  });
+});
+
+/**
+ * **Story 8.13 — a baixa passou a pedir conta bancária e dia.**
+ *
+ * Até a 8.12, "Marcar paga" fazia `POST /payables/bills/{id}/pay` **sem corpo**. O backend passou a
+ * exigir o corpo (a conta de onde o dinheiro saiu), então esta tela quebrava com 422 — 8.12 e 8.13
+ * são um par de release.
+ */
+describe("PagarPage — dar baixa (Story 8.13)", () => {
+  async function abrirBaixa() {
+    const user = userEvent.setup();
+    renderPage();
+    await user.click(await screen.findByRole("button", { name: "Marcar paga" }));
+    return user;
+  }
+
+  it('"Marcar paga" NÃO paga direto: abre a confirmação com conta e dia', async () => {
+    mockComConta([CONTA]);
+    await abrirBaixa();
+
+    // O clique deixou de cometer a ação — nada foi enviado ainda.
+    expect(api.post).not.toHaveBeenCalled();
+    expect(await screen.findByText("Dar baixa nesta conta")).toBeInTheDocument();
+    expect(screen.getByLabelText(/conta bancária de onde o dinheiro saiu/i)).toBeInTheDocument();
+  });
+
+  it("envia bank_account_id e paid_on; o dia vem do VENCIMENTO, não de hoje", async () => {
+    mockComConta([CONTA]);
+    vi.mocked(api.post).mockResolvedValue({ data: {} } as never);
+    const user = await abrirBaixa();
+
+    const dia = (await screen.findByLabelText(/dia em que o dinheiro saiu/i)) as HTMLInputElement;
+    // Fundador F10: "deixar habilitado no vencimento, pois se estiver fazendo retroativo, pq não
+    // deu certo no dia". NÃO é hoje, e não é `now()`.
+    expect(dia.value).toBe("2026-06-10");
+    expect(dia.value).not.toBe(hoje());
+
+    await user.click(screen.getByRole("button", { name: /confirmar baixa/i }));
+
+    await waitFor(() => expect(api.post).toHaveBeenCalled());
+    expect(vi.mocked(api.post).mock.calls[0]).toEqual([
+      "/payables/bills/b-1/pay",
+      { bank_account_id: "acc-1", paid_on: "2026-06-10" },
+    ]);
+  });
+
+  it("o campo de dia tem teto em HOJE — o `max` que a Story 8.14 remove", async () => {
+    mockComConta([CONTA]);
+    await abrirBaixa();
+
+    const dia = (await screen.findByLabelText(/dia em que o dinheiro saiu/i)) as HTMLInputElement;
+    expect(dia.getAttribute("max")).toBe(hoje());
+  });
+
+  it("a conta primária vem pré-selecionada e o NOME dela aparece no próprio botão (AC5)", async () => {
+    mockComConta([CONTA]);
+    await abrirBaixa();
+
+    const seletor = (await screen.findByLabelText(
+      /conta bancária de onde o dinheiro saiu/i,
+    )) as HTMLSelectElement;
+    expect(seletor.value).toBe("acc-1");
+    // Pré-selecionar não é tornar opcional: o default tem de estar VISÍVEL, senão é um campo
+    // opcional pulado. Por isso o nome da conta vai no botão, não só dentro do `<select>`.
+    expect(screen.getByRole("button", { name: /sai do Itaú PJ/i })).toBeInTheDocument();
+  });
+
+  it("SEM conta primária nada é pré-selecionado e a confirmação fica DESABILITADA", async () => {
+    mockComConta([
+      { ...CONTA, id: "a", name: "Conta A", is_primary: false },
+      { ...CONTA, id: "b", name: "Conta B", is_primary: false },
+    ]);
+    await abrirBaixa();
+
+    const seletor = (await screen.findByLabelText(
+      /conta bancária de onde o dinheiro saiu/i,
+    )) as HTMLSelectElement;
+    expect(seletor.value).toBe(""); // silêncio, nunca um palpite
+    expect(screen.getByRole("button", { name: /confirmar baixa/i })).toBeDisabled();
+  });
+
+  it("escolhida uma conta a dedo, a confirmação habilita e manda a conta escolhida", async () => {
+    mockComConta([
+      { ...CONTA, id: "a", name: "Conta A", is_primary: false },
+      { ...CONTA, id: "b", name: "Conta B", is_primary: false },
+    ]);
+    vi.mocked(api.post).mockResolvedValue({ data: {} } as never);
+    const user = await abrirBaixa();
+
+    await user.selectOptions(
+      await screen.findByLabelText(/conta bancária de onde o dinheiro saiu/i),
+      "b",
+    );
+    await user.click(screen.getByRole("button", { name: /confirmar baixa/i }));
+
+    await waitFor(() => expect(api.post).toHaveBeenCalled());
+    expect(vi.mocked(api.post).mock.calls[0][1]).toMatchObject({ bank_account_id: "b" });
+  });
+
+  it("erro 422 do backend é exibido COMO VEIO (a mensagem nomeia as saídas reais)", async () => {
+    mockComConta([CONTA]);
+    const mensagem =
+      "Esta conta bancária só existe no e1p a partir de 2026-07-01, então um pagamento em " +
+      "2026-06-10 não entraria no extrato dela. Mova a abertura desta conta para antes de 10/06 " +
+      "e informe o saldo daquele dia, ou escolha outra conta.";
+    vi.mocked(api.post).mockRejectedValue({ response: { status: 422, data: { detail: mensagem } } });
+    const user = await abrirBaixa();
+
+    await user.click(await screen.findByRole("button", { name: /confirmar baixa/i }));
+
+    expect(await screen.findByText(mensagem)).toBeInTheDocument();
+  });
+
+  /**
+   * **O fluxo do AC2, ponta a ponta.** É o teste que a DoD desta story exige: sem conta utilizável,
+   * a tela mostra o 409 acionável, abre o cadastro EMBUTIDO e **retoma o pagamento** — sem perder
+   * de vista qual conta estava sendo paga.
+   */
+  it("409 acionável → cadastro embutido → RETOMA a baixa com a conta nova selecionada", async () => {
+    // O tenant tem uma conta na lista, mas o backend a recusa (arquivada) — é assim que o 409
+    // chega mesmo com a lista preenchida. O caminho "lista vazia" é o outro teste, abaixo.
+    mockComConta([{ ...CONTA, name: "Conta velha" }]);
+    const mensagem409 =
+      "A conta bancária escolhida está arquivada e não recebe lançamentos novos. Escolha outra " +
+      "conta ou cadastre a conta que você usa hoje — com o saldo de abertura do dia.";
+    vi.mocked(api.post).mockImplementation((url: string) => {
+      if (url === "/bank/accounts") {
+        return Promise.resolve({
+          data: { ...CONTA, id: "acc-nova", name: "Nubank PJ" },
+        } as never);
+      }
+      // A primeira baixa é recusada com o 409 acionável; a segunda (já com a conta nova) passa.
+      const jaCadastrou = vi
+        .mocked(api.post)
+        .mock.calls.some(([u]) => String(u) === "/bank/accounts");
+      if (jaCadastrou) return Promise.resolve({ data: {} } as never);
+      return Promise.reject({
+        response: { status: 409, data: { detail: { acao: "cadastrar_conta", mensagem: mensagem409 } } },
+      });
+    });
+
+    const user = await abrirBaixa();
+    await user.click(await screen.findByRole("button", { name: /confirmar baixa/i }));
+
+    // (1) A mensagem do BACKEND aparece — não um erro cru, e não uma frase reescrita no frontend.
+    expect(await screen.findByText(mensagem409)).toBeInTheDocument();
+    // (2) O cadastro abre ALI MESMO, e o contexto do pagamento continua na tela por trás.
+    // (o título do modal; "Nova conta" também é o rótulo do botão da topbar)
+    expect(screen.getByRole("heading", { name: "Nova conta" })).toBeInTheDocument();
+    // O painel da baixa continua montado por baixo, ainda dizendo QUAL conta está sendo paga —
+    // é isso que significa "sem o usuário perder de vista o que ele estava pagando".
+    const painel = screen
+      .getByRole("heading", { name: "Dar baixa nesta conta" })
+      .closest("div")?.parentElement as HTMLElement;
+    expect(within(painel).getByText("Aluguel")).toBeInTheDocument();
+    expect(within(painel).getByText(/R\$ 2\.500,00/)).toBeInTheDocument();
+
+    // (3) Cadastra a conta pelo formulário embutido (o MESMO de Contas & Saldos).
+    await user.type(screen.getByLabelText("Nome da conta"), "Nubank PJ");
+    await user.click(screen.getByRole("button", { name: "Cadastrar conta" }));
+
+    // (4) A baixa é RETOMADA com a conta recém-criada já selecionada.
+    const botao = await screen.findByRole("button", { name: /sai do Nubank PJ/i });
+    await user.click(botao);
+
+    await waitFor(() =>
+      expect(
+        vi.mocked(api.post).mock.calls.filter(([u]) => String(u) === "/payables/bills/b-1/pay"),
+      ).toHaveLength(2),
+    );
+    const ultima = vi
+      .mocked(api.post)
+      .mock.calls.filter(([u]) => String(u) === "/payables/bills/b-1/pay")
+      .at(-1);
+    expect(ultima?.[1]).toMatchObject({ bank_account_id: "acc-nova" });
+  });
+
+  it("tenant SEM conta nenhuma: a tela oferece o cadastro em vez de um seletor vazio", async () => {
+    mockComConta([]);
+    await abrirBaixa();
+
+    expect(await screen.findByText(/precisa saber de qual conta bancária o dinheiro saiu/i))
+      .toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /cadastrar conta bancária/i })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /confirmar baixa/i })).toBeDisabled();
+  });
+
+  it("a tabela é rolável e tem largura mínima — em 360px ela ROLA, não se espreme (AC9d)", async () => {
+    mockComConta([CONTA]);
+    renderPage();
+
+    const table = await screen.findByRole("table");
+    expect(table.parentElement?.className).toContain("overflow-x-auto");
+    expect(table.className).toMatch(/min-w-\[/);
   });
 });

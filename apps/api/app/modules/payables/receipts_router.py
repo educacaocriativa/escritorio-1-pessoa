@@ -99,6 +99,8 @@ def link_receipt(
         p = receipts.link_receipt(
             db, attachment_id=attachment_id, user_id=user.user_id, tenant_id=user.tenant_id,
             actor=user.user_id, bill_id=data.bill_id, mark_paid=data.mark_paid,
+            # Story 8.13: a conta e a data vêm da tela — o backend não elege mais a primária.
+            bank_account_id=data.bank_account_id, paid_on=data.paid_on,
         )
     except receipts.ReceiptError as e:
         raise _err(e, e.status_code) from e
@@ -122,6 +124,8 @@ def new_bill_from_receipt(
         p = receipts.new_bill_from_receipt(
             db, attachment_id=attachment_id, user_id=user.user_id, tenant_id=user.tenant_id,
             actor=user.user_id, data=create, mark_paid=data.mark_paid,
+            # Story 8.13: idem `link` — os dois campos atravessam até `apply_paid`.
+            bank_account_id=data.bank_account_id, paid_on=data.paid_on,
         )
     except receipts.ReceiptError as e:
         raise _err(e, e.status_code) from e

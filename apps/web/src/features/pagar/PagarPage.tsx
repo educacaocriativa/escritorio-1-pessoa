@@ -10,6 +10,7 @@ import ChartAccountSelect from "../financeiro/ChartAccountSelect";
 import type { CostCenter } from "../financeiro/costCenters";
 import CostCenterSelect from "../financeiro/CostCenterSelect";
 import { type ChartAccount, GRUPOS_DRE } from "../financeiro/planoContas";
+import { DialogDeBaixa } from "./EscolhaDaBaixa";
 
 /** Grupos DRE cabíveis numa DESPESA (Contas a Pagar nunca lança em Receita). */
 const EXPENSE_GROUPS = GRUPOS_DRE.filter((g) => g !== "RECEITA");
@@ -73,6 +74,9 @@ export default function PagarPage() {
   const [open, setOpen] = useState(false);
   const [attach, setAttach] = useState<Payable | null>(null);
   const [edit, setEdit] = useState<Payable | null>(null);
+  // A conta cuja baixa está sendo confirmada (Story 8.13): "Marcar paga" deixou de ser um clique
+  // que comete a ação e passou a abrir a escolha de conta bancária + dia.
+  const [pagando, setPagando] = useState<Payable | null>(null);
   // Comprovantes que chegaram pelo celular e ainda não foram vinculados a nenhuma conta.
   const [inbox, setInbox] = useState<{ id: string }[]>([]);
 
@@ -114,10 +118,6 @@ export default function PagarPage() {
 
   usePrimaryAction("Nova conta", useCallback(() => setOpen(true), []));
 
-  async function pay(id: string) {
-    await api.post(`/payables/bills/${id}/pay`);
-    load();
-  }
   async function cancel(id: string) {
     if (!confirm("Cancelar esta conta?")) return;
     await api.post(`/payables/bills/${id}/cancel`);
@@ -164,7 +164,13 @@ export default function PagarPage() {
             Nenhuma conta. Clique em "Nova conta".
           </p>
         ) : (
-          <table className="w-full text-sm">
+          <table
+            // `min-w-[48rem]`: sem uma largura mínima, `overflow-x-auto` não rola — a tabela se
+            // espreme dentro dos 360px e as 7 colunas viram tiras ilegíveis (o mesmo par
+            // `overflow-x-auto` + `min-w` que `ContasSaldosPage` usa). Rolar é o comportamento
+            // desejado; espremer só troca "cortado" por "ilegível".
+            className="w-full min-w-[48rem] text-sm"
+          >
             <thead>
               <tr className="border-b border-neutral-100 text-left text-xs uppercase text-neutral-400">
                 <th className="px-4 py-3 font-medium">Conta</th>
@@ -217,7 +223,7 @@ export default function PagarPage() {
                             <button onClick={() => setEdit(p)} className="text-xs font-medium text-neutral-500 hover:text-primary-600">
                               Editar
                             </button>
-                            <button onClick={() => pay(p.id)} className="text-xs font-medium text-accent-600 hover:underline">
+                            <button onClick={() => setPagando(p)} className="text-xs font-medium text-accent-600 hover:underline">
                               Marcar paga
                             </button>
                             <button onClick={() => cancel(p.id)} className="text-xs text-neutral-400 hover:text-danger">
@@ -239,6 +245,24 @@ export default function PagarPage() {
           </table>
         )}
       </div>
+
+      {/* A baixa passa por aqui desde a Story 8.13: a conta bancária de onde o dinheiro saiu é
+          obrigatória no backend (8.12) e o dia é escolhido junto, no MESMO container do botão que
+          comete a ação. O 409 acionável abre o cadastro de conta embutido e volta para cá. */}
+      {pagando && (
+        <DialogDeBaixa
+          titulo="Dar baixa nesta conta"
+          descricao={pagando.description || pagando.supplier || "Conta"}
+          valor={`${brl(pagando.amount_cents)} · vence ${new Date(pagando.due_date + "T00:00").toLocaleDateString("pt-BR")}`}
+          dataPadrao={pagando.due_date}
+          onClose={() => setPagando(null)}
+          onPago={async (corpo) => {
+            await api.post(`/payables/bills/${pagando.id}/pay`, corpo);
+            setPagando(null);
+            load();
+          }}
+        />
+      )}
 
       <NewBillModal open={open} onClose={() => setOpen(false)} onCreated={load} />
       {edit && (
