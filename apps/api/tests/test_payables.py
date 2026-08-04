@@ -179,6 +179,31 @@ def test_paid_cannot_cancel(client: TestClient, headers, conta):
     assert resp.status_code == 409
 
 
+def test_scheduled_cannot_cancel(client: TestClient, headers, conta):
+    """BANK-002 (QA gate da Onda 2): cancelar uma conta agendada sem recusar deixava o
+    bank_transaction de débito futuro órfão — divergência inventada na conferência, invisível
+    ao gate P1-P4 porque `canceled` sai da população de "sem conta informada". Espelha
+    test_receivables_off_rail.py::test_scheduled_cannot_cancel."""
+    b = client.post(
+        "/payables/bills",
+        json=_bill(amount_cents=12345, due_date="2099-01-01"),
+        headers=headers,
+    ).json()
+    pay_resp = _pay(client, headers, b["id"], conta, paid_on="2099-01-01")
+    assert pay_resp.json()["status"] == "scheduled"
+
+    resp = client.post(f"/payables/bills/{b['id']}/cancel", headers=headers)
+    assert resp.status_code == 409
+
+    movs = client.get(
+        "/bank/transactions", params={"bank_account_id": conta}, headers=headers
+    ).json()
+    assert any(m["amount_cents"] == -12345 and m["posted_at"] == "2099-01-01" for m in movs), (
+        "o débito futuro tem que continuar de pé — cancelar foi recusado, não silenciosamente "
+        "aceito com o débito órfão"
+    )
+
+
 def test_summary_open_and_overdue(client: TestClient, headers):
     client.post(
         "/payables/bills", json=_bill(amount_cents=10000, due_date="2020-01-01"), headers=headers

@@ -663,9 +663,25 @@ def update_payment(
 
 
 def cancel_payable(db: Session, *, payable_id: str, tenant_id: str, actor: str) -> Payable:
+    """Cancela uma conta em aberto.
+
+    Recusa conta **paga** (409) e conta **agendada** (409, BANK-002 — QA gate da Onda 2): agendada
+    já tem um débito futuro registrado em `bank_transactions` (Regra da Origem (c)). Cancelar sem
+    apagar esse movimento deixa um débito "fantasma" anunciado no extrato calculado, contaminando o
+    saldo derivado e a conferência com uma divergência que não existe — o mesmo defeito do
+    BANK-001, agora pela porta do cancelamento em vez da data de abertura. Espelha
+    `receivables.cancel_charge`.
+    """
     p = get_payable(db, payable_id)
     if p.status == STATUS_PAID:
         raise PayableError("Conta paga não pode ser cancelada", 409)
+    if p.status == STATUS_SCHEDULED:
+        raise PayableError(
+            "Esta conta já tem um pagamento agendado, com dia marcado para sair da sua conta. Se a "
+            "conta ou a data estiverem erradas, corrija o pagamento; cancelar a conta deixaria um "
+            "débito anunciado no seu extrato sem nada por trás.",
+            409,
+        )
     p.status = STATUS_CANCELED
     audit.record(db, tenant_id=tenant_id, actor=actor, action="payable.cancel", target=p.id)
     db.commit()
