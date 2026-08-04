@@ -427,16 +427,17 @@ def test_vocabulario_sugerido_bate_com_a_ui():
 
     Pula (em vez de falhar) quando `apps/web` não está presente: o backend precisa poder rodar
     sozinho num container sem o frontend.
+
+    ⚠️ **[CORREÇÃO, gate do PR #71]** A guarda tem que vir ANTES de indexar `parents[3]`, não
+    depois: dentro da imagem de produção (`apps/api/Dockerfile`, contexto de build = só `apps/api`)
+    a árvore é mais rasa e `parents[3]` levanta `IndexError` — não "arquivo ausente". Checar
+    `.exists()` depois de já ter estourado o índice nunca executa. Mesmo padrão de
+    `test_financial_intelligence_onda2_signals.py::test_o_rotulo_do_frontend_tambem_perdeu_o_adjetivo`.
     """
-    contas_ts = (
-        pathlib.Path(__file__).resolve().parents[3]
-        / "apps"
-        / "web"
-        / "src"
-        / "features"
-        / "financeiro"
-        / "contas.ts"
-    )
+    parents = pathlib.Path(__file__).resolve().parents
+    if len(parents) <= 3:
+        pytest.skip("apps/web não está presente nesta árvore")
+    contas_ts = parents[3] / "apps" / "web" / "src" / "features" / "financeiro" / "contas.ts"
     if not contas_ts.exists():
         pytest.skip("apps/web não está presente nesta árvore")
     texto = contas_ts.read_text(encoding="utf-8")
