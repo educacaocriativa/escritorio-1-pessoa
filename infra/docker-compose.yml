@@ -57,7 +57,9 @@ services:
       #      CREATE DATABASE evolution_db OWNER e1p_evolution;"
       # Validação end-to-end da Evolution (Onda 1) fica para o checklist manual, na VPS.
       DATABASE_CONNECTION_URI: postgresql://e1p_evolution:e1p-evolution-pass@postgres:5432/evolution_db
-      REDIS_URI: redis://redis:6379/0
+      CACHE_REDIS_ENABLED: 'true'
+      CACHE_REDIS_URI: redis://redis:6379/0
+      CACHE_LOCAL_ENABLED: 'false'
       DEL_INSTANCE: 'false'
     depends_on:
       postgres:
