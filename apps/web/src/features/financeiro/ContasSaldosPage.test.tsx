@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter } from "react-router-dom";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -678,5 +678,157 @@ describe("Story 8.10 — a data de apuração do saldo aparece na tela", () => {
     expect(screen.getByText(DISPONIVEL_CAIXA_LABEL)).toBeInTheDocument();
     expect(container.textContent).not.toMatch(/agendado/i);
     expect(container.textContent).not.toContain(ROTULO_BANCO);
+  });
+});
+
+// ── Story 8.17 — o manual curado e o 409 acionável na tela (AC1 / AC8) ───────────────────────
+
+describe("Story 8.17 — o formulário pergunta PARA QUE SERVE, e a guarda tem escolha", () => {
+  const CONTA = conta({ id: "acc-1" });
+
+  beforeEach(() => {
+    vi.mocked(api.post).mockReset();
+  });
+
+  /** Abre o modal "Lançar movimento" com um valor de saída já digitado. */
+  async function abrirLancamento() {
+    const user = userEvent.setup();
+    mockApi([CONTA]);
+    renderPage();
+    await user.click(await screen.findByText("Lançar movimento"));
+    await waitFor(() =>
+      expect(screen.getByText("Lançar movimento — Itaú PJ")).toBeInTheDocument(),
+    );
+    fireEvent.change(screen.getByLabelText("Valor (R$)"), { target: { value: "380,00" } });
+    return user;
+  }
+
+  /**
+   * O painel do modal, para escopar as buscas: **"Lançar movimento" é o rótulo do gatilho no
+   * cartão da conta E do botão que efetiva dentro do modal** — `getByRole` global acharia os dois.
+   * O painel é o avô do `<h2>` do título (`h2` → `div.mb-4` → painel, ver `components/Modal.tsx`).
+   */
+  function modal(): HTMLElement {
+    const titulo = screen.getByText("Lançar movimento — Itaú PJ");
+    return titulo.parentElement?.parentElement as HTMLElement;
+  }
+
+  function botaoLancar() {
+    return within(modal()).getByRole("button", { name: "Lançar movimento" });
+  }
+
+  it("a finalidade é obrigatória na tela — o botão só abre depois de respondida", async () => {
+    // A porta primária deixa de "parecer o jeito de registrar qualquer coisa". A obrigatoriedade é
+    // de UI: a API continua aceitando `null` (movimento legado nasceu assim — AC7).
+    await abrirLancamento();
+    expect(botaoLancar()).toBeDisabled();
+
+    fireEvent.change(screen.getByLabelText("Para que serve este movimento"), {
+      target: { value: "tarifa_bancaria" },
+    });
+    await waitFor(() => expect(botaoLancar()).toBeEnabled());
+  });
+
+  it("a lista é curta e SUGERIDA — 'Outro (descreva)' abre o texto livre e é ele que viaja", async () => {
+    const user = await abrirLancamento();
+    vi.mocked(api.post).mockResolvedValue({ data: {} } as never);
+
+    fireEvent.change(screen.getByLabelText("Para que serve este movimento"), {
+      target: { value: "_outro" },
+    });
+    fireEvent.change(await screen.findByLabelText("Descreva a finalidade"), {
+      target: { value: "estorno de tarifa" },
+    });
+    await user.click(botaoLancar());
+
+    await waitFor(() => expect(api.post).toHaveBeenCalled());
+    expect(vi.mocked(api.post).mock.calls[0][1]).toMatchObject({
+      amount_cents: -38_000,
+      operation_nature: "estorno de tarifa",
+      confirmar_avulso: false,
+    });
+  });
+
+  it("o 409 oferece DUAS ações, nenhuma pré-selecionada, e não apaga o formulário", async () => {
+    // ⚠️ Um 409 que apaga o formulário treina o usuário a marcar "é outro pagamento" sem ler.
+    const user = await abrirLancamento();
+    const mensagem =
+      "Existe uma conta a pagar de R$ 380,00 com vencimento em 12/07 (Enel). Quer dar baixa nela?";
+    vi.mocked(api.post).mockRejectedValue({
+      response: {
+        status: 409,
+        data: { detail: { acao: "baixar_payable", payable_id: "p-1", mensagem } },
+      },
+    });
+    fireEvent.change(screen.getByLabelText("Para que serve este movimento"), {
+      target: { value: "tarifa_bancaria" },
+    });
+
+    await user.click(botaoLancar());
+
+    // A frase é a da API — uma redação, um lugar (mesma disciplina do `_NOTE_SEM_CHECKPOINT`).
+    expect(await screen.findByText(mensagem)).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "Dar baixa nessa conta" })).toHaveAttribute(
+      "href",
+      "/pagar",
+    );
+    expect(screen.getByRole("button", { name: "É outro pagamento" })).toBeInTheDocument();
+    // O formulário CONTINUA lá, com tudo o que foi digitado.
+    expect((screen.getByLabelText("Valor (R$)") as HTMLInputElement).value).toBe("380,00");
+    expect(
+      (screen.getByLabelText("Para que serve este movimento") as HTMLSelectElement).value,
+    ).toBe("tarifa_bancaria");
+  });
+
+  it("'É outro pagamento' reenvia com `confirmar_avulso: true` e o movimento nasce", async () => {
+    const user = await abrirLancamento();
+    vi.mocked(api.post)
+      .mockRejectedValueOnce({
+        response: { status: 409, data: { detail: { acao: "baixar_payable", payable_id: "p-1", mensagem: "x" } } },
+      })
+      .mockResolvedValueOnce({ data: {} } as never);
+    fireEvent.change(screen.getByLabelText("Para que serve este movimento"), {
+      target: { value: "tarifa_bancaria" },
+    });
+
+    await user.click(botaoLancar());
+    await user.click(await screen.findByRole("button", { name: "É outro pagamento" }));
+
+    await waitFor(() => expect(api.post).toHaveBeenCalledTimes(2));
+    expect(vi.mocked(api.post).mock.calls[1][1]).toMatchObject({ confirmar_avulso: true });
+  });
+
+  it("erro comum (não acionável) continua aparecendo como erro, sem as duas ações", async () => {
+    const user = await abrirLancamento();
+    vi.mocked(api.post).mockRejectedValue({ response: { status: 422, data: { detail: "nope" } } });
+    fireEvent.change(screen.getByLabelText("Para que serve este movimento"), {
+      target: { value: "tributo" },
+    });
+
+    await user.click(botaoLancar());
+
+    expect(await screen.findByText("Erro inesperado")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "É outro pagamento" })).toBeNull();
+  });
+});
+
+describe("Story 8.17 — movimento legado com finalidade NULA continua legítimo (AC7)", () => {
+  it("a linha não pede preenchimento retroativo nem mostra 'não informado'", async () => {
+    mockApi([conta()], [], [movimento({ operation_nature: null })]);
+    renderPage();
+    await screen.findByText("Itaú PJ");
+    fireEvent.click(screen.getByText("Ver movimentos"));
+
+    expect(await screen.findByText("Aluguel")).toBeInTheDocument();
+    expect(screen.queryByText(/não informad/i)).toBeNull();
+  });
+
+  it("com finalidade, ela aparece traduzida ao lado da descrição", async () => {
+    mockApi([conta()], [], [movimento({ operation_nature: "tarifa_bancaria" })]);
+    renderPage();
+    await screen.findByText("Itaú PJ");
+    fireEvent.click(screen.getByText("Ver movimentos"));
+
+    expect(await screen.findByText("Tarifa / juros")).toBeInTheDocument();
   });
 });

@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from datetime import UTC, date, datetime, time, timedelta
 
-from sqlalchemy import func, select
+from sqlalchemy import and_, func, or_, select
 from sqlalchemy.orm import Session
 
 from app.core import audit
@@ -47,6 +47,12 @@ class PayableError(Exception):
         # `None` = o router serializa `str(e)` como sempre. Só o erro ACIONÁVEL abaixo preenche.
         self.detail: dict | None = None
 
+
+# Os estados em que uma conta a pagar ainda é uma OBRIGAÇÃO que pode ter virado dinheiro saindo —
+# e portanto candidata a ser o mesmo dinheiro de um lançamento manual (Story 8.17 AC5). `canceled`
+# fica fora: não é obrigação nenhuma, e casá-la daria um 409 sem saída pelo caminho oferecido.
+# ⚠️ Quando a Story 8.14 criar `scheduled`, ele entra AQUI — uma entrada nesta tupla, e nada mais.
+_ESTADOS_CANDIDATOS: tuple[str, ...] = (STATUS_OPEN, STATUS_PAID)
 
 ACAO_CADASTRAR_CONTA = "cadastrar_conta"
 
@@ -727,6 +733,100 @@ def paid_before(db: Session, *, date_: date) -> dict:
         "oldest_paid_on": _as_utc_date(oldest),
         "newest_paid_on": _as_utc_date(newest),
     }
+
+
+# ── A guarda de contagem dupla, do lado de quem SABE o que é uma conta a pagar (Story 8.17) ───
+
+
+def probe_pagamento_duplicado(
+    db: Session, *, amount_cents: int, posted_at: date
+) -> bank_service.DuplicataCandidato | None:
+    """*"Esta saída manual pode ser o mesmo dinheiro de uma conta a pagar que eu já conheço?"*
+
+    Implementação concreta do `bank_service.DuplicataProbe`, registrada em `app/main.py`. **Ela vive
+    aqui, e não em `bank`, por decisão de arquitetura ratificada** (§C-5): o gate estrutural da
+    Story 8.9 proíbe `bank` de importar `payables`, e a dependência é de **negócio para banco,
+    jamais a volta**. `bank` declara o contrato e não sabe quem o implementa; este módulo, que já
+    importa `bank` desde a 8.12, é quem sabe consultar a obrigação — e é quem monta o DTO opaco.
+
+    Por que o problema existe (design Onda 2 §7(b)): *"hoje o formulário manual é a porta primária e
+    parece o jeito de registrar qualquer coisa — inclusive um pagamento. Um pagamento registrado nos
+    dois lugares derruba o saldo **duas vezes**, e a divergência resultante parece um achado real. É
+    o pior modo de falha desta onda."*
+
+    **O critério — o mesmo do enriquecimento da Onda 4, um número e não dois:**
+    - **valor absoluto EXATO** (`abs(amount_cents) == p.amount_cents`), sem tolerância percentual;
+    - **±`DUPLICATA_JANELA_DIAS` dias** de `posted_at`, em aritmética de **data de calendário**
+      (`posted_at` é `DATE`; nada aqui converte fuso — a lição do `CLAUDE.md` §6.0);
+    - estados **`open`** e **`paid`**, com `due_date` **ou** a data de caixa (`paid_at`) na janela.
+      Uma conta já paga é candidata legítima: o caso ruim é justamente o dono dar a baixa **e**
+      lançar à mão o mesmo pagamento.
+
+    ⚠️ **Desvio declarado da Story 8.17 AC5:** ela lista os estados `open|scheduled|paid`, mas
+    **`scheduled` não existe ainda** — `payables.models.ALL_STATUSES` é `{open, paid, canceled}` e
+    quem cria `scheduled` é a Story 8.14. Filtrar por um valor inexistente seria ruído; quando a
+    8.14 chegar, `scheduled` entra em `_ESTADOS_CANDIDATOS` (uma entrada numa tupla) e o teste
+    `test_estados_candidatos_existem_no_vocabulario` reprova se alguém esquecer. `canceled` fica
+    **fora** de propósito: conta cancelada não é obrigação nenhuma, e casá-la produziria um 409 que
+    o usuário não teria como resolver pelo caminho que a mensagem oferece.
+
+    **Desempate** (AC5), quando há mais de um: **menor distância em dias** e, no empate, `due_date`
+    **mais recente**. A mensagem é **uma** escolha e nunca uma lista — mesmo anti-ruído da banda de
+    tolerância da conferência.
+
+    **Isolamento:** roda na sessão do REQUEST, sob RLS, sem nenhum filtro manual de `tenant_id`
+    (Regra de Ouro nº 1). Nunca abre sessão própria — isso seria escapar da GUC do tenant e a guarda
+    passaria a enxergar conta a pagar de outro tenant (o cenário do IV5).
+
+    **Uma query só** (não N+1): traz os candidatos da janela e classifica em Python — o conjunto é
+    pequeno por construção (mesmo valor exato, 7 dias).
+    """
+    alvo = abs(amount_cents)
+    inicio = posted_at - timedelta(days=bank_service.DUPLICATA_JANELA_DIAS)
+    fim = posted_at + timedelta(days=bank_service.DUPLICATA_JANELA_DIAS)
+    # Limites de TIMESTAMP para a data de caixa, em vez de `::date` — dialeto-agnóstico (o SQLite
+    # dos testes não tem `::date`), mesmo padrão de `paid_before`/`summary` acima. `fim` é
+    # inclusivo, por isso o teto é a meia-noite do dia SEGUINTE, com `<`.
+    caixa_de = datetime.combine(inicio, time.min, tzinfo=UTC)
+    caixa_ate = datetime.combine(fim + timedelta(days=1), time.min, tzinfo=UTC)
+
+    candidatos = list(
+        db.scalars(
+            select(Payable).where(
+                Payable.status.in_(_ESTADOS_CANDIDATOS),
+                Payable.amount_cents == alvo,
+                or_(
+                    Payable.due_date.between(inicio, fim),
+                    and_(
+                        Payable.paid_at.is_not(None),
+                        Payable.paid_at >= caixa_de,
+                        Payable.paid_at < caixa_ate,
+                    ),
+                ),
+            )
+        ).all()
+    )
+    if not candidatos:
+        return None
+
+    def _distancia(p: Payable) -> int:
+        """Dias até o movimento, pela data que estiver mais perto (vencimento ou caixa)."""
+        dias = [abs((p.due_date - posted_at).days)]
+        caixa = _as_utc_date(p.paid_at)
+        if caixa is not None:
+            dias.append(abs((caixa - posted_at).days))
+        return min(dias)
+
+    escolhido = min(candidatos, key=lambda p: (_distancia(p), -p.due_date.toordinal()))
+    return bank_service.DuplicataCandidato(
+        # Opaco do lado de lá: `bank` não sabe que isto é o id de uma conta a pagar. Quem traduz
+        # para `{"payable_id": ...}` é a rota de `bank` (achado A-2 / ratificação §C-5.3).
+        referencia_id=escolhido.id,
+        # O que o usuário reconhece: o fornecedor, ou a descrição quando não houver fornecedor.
+        descricao=escolhido.supplier or escolhido.description,
+        valor_cents=escolhido.amount_cents,
+        data=escolhido.due_date,
+    )
 
 
 def list_categories(db: Session) -> list[str]:

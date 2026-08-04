@@ -203,7 +203,24 @@ class BankTransactionCreate(BaseModel):
     # `fiscal_document_ref`) só são preenchidos por importação/conciliação e não entram aqui.
     counterparty_name: str = Field(default="", max_length=160)
     counterparty_document: str = Field(default="", max_length=20)
+    # *"Para que serve este movimento?"* — RÓTULO, nunca fato de dinheiro (Story 8.17 AC9).
+    #
+    # ⚠️ **Validado por TAMANHO, jamais contra a lista** (AC3): `models.OPERATION_NATURES` é
+    # vocabulário **sugerido na UI**, e o texto livre de *"Outro (descreva)"* precisa passar. Um
+    # `Literal[...]`/`Enum` aqui recusaria o fato bancário legítimo que ninguém imaginou (estorno de
+    # tarifa, crédito de convênio, cashback) e recriaria a incompletude que a onda combate. Não
+    # afrouxe o `max_length` também: a coluna é `String(24)`.
     operation_nature: str | None = Field(default=None, max_length=24)
+    # ⚠️ **NÃO É PERSISTIDO — e não deve passar a ser** (Story 8.17 AC5). É a resposta do usuário à
+    # pergunta do 409 (*"é outro pagamento mesmo"*), ou seja, uma confirmação de **intenção**; um
+    # fato sobre o movimento é outra coisa, e gravá-lo criaria uma coluna que descreve o diálogo em
+    # vez do dinheiro. `create_transaction` lê o campo e o descarta — não existe coluna equivalente
+    # em `BankTransaction`, e o `BankTransactionOut` não o devolve.
+    #
+    # Fluxo: 1º POST → 409 com as duas escolhas → o usuário escolhe *"é outro pagamento"* → o mesmo
+    # POST volta com `confirmar_avulso=true` e passa. Repetir é o mecanismo, de propósito: nada é
+    # pré-selecionado para ele, e o formulário não é perdido no caminho (AC8).
+    confirmar_avulso: bool = Field(default=False)
 
     @field_validator("description", "counterparty_name")
     @classmethod

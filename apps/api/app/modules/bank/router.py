@@ -107,7 +107,63 @@ def _cp_out(c: BankBalanceCheckpoint) -> CheckpointOut:
 
 
 def _err(e: service.BankError) -> HTTPException:
-    return HTTPException(status_code=e.status_code, detail=str(e))
+    """`detail` estruturado quando o erro é ACIONÁVEL; string em todo o resto.
+
+    Mesmo contrato de `payables.router._err` — **um** formato de erro acionável no repositório, não
+    dois: `{"detail": {"acao": ..., "mensagem": ...}}`, com `acao` e os dados **dentro** de
+    `detail`. Dois formatos obrigariam a UI a saber, por rota, onde procurar o `acao`.
+    """
+    return HTTPException(status_code=e.status_code, detail=e.detail or str(e))
+
+
+# ── O 409 acionável da guarda de contagem dupla (Story 8.17 AC5/AC8) ─────────────────────────
+#
+# ⚠️ **É AQUI que o id opaco vira vocabulário de negócio, e não no service.** `bank/service.py` não
+# pode nomear a entidade do outro módulo (nem em nome de campo — achado A-2 da ratificação §C-5.3);
+# a **rota** pode, porque o que ela monta é o payload HTTP que a tela consome. O
+# `DuplicataCandidato` entra opaco e sai traduzido.
+ACAO_BAIXAR_PAYABLE = "baixar_payable"
+
+
+def _brl(cents: int) -> str:
+    """Centavos → "R$ 1.234,56". Cópia deliberada da fórmula de `core/boleto._brl`.
+
+    **Não** importamos aquela: `core/boleto` carrega o `fpdf` no import, e puxar um gerador de PDF
+    para dentro do caminho de erro de um lançamento manual é peso sem motivo. A dívida de
+    consolidar as ~9 formatações de moeda do repositório está registrada (`contas.ts`) e não é
+    desta story.
+    """
+    return f"R$ {cents / 100:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
+
+
+def _erro_de_duplicata(e: service.DuplicataDePagamento) -> HTTPException:
+    """A **redação da escolha**, num lugar só (AC8: *"a mensagem é do backend"*).
+
+    A tela mostra esta frase como veio e oferece as duas ações — *"dar baixa nessa conta"* (o
+    movimento nasce sozinho, pela Regra da Origem) e *"é outro pagamento"* (reenvia com
+    `confirmar_avulso=true`) —, **sem** pré-selecionar nenhuma e **sem** perder o que foi digitado:
+    um 409 que apaga o formulário treina o usuário a marcar "é outro pagamento" sem ler.
+
+    ⚠️ A frase diz *"com vencimento em"* e não *"vencendo em"* de propósito: o candidato pode estar
+    **pago** (a janela de ±3 dias cobre os dois estados), e "vencendo" descreveria errado uma conta
+    que já foi paga.
+    """
+    c = e.candidato
+    quem = f" ({c.descricao})" if c.descricao else ""
+    mensagem = (
+        f"Existe uma conta a pagar de {_brl(c.valor_cents)} com vencimento em "
+        f"{c.data.strftime('%d/%m')}{quem}. Quer dar baixa nela — o movimento nasce sozinho — ou "
+        "este é outro pagamento?"
+    )
+    return HTTPException(
+        status_code=e.status_code,
+        detail={
+            "acao": ACAO_BAIXAR_PAYABLE,
+            # O id opaco do DTO, traduzido para o vocabulário de quem consome o payload.
+            "payable_id": c.referencia_id,
+            "mensagem": mensagem,
+        },
+    )
 
 
 @router.get("/accounts", response_model=list[BankAccountOut])
@@ -235,7 +291,11 @@ def create_transaction(
     user: CurrentUser = Depends(_guard),
     db: Session = Depends(get_tenant_db),
 ) -> BankTransactionOut:
-    """Lança um movimento MANUAL nesta conta. A conta vem do path; `source` é fixado no service."""
+    """Lança um movimento MANUAL nesta conta. A conta vem do path; `source` é fixado no service.
+
+    **409 acionável** quando a saída manual casa com uma conta a pagar em valor e janela (Story
+    8.17 AC5) — ver `_erro_de_duplicata`. Reenviar com `confirmar_avulso=true` passa.
+    """
     try:
         tx = service.create_transaction(
             db,
@@ -244,6 +304,11 @@ def create_transaction(
             actor=user.user_id,
             data=data,
         )
+    # ANTES do `except BankError` genérico: `DuplicataDePagamento` é subclasse dele, e a ordem
+    # invertida faria o 409 acionável sair como string solta (a UI voltaria a adivinhar por
+    # substring, que é como um contrato de erro deixa de ser contrato).
+    except service.DuplicataDePagamento as e:
+        raise _erro_de_duplicata(e) from e
     except service.BankError as e:
         raise _err(e) from e
     return _tx_out(tx)

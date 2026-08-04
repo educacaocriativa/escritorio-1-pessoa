@@ -7,9 +7,16 @@ nº 1 do `CLAUDE.md`: defesa-em-profundidade foi considerada e REJEITADA para n�
 "algumas queries filtram, outras não", onde esquecer uma vira vazamento). Cross-tenant cai em
 `db.get(...) is None` → 404 fail-closed, nunca 403 (403 confirmaria a existência da linha).
 
-**Sem FK dura** entre entidades financeiras (padrão do projeto: `charges.client_id`,
-`payables.cost_center_id`): a referência é solta e a integridade é validada no service —
-`bank_transactions.bank_account_id` é validada chamando `get_account`, sem `ForeignKey`.
+**Sem FK dura** entre entidades financeiras (padrão do projeto: `charges.client_id`, e o mesmo
+`cost_center_id` do módulo de contas a pagar): a referência é solta e a integridade é validada no
+service — `bank_transactions.bank_account_id` é validada chamando `get_account`, sem `ForeignKey`.
+
+⚠️ **Este arquivo não NOMEIA os módulos de negócio, e isso é gate, não estilo** (Story 8.17,
+achado A-2): `tests/test_money_planes.py::test_bank_service_nao_nomeia_a_entidade_de_negocio`
+reprova as strings do módulo de contas a pagar/a receber aqui — em qualquer posição, inclusive em
+prosa e em anotação sob `TYPE_CHECKING`. O custo é escrever *"o módulo de negócio"* em vez do nome
+dele; o ganho é que **não existe forma de reintroduzir a dependência proibida que passe daqui**.
+Duas citações desta docstring foram reescritas por causa disso, sem mudar o que elas dizem.
 
 **O saldo é derivado, nunca materializado** (design §3.1). Não existe coluna de saldo em
 `bank_accounts` e não pode passar a existir; ver o aviso (b) na docstring de `models.py`. A soma
@@ -33,8 +40,9 @@ from __future__ import annotations
 
 import hashlib
 from collections.abc import Iterable, Sequence
+from dataclasses import dataclass
 from datetime import UTC, date, datetime
-from typing import Final
+from typing import Final, Protocol
 
 from sqlalchemy import and_, case, func, or_, select
 from sqlalchemy.exc import IntegrityError
@@ -76,6 +84,141 @@ class BankError(Exception):
     def __init__(self, message: str, status_code: int = 400):
         super().__init__(message)
         self.status_code = status_code
+        # `None` = o router serializa `str(e)`, como sempre. Só o erro ACIONÁVEL preenche — mesmo
+        # contrato do erro do módulo de contas a pagar, para que exista **um** formato de erro
+        # acionável no repositório e não dois (Story 8.17 AC5, alinhado com a 8.12 AC2).
+        self.detail: dict | None = None
+
+
+# ── A porta de saída da guarda de contagem dupla (Story 8.17 AC6) ────────────────────────────
+#
+# ⚠️ **LEIA ISTO ANTES DE "SIMPLIFICAR" O QUE VEM ABAIXO.** Este bloco existe porque a guarda do
+# AC5 precisa perguntar *"já existe uma obrigação de negócio para este mesmo dinheiro?"* de dentro
+# do caminho de escrita de `bank` — e o gate estrutural da Story 8.9
+# (a asserção positiva de `tests/test_money_planes.py`) proíbe `bank` de importar o módulo
+# de negócio. A regra que decide todas as alternativas está na ratificação §C-5.1:
+#
+#     **Evadir um gate é pior do que quebrá-lo às claras.** Quebrado às claras, alguém vê no diff;
+#     evadido, o gate fica verde e a proibição está morta — que é literalmente o achado TEST-001.
+#
+# Por isso **import lazy dentro da função e SQL cru sobre a tabela do outro módulo estão reprovados
+# por definição** nesta onda (os dois passam no gate de AST e violam exatamente o que ele protege).
+#
+# **A forma ratificada: inversão de dependência.** `bank` declara o contrato (o DTO + o `Protocol`
+# + o registrador) e **não sabe** quem o implementa; o módulo de negócio implementa (ele **pode**
+# importar `bank`); `app/main.py` liga os dois. Direção final: `main → bank`, `main → negócio`,
+# `negócio → bank`. O gate fica verde **porque a dependência sumiu**, não porque foi escondida.
+#
+# ⚠️ **E é por isso que NADA neste arquivo nomeia a entidade do outro lado — nem sob
+# `TYPE_CHECKING`, nem no nome de um campo.** Um `Protocol` que devolvesse a entidade do módulo de
+# negócio obrigaria este arquivo a importar o TIPO, e `if TYPE_CHECKING: from app.modules...`
+# continua sendo um import que a varredura de **texto cru** do gate pega, com razão (achado A-2 da
+# ratificação: *"a forma proposta reprovava o próprio gate que ela existe para respeitar"*).
+# `test_money_planes.py::test_bank_service_nao_nomeia_a_entidade_de_negocio` trava isto.
+
+
+@dataclass(frozen=True)
+class DuplicataCandidato:
+    """Uma obrigação de negócio que **pode ser o mesmo dinheiro** de um movimento manual de saída.
+
+    O DTO é de `bank` e é **opaco de propósito**: `referencia_id` não se chama nada mais específico
+    porque este módulo não pode nomear um conceito do outro lado nem em nome de campo. Quem monta o
+    DTO é o implementador do `DuplicataProbe`; quem traduz o `referencia_id` para o vocabulário do
+    payload HTTP é a **rota** (`bank/router.py`), nunca este service.
+    """
+
+    referencia_id: str
+    """Id opaco. `bank` não sabe de que entidade é — só o devolve para quem sabe."""
+    descricao: str
+    """Como a obrigação se chama para o usuário ("Enel", "Aluguel"). Pode ser vazio."""
+    valor_cents: int
+    """Valor ABSOLUTO em centavos (BigInteger, Regra de Ouro: dinheiro nunca é float)."""
+    data: date
+    """A data de calendário que identifica a obrigação para o usuário (o vencimento)."""
+
+
+class DuplicataProbe(Protocol):
+    """A consulta que `bank` **não** sabe fazer. Recebe o `db` do request; nunca abre sessão.
+
+    ⚠️ **O `db` é parâmetro, e isso é normativo** (ratificação §C-5.4): a busca roda na sessão do
+    request, sob RLS, sem nenhum filtro manual de `tenant_id` (Regra de Ouro nº 1). Abrir sessão
+    própria dentro do probe seria escapar da GUC do tenant — e a guarda passaria a enxergar
+    obrigação de OUTRO tenant, que é o cenário do IV5 da Story 8.17.
+    """
+
+    def __call__(
+        self, db: Session, *, amount_cents: int, posted_at: date
+    ) -> DuplicataCandidato | None: ...
+
+
+_duplicata_probe: DuplicataProbe | None = None
+
+
+def register_duplicata_probe(probe: DuplicataProbe) -> None:
+    """Liga a implementação concreta. Chamado **uma vez**, na composição (`app/main.py`)."""
+    global _duplicata_probe
+    _duplicata_probe = probe
+
+
+def duplicata_probe_registrado() -> bool:
+    """A guarda de BOOT pergunta isto — ver `app.main.verifica_fiacao_da_guarda`."""
+    return _duplicata_probe is not None
+
+
+# A janela e o critério de valor da guarda, em **constantes nomeadas e num lugar só**.
+#
+# ⚠️ **±3 dias e valor EXATO são deliberadamente os MESMOS do enriquecimento** do design-mãe §4.5 —
+# *"um número, não dois"* (design Onda 2 §7(b), `[SUPOSIÇÃO do design, parametrizável]`). Dois
+# números diferentes para a mesma pergunta ("estas duas linhas são o mesmo dinheiro?") seriam o
+# começo de duas respostas diferentes quando o matcher da Onda 4 chegar.
+#
+# Moram AQUI, e não no implementador, pelo mesmo motivo: quem define a pergunta é o contrato. O
+# implementador importa daqui (a direção `negócio → bank` é a permitida), e por isso a constante é
+# pública apesar de a Story 8.17 tê-la escrito com underscore — **desvio deliberado**: um nome
+# privado importado de fora seria a forma de ter dois números sem parecer que se tem.
+DUPLICATA_JANELA_DIAS: Final[int] = 3
+
+
+class DuplicataDePagamento(BankError):
+    """**409 com ESCOLHA, não bloqueio mudo** (Story 8.17 AC5). Carrega o DTO; a rota o traduz.
+
+    O usuário tem duas saídas, e nenhuma delas vem pré-selecionada: dar baixa na obrigação (e aí o
+    movimento *nasce sozinho*, pela Regra da Origem) ou repetir a requisição com
+    `confirmar_avulso=true` para afirmar que é mesmo outro pagamento.
+
+    ⚠️ **A mensagem NÃO é montada aqui.** Ela nomeia o conceito do outro módulo ("conta a pagar"),
+    e este arquivo não pode nomeá-lo — ver o aviso no topo deste bloco. Quem redige é a rota, num
+    lugar só (mesma disciplina de `_NOTE_SEM_CHECKPOINT` na conferência).
+    """
+
+    def __init__(self, candidato: DuplicataCandidato):
+        super().__init__(
+            "Este movimento pode ser o mesmo dinheiro de um lançamento que o e1p já conhece.", 409
+        )
+        self.candidato = candidato
+
+
+def _probe_duplicata(
+    db: Session, *, amount_cents: int, posted_at: date
+) -> DuplicataCandidato | None:
+    """A **segunda** guarda do fail-closed — inalcançável se a de boot funcionar.
+
+    ⚠️ **Fail-closed, e a hora certa é o BOOT** (ratificação §C-5.2): *"um erro de fiação é condição
+    de startup, não de request"*. Quem impede a app de subir sem probe é
+    `app.main.verifica_fiacao_da_guarda` (precedente: a guarda de boot do `JWT_SECRET` fraco). Esta
+    checagem fica como segunda linha, com a mesma disciplina dupla que `update_transaction`
+    documenta *"de propósito"* — e **nunca** silencia: "não valida em silêncio" seria a guarda
+    desligada em produção sem ninguém saber, que é o pior modo de falha da onda.
+    """
+    if _duplicata_probe is None:
+        raise BankError(
+            "A guarda de contagem dupla não está ligada nesta instância — o lançamento foi "
+            "recusado em vez de ser aceito sem verificação. Isto é erro de configuração do "
+            "servidor (a composição da aplicação não registrou a consulta), não do seu "
+            "lançamento.",
+            500,
+        )
+    return _duplicata_probe(db, amount_cents=amount_cents, posted_at=posted_at)
 
 
 def _today() -> date:
@@ -838,8 +981,8 @@ def list_transactions(
     quebra a paginação em silêncio — a linha que estava no fim da página 1 reaparece no topo da 2.
 
     Paginação obrigatória é padrão do projeto desde a correção de QA da Agenda (`CLAUDE.md`):
-    `limit` é grampeado em [1, 500] em vez de rejeitado, mesmo contrato de
-    `payables.list_payables`.
+    `limit` é grampeado em [1, 500] em vez de rejeitado, mesmo contrato da listagem do módulo de
+    contas a pagar (ver a nota do topo sobre por que este arquivo não nomeia aquele módulo).
     """
     limit = max(1, min(limit, 500))
     stmt = select(BankTransaction).order_by(
@@ -881,6 +1024,12 @@ def create_transaction(
     jeito, e `update_transaction` já recebe o `transaction_id` do mesmo jeito. Pôr o id no corpo
     criaria duas fontes de verdade para a mesma informação, com a pergunta "qual vence?" a ser
     respondida em 8.7.
+
+    ⚠️ **A guarda de contagem dupla (Story 8.17 AC5) mora aqui, e SÓ aqui.** Ela roda depois de
+    todas as validações e **antes de qualquer escrita**, como as demais. Ela **não** foi estendida a
+    `update_transaction` de propósito (ratificação §C-5.4): editar valor/data de um movimento manual
+    já existente é **correção**, não criação, e pôr o 409 ali transformaria uma correção legítima
+    numa parede.
     """
     acc = get_account(db, bank_account_id)
     if acc.archived_at is not None:
@@ -891,6 +1040,25 @@ def create_transaction(
         )
     amount_cents = _validate_amount(data.amount_cents)
     posted_at = _validate_posted_at(data.posted_at, acc)
+
+    # ── A guarda de contagem dupla (AC5) ──────────────────────────────────────────────────────
+    #
+    # **Só SAÍDA, e só quando o usuário ainda não insistiu.** Movimento POSITIVO nunca dispara: um
+    # recebimento não pode ser a mesma linha de uma obrigação a pagar, e disparar ali seria ruído
+    # num formulário que já é a porta primária.
+    #
+    # ⚠️ **Saída manual continua LEGÍTIMA** (AC4): tarifa, IOF e taxa de TED são saídas que não têm
+    # — e nunca terão — obrigação de negócio correspondente (*"criar uma conta a pagar de R$ 2,90
+    # para uma tarifa é a ERP-ificação que o produto recusa"*). Por isso a guarda é **por
+    # candidato encontrado**, e não uma proibição de saída manual: sem candidato, 201 e silêncio.
+    #
+    # `confirmar_avulso` é confirmação de INTENÇÃO e **não é persistida** — não há coluna e não
+    # deve haver: ela descreve o que o usuário respondeu a uma pergunta, não um fato sobre o
+    # movimento. Ver `BankTransactionCreate.confirmar_avulso`.
+    if amount_cents < 0 and not data.confirmar_avulso:
+        candidato = _probe_duplicata(db, amount_cents=amount_cents, posted_at=posted_at)
+        if candidato is not None:
+            raise DuplicataDePagamento(candidato)
 
     # O id é gerado AQUI (e não pelo default do modelo, que só é aplicado no INSERT) porque o
     # `dedup_hash` é chaveado nele: sem isso seria preciso inserir, ler o id de volta e dar um

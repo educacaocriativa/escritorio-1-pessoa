@@ -18,17 +18,25 @@ import { usePrimaryAction } from "../../store/pageActions";
 // precisa do mesmo formulário, com o aviso pró-ativo e a guarda do recuo da 8.11 intactos.
 import AccountModal from "./AccountModal";
 import {
+  acaoBaixarPayable,
   type BankAccount,
   type BankBalanceCheckpoint,
   type BankTransaction,
   centsToInput,
+  type DuplicataAcionavel,
   formatBRL,
   formatDateBR,
   hojeISO,
   isIgnored,
   kindLabel,
+  naturezaParaEnvio,
+  operationNatureLabel,
+  OPERATION_NATURE_OUTRO,
+  OPERATION_NATURE_TRANSFERENCIA,
+  OPERATION_NATURES,
   origemLabel,
   parseCentsBRL,
+  ponteiroDaTransferencia,
   type ResumoSaldo,
   resumoSaldos,
   saldoApuradoEm,
@@ -659,6 +667,15 @@ function TransactionRow({
           título de modal nem query string. */}
       <td className={`py-2.5 pr-3 ${ignorado ? "text-neutral-400 line-through" : "text-neutral-800"}`}>
         {tx.description || "—"}
+        {/* A finalidade (Story 8.17), quando houver. Movimento legado nasceu com `NULL` e continua
+            legítimo: aqui ele simplesmente **não mostra a linha** — nada de "não informado", que
+            transformaria um dado ausente num defeito aparente e pediria preenchimento retroativo
+            (AC7: nada automático sobre o `source='manual'` que já existe). */}
+        {tx.operation_nature && (
+          <span className="block text-[11px] text-neutral-400">
+            {operationNatureLabel(tx.operation_nature)}
+          </span>
+        )}
       </td>
       <td
         className={`whitespace-nowrap py-2.5 pr-3 text-right tabular-nums font-medium ${
@@ -782,7 +799,14 @@ function LancarMovimentoModal({
   const [entrada, setEntrada] = useState(false);
   const [value, setValue] = useState("0,00");
   const [description, setDescription] = useState("");
+  // Story 8.17 — *"para que serve este movimento?"*. Obrigatório, com a válvula de texto livre.
+  const [natureza, setNatureza] = useState("");
+  const [naturezaLivre, setNaturezaLivre] = useState("");
   const [error, setError] = useState<string | null>(null);
+  // O 409 acionável da contagem dupla. Enquanto ele existe, o formulário CONTINUA na tela com tudo
+  // o que foi digitado (AC8) — um 409 que apaga o formulário treina o usuário a marcar "é outro
+  // pagamento" sem ler.
+  const [duplicata, setDuplicata] = useState<DuplicataAcionavel | null>(null);
   const [saving, setSaving] = useState(false);
 
   useEffect(() => {
@@ -792,7 +816,11 @@ function LancarMovimentoModal({
     setEntrada(false);
     setValue("0,00");
     setDescription("");
+    // Nada pré-selecionado: a pergunta é "para que serve", e responder por ele seria inventar.
+    setNatureza("");
+    setNaturezaLivre("");
     setError(null);
+    setDuplicata(null);
   }, [account]);
 
   const cents = parseCentsBRL(value);
@@ -800,8 +828,16 @@ function LancarMovimentoModal({
   // o usuário lê antes de clicar seja literalmente o que vai para a API.
   const assinado = entrada ? Math.abs(cents) : -Math.abs(cents);
   const previa = signedAmountView(assinado);
+  const operationNature = naturezaParaEnvio(natureza, naturezaLivre);
+  // ⚠️ **Obrigatório na TELA, aceito vazio pela API** — e a assimetria é deliberada. O campo é
+  // nullable no banco e movimento legado nasceu com `NULL`; forçar preenchimento no backend
+  // quebraria a edição de tudo o que já existe (AC7). A curadoria é de UI.
+  const naturezaPendente = operationNature === null;
+  // Ponteiro para a transferência de verdade (8.18). Hoje `false`: ela não está em produção.
+  const ponteiro =
+    natureza === OPERATION_NATURE_TRANSFERENCIA ? ponteiroDaTransferencia(false) : null;
 
-  async function save() {
+  async function save(confirmarAvulso = false) {
     if (!account) return;
     setError(null);
     setSaving(true);
@@ -811,11 +847,17 @@ function LancarMovimentoModal({
         // O SINAL é o dado (8.3): entrada positiva, saída negativa. O backend recusa 0.
         amount_cents: assinado,
         description,
+        operation_nature: operationNature,
+        // Só viaja como `true` quando o usuário respondeu "é outro pagamento" ao 409 (AC5).
+        confirmar_avulso: confirmarAvulso,
       });
       onSaved();
       onClose();
     } catch (err) {
-      setError(apiErrorMessage(err));
+      // Reconhecido pelo `acao`, nunca por substring da mensagem (contrato da 8.12, reusado aqui).
+      const acionavel = acaoBaixarPayable(err);
+      if (acionavel) setDuplicata(acionavel);
+      else setError(apiErrorMessage(err));
     } finally {
       setSaving(false);
     }
@@ -841,6 +883,37 @@ function LancarMovimentoModal({
             <option value="entrada">Entrada (dinheiro entrou na conta)</option>
           </select>
         </label>
+        {/*
+          A curadoria (AC1): o formulário deixa de ser "novo movimento" e pergunta a FINALIDADE.
+          A lista é curta e sugerida; "Outro (descreva)" é a válvula obrigatória — a API aceita
+          texto livre e recusar um fato bancário legítimo é o defeito que esta story combate.
+        */}
+        <label className="block">
+          <span className="mb-1 block text-xs font-medium text-neutral-600">Para que serve</span>
+          <select
+            value={natureza}
+            onChange={(e) => setNatureza(e.target.value)}
+            aria-label="Para que serve este movimento"
+            className="w-full rounded-lg border border-neutral-200 px-3 py-2 text-sm outline-none focus:border-primary-400"
+          >
+            <option value="">Escolha…</option>
+            {OPERATION_NATURES.map(([valor, rotulo]) => (
+              <option key={valor} value={valor}>
+                {rotulo}
+              </option>
+            ))}
+            <option value={OPERATION_NATURE_OUTRO}>Outro (descreva)</option>
+          </select>
+        </label>
+        {ponteiro && <p className="rounded-lg bg-neutral-50 p-2 text-xs text-neutral-600">{ponteiro}</p>}
+        {natureza === OPERATION_NATURE_OUTRO && (
+          <Field
+            label="Descreva a finalidade"
+            value={naturezaLivre}
+            onChange={setNaturezaLivre}
+            placeholder="Ex.: estorno de tarifa"
+          />
+        )}
         <Field label="Valor (R$)" value={value} onChange={setValue} />
         <Field
           label="Descrição"
@@ -857,10 +930,36 @@ function LancarMovimentoModal({
           em {formatDateBR(postedAt)}.
         </p>
         {error && <p className="rounded-lg bg-red-50 p-2 text-sm text-danger">{error}</p>}
+        {/*
+          O 409 acionável: a frase vem da API (uma redação, um lugar) e as DUAS ações ficam no
+          mesmo bloco visível, logo acima do botão — nenhuma pré-selecionada, e o formulário
+          preservado atrás (AC8, lições dos PRs #56 e #58 em ~360px).
+        */}
+        {duplicata && (
+          <div className="space-y-2 rounded-lg bg-amber-50 p-3">
+            <p className="text-sm text-neutral-800">{duplicata.mensagem}</p>
+            <div className="flex flex-col gap-2">
+              <Link
+                to="/pagar"
+                className="rounded-pill bg-primary-500 px-3 py-2 text-center text-sm font-semibold text-white transition hover:bg-primary-600"
+              >
+                Dar baixa nessa conta
+              </Link>
+              <button
+                type="button"
+                onClick={() => save(true)}
+                disabled={saving}
+                className="rounded-pill border border-neutral-300 px-3 py-2 text-sm font-semibold text-neutral-700 transition hover:bg-neutral-50 disabled:opacity-60"
+              >
+                É outro pagamento
+              </button>
+            </div>
+          </div>
+        )}
         <button
           type="button"
-          onClick={save}
-          disabled={saving || cents === 0}
+          onClick={() => save()}
+          disabled={saving || cents === 0 || naturezaPendente}
           className="w-full rounded-pill bg-accent-400 py-2.5 font-semibold text-white transition hover:bg-accent-500 disabled:opacity-60"
         >
           {saving ? "Salvando…" : "Lançar movimento"}

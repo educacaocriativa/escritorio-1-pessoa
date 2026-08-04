@@ -230,6 +230,63 @@ def test_bank_nao_importa_payables_tambem_por_texto_cru():
     )
 
 
+def test_bank_service_nao_nomeia_a_entidade_de_negocio():
+    """**Story 8.17 / achado A-2** — o gate que a porta de saída da guarda tinha de sobreviver.
+
+    A Story 8.17 precisa perguntar, de dentro de `create_transaction`, se já existe uma obrigação de
+    negócio para o mesmo dinheiro (senão o pagamento contado duas vezes derruba o saldo em dobro, e
+    *"a divergência dobrada parece um achado real"*). A primeira forma proposta era um `Protocol`
+    devolvendo `Payable | None` — e **essa forma reprovava o próprio gate que ela existia para
+    respeitar**: com `Payable` na assinatura, `bank/service.py` precisa do TIPO, e
+    `if TYPE_CHECKING: from app.modules.payables.models import Payable` **continua sendo um import
+    de `payables` dentro de `bank`**. Foi por isso que a ratificação (§C-5.3) trocou o retorno por
+    um DTO do próprio `bank` (`DuplicataCandidato`, com `referencia_id` **opaco**).
+
+    ⚠️ Este teste é mais estrito que os dois acima **de propósito**: eles procuram o caminho de
+    import (`app.modules.payables`); este procura o **nome do conceito**, em qualquer posição —
+    inclusive em nome de campo de dataclass, em anotação sob `TYPE_CHECKING` e em docstring. É
+    deliberado que a prosa deste arquivo não possa citar a entidade: o custo é escrever *"a entidade
+    de negócio"* em vez do nome dela, e o ganho é que **não existe forma de reintroduzir a
+    dependência que passe daqui**.
+
+    **Mutante que este teste mata:** trocar o retorno do `Protocol` de `DuplicataCandidato | None`
+    para `Payable | None` (com ou sem `TYPE_CHECKING`). Verificado por mutação na implementação da
+    Story 8.17.
+
+    O vocabulário do outro módulo aparece **só no payload HTTP** (`{"acao": "baixar_payable",
+    "payable_id": ...}`), montado pela ROTA a partir do id opaco — por isso o teste é escopado em
+    `service.py`, e não no módulo inteiro.
+    """
+    alvo = BANK_DIR / "service.py"
+    texto = alvo.read_text(encoding="utf-8")
+    proibidas = [t for t in ("payables", "Payable", "payable_id") if t in texto]
+    assert not proibidas, (
+        f"app/modules/bank/service.py nomeia a entidade de `payables`: {proibidas}. O contrato da "
+        "guarda de contagem dupla é um DTO do próprio `bank` (`DuplicataCandidato`, com "
+        "`referencia_id` opaco) justamente para que este arquivo não precise do tipo do outro "
+        "módulo — nem em runtime, nem sob TYPE_CHECKING, nem em nome de campo. Quem traduz o id "
+        "opaco para o vocabulário de negócio é `bank/router.py`, no payload HTTP. Ver ratificação "
+        "§C-5.3 (achado A-2)."
+    )
+
+
+def test_a_guarda_de_contagem_dupla_e_uma_porta_registrada():
+    """O outro lado do A-2: a porta **existe** e é ligada por composição (Story 8.17 AC6).
+
+    Sem esta asserção, o teste acima ficaria verde do jeito mais fácil possível — apagando a guarda.
+    Um teste de ausência precisa de um teste de presença ao lado, senão ele mede o vazio.
+    """
+    from app.modules.bank import service as bank
+
+    assert hasattr(bank, "DuplicataCandidato") and hasattr(bank, "DuplicataProbe")
+    campos = set(bank.DuplicataCandidato.__dataclass_fields__)
+    assert campos == {"referencia_id", "descricao", "valor_cents", "data"}
+    # E quem implementa vive do lado do NEGÓCIO, que pode importar `bank` — a direção permitida.
+    from app.modules.payables.service import probe_pagamento_duplicado
+
+    assert callable(probe_pagamento_duplicado)
+
+
 # ── Story 8.9 — o vocabulário de `source` é uma PARTIÇÃO, e o D-3 não ganha uma terceira vida ──
 
 

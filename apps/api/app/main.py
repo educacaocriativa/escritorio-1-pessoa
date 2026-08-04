@@ -5,8 +5,10 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from app.config import settings
 from app.modules import ALL_ROUTERS
+from app.modules.bank import service as bank_service
 from app.modules.funnels.automation import register as register_funnel_automation
 from app.modules.notifications.service import register as register_notifications
+from app.modules.payables.service import probe_pagamento_duplicado
 
 
 class PublicLeadsCORSMiddleware:
@@ -86,6 +88,49 @@ for router in ALL_ROUTERS:
 # auto-enroll no funil de vendas padrão ao criar lead).
 register_notifications()
 register_funnel_automation()
+
+
+# ── A composição da guarda de contagem dupla (Story 8.17 AC6) ────────────────────────────────
+#
+# ⚠️ **Este é o ÚNICO lugar onde `bank` e `payables` se encontram nesta direção — e é de propósito.**
+# O gate estrutural da Story 8.9 (`tests/test_money_planes.py`) proíbe `bank` de importar
+# `payables`; `bank` declara o `Protocol` e o registrador, `payables` implementa, e a fiação é feita
+# **aqui**, na composição. Direção final: `main → bank`, `main → payables`, `payables → bank`.
+# O gate fica verde **porque a dependência sumiu**, não porque foi escondida. Ver
+# `bank/service.py`, bloco "A porta de saída da guarda de contagem dupla".
+def liga_a_guarda_de_contagem_dupla() -> None:
+    bank_service.register_duplicata_probe(probe_pagamento_duplicado)
+
+
+def verifica_fiacao_da_guarda() -> None:
+    """**FAIL-CLOSED NO BOOT: a aplicação não sobe sem o probe registrado** (ratificação §C-5.2).
+
+    *"Um erro de fiação é condição de startup, não de request."* A alternativa — deixar o request
+    seguir sem validar — seria a guarda **desligada em produção sem ninguém saber**, e a
+    consequência é o pior modo de falha da onda (o pagamento contado duas vezes, com a divergência
+    dobrada parecendo um achado real). A outra alternativa, o 500 no request, descobriria o
+    problema no pior lugar imaginável: uma ação legítima do dono lançando uma tarifa de R$ 2,90.
+
+    Precedente do próprio projeto: a guarda de boot contra `JWT_SECRET` fraco em produção
+    (`CLAUDE.md` §6.1). A checagem de request-time **fica** como segunda guarda
+    (`bank/service._probe_duplicata`), inalcançável se esta funcionar.
+
+    ⚠️ **Não transforme isto num `warning`.** O teste que amarra o comportamento é
+    `test_bank_contagem_dupla.py::test_app_nao_sobe_sem_o_probe_de_contagem_dupla`, e há um teste
+    ESTRUTURAL provando que esta função é chamada no nível do módulo — apagar a chamada abaixo
+    reprova, porque um fail-closed que ninguém invoca é um comentário.
+    """
+    if not bank_service.duplicata_probe_registrado():
+        raise RuntimeError(
+            "A guarda de contagem dupla não foi ligada: `bank.service.register_duplicata_probe` "
+            "não recebeu implementação. A aplicação NÃO sobe sem ela — sem essa consulta, um "
+            "pagamento lançado à mão e também baixado em Contas a Pagar derrubaria o saldo duas "
+            "vezes, em silêncio. Verifique `liga_a_guarda_de_contagem_dupla` em app/main.py."
+        )
+
+
+liga_a_guarda_de_contagem_dupla()
+verifica_fiacao_da_guarda()
 
 
 @app.get("/health", tags=["infra"])

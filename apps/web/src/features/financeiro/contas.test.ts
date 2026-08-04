@@ -1,5 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
+  ACAO_BAIXAR_PAYABLE,
+  acaoBaixarPayable,
   type BankAccount,
   BANK_ACCOUNT_KINDS,
   avisoContasPagasAnteriores,
@@ -15,7 +17,16 @@ import {
   KIND_SAVINGS,
   kindLabel,
   KINDS_FORA_DO_CAIXA,
+  naturezaParaEnvio,
+  OPERATION_NATURE_OUTRO,
+  OPERATION_NATURE_RECEITA_FINANCEIRA,
+  OPERATION_NATURE_TARIFA,
+  OPERATION_NATURE_TRANSFERENCIA,
+  OPERATION_NATURE_TRIBUTO,
+  OPERATION_NATURES,
+  operationNatureLabel,
   origemLabel,
+  ponteiroDaTransferencia,
   parseCentsBRL,
   type PayablesPaidBefore,
   resumoSaldos,
@@ -348,5 +359,96 @@ describe("Story 8.10 — saldoApuradoEm: a data em que o saldo derivado foi apur
     expect(frase).not.toContain(ROTULO_BANCO);
     expect(frase).not.toContain(TOTAL_EM_CONTAS_LABEL);
     expect(frase).not.toContain(DISPONIVEL_CAIXA_LABEL);
+  });
+});
+
+// ── Story 8.17 — o manual curado e a guarda de contagem dupla ────────────────────────────────
+
+describe("Story 8.17 — natureza da operação: curadoria, NUNCA whitelist", () => {
+  it("a lista sugerida é a do backend (`models.OPERATION_NATURES`), na ordem da tela", () => {
+    // Espelho manual: o outro lado deste pareamento é
+    // `apps/api/tests/test_bank_contagem_dupla.py::test_vocabulario_sugerido_bate_com_a_ui`.
+    // Só `tarifa_bancaria` é valor NOVO; os outros três já eram vocabulário do design-mãe §7.2.
+    expect(OPERATION_NATURES.map(([v]) => v)).toEqual([
+      OPERATION_NATURE_TARIFA,
+      OPERATION_NATURE_TRIBUTO,
+      OPERATION_NATURE_TRANSFERENCIA,
+      OPERATION_NATURE_RECEITA_FINANCEIRA,
+    ]);
+    expect(OPERATION_NATURES.map(([v]) => v)).toEqual([
+      "tarifa_bancaria",
+      "tributo",
+      "transferencia_propria",
+      "receita_financeira",
+    ]);
+  });
+
+  it("a válvula 'Outro' é sentinela de UI e NUNCA viaja para a API", () => {
+    // O extrato está cheio do que ninguém imaginou (estorno de tarifa, cashback, crédito de
+    // convênio). Recusar um fato legítimo recria a incompletude que a onda combate — por isso o
+    // que viaja é o TEXTO do usuário, e o sentinela fica na tela.
+    expect(OPERATION_NATURES.map(([v]) => v)).not.toContain(OPERATION_NATURE_OUTRO);
+    expect(naturezaParaEnvio(OPERATION_NATURE_OUTRO, "estorno de tarifa")).toBe("estorno de tarifa");
+  });
+
+  it("escolha da lista viaja como veio; espaços em volta não viram valor", () => {
+    expect(naturezaParaEnvio(OPERATION_NATURE_TARIFA, "")).toBe("tarifa_bancaria");
+    expect(naturezaParaEnvio(OPERATION_NATURE_OUTRO, "   ")).toBeNull();
+  });
+
+  it("nada escolhido → `null`, e o backend aceita — a obrigatoriedade é de TELA (AC7)", () => {
+    // Movimento legado nasceu com `operation_nature = NULL` e continua legítimo: forçar
+    // preenchimento retroativo seria reescrever a afirmação do usuário (lição D-3).
+    expect(naturezaParaEnvio("", "")).toBeNull();
+    expect(operationNatureLabel(null)).toBe("");
+  });
+
+  it("um valor livre do backend aparece cru em vez de sumir da tela", () => {
+    expect(operationNatureLabel("tarifa_bancaria")).toBe("Tarifa / juros");
+    expect(operationNatureLabel("cashback")).toBe("cashback");
+  });
+
+  it("⚠️ nenhum rótulo da lista colide com rótulo de SALDO do produto (UX-001 / D-6)", () => {
+    for (const [, rotulo] of OPERATION_NATURES) {
+      expect(rotulo).not.toContain(ROTULO_BANCO);
+      expect(rotulo).not.toBe(TOTAL_EM_CONTAS_LABEL);
+      expect(rotulo).not.toBe(DISPONIVEL_CAIXA_LABEL);
+    }
+  });
+
+  it("o ponteiro para a transferência (8.18) só existe quando ela existe", () => {
+    // A opção "Transferência entre minhas contas" fica na lista de todo jeito — recusar um fato
+    // legítimo é o defeito que esta story combate —, mas apontar para uma tela que não existe
+    // mandaria o usuário para lugar nenhum.
+    expect(ponteiroDaTransferencia(false)).toBeNull();
+    expect(ponteiroDaTransferencia(true)).toContain("transferência entre contas");
+  });
+});
+
+describe("Story 8.17 — o 409 acionável da contagem dupla", () => {
+  const erro409 = (detail: unknown) => ({ response: { status: 409, data: { detail } } });
+
+  it("reconhece pelo `acao`, nunca por substring da mensagem", () => {
+    const acionavel = acaoBaixarPayable(
+      erro409({ acao: ACAO_BAIXAR_PAYABLE, payable_id: "p-1", mensagem: "Existe uma conta…" }),
+    );
+    expect(acionavel).toEqual({ payableId: "p-1", mensagem: "Existe uma conta…" });
+  });
+
+  it("o formato é o MESMO da 8.12 — `acao` dentro de `detail`, não irmão dele", () => {
+    // Dois formatos de erro acionável obrigariam cada tela a saber, por rota, onde procurar o
+    // `acao` — que é como um contrato de erro deixa de ser contrato.
+    expect(
+      acaoBaixarPayable({
+        response: { data: { acao: ACAO_BAIXAR_PAYABLE, payable_id: "p-1" } },
+      }),
+    ).toBeNull();
+  });
+
+  it("não confunde com o 409 de `cadastrar_conta` da 8.12 nem com erro comum", () => {
+    expect(acaoBaixarPayable(erro409({ acao: "cadastrar_conta", mensagem: "x" }))).toBeNull();
+    expect(acaoBaixarPayable(erro409("Movimento inválido"))).toBeNull();
+    expect(acaoBaixarPayable(new Error("rede caiu"))).toBeNull();
+    expect(acaoBaixarPayable(undefined)).toBeNull();
   });
 });

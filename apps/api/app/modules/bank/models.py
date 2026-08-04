@@ -178,6 +178,48 @@ STATUSES: tuple[str, ...] = (
 )
 
 
+# ── Vocabulário de `operation_nature` — SUGERIDO, jamais enum fechado (Story 8.17) ────────────
+#
+# **A pergunta que este campo responde: *"para que serve este movimento?"*** — e ele é um RÓTULO,
+# nunca um fato de dinheiro: não entra em nenhuma fórmula de saldo, não muda `derived_balance`, não
+# muda a divergência da conferência (Story 8.17 AC9).
+#
+# ⚠️ **Este vocabulário NÃO é validado, e a diferença para `KINDS` é deliberada — leia o aviso (c)
+# da docstring do módulo antes de "harmonizar".** `kind` de conta tem COMPORTAMENTO associado
+# (`investment` sai do caixa; `platform_wallet` é recusado), então é validado. Aqui é o oposto:
+# mesmo padrão de `investment_accounts.kind` e `cost_centers.kind` — **texto curto validado por
+# tamanho** (`String(24)`, mais o `max_length` do schema de entrada), com a lista abaixo servindo de
+# **sugestão na UI**. A API aceita qualquer texto que caiba.
+#
+# **Por que a válvula de texto livre é obrigatória** (design Onda 2 §7(a), design-mãe §7.2 D8):
+#
+#     *"O extrato está cheio de coisas que não imaginamos (estorno de tarifa, crédito de convênio,
+#     débito de seguro, cashback). Recusar um fato bancário legítimo porque ele não está na lista
+#     recria a incompletude que a onda combate."*
+#
+# Uma story futura que transformar isto num `Enum`/`CheckConstraint` — ou que fizer o service
+# recusar valor fora da lista — quebra o AC3 da 8.17 e reintroduz exatamente aquela incompletude.
+#
+# `tarifa_bancaria` é o ÚNICO valor novo da Story 8.17; os outros três já eram vocabulário do
+# design-mãe §7.2 (que também lista `receita_servico`, `receita_produto`, `despesa_operacional`,
+# `pro_labore`, `aporte_socio`, `distribuicao_lucro`, `emprestimo`, `estorno` — fora da curadoria
+# da 8.17 de propósito: a lista da UI é CURTA, e "Outro (descreva)" cobre o resto).
+OPERATION_NATURE_TARIFA = "tarifa_bancaria"          # tarifa, juros, taxa de TED (NOVO na 8.17)
+OPERATION_NATURE_TRIBUTO = "tributo"                 # IOF, imposto
+OPERATION_NATURE_TRANSFERENCIA = "transferencia_propria"  # entre contas do próprio dono
+OPERATION_NATURE_RECEITA_FINANCEIRA = "receita_financeira"  # rendimento
+
+# A lista **sugerida** na UI, nesta ordem. `bank/router.py` NÃO a valida e o service NÃO a impõe:
+# quem a consome é o `<select>` do formulário (`apps/web/.../contas.ts`), e o pareamento entre as
+# duas listas tem teste (`test_bank_contagem_dupla.py::test_vocabulario_sugerido_bate_com_a_ui`).
+OPERATION_NATURES: tuple[str, ...] = (
+    OPERATION_NATURE_TARIFA,
+    OPERATION_NATURE_TRIBUTO,
+    OPERATION_NATURE_TRANSFERENCIA,
+    OPERATION_NATURE_RECEITA_FINANCEIRA,
+)
+
+
 class BankTransaction(Base, TenantMixin, TimestampMixin):
     """Uma linha de extrato bancário (Story 8.3). **Plano 3.**
 

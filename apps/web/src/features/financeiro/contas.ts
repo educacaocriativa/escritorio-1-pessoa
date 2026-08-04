@@ -143,6 +143,112 @@ export function isIgnored(tx: BankTransaction): boolean {
   return tx.status === STATUS_IGNORED;
 }
 
+// ── Natureza da operação (`models.OPERATION_NATURES`) — Story 8.17 ───────────────────────────
+//
+// *"Para que serve este movimento?"* — a curadoria que transforma "Novo movimento" (que parece o
+// jeito de registrar qualquer coisa, inclusive um pagamento) num formulário que pergunta a
+// finalidade. É **RÓTULO**, nunca fato de dinheiro: não entra em nenhuma soma de saldo.
+//
+// ⚠️ **Curadoria de UI, NUNCA whitelist.** O backend aceita qualquer texto de até 24 caracteres
+// (`operation_nature` é `String(24)`, vocabulário aberto — design-mãe §7.2). A lista abaixo é
+// SUGESTÃO, e a válvula *"Outro (descreva)"* é obrigatória: *"o extrato está cheio de coisas que
+// não imaginamos (estorno de tarifa, crédito de convênio, débito de seguro, cashback). Recusar um
+// fato bancário legítimo porque ele não está na lista recria a incompletude que a onda combate."*
+// Quem transformar isto num `<select>` sem a válvula quebra o AC3 da Story 8.17.
+
+export const OPERATION_NATURE_TARIFA = "tarifa_bancaria";
+export const OPERATION_NATURE_TRIBUTO = "tributo";
+export const OPERATION_NATURE_TRANSFERENCIA = "transferencia_propria";
+export const OPERATION_NATURE_RECEITA_FINANCEIRA = "receita_financeira";
+
+/**
+ * O valor sentinela do `<select>` para *"Outro (descreva)"*. **Nunca é enviado à API** — quando ele
+ * está escolhido, o que viaja é o texto que o usuário digitou. Começa com `_` justamente para não
+ * poder colidir com um valor real do vocabulário do backend.
+ */
+export const OPERATION_NATURE_OUTRO = "_outro";
+
+/**
+ * Pares [valor, rótulo] na ordem do `<select>`. **Espelho manual** de
+ * `bank/models.py::OPERATION_NATURES` — o pareamento entre as duas listas tem teste dos dois lados
+ * (aqui e em `apps/api/tests/test_bank_contagem_dupla.py`), mesmo padrão de `BANK_ACCOUNT_KINDS`.
+ *
+ * ⚠️ Nenhum destes rótulos pode colidir com `ROTULO_BANCO` ("no banco", que na Projeção nomeia uma
+ * parcela de saldo), `TOTAL_EM_CONTAS_LABEL` nem `DISPONIVEL_CAIXA_LABEL` — a colisão D-6/UX-001
+ * que o épico já pagou para separar. Há teste fixando isso.
+ */
+export const OPERATION_NATURES: ReadonlyArray<readonly [string, string]> = [
+  [OPERATION_NATURE_TARIFA, "Tarifa / juros"],
+  [OPERATION_NATURE_TRIBUTO, "IOF / imposto"],
+  [OPERATION_NATURE_TRANSFERENCIA, "Transferência entre minhas contas"],
+  [OPERATION_NATURE_RECEITA_FINANCEIRA, "Rendimento"],
+];
+
+/** Rótulo da natureza, tolerante a valor livre do backend (mostra o cru em vez de sumir). */
+export function operationNatureLabel(nature: string | null): string {
+  if (!nature) return "";
+  return OPERATION_NATURES.find(([v]) => v === nature)?.[1] ?? nature;
+}
+
+/**
+ * O que sai do formulário para o campo `operation_nature` da API. PURA.
+ *
+ * `escolha` é o valor do `<select>`; `livre` é o que foi digitado no campo de *"Outro"*. Vazio →
+ * `null` (o backend normaliza `strip() or None` do mesmo jeito), porque **movimento legado nasceu
+ * com `NULL` e continua válido** — a UI nunca força preenchimento retroativo (AC7).
+ */
+export function naturezaParaEnvio(escolha: string, livre: string): string | null {
+  const valor = escolha === OPERATION_NATURE_OUTRO ? livre.trim() : escolha.trim();
+  return valor || null;
+}
+
+/**
+ * O ponteiro para a **transferência de verdade** (Story 8.18), ao lado de *"Transferência entre
+ * minhas contas"*: lançar as duas pernas à mão é a digitação dupla que a Regra da Origem §4.8(e)
+ * manda evitar.
+ *
+ * ⚠️ **Condicional de propósito, e hoje o argumento é `false`.** A Story 8.18 **não está em
+ * produção** (não existe `bank_transfers`, nem rota, nem tela) — apontar para ela agora mandaria o
+ * usuário para lugar nenhum. A opção continua na lista mesmo assim, porque **recusar um fato
+ * legítimo é o defeito que esta story combate**. Quando a 8.18 subir, quem a implementar troca o
+ * argumento por `true` no único ponto de chamada.
+ */
+export function ponteiroDaTransferencia(transferenciaDisponivel: boolean): string | null {
+  if (!transferenciaDisponivel) return null;
+  return (
+    "Se o dinheiro foi de uma conta sua para outra, use a transferência entre contas — " +
+    "as duas pernas nascem juntas e você não digita duas vezes."
+  );
+}
+
+// ── O 409 acionável da contagem dupla (contrato da Story 8.17, formato da 8.12) ───────────────
+
+/** A ação que o backend pede quando a saída manual casa com uma conta a pagar. Contrato. */
+export const ACAO_BAIXAR_PAYABLE = "baixar_payable";
+
+export interface DuplicataAcionavel {
+  payableId: string;
+  mensagem: string;
+}
+
+/**
+ * O `detail` estruturado do 409 da contagem dupla, quando for ele. `null` para qualquer outro erro.
+ *
+ * ⚠️ **Reconhecer por `acao`, nunca por substring da mensagem** — mesma disciplina de
+ * `pagar/baixa.ts::acaoCadastrarConta`, e **o mesmo formato**: `{"detail": {"acao", ...}}`, com o
+ * `acao` DENTRO de `detail`. Dois formatos de erro acionável obrigariam cada tela a saber, por
+ * rota, onde procurar — que é como um contrato de erro deixa de ser contrato.
+ */
+export function acaoBaixarPayable(err: unknown): DuplicataAcionavel | null {
+  const detail = (
+    err as {
+      response?: { data?: { detail?: { acao?: string; payable_id?: string; mensagem?: string } } };
+    }
+  )?.response?.data?.detail;
+  if (!detail || typeof detail !== "object" || detail.acao !== ACAO_BAIXAR_PAYABLE) return null;
+  return { payableId: detail.payable_id ?? "", mensagem: detail.mensagem ?? "" };
+}
+
 // ── Exibição do valor assinado ───────────────────────────────────────────────────────────────
 
 export interface SignedAmountView {

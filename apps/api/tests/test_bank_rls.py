@@ -1287,3 +1287,71 @@ def test_baixa_de_payable_isolamento_cross_tenant(app_url: str) -> None:
             "o estorno de A apagou o movimento homônimo de B — o extrato do vizinho perdeu uma "
             "linha por causa de um evento que não é dele"
         )
+
+
+# ── Story 8.17 (IV5) — a guarda de contagem dupla NÃO enxerga o vizinho ───────────────────────
+#
+# É o teste mais valioso desta story em Postgres real, e o motivo é estrutural: a guarda faz `bank`
+# perguntar por uma entidade de OUTRO módulo, e a pergunta roda no caminho de escrita do lançamento
+# manual. Se o probe abrisse sessão própria (escapando da GUC do tenant), ou se alguém "otimizasse"
+# a busca com um filtro manual, o dono levaria um 409 apontando para uma conta a pagar do vizinho —
+# um vazamento de EXISTÊNCIA disfarçado de ajuda, no formato de uma frase que nomeia o fornecedor
+# e o valor de outra empresa. O SQLite não pega isso: lá todas as linhas são visíveis a todos.
+
+
+def test_guarda_de_contagem_dupla_isolamento_cross_tenant(app_url: str) -> None:
+    """**IV5 — tenant B lança R$ 380 no mesmo dia em que A tem uma conta a pagar de R$ 380.**
+
+    Esperado: **201**, sem 409, e sem que o `payable` de A apareça em lugar nenhum. O mesmo
+    lançamento dentro de A dá 409 — é o par membro/não-membro que prova que o teste mede algo.
+    """
+    from app.modules.bank import service as bank_service
+    from app.modules.bank.models import BankTransaction
+    from app.modules.bank.schemas import BankTransactionCreate
+    from app.modules.payables.service import probe_pagamento_duplicado
+
+    tenant_a = str(uuid4())
+    tenant_b = str(uuid4())
+    acc_a = _seed_account(app_url, tenant_a, name="Dupla A", opening=500_000, number="8177-1")
+    acc_b = _seed_account(app_url, tenant_b, name="Dupla B", opening=500_000, number="8177-2")
+    dia = date(2026, 7, 12)
+    bill_a = _seed_payable(app_url, tenant_a, amount_cents=380_00, due=dia)
+
+    # Pré-condição: dentro de A, a guarda ENCONTRA (se este 409 não acontecer, o teste de baixo
+    # estaria medindo o vazio — é o "membro" do par exigido pela regra da instanciação).
+    with _session_for(app_url, tenant_a) as sa:
+        assert probe_pagamento_duplicado(sa, amount_cents=-380_00, posted_at=dia) is not None
+        with pytest.raises(bank_service.DuplicataDePagamento) as exc:
+            bank_service.create_transaction(
+                sa,
+                bank_account_id=acc_a,
+                tenant_id=tenant_a,
+                actor="a",
+                data=BankTransactionCreate(
+                    posted_at=dia, amount_cents=-380_00, description="Aluguel"
+                ),
+            )
+        assert exc.value.candidato.referencia_id == bill_a
+        sa.rollback()
+
+    # ── O que a IV5 mede: em B, o MESMO lançamento passa, e nada de A escapa ─────────────────
+    with _session_for(app_url, tenant_b) as sb:
+        assert probe_pagamento_duplicado(sb, amount_cents=-380_00, posted_at=dia) is None, (
+            "a guarda de contagem dupla enxergou a conta a pagar de outro tenant — o probe está "
+            "abrindo sessão própria (fora da GUC) ou filtrando por fora da RLS"
+        )
+        tx = bank_service.create_transaction(
+            sb,
+            bank_account_id=acc_b,
+            tenant_id=tenant_b,
+            actor="b",
+            data=BankTransactionCreate(
+                posted_at=dia, amount_cents=-380_00, description="Outro pagamento"
+            ),
+        )
+        assert tx.tenant_id == tenant_b and tx.amount_cents == -380_00
+
+    # E o movimento de B não contaminou o saldo de A (nem o contrário).
+    with _session_for(app_url, tenant_a) as sa:
+        assert bank_service.derived_balance(sa, bank_account_id=acc_a, until=dia) == 500_000
+        assert sa.query(BankTransaction).filter(BankTransaction.id == tx.id).count() == 0
