@@ -14,6 +14,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.core import audit, whatsapp
+from app.core.whatsapp.inbound import InboundMessage
 from app.modules.attachments import service as attachments_service
 from app.modules.attachments.models import ALLOWED_TYPES, MAX_BYTES
 from app.modules.attachments.service import AttachmentError
@@ -103,33 +104,6 @@ def resolve_by_verify_token(db: Session, *, verify_token: str) -> PublicWhatsapp
 # ── Ingestão (webhook) ──────────────────────────────────────────────────────
 
 
-def _extract_messages(payload: dict) -> list[tuple[dict, str]]:
-    """Devolve [(mensagem, nome_do_contato)] achatando o formato aninhado do payload da Meta.
-    O `tenant_id` já vem resolvido e validado pelo chamador (ver `ingest_webhook_payload`) — não
-    precisamos extrair `phone_number_id` aqui.
-
-    Este método é chamado DEPOIS que a assinatura do webhook já foi verificada (ver router), mas
-    o CONTEÚDO do payload continua não confiável — a Meta não garante o shape interno. Em vez de
-    `isinstance` a cada nível aninhado (mesmo histórico de gaps do router — ver
-    `router._extract_phone_number_id`), captura a classe inteira de erro de shape inesperado de
-    uma vez: `AttributeError` (`.get()` em algo que não é dict), `TypeError` (iterar algo
-    não-iterável), `KeyError` (defensivo, ex.: `contacts[0]["profile"]` sem essas chaves)."""
-    out: list[tuple[dict, str]] = []
-    try:
-        for entry in payload.get("entry", []):
-            for change in entry.get("changes", []):
-                value = change.get("value", {})
-                contacts = value.get("contacts", [])
-                name = contacts[0]["profile"]["name"] if contacts else "Cliente"
-                for msg in value.get("messages", []):
-                    if not isinstance(msg, dict):
-                        raise WhatsappInboxError("Payload inválido", 400)
-                    out.append((msg, name))
-    except (AttributeError, TypeError, KeyError) as exc:
-        raise WhatsappInboxError("Payload inválido", 400) from exc
-    return out
-
-
 def _get_or_create_client(db: Session, *, tenant_id: str, phone: str, name: str) -> Client:
     client = db.scalar(select(Client).where(Client.phone == phone))
     if client is not None:
@@ -140,21 +114,24 @@ def _get_or_create_client(db: Session, *, tenant_id: str, phone: str, name: str)
     )
 
 
-def ingest_webhook_payload(db: Session, *, tenant_id: str, payload: dict) -> None:
-    """Processa UM payload de webhook para um tenant já resolvido/validado pelo chamador. O
-    router do webhook resolve o `tenant_id` via `PublicWhatsappAccount` (pelo `phone_number_id`)
-    ANTES de chamar esta função, pois precisa do `app_secret` daquele tenant para validar a
-    assinatura do webhook — reaproveitamos aqui o mesmo `tenant_id` já validado, sem resolvê-lo
-    de novo. Idempotente: mensagens com `wa_message_id` já visto são ignoradas (a Meta reentrega
-    o mesmo evento às vezes)."""
-    # Cada mensagem do lote é processada de forma ISOLADA e commitada individualmente: uma mensagem
-    # malformada (campo `text`/mídia com tipo errado, `contacts[0].profile.name` não-string que
-    # quebra o `ClientCreate`, ou qualquer outra falha de UMA mensagem) NUNCA derruba a request
-    # inteira nem bloqueia as demais mensagens válidas do MESMO lote. Mesmo princípio de isolamento
-    # de `notifications/service.py::process_pending` (uma falha por item, logada, sem travar o
-    # resto). A validação estrutural do payload como um todo continua em `_extract_messages` (antes
-    # deste loop) — falha lá é uma classe diferente (não dá nem pra identificar as mensagens) e
-    # ainda levanta `WhatsappInboxError` para a request toda, corretamente.
+def ingest_webhook_payload(
+    db: Session, *, tenant_id: str, messages: list[InboundMessage]
+) -> None:
+    """Processa mensagens JÁ PARSEADAS (Onda 3 — `InboundMessage`, normalizado por
+    `provider.parse_inbound()`, chamado pelo router ANTES desta função) para um tenant já
+    resolvido/validado pelo chamador. Genérico entre Meta e Evolution: nada aqui sabe de qual
+    provider veio a mensagem. Idempotente: mensagens com `wa_message_id` já visto são ignoradas
+    (o provider reentrega o mesmo evento às vezes).
+
+    `from_phone is None` (ex.: `@lid` da Evolution, que esconde o telefone) vira mensagem SEM
+    cliente resolvido (`client_id=None` — bandeja "Não identificados" na tela de Conversas) em
+    vez de adivinhar por heurística (ver Onda 3 da spec)."""
+    # Cada mensagem do lote é processada de forma ISOLADA e commitada individualmente: uma
+    # falha em UMA mensagem (client_id não resolvido, `ClientCreate` com nome inválido, ou
+    # qualquer outra) NUNCA derruba as demais do MESMO lote. Mesmo princípio de isolamento de
+    # `notifications/service.py::process_pending`. A validação de SHAPE do lote (batch malformado)
+    # já aconteceu em `provider.parse_inbound()`, antes desta função ser chamada — o router
+    # converte essa falha em 400 antes de chegar aqui.
     #
     # CRÍTICO — commit POR MENSAGEM (não um único commit no fim do laço): o `db.add(...)` apenas
     # STAGE o insert; a falha real de PERSISTÊNCIA (ex.: `text_body`/caption com surrogate solto ou
@@ -170,67 +147,45 @@ def ingest_webhook_payload(db: Session, *, tenant_id: str, payload: dict) -> Non
     # `tenant_session` com `set_config(..., is_local=false)` + `conn.commit()` no nível da CONEXÃO
     # (escopo de sessão), então o rollback ORM não a reverte e as mensagens seguintes continuam
     # corretamente escopadas por tenant.
-    for msg, contact_name in _extract_messages(payload):
+    for msg in messages:
         try:
-            wa_message_id = msg.get("id")
-            if wa_message_id and db.scalar(
-                select(WhatsappMessage).where(WhatsappMessage.wa_message_id == wa_message_id)
+            if msg.wa_message_id and db.scalar(
+                select(WhatsappMessage).where(WhatsappMessage.wa_message_id == msg.wa_message_id)
             ):
                 continue  # duplicata — ignora
 
-            from_number = msg.get("from", "")
-            kind = msg.get("type", "text")
-            text_body = ""
-            media_status = MEDIA_STATUS_NONE
-            meta_media_id = None
-
-            if kind == "text":
-                text_field = msg.get("text", {})
-                if not isinstance(text_field, dict):
-                    raise WhatsappInboxError("Payload inválido: campo 'text' malformado", 400)
-                text_body = text_field.get("body", "")
-            elif kind in ("image", "audio", "document", "video"):
-                media_obj = msg.get(kind, {})
-                if not isinstance(media_obj, dict):
-                    raise WhatsappInboxError(f"Payload inválido: campo '{kind}' malformado", 400)
-                text_body = media_obj.get("caption", "")
-                media_status = MEDIA_STATUS_PENDING
-                meta_media_id = media_obj.get("id")
+            if msg.from_phone is None:
+                client_id = None
             else:
-                kind = "text"
-                text_body = "[tipo de mensagem não suportado]"
+                client = _get_or_create_client(
+                    db, tenant_id=tenant_id, phone=msg.from_phone, name=msg.push_name
+                )
+                client_id = client.id
 
-            client = _get_or_create_client(
-                db, tenant_id=tenant_id, phone=from_number, name=contact_name
-            )
             db.add(WhatsappMessage(
-                tenant_id=tenant_id, client_id=client.id, direction=DIRECTION_IN, kind=kind,
-                text_body=text_body, media_status=media_status, wa_message_id=wa_message_id,
-                meta_media_id=meta_media_id if kind != "text" else None,
+                tenant_id=tenant_id, client_id=client_id, direction=DIRECTION_IN, kind=msg.kind,
+                text_body=msg.text_body,
+                media_status=MEDIA_STATUS_PENDING if msg.media_ref else MEDIA_STATUS_NONE,
+                wa_message_id=msg.wa_message_id,
+                meta_media_id=msg.media_ref if msg.kind != "text" else None,
                 status="sent",
             ))
             audit.record(
                 db, tenant_id=tenant_id, actor="whatsapp:inbox",
-                action="whatsapp_inbox.message.received", target=client.id,
+                action="whatsapp_inbox.message.received", target=client_id or "unidentified",
             )
             db.commit()  # commita SÓ esta mensagem — transação atômica própria, isolada de
             # qualquer mensagem seguinte do mesmo lote que venha a falhar (ver nota no topo da
             # função sobre por que um único commit no fim do laço, ou flush+rollback parcial,
             # arriscaria desfazer mensagens anteriores já processadas com sucesso).
-        except (AttributeError, TypeError, KeyError, WhatsappInboxError) as exc:
-            db.rollback()  # desfaz só a transação desta mensagem (não a GUC de tenant — ver nota)
-            logger.warning(
-                "[whatsapp_inbox] mensagem malformada ignorada, wa_message_id=%s: %s",
-                msg.get("id") if isinstance(msg, dict) else None, exc,
-            )
-            continue
         except Exception as exc:  # noqa: BLE001 — isola a falha de UMA mensagem (inclui
             # pydantic.ValidationError de ClientCreate E falha de persistência do driver no commit,
             # ex.: text_body/caption com surrogate solto ou NUL); não trava o restante do lote
             # (mesmo princípio de process_pending)
             db.rollback()  # desfaz só a transação desta mensagem (não a GUC de tenant — ver nota)
             logger.warning(
-                "[whatsapp_inbox] falha inesperada processando mensagem, ignorada: %s", exc
+                "[whatsapp_inbox] falha inesperada processando mensagem, ignorada: "
+                "wa_message_id=%s: %s", msg.wa_message_id, exc,
             )
             continue
     # NENHUM db.commit() aqui: cada mensagem já commitou (ou fez rollback) a si mesma acima.

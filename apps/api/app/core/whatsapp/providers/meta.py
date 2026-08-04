@@ -275,26 +275,47 @@ def send_media(
 
 def parse_inbound(payload: dict) -> list[InboundMessage]:
     """Extrai as mensagens do formato aninhado do payload da Meta. Payload não confiável (a
-    Meta não garante o shape interno) — captura a classe inteira de erro de shape inesperado."""
+    Meta não garante o shape interno) — dois níveis de tolerância, preservados do antigo
+    `whatsapp_inbox.service._extract_messages`:
+
+    - Shape do LOTE quebrado (`value` não é dict, `messages` não é uma lista de dicts) — a
+      Meta não conseguiu nem descrever o que mandou; levanta `ValueError` pro chamador decidir
+      (o router converte em 400 — o remetente está errado, não uma mensagem específica).
+    - Campo de UMA mensagem malformado (`text`/mídia não é dict) — isola só aquela mensagem
+      (não entra na lista), sem afetar as demais do mesmo lote nem levantar erro.
+    """
     out: list[InboundMessage] = []
-    try:
-        for entry in payload.get("entry", []):
-            for change in entry.get("changes", []):
-                value = change.get("value", {})
-                contacts = value.get("contacts", [])
+    for entry in payload.get("entry", []):
+        for change in entry.get("changes", []):
+            value = change.get("value", {})
+            if not isinstance(value, dict):
+                raise ValueError("Payload inválido: 'value' malformado")
+            contacts = value.get("contacts", [])
+            try:
                 push_name = contacts[0]["profile"]["name"] if contacts else ""
-                for msg in value.get("messages", []):
-                    if not isinstance(msg, dict):
-                        continue
+            except (AttributeError, TypeError, KeyError) as exc:
+                raise ValueError("Payload inválido: 'contacts' malformado") from exc
+            messages = value.get("messages", [])
+            if not isinstance(messages, list) or any(
+                not isinstance(msg, dict) for msg in messages
+            ):
+                raise ValueError("Payload inválido: 'messages' malformado")
+            for msg in messages:
+                try:
                     wa_message_id = msg.get("id", "")
                     from_phone = msg.get("from") or None
                     kind = msg.get("type", "text")
                     text_body = ""
                     media_ref = None
                     if kind == "text":
-                        text_body = msg.get("text", {}).get("body", "")
+                        text_field = msg.get("text", {})
+                        if not isinstance(text_field, dict):
+                            continue  # isola só esta mensagem — ver docstring
+                        text_body = text_field.get("body", "")
                     elif kind in ("image", "audio", "document", "video"):
                         media_obj = msg.get(kind, {})
+                        if not isinstance(media_obj, dict):
+                            continue  # isola só esta mensagem — ver docstring
                         text_body = media_obj.get("caption", "")
                         media_ref = media_obj.get("id")
                     else:
@@ -304,6 +325,6 @@ def parse_inbound(payload: dict) -> list[InboundMessage]:
                         wa_message_id=wa_message_id, from_phone=from_phone, kind=kind,
                         text_body=text_body, media_ref=media_ref, push_name=push_name,
                     ))
-    except (AttributeError, TypeError, KeyError):
-        return []
+                except (AttributeError, TypeError, KeyError):
+                    continue  # isola só esta mensagem — ver docstring
     return out

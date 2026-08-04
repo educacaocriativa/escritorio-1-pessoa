@@ -7,6 +7,7 @@ from sqlalchemy.exc import IntegrityError
 
 from app.core import whatsapp
 from app.core.audit import AuditEntry
+from app.core.whatsapp.providers import meta
 from app.modules.attachments.models import Attachment
 from app.modules.crm.models import Client
 from app.modules.notifications.models import Notification
@@ -129,10 +130,10 @@ def test_resolve_by_verify_token_rejects_verify_token_with_lone_surrogate(db):
 def test_ingest_creates_lead_for_unknown_number(db):
     _configure_credentials(db)
     inbox_service.ingest_webhook_payload(
-        db, tenant_id=TENANT_ID, payload=_text_message_payload(
+        db, tenant_id=TENANT_ID, messages=meta.parse_inbound(_text_message_payload(
             phone_number_id="phone-123", wa_id="5511999999999",
             from_number="5511999999999", body="Oi, quero saber do cardápio",
-        ),
+        )),
     )
     client = db.scalar(select(Client).where(Client.phone == "5511999999999"))
     assert client is not None
@@ -148,10 +149,10 @@ def test_ingest_records_audit_entry_for_received_message(db):
     db.add(existing)
     db.commit()
     inbox_service.ingest_webhook_payload(
-        db, tenant_id=TENANT_ID, payload=_text_message_payload(
+        db, tenant_id=TENANT_ID, messages=meta.parse_inbound(_text_message_payload(
             phone_number_id="phone-123", wa_id="5511988880000",
             from_number="5511988880000", body="oi, já sou cliente",
-        ),
+        )),
     )
     audit_entry = db.scalar(
         select(AuditEntry).where(AuditEntry.action == "whatsapp_inbox.message.received")
@@ -166,10 +167,10 @@ def test_ingest_reuses_existing_client_by_phone(db):
     db.add(existing)
     db.commit()
     inbox_service.ingest_webhook_payload(
-        db, tenant_id=TENANT_ID, payload=_text_message_payload(
+        db, tenant_id=TENANT_ID, messages=meta.parse_inbound(_text_message_payload(
             phone_number_id="phone-123", wa_id="5511988887777",
             from_number="5511988887777", body="oi",
-        ),
+        )),
     )
     clients = db.scalars(select(Client).where(Client.phone == "5511988887777")).all()
     assert len(clients) == 1  # não duplicou
@@ -181,8 +182,12 @@ def test_ingest_is_idempotent_on_duplicate_wa_message_id(db):
         phone_number_id="phone-123", wa_id="5511977776666",
         from_number="5511977776666", body="oi", msg_id="wamid.dup",
     )
-    inbox_service.ingest_webhook_payload(db, tenant_id=TENANT_ID, payload=payload)
-    inbox_service.ingest_webhook_payload(db, tenant_id=TENANT_ID, payload=payload)
+    inbox_service.ingest_webhook_payload(
+        db, tenant_id=TENANT_ID, messages=meta.parse_inbound(payload)
+    )
+    inbox_service.ingest_webhook_payload(
+        db, tenant_id=TENANT_ID, messages=meta.parse_inbound(payload)
+    )
     all_rows = db.scalars(
         select(WhatsappMessage).where(WhatsappMessage.wa_message_id == "wamid.dup")
     ).all()
@@ -206,42 +211,20 @@ def test_ingest_image_message_marks_media_pending(db):
             }],
         }],
     }
-    inbox_service.ingest_webhook_payload(db, tenant_id=TENANT_ID, payload=payload)
+    inbox_service.ingest_webhook_payload(
+        db, tenant_id=TENANT_ID, messages=meta.parse_inbound(payload)
+    )
     msg = db.scalar(select(WhatsappMessage).where(WhatsappMessage.wa_message_id == "wamid.img"))
     assert msg.kind == "image"
     assert msg.media_status == MEDIA_STATUS_PENDING
 
 
-def test_ingest_raises_on_non_dict_value(db):
-    # `change["value"]` não é dict — `_extract_messages` agora captura essa classe inteira de
-    # erro de shape (AttributeError/TypeError/KeyError) num único try/except e converte em
-    # `WhatsappInboxError`, em vez de deixar o AttributeError escapar sem tratamento.
-    _configure_credentials(db)
-    payload = {"entry": [{"changes": [{"value": "boom"}]}]}
-    with pytest.raises(inbox_service.WhatsappInboxError):
-        inbox_service.ingest_webhook_payload(db, tenant_id=TENANT_ID, payload=payload)
-
-
-def test_ingest_skips_or_rejects_non_dict_message_item(db):
-    # `value["messages"]` é uma string (não uma lista de dicts) — iterar sobre ela produz
-    # caracteres individuais (strings de 1 char), que `_extract_messages` deve rejeitar ANTES de
-    # devolvê-los para `ingest_webhook_payload`. Sem a guarda, `msg.get("id")` no loop de
-    # `ingest_webhook_payload` levantaria um `AttributeError` cru (Gap B da review round 4).
-    _configure_credentials(db)
-    payload = {
-        "entry": [{
-            "changes": [{
-                "value": {
-                    "metadata": {"phone_number_id": "phone-123"},
-                    "contacts": [{"profile": {"name": "Fulano"}, "wa_id": "5511900009999"}],
-                    "messages": "not-a-list",
-                },
-                "field": "messages",
-            }],
-        }],
-    }
-    with pytest.raises(inbox_service.WhatsappInboxError):
-        inbox_service.ingest_webhook_payload(db, tenant_id=TENANT_ID, payload=payload)
+# NOTA (Onda 3): os testes de shape do LOTE malformado (`value` não-dict, `messages` não é uma
+# lista de dicts) MOVERAM para tests/test_whatsapp_inbound_parsing.py
+# (test_meta_parse_inbound_raises_on_non_dict_value,
+# test_meta_parse_inbound_raises_when_messages_is_not_a_list_of_dicts) — essa validação agora
+# vive em `meta.parse_inbound()`, chamado pelo router ANTES de `ingest_webhook_payload`, que só
+# recebe `messages` já parseadas e válidas na forma.
 
 
 def test_ingest_skips_malformed_text_field_without_crashing(db):
@@ -264,7 +247,10 @@ def test_ingest_skips_malformed_text_field_without_crashing(db):
             }],
         }],
     }
-    inbox_service.ingest_webhook_payload(db, tenant_id=TENANT_ID, payload=payload)  # não levanta
+    # não levanta
+    inbox_service.ingest_webhook_payload(
+        db, tenant_id=TENANT_ID, messages=meta.parse_inbound(payload)
+    )
     assert db.scalar(
         select(WhatsappMessage).where(WhatsappMessage.wa_message_id == "w1")
     ) is None
@@ -288,7 +274,10 @@ def test_ingest_skips_malformed_media_field_without_crashing(db):
             }],
         }],
     }
-    inbox_service.ingest_webhook_payload(db, tenant_id=TENANT_ID, payload=payload)  # não levanta
+    # não levanta
+    inbox_service.ingest_webhook_payload(
+        db, tenant_id=TENANT_ID, messages=meta.parse_inbound(payload)
+    )
     assert db.scalar(
         select(WhatsappMessage).where(WhatsappMessage.wa_message_id == "w2")
     ) is None
@@ -314,7 +303,10 @@ def test_ingest_skips_message_with_non_string_contact_name(db):
             }],
         }],
     }
-    inbox_service.ingest_webhook_payload(db, tenant_id=TENANT_ID, payload=payload)  # não levanta
+    # não levanta
+    inbox_service.ingest_webhook_payload(
+        db, tenant_id=TENANT_ID, messages=meta.parse_inbound(payload)
+    )
     assert db.scalar(
         select(WhatsappMessage).where(WhatsappMessage.wa_message_id == "w3")
     ) is None
@@ -346,7 +338,10 @@ def test_ingest_processes_valid_message_even_when_another_in_same_payload_is_mal
             }],
         }],
     }
-    inbox_service.ingest_webhook_payload(db, tenant_id=TENANT_ID, payload=payload)  # não levanta
+    # não levanta
+    inbox_service.ingest_webhook_payload(
+        db, tenant_id=TENANT_ID, messages=meta.parse_inbound(payload)
+    )
 
     assert db.scalar(
         select(WhatsappMessage).where(WhatsappMessage.wa_message_id == "bad-1")
@@ -391,7 +386,10 @@ def test_ingest_persists_valid_message_after_earlier_message_fails_to_encode(db)
             }],
         }],
     }
-    inbox_service.ingest_webhook_payload(db, tenant_id=TENANT_ID, payload=payload)  # não levanta
+    # não levanta
+    inbox_service.ingest_webhook_payload(
+        db, tenant_id=TENANT_ID, messages=meta.parse_inbound(payload)
+    )
 
     assert db.scalar(
         select(WhatsappMessage).where(WhatsappMessage.wa_message_id == "bad-encode-1")

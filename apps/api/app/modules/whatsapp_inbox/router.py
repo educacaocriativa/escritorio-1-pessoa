@@ -10,12 +10,18 @@ from sqlalchemy.orm import Session
 
 from app.core import whatsapp
 from app.core.tenancy import CurrentUser, get_tenant_db, require_module
+from app.core.whatsapp.providers import evolution, meta
 from app.db.session import get_db, get_tenant_session_factory
 from app.modules.whatsapp_inbox import service
 from app.modules.whatsapp_inbox.schemas import SendTemplateRequest, SendTextRequest
+from app.modules.whatsapp_session import service as whatsapp_session_service
 
 public_router = APIRouter(prefix="/public/whatsapp", tags=["whatsapp-inbox-public"])
 router = APIRouter(prefix="/whatsapp-conversations", tags=["whatsapp-inbox"])
+# Alcançável SÓ de dentro da rede interna do Docker — a Evolution não tem rota publicada pelo
+# Traefik/Caddy (ver infra da Onda 1). O segredo no path é defesa em profundidade, não a
+# garantia primária (que é o isolamento de rede).
+internal_router = APIRouter(prefix="/internal/whatsapp", tags=["whatsapp-internal"])
 
 _guard = require_module("crm")
 
@@ -94,11 +100,46 @@ async def receive_webhook(
     ):
         raise HTTPException(status_code=403, detail="Assinatura inválida")
 
+    try:
+        messages = meta.parse_inbound(payload)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
     with session_factory(account.tenant_id) as tdb:
-        try:
-            service.ingest_webhook_payload(tdb, tenant_id=account.tenant_id, payload=payload)
-        except service.WhatsappInboxError as e:
-            raise _err(e) from e
+        service.ingest_webhook_payload(tdb, tenant_id=account.tenant_id, messages=messages)
+
+    return {"status": "ok"}
+
+
+@internal_router.post("/evolution/webhook/{webhook_secret}")
+async def receive_evolution_webhook(
+    webhook_secret: str,
+    request: Request,
+    db: Session = Depends(get_db),
+    session_factory=Depends(get_tenant_session_factory),
+) -> dict:
+    """Webhook da Evolution API — só alcançável de dentro da rede Docker (ver docstring de
+    `internal_router` acima). Resolve o tenant via `PublicWhatsappInstance.webhook_secret`
+    (Onda 2), não por assinatura HMAC (a Evolution não suporta — ver
+    `providers.evolution.verify_webhook_signature`, que existe só pra levantar
+    `EvolutionUnsupportedError` de propósito)."""
+    instance = whatsapp_session_service.resolve_by_webhook_secret(
+        db, webhook_secret=webhook_secret
+    )
+    if instance is None:
+        raise HTTPException(status_code=404, detail="Instância não encontrada")
+
+    body = await request.body()
+    try:
+        payload = json.loads(body) if body else {}
+    except (json.JSONDecodeError, UnicodeDecodeError) as exc:
+        raise HTTPException(status_code=400, detail="JSON inválido") from exc
+    if not isinstance(payload, dict):
+        raise HTTPException(status_code=400, detail="JSON inválido")
+
+    messages = evolution.parse_inbound(payload)
+    with session_factory(instance.tenant_id) as tdb:
+        service.ingest_webhook_payload(tdb, tenant_id=instance.tenant_id, messages=messages)
 
     return {"status": "ok"}
 

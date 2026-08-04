@@ -10,6 +10,7 @@ from __future__ import annotations
 import secrets
 
 import httpx
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.config import settings
@@ -30,6 +31,19 @@ class WhatsappSessionError(Exception):
 
 def _instance_name(tenant_id: str) -> str:
     return f"e1p-{tenant_id}"
+
+
+def resolve_by_webhook_secret(
+    db: Session, *, webhook_secret: str
+) -> PublicWhatsappInstance | None:
+    """Resolve a instância pelo segredo do webhook — chamado numa sessão SEM tenant (`get_db`),
+    ANTES de qualquer autenticação, mesmo padrão de `whatsapp_inbox.resolve_account`. Percorre
+    todas as instâncias comparando o valor DECIFRADO (o segredo não é indexável cifrado) — custo
+    aceitável pelo volume esperado (uma linha por tenant conectado, não por mensagem)."""
+    for instance in db.scalars(select(PublicWhatsappInstance)).all():
+        if instance.webhook_secret == webhook_secret:
+            return instance
+    return None
 
 
 def _headers() -> dict[str, str]:
