@@ -10,7 +10,6 @@ from sqlalchemy.orm import Session
 
 from app.core import whatsapp
 from app.core.tenancy import CurrentUser, get_tenant_db, require_module
-from app.core.whatsapp.providers import evolution, meta
 from app.db.session import get_db, get_tenant_session_factory
 from app.modules.whatsapp_inbox import service
 from app.modules.whatsapp_inbox.schemas import SendTemplateRequest, SendTextRequest
@@ -101,7 +100,7 @@ async def receive_webhook(
         raise HTTPException(status_code=403, detail="Assinatura inválida")
 
     try:
-        messages = meta.parse_inbound(payload)
+        messages = whatsapp.meta.parse_inbound(payload)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
@@ -137,7 +136,7 @@ async def receive_evolution_webhook(
     if not isinstance(payload, dict):
         raise HTTPException(status_code=400, detail="JSON inválido")
 
-    messages = evolution.parse_inbound(payload)
+    messages = whatsapp.evolution.parse_inbound(payload)
     with session_factory(instance.tenant_id) as tdb:
         service.ingest_webhook_payload(tdb, tenant_id=instance.tenant_id, messages=messages)
 
