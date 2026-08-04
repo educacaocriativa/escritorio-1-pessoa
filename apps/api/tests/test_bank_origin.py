@@ -815,6 +815,17 @@ _CHAMADORES_PERMITIDOS: dict[str, str] = {
         "A direção de import `payables → bank` é permitida (Regra dos Planos §1.3d); a volta é "
         "proibida e `test_bank_nao_importa_payables` a reprova."
     ),
+    "modules/receivables/service.py": (
+        "**Story 8.15** — o recebimento fora do trilho (`settle_off_rail`/`update_off_rail_"
+        "payment`) é o SEGUNDO chamador de produção da Regra da Origem, e o primeiro do lado das "
+        "ENTRADAS (`source='charge'`, `amount_cents` POSITIVO). Chama o sincronizador por "
+        "`_sincroniza_movimento`, um ponto só dentro do módulo, na MESMA transação da baixa. "
+        "⚠️ **A permissão é só para o caminho FORA DO TRILHO:** a cobrança paga pelo gateway "
+        "(`mark_paid`) continua sem tocar o razão bancário — o dinheiro dela está na Carteira, e "
+        "escrever movimento bancário ali seria o cruzamento de planos que originou o épico. A "
+        "INVARIANTE DO TRILHO é o que separa os dois, e `tests/test_invariante_do_trilho.py` a "
+        "varre. Direção `receivables → bank` permitida (§1.3d); a volta é proibida."
+    ),
 }
 
 

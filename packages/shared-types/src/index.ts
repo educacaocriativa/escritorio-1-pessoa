@@ -328,7 +328,11 @@ export interface SplitRates {
 }
 
 // ── Contas a Receber ───────────────────────────────────
-export type ChargeStatus = "open" | "paid" | "canceled";
+// ⚠️ **[Story 8.15] `scheduled` — o Pix que o cliente agendou e ainda não caiu.**
+// Nasce **só** pelo caminho fora do trilho (`POST /charges/{id}/settle-externally` com
+// `received_on` futuro); o estado é **derivado da data** no backend, nunca escolhido pelo cliente.
+// O caminho do gateway (webhook) continua sem estado agendado — a assimetria é a informação.
+export type ChargeStatus = "open" | "scheduled" | "paid" | "canceled";
 
 export interface Charge {
   id: UUID;
@@ -352,7 +356,18 @@ export interface Charge {
   recurrence: Recurrence;
   recurrence_group: string | null;
   payment_code: string;
+  // ── A INVARIANTE DO TRILHO, pelos DOIS ponteiros (Story 8.15) ─────────────────────────────
+  // Numa cobrança liquidada, **exatamente um** deles é não-nulo:
+  //   `transaction_id`  → **trilho**: caiu na Carteira da e1p, com split 40/30/20;
+  //   `bank_account_id` → **fora do trilho**: caiu direto na conta bancária do dono, sem split.
+  // ⚠️ **Não existe campo de rota.** Ela é DERIVADA (`features/cobrancas/rota.ts`); um rótulo
+  // persistido pode divergir dos ponteiros e vira a terceira fonte de verdade.
   transaction_id: UUID | null;
+  bank_account_id: UUID | null;
+  bank_transaction_id: UUID | null;
+  // Regime de CAIXA (`paid_at`) × regime de COMPETÊNCIA (`competence_date`) — nunca se invertem.
+  competence_date: string | null;
+  paid_at: string | null;
   created_at: string;
 }
 
@@ -362,6 +377,8 @@ export interface ChargesSummary {
   paid_cents: number;
   open_count: number;
   overdue_count: number;
+  // [Story 8.15] Recebido fora do trilho com data FUTURA — fora de `open_cents` e de `paid_cents`.
+  scheduled_cents: number;
 }
 
 // ── Contas a Pagar ─────────────────────────────────────

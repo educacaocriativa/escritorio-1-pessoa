@@ -6,7 +6,7 @@ Tudo numa única transação por operação.
 from __future__ import annotations
 
 import logging
-from datetime import UTC, date, datetime, time
+from datetime import UTC, date, datetime, time, timedelta
 
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
@@ -14,14 +14,38 @@ from sqlalchemy.orm import Session
 from app.config import settings
 from app.core import ai, audit, payment_gateway, whatsapp
 from app.core.recurrence import advance, occurrences
+
+# O estado é DERIVADO da data, nunca escolhido (Story 8.15 AC5, herdando a 8.14). O helper é
+# **público e neutro** (`app/core/`) exatamente para que os dois lados do dinheiro o compartilhem —
+# **importar, nunca copiar** (`app/core/scheduling.py`, docstring).
+from app.core.scheduling import status_por_data
 from app.db.base import _uuid
+
+# ⚠️ **Duas palavras `scheduled` neste arquivo, e elas NÃO são a mesma coisa** — a mesma colisão que
+# `payables/service.py` documenta desde a 8.14. O `scheduled` da Agenda quer dizer *"este evento
+# ainda está pendente"*; o `scheduled` de `receivables` (Story 8.15) quer dizer *"o crédito já tem
+# dia marcado"* — que, do ponto de vista da Agenda, deixa o evento **`done`**. Os dois vocabulários
+# apontam para lados opostos no mesmo instante, então o da Agenda entra com prefixo: um `import` nu
+# faria a colisão passar como sombreamento silencioso.
 from app.modules.agenda.models import (
     KIND_COBRANCA_RECEBER,
     PRIORITY_NORMAL,
-    STATUS_DONE,
-    STATUS_SCHEDULED,
     AgendaEvent,
 )
+from app.modules.agenda.models import (
+    STATUS_DONE as AGENDA_STATUS_DONE,
+)
+from app.modules.agenda.models import (
+    STATUS_SCHEDULED as AGENDA_STATUS_PENDENTE,
+)
+
+# ⚠️ **A direção de import de NEGÓCIO → BANCO (Regra dos Planos §1.3d, Story 8.9 AC10).**
+# `receivables` **pode** importar `app.modules.bank`; `app.modules.bank` **nunca** importa
+# `receivables`. A volta é proibida e o gate `test_bank_nao_importa_payables` (AST **e** texto cru)
+# a reprova.
+from app.modules.bank import origin as bank_origin
+from app.modules.bank import service as bank_service
+from app.modules.bank.models import SOURCE_CHARGE, BankAccount
 from app.modules.chart_of_accounts import service as chart_service
 from app.modules.contracts import service as contracts_service
 from app.modules.cost_centers import service as cost_centers_service
@@ -31,6 +55,7 @@ from app.modules.receivables.models import (
     STATUS_CANCELED,
     STATUS_OPEN,
     STATUS_PAID,
+    STATUS_SCHEDULED,
     Charge,
 )
 from app.modules.receivables.schemas import ChargeCreate
@@ -57,6 +82,53 @@ class ReceivableError(Exception):
     def __init__(self, message: str, status_code: int = 400):
         super().__init__(message)
         self.status_code = status_code
+        # `None` = o router serializa `str(e)` como sempre. Só o erro ACIONÁVEL abaixo preenche.
+        self.detail: dict | None = None
+
+
+# ── O 409 ACIONÁVEL, no MESMO formato que a Story 8.12 fixou (AC9) ────────────────────────────
+#
+# ⚠️ **A string é duplicada de `payables.service.ACAO_CADASTRAR_CONTA` DE PROPÓSITO**, e a sincronia
+# é garantida por **teste**, não por comentário: `test_receivables_off_rail.py::
+# test_a_acao_do_409_e_a_MESMA_string_de_payables` compara as duas constantes. Fazer `receivables`
+# importar `payables` só por causa de uma palavra seria acoplamento gratuito entre dois módulos de
+# negócio que, por design, não se conhecem — exatamente o motivo pelo qual
+# `app/core/scheduling.py` nasceu neutro (correção do @po na 8.14). É o mesmo precedente de
+# `_INVESTMENT_REF_PREFIX` neste arquivo, com a diferença de que aqui existe um teste no lugar do
+# comentário cruzado.
+ACAO_CADASTRAR_CONTA = "cadastrar_conta"
+
+SEM_CONTA_MSG = (
+    "Para registrar que você recebeu direto na conta, o e1p precisa saber em qual conta bancária "
+    "o dinheiro caiu — é isso que faz o crédito aparecer no seu extrato e a conferência valer "
+    "alguma coisa. Cadastre a sua conta bancária uma vez e o registro segue normalmente."
+)
+
+_CONTA_ARQUIVADA_MSG = (
+    "A conta bancária escolhida está arquivada e não recebe lançamentos novos. Escolha outra "
+    "conta ou cadastre a conta que você usa hoje — com o saldo de abertura do dia."
+)
+
+
+class ContaBancariaNecessaria(ReceivableError):
+    """**409 ACIONÁVEL** — o formato do payload é CONTRATO, não detalhe de implementação.
+
+        {"detail": {"acao": "cadastrar_conta", "mensagem": "..."}}
+
+    Mesmo shape da Story 8.12 (`payables.service.ContaBancariaNecessaria`), consumido pela mesma
+    tela de frontend (`features/pagar/baixa.ts::acaoCadastrarConta`, que reconhece por `acao` e
+    **nunca** por substring da mensagem). Inventar um segundo formato aqui obrigaria a UI a
+    aprender duas maneiras de reconhecer a mesma situação — que é como um contrato de erro deixa
+    de ser contrato.
+
+    ⚠️ **Nunca use este erro para uma conta que EXISTE em outro tenant.** Ali a resposta é **404**
+    (`bank_service.get_account`, fail-closed pela RLS): 409 confirmaria a existência da linha.
+    """
+
+    def __init__(self, mensagem: str = ""):
+        mensagem = mensagem or SEM_CONTA_MSG
+        super().__init__(mensagem, 409)
+        self.detail = {"acao": ACAO_CADASTRAR_CONTA, "mensagem": mensagem}
 
 
 def _payment_code(method: str, charge_id: str) -> str:
@@ -289,7 +361,8 @@ def reschedule_charge(
             day_start = datetime.combine(due_date, time.min, tzinfo=UTC)
             ev.starts_at = day_start
             ev.ends_at = day_start.replace(hour=23, minute=59)
-            ev.status = STATUS_SCHEDULED  # volta a "agendado" (deixa de ficar vermelho se atrasara)
+            # Volta a "pendente" na Agenda (deixa de ficar vermelho se atrasara).
+            ev.status = AGENDA_STATUS_PENDENTE
     audit.record(
         db, tenant_id=tenant_id, actor=actor, action="receivable.reschedule", target=charge.id
     )
@@ -345,7 +418,7 @@ def update_charge(db: Session, *, charge_id: str, tenant_id: str, actor: str, da
             day_start = datetime.combine(charge.due_date, time.min, tzinfo=UTC)
             ev.starts_at = day_start
             ev.ends_at = day_start.replace(hour=23, minute=59)
-            ev.status = STATUS_SCHEDULED
+            ev.status = AGENDA_STATUS_PENDENTE
         if data.amount_cents is not None:
             ev.amount_cents = charge.amount_cents
         if data.description is not None:
@@ -386,7 +459,23 @@ def mark_paid(db: Session, *, charge_id: str, tenant_id: str, actor: str, by_ai:
     charge = db.scalar(select(Charge).where(Charge.id == charge_id).with_for_update())
     if charge is None:
         raise ReceivableError("Cobrança não encontrada", 404)
-    if charge.status == STATUS_PAID:
+    # ── ⚠️ **[Story 8.15, DEFESA 4] O no-op do webhook atrasado deixa de ser ACIDENTE.** ────────
+    #
+    # Até aqui esta linha era só a guarda de reenvio de webhook (at-least-once). A partir do
+    # `settle_off_rail`, ela **também** é o que impede um webhook do gateway, chegando DEPOIS de o
+    # dono ter registrado que recebeu direto na conta, de criar uma `Transaction` + um
+    # `PlatformEarning` sobre dinheiro que **nunca passou pela e1p** — GMV inflado no painel do
+    # Master, sem estorno possível (a dívida `platform_earnings → transaction` segue aberta).
+    #
+    # ⚠️ **`scheduled` ENTROU AQUI, e sem ele a defesa tem um buraco de dias:** uma cobrança
+    # liquidada fora do trilho com data futura fica `scheduled` até o worker promovê-la, e um
+    # webhook nessa janela atravessaria um `if` que só olhasse `STATUS_PAID`.
+    #
+    # ⚠️ **Se você for refinar esta idempotência** (ex.: *"reenvio só é no-op se o
+    # `gateway_charge_id` for o mesmo"*), leia `test_receivables_off_rail.py::
+    # test_webhook_apos_recebimento_fora_do_trilho_e_noop` **antes**: o silêncio aqui é escolhido,
+    # não herdado.
+    if charge.status in (STATUS_PAID, STATUS_SCHEDULED):
         return charge
     if charge.status == STATUS_CANCELED:
         raise ReceivableError("Cobrança cancelada não pode ser paga", 409)
@@ -406,11 +495,430 @@ def mark_paid(db: Session, *, charge_id: str, tenant_id: str, actor: str, by_ai:
     if charge.agenda_event_id:
         ev = db.get(AgendaEvent, charge.agenda_event_id)
         if ev is not None:
-            ev.status = STATUS_DONE  # não fica "atrasado" na agenda
+            ev.status = AGENDA_STATUS_DONE  # não fica "atrasado" na agenda
     audit.record(db, tenant_id=tenant_id, actor=actor, action="receivable.paid", target=charge.id)
     db.commit()
     db.refresh(charge)
     return charge
+
+
+# ══════════════════════════════════════════════════════════════════════════════════════════════
+# A PORTA FORA DO TRILHO (Story 8.15) — e a INVARIANTE DO TRILHO que ela mantém de pé
+# ══════════════════════════════════════════════════════════════════════════════════════════════
+#
+# > **Para toda `Charge` liquidada, exatamente UM de `transaction_id` e `bank_account_id` é
+# > não-nulo. Nunca os dois, nunca nenhum.**
+# >
+# > - `transaction_id IS NOT NULL` → **trilho** (plano 1): split 40/30/20 aplicado,
+# >   `PlatformEarning` criado, **zero** movimento bancário. O dinheiro está na Carteira da e1p e
+# >   só encosta na conta do dono no payout (Onda 3);
+# > - `bank_account_id IS NOT NULL` → **fora do trilho** (plano 3): **zero** `Transaction`,
+# >   **zero** `PlatformEarning`, um `bank_transaction` de crédito. O dinheiro nunca passou
+# >   pela e1p.
+#
+# **NÃO existe coluna `payment_route`**: a rota é DERIVADA dos dois ponteiros
+# (`"trilho" if charge.transaction_id else "banco"`). Um rótulo separado pode divergir do fato e
+# vira a terceira fonte de verdade — a lição D-3, aplicada preventivamente. O gate
+# `test_money_planes.py::test_origin_type_e_payment_route_nao_existem` reprova quem a criar.
+#
+# A varredura da invariante mora em `tests/test_invariante_do_trilho.py`; as outras quatro defesas,
+# em `tests/test_receivables_off_rail.py`. **Nenhuma delas é "tomar cuidado".**
+
+
+def _today() -> date:
+    """Hoje em UTC — a MESMA âncora de `is_overdue`, `summary` e `payables._today`."""
+    return datetime.now(UTC).date()
+
+
+def _traduz_bank_error(call):
+    """Executa uma chamada ao módulo `bank` traduzindo `BankError` → `ReceivableError`.
+
+    A fronteira de módulo existe também para os ERROS: sem esta tradução, um `BankError` subindo
+    de `sync_origin_movement` atravessaria o `except ReceivableError` do router e viraria **500** —
+    um 422 legítimo (data, valor) apareceria ao usuário como falha do servidor. Mesma disciplina de
+    `payables.service._traduz_bank_error`; o `status_code` é preservado.
+    """
+    try:
+        return call()
+    except bank_service.BankError as e:
+        raise ReceivableError(str(e), e.status_code) from e
+
+
+def _conta_do_recebimento(db: Session, bank_account_id: str) -> BankAccount:
+    """Resolve a conta do recebimento: **409 acionável, 404, 409 — nesta ordem, e por este motivo.**
+
+    Mesma escada de `payables.service._conta_de_baixa` (AC9 manda reusar a decisão F7 inteira,
+    não só o formato do corpo):
+
+    1. **Tenant sem NENHUMA conta ativa → 409 acionável**, *antes* de olhar o id recebido. É esta
+       ordem que torna o erro alcançável a partir da rota: como `bank_account_id` é obrigatório, um
+       tenant sem contas só consegue mandar um id qualquer — e um 404 ali diria "esse id não
+       existe" quando o fato é "você ainda não cadastrou conta nenhuma". Também **não vaza
+       existência**: com zero contas próprias, *todo* id recebe a mesma resposta, inclusive o id
+       real de outro tenant;
+    2. **Id desconhecido (ou de outro tenant, escondido pela RLS) → 404 fail-closed**;
+    3. **Conta arquivada → 409 acionável**: a conta existe, mas encerrada não recebe lançamento
+       novo, e a saída é a mesma do caso (1).
+    """
+    if not bank_service.list_accounts(db):
+        raise ContaBancariaNecessaria()
+    acc = _traduz_bank_error(lambda: bank_service.get_account(db, bank_account_id))
+    if acc.archived_at is not None:
+        raise ContaBancariaNecessaria(_CONTA_ARQUIVADA_MSG)
+    return acc
+
+
+def _valida_data_do_recebimento(received_on: date, acc: BankAccount) -> date:
+    """A guarda da data do crédito: **só o PISO**. 422 — nunca trunca em silêncio.
+
+    A comparação NÃO é reescrita aqui: quem a aplica é `bank.service.validate_posted_at_floor`,
+    pública desde a 8.9 exatamente para isto. O que esta função acrescenta é a **mensagem que
+    nomeia as duas saídas** (mover a abertura da conta ou escolher outra) — a genérica do módulo
+    `bank` explica a fórmula do saldo, e quem está registrando um Pix antigo precisa saber o que
+    fazer, não por que a soma dobraria.
+
+    **Sem teto**, e a ausência é a regra do AC5: `received_on` futuro é um recebimento **agendado**
+    (`scheduled`), não um erro. O corte é por `source` — `SOURCES_EXTERNA` continua recusando data
+    futura em `bank.service._validate_posted_at`.
+    """
+    try:
+        bank_service.validate_posted_at_floor(received_on, acc)
+    except bank_service.BankError as e:
+        raise ReceivableError(
+            f"Esta conta bancária só existe no e1p a partir de "
+            f"{acc.opening_date.isoformat()}, então um recebimento em "
+            f"{received_on.isoformat()} não entraria no extrato dela. Mova a abertura desta conta "
+            f"para antes de {received_on.strftime('%d/%m')} e informe o saldo daquele dia, ou "
+            "escolha outra conta.",
+            422,
+        ) from e
+    return received_on
+
+
+def _descricao_do_movimento(charge: Charge, client: Client | None) -> str:
+    """A descrição que vai para `bank_transactions.raw_description`.
+
+    Quem lê o extrato está procurando *de quem* veio o dinheiro e *por quê* — os dois quando
+    houver os dois. Espelho de `payables._descricao_do_movimento`, com a ordem invertida porque
+    numa entrada o pagador é o que identifica a linha.
+    """
+    partes = [texto for texto in (client.name if client else "", charge.description) if texto]
+    return " — ".join(partes) or "Recebimento"
+
+
+def _data_de_caixa(charge: Charge) -> date | None:
+    """`charge.paid_at` como data de calendário em UTC (ou `None`).
+
+    Coluna `DateTime(timezone=True)`: o Postgres devolve tz-aware, o SQLite dos testes devolve
+    naive (já em UTC). Normalizar aqui é o mesmo cuidado de `payables._as_utc_date`, na versão
+    que basta para um atributo do ORM (aquela existe para o TEXTO que o SQLite devolve em
+    agregações `MIN/MAX`, que não acontece neste caminho).
+    """
+    if charge.paid_at is None:
+        return None
+    dt = charge.paid_at
+    return (dt if dt.tzinfo is None else dt.astimezone(UTC)).date()
+
+
+def _sincroniza_movimento(
+    db: Session,
+    charge: Charge,
+    *,
+    tenant_id: str,
+    actor: str,
+    client: Client | None,
+    bank_account_id: str | None,
+    posted_at: date | None,
+) -> None:
+    """O **único** ponto deste módulo que escreve o razão bancário. Não commita.
+
+    ⚠️ **Nenhum segundo caminho de escrita.** Se aparecer um `BankTransaction(...)` com
+    `source='charge'` fora de `bank.origin.sync_origin_movement`, a Regra da Origem fica
+    inauditável — o gate `test_chamadores_do_sincronizador_estao_na_allowlist` existe para que a
+    segunda porta não passe despercebida (e este módulo entrou na allowlist com esta story).
+
+    O cache (`charge.bank_transaction_id`) é gravado com **o que o sincronizador devolveu**,
+    sempre — é assim que ele nunca diverge do `origin_id`.
+    """
+    movimento = _traduz_bank_error(
+        lambda: bank_origin.sync_origin_movement(
+            db,
+            tenant_id=tenant_id,
+            actor=actor,
+            source=SOURCE_CHARGE,
+            origin_id=charge.id,
+            bank_account_id=bank_account_id,
+            posted_at=posted_at,
+            # **POSITIVO — é entrada.** O sinal é interno à tabela de movimentos (invariante (b)
+            # de `BankTransaction`) e `+abs()` é deliberado: `charge.amount_cents` já é `> 0` por
+            # schema, mas um dado legado negativo viraria uma SAÍDA no extrato.
+            amount_cents=abs(charge.amount_cents) if bank_account_id else None,
+            description=_descricao_do_movimento(charge, client),
+            # PII de terceiro: o cliente nunca contratou com a e1p. A Onda 2 não chama IA em lugar
+            # nenhum (epic §4.4), então o anonimizador não entra aqui — ele volta a ser obrigatório
+            # nas Ondas 4 e 5.
+            counterparty_name=client.name if client else "",
+            counterparty_document=(client.document if client and client.document else ""),
+            operation_nature=None,
+        )
+    )
+    charge.bank_account_id = bank_account_id
+    charge.bank_transaction_id = movimento.id if movimento is not None else None
+
+
+def settle_off_rail(
+    db: Session,
+    *,
+    charge_id: str,
+    tenant_id: str,
+    actor: str,
+    bank_account_id: str,
+    received_on: date | None = None,
+) -> Charge:
+    """Registra que a cobrança foi recebida DIRETO na conta do dono, **fora do trilho**. Commita.
+
+    > **NUNCA chama `wallet`. NUNCA cria `Transaction` nem `PlatformEarning`.** Gera um
+    > `bank_transaction` de **crédito** via `sync_origin_movement(source='charge')`, na MESMA
+    > transação. `transaction_id` permanece **NULL para sempre** — é a metade "banco" da
+    > INVARIANTE DO TRILHO.
+
+    **Por que esta porta existe:** hoje não há caminho nenhum. O botão "Marcar paga" foi removido
+    de propósito (só o webhook do gateway marca pago), então a cobrança paga por fora fica **em
+    aberto para sempre** — o dinheiro não aparece em lugar nenhum e a régua segue mandando lembrete
+    a quem já pagou.
+
+    **O que muda, item a item** (AC2):
+      - `status` = `paid` **ou** `scheduled`, **derivado de `received_on`** (AC5);
+      - `paid_at` = `received_on` à meia-noite UTC (**regime de caixa**);
+      - `competence_date` **intocada** (**regime de competência** — `receivables/models.py:6-9`,
+        regra dura: mudar a data do recebimento move caixa, Projeção e o movimento bancário;
+        **não** move DRE nem Lucratividade);
+      - `bank_account_id` preenchido, `transaction_id` **NULL**;
+      - o evento da Agenda vai para `done` — a cobrança sai da régua **porque deixou de ser
+        `open`**, não porque alguém a excluiu;
+      - um `bank_transaction` de `+amount_cents`, `source='charge'`, `origin_id=charge.id`,
+        `status='matched'`, contraparte herdada do `Client`.
+
+    **A ordem das guardas é a defesa 5** (AC8): `transaction_id IS NOT NULL` é checado **antes** da
+    idempotência de status. Invertido, uma cobrança já paga pelo trilho cairia no `return` de
+    idempotência e a tentativa de "corrigi-la" para fora do trilho passaria em silêncio — que é
+    exatamente transformar dinheiro de plataforma em dinheiro de banco, o cruzamento de planos que
+    originou o épico.
+
+    **`scheduled` NÃO é idempotente aqui, e isso é o ponto** (mesma decisão de
+    `payables.apply_paid`): uma cobrança agendada que recebe um registro novo (com o dia em que o
+    dinheiro caiu de verdade) **atravessa** a guarda e re-deriva o estado. O movimento não duplica
+    porque `sync_origin_movement` é upsert sobre `(source, origin_id)`: ele **move**, nunca cria
+    um segundo. Já liquidada (`paid`) volta **inalterada**, sem re-datar — para corrigir conta ou
+    data existe `update_off_rail_payment`.
+
+    Args:
+        bank_account_id: **OBRIGATÓRIO, sem default e sem `| None`** (AC9, fundador F7). Não há
+            fallback para a conta primária aqui: o pré-preenchimento é da UI, e *"o que o
+            pré-preenchimento evita é **construir**, não **confirmar**"*.
+        received_on: `None` ⇒ **hoje**. Diferente do `payables.apply_paid` (que cai no `due_date`,
+            fundador F10) **de propósito**: lá o gesto é *"paguei — provavelmente no vencimento"*;
+            aqui o gesto é *"caiu na minha conta"*, um fato que o dono está observando agora. A
+            assimetria é a mesma que separa `mark_paid` (fato atestado por terceiro) desta função.
+    """
+    charge = db.scalar(select(Charge).where(Charge.id == charge_id).with_for_update())
+    if charge is None:
+        raise ReceivableError("Cobrança não encontrada", 404)
+    if charge.status == STATUS_CANCELED:
+        raise ReceivableError("Cobrança cancelada não pode ser recebida", 409)
+    # DEFESA 5 — a direção inversa, e ela vem ANTES da idempotência (ver a docstring).
+    if charge.transaction_id is not None:
+        raise ReceivableError(
+            "Esta cobrança já foi paga pelo trilho do e1p: o dinheiro entrou na Carteira, com o "
+            "split aplicado, e não caiu direto na sua conta bancária. Registrá-la como recebida "
+            "fora do trilho faria o mesmo dinheiro existir nos dois planos.",
+            409,
+        )
+    if charge.status == STATUS_PAID:
+        return charge  # idempotente: já liquidada fora do trilho, não re-data
+
+    # Ordem deliberada: TODA validação antes de qualquer escrita (mesma disciplina de
+    # `bank.origin.sync_origin_movement`).
+    acc = _conta_do_recebimento(db, bank_account_id)
+    received_on = _valida_data_do_recebimento(
+        received_on if received_on is not None else _today(), acc
+    )
+
+    charge.status = status_por_data(
+        received_on, _today(), status_agendado=STATUS_SCHEDULED, status_pago=STATUS_PAID
+    )
+    # Meia-noite UTC da data de caixa — mesma convenção de `payables.apply_paid` e o mesmo cuidado
+    # de data-de-calendário que o bug de fuso da Agenda (`CLAUDE.md` §6.0) ensinou.
+    charge.paid_at = datetime.combine(received_on, time.min, tzinfo=UTC)
+    if charge.agenda_event_id:
+        ev = db.get(AgendaEvent, charge.agenda_event_id)
+        if ev is not None:
+            # `done` também no caminho `scheduled`: do ponto de vista da Agenda a cobrança deixou
+            # de ser uma pendência: ela tem dia marcado. É o que permite `promote_scheduled`
+            # promover sem tocar na Agenda.
+            ev.status = AGENDA_STATUS_DONE
+    client = db.get(Client, charge.client_id) if charge.client_id else None
+    _sincroniza_movimento(
+        db,
+        charge,
+        tenant_id=tenant_id,
+        actor=actor,
+        client=client,
+        bank_account_id=acc.id,
+        posted_at=received_on,
+    )
+    audit.record(
+        db, tenant_id=tenant_id, actor=actor, action="receivable.settle_off_rail", target=charge.id
+    )
+    db.commit()
+    db.refresh(charge)
+    return charge
+
+
+def update_off_rail_payment(
+    db: Session,
+    *,
+    charge_id: str,
+    tenant_id: str,
+    actor: str,
+    bank_account_id: str | None = None,
+    received_on: date | None = None,
+) -> Charge:
+    """Corrige o **recebimento fora do trilho**: a conta bancária e/ou a data. Commita.
+
+    Simétrica de `payables.update_payment`, e existe pelo mesmo motivo (F-D10): corrigir é evento
+    **normal**, não excepcional. Sem ela, a alternativa seria desfazer + refazer — delete + recreate
+    do movimento bancário e o evento da Agenda indo e voltando.
+
+    - **restrita a cobranças fora do trilho** (`transaction_id IS NULL AND bank_account_id IS NOT
+      NULL`). Cobrança do trilho → **409** (não há conta bancária a corrigir: o dinheiro está na
+      Carteira); cobrança em aberto → **409** (não há recebimento a corrigir);
+    - aceita `paid` **e** `scheduled`, e mudar `received_on` **move o estado** entre os dois —
+      pela **mesma** derivação de `settle_off_rail` (`status_por_data`), nunca uma segunda cópia;
+    - trocar a conta → **UPDATE na MESMA linha** do movimento (move, nunca duplica). Trocar a data
+      → UPDATE de `posted_at`, revalidado contra a `opening_date` da conta de **destino**, que pode
+      ter mudado no mesmo PATCH;
+    - `competence_date` **não** é tocado (caixa × competência não se invertem).
+
+    ⚠️ **`ChargeUpdate` NÃO é tocado, e a guarda é dupla** — a mesma disciplina que
+    `bank.update_transaction` e `payables.update_payment` documentam "de propósito": o campo não
+    existe no schema genérico **e** nenhuma função faz `setattr` genérico. Mantendo o PATCH
+    genérico intacto, ninguém torna um campo editável em cobrança paga por acidente.
+
+    **Não desfaz nada.** Desfazer um recebimento fora do trilho está FORA de escopo (F-D4) e não é
+    o mesmo que corrigir conta ou data — que é o erro provável.
+    """
+    charge = db.scalar(select(Charge).where(Charge.id == charge_id).with_for_update())
+    if charge is None:
+        raise ReceivableError("Cobrança não encontrada", 404)
+    if charge.transaction_id is not None:
+        raise ReceivableError(
+            "Esta cobrança entrou pelo trilho do e1p (o dinheiro caiu na Carteira, com o split "
+            "aplicado). Não há conta bancária nem data de crédito a corrigir aqui.",
+            409,
+        )
+    if charge.bank_account_id is None:
+        raise ReceivableError(
+            "Só uma cobrança registrada como recebida fora do trilho tem recebimento a corrigir. "
+            "Para mexer em valor, vencimento ou descrição de uma cobrança em aberto, use a edição "
+            "da cobrança.",
+            409,
+        )
+
+    destino_id = bank_account_id if bank_account_id is not None else charge.bank_account_id
+    acc = _conta_do_recebimento(db, destino_id)
+
+    if received_on is None:
+        # Data ausente = "não altera". `paid_at` é a data de caixa autoritativa.
+        received_on = _data_de_caixa(charge) or charge.due_date
+    received_on = _valida_data_do_recebimento(received_on, acc)
+
+    charge.paid_at = datetime.combine(received_on, time.min, tzinfo=UTC)
+    charge.status = status_por_data(
+        received_on, _today(), status_agendado=STATUS_SCHEDULED, status_pago=STATUS_PAID
+    )
+    client = db.get(Client, charge.client_id) if charge.client_id else None
+    _sincroniza_movimento(
+        db,
+        charge,
+        tenant_id=tenant_id,
+        actor=actor,
+        client=client,
+        bank_account_id=acc.id,
+        posted_at=received_on,
+    )
+    audit.record(
+        db,
+        tenant_id=tenant_id,
+        actor=actor,
+        action="receivable.payment_update",
+        target=charge.id,
+    )
+    db.commit()
+    db.refresh(charge)
+    return charge
+
+
+def promote_scheduled(
+    db: Session, *, tenant_id: str, actor: str, today: date | None = None
+) -> int:
+    """`scheduled → paid` para toda cobrança cujo dia do crédito chegou. Devolve quantas promoveu.
+
+    **O irmão de `payables.service.promote_scheduled`, com a MESMA assinatura** (correção do @po na
+    8.15 AC5): a **etapa 4** de `app.worker.run_sweep` chama as **duas** na mesma varredura — é a
+    mesma pergunta (*"já chegou o dia?"*) sobre os dois lados do dinheiro, e uma quinta etapa seria
+    a mesma regra em dois lugares.
+
+    ⚠️ **O SALDO DERIVADO NÃO DEPENDE DESTE WORKER** (F-D11). O movimento bancário nasceu com
+    `posted_at` = a data do crédito, e o saldo é **função da data** (`_movements_sums` filtra
+    `posted_at <= until`): ele entra sozinho quando o dia chega, com o worker desligado, parado ou
+    nem instalado. O que esta função move é **só o `status`** — para a lista de cobranças e o
+    `scheduled_cents` do resumo pararem de mostrar como "agendada" uma cobrança que já caiu. A
+    mesma disciplina vale para a Projeção (o recorte `paid_at::date > hoje` do AC6 faz a aritmética
+    depender da **data**, não do status materializado).
+
+    **Não toca em mais nada**, e cada omissão é deliberada:
+    - `paid_at` **não** é re-datado (é a data de caixa que o dono informou; sobrescrevê-la por
+      "hoje" inventaria um fato de caixa — Artigo IV);
+    - `bank_account_id` / `bank_transaction_id` intactos (o movimento já está certo);
+    - `transaction_id` **jamais** — promover não é entrar no trilho, e a Invariante do Trilho tem
+      de sobreviver à promoção (há teste varrendo depois do worker);
+    - o evento da Agenda já está `done` desde o registro;
+    - `competence_date` **jamais** (caixa × competência não se invertem).
+
+    **Idempotente:** rodar duas vezes seguidas promove zero na segunda. `today` é **injetável** —
+    um contador preso ao relógio da máquina não é testável. Isolamento por RLS, sem filtro manual
+    de `tenant_id` (Regra de Ouro nº 1).
+    """
+    today = today or _today()
+    # Limite de TIMESTAMP em vez de `::date` (dialeto-agnóstico — o SQLite dos testes não tem
+    # `::date`), mesmo padrão de `payables.promote_scheduled`. "A data já chegou" é
+    # `paid_at::date <= today`, ou seja, `paid_at < meia-noite UTC de today+1`.
+    limite = datetime.combine(today + timedelta(days=1), time.min, tzinfo=UTC)
+    vencidas = list(
+        db.scalars(
+            select(Charge).where(
+                Charge.status == STATUS_SCHEDULED,
+                # Agendada sem data de caixa é estado inalcançável (a derivação exige a data); a
+                # guarda existe porque `paid_at IS NULL` compararia como desconhecido em SQL e a
+                # linha ficaria presa em `scheduled` para sempre, sem ninguém notar.
+                Charge.paid_at.is_not(None),
+                Charge.paid_at < limite,
+            )
+        ).all()
+    )
+    for charge in vencidas:
+        charge.status = STATUS_PAID
+        audit.record(
+            db,
+            tenant_id=tenant_id,
+            actor=actor,
+            action="receivable.scheduled_promoted",
+            target=charge.id,
+        )
+    if vencidas:
+        db.commit()
+    return len(vencidas)
 
 
 def webhook_confirm(*, session_factory, tenant_id: str, charge_id: str) -> str:
@@ -487,9 +995,30 @@ def process_webhook(*, session_factory, body: dict, token: str | None) -> dict:
 
 
 def cancel_charge(db: Session, *, charge_id: str, tenant_id: str, actor: str) -> Charge:
+    """⚠️ **[Story 8.15] `scheduled` ENTROU na guarda, e a omissão seria um movimento órfão.**
+
+    Antes desta story nenhuma `Charge` tinha perna bancária, então cancelar era só uma troca de
+    status. A partir do `settle_off_rail`, uma cobrança `scheduled` **tem um `bank_transaction` de
+    crédito futuro**: cancelá-la sem tocar no movimento deixaria o razão bancário afirmando *"este
+    dinheiro vai entrar nesta conta"* sobre uma cobrança que não existe mais — a violação (c) da
+    Regra da Origem (*"nunca deixa órfão"*), e ela apareceria como um crédito inexplicável em
+    "Agendado para entrar".
+
+    **Recusar é a resposta certa, e não é falta de funcionalidade:** desfazer um recebimento fora do
+    trilho está explicitamente FORA de escopo (F-D4, epic §9.2), e a rota de correção do AC10 cobre
+    o erro provável (conta ou data erradas). Cancelar uma cobrança que o dono declarou ter recebido
+    é dizer duas coisas contraditórias sobre o mesmo dinheiro.
+    """
     charge = get_charge(db, charge_id)
     if charge.status == STATUS_PAID:
         raise ReceivableError("Cobrança paga não pode ser cancelada", 409)
+    if charge.status == STATUS_SCHEDULED:
+        raise ReceivableError(
+            "Esta cobrança já tem um recebimento registrado, com dia marcado para cair na sua "
+            "conta. Se a conta ou a data estiverem erradas, corrija o recebimento; cancelar a "
+            "cobrança deixaria um crédito anunciado no seu extrato sem nada por trás.",
+            409,
+        )
     charge.status = STATUS_CANCELED
     audit.record(db, tenant_id=tenant_id, actor=actor, action="receivable.cancel", target=charge.id)
     db.commit()
@@ -697,10 +1226,28 @@ def summary(db: Session) -> dict:
         .where(Charge.status == STATUS_PAID)
         .where(_not_investment_yield())
     ) or 0
+    # [8.15] `scheduled_cents` — e ele **não se mistura com nada** (AC7).
+    #
+    # Fica FORA de `open_cents`/`overdue_cents` (que exigem `STATUS_OPEN` — uma cobrança agendada
+    # não está "a vencer" nem vencida: ela já tem dia marcado) e FORA de `paid_cents` (o dinheiro
+    # ainda não caiu). Sem este campo, a cobrança agendada **desapareceria dos três buckets** — o
+    # mesmo modo de falha "o dinheiro some da tela" que esta onda existe para eliminar, numa
+    # superfície que o Cockpit e a Ficha 360° já consomem.
+    #
+    # O `_not_investment_yield()` vai junto pelo mesmo motivo de `paid_cents`: este resumo é
+    # reconciliação de recebíveis de CLIENTE. Hoje a `Charge` de rendimento nasce `paid` e nunca
+    # chega a `scheduled`, então o predicado é defensivo — e é assim que ele deve ficar, porque a
+    # Onda 2b dá perna bancária ao rendimento e a ausência do filtro só apareceria lá.
+    scheduled = db.scalar(
+        select(func.coalesce(func.sum(Charge.amount_cents), 0))
+        .where(Charge.status == STATUS_SCHEDULED)
+        .where(_not_investment_yield())
+    ) or 0
     return {
         "open_cents": open_cents,
         "overdue_cents": sum(c.amount_cents for c in overdue),
         "paid_cents": paid,
         "open_count": len([c for c in open_charges if c.due_date >= today]),
         "overdue_count": len(overdue),
+        "scheduled_cents": int(scheduled),
     }

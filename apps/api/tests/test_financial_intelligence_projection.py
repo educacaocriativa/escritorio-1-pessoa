@@ -701,13 +701,21 @@ def test_conta_CANCELADA_e_conta_PAGA_continuam_fora_da_projecao(client: TestCli
     )
 
 
-def test_ENTRADAS_continuam_so_open_nesta_story(client: TestClient, headers, db: Session):
-    """**Delimitação de escopo, em forma de teste.** O lado do recebimento é a Story 8.15.
+def test_window_sums_SEM_os_parametros_de_agendado_se_comporta_como_antes_da_8_14(
+    client: TestClient, headers, db: Session
+):
+    """**O contrato da parametrização, em forma de teste** — omitidos, os parâmetros não mudam nada.
 
-    `_window_sums` é chamado para `Charge` **sem** `scheduled_status`, e o comportamento tem de ser
-    byte a byte o de antes da 8.14. Este teste é o que reprova quem "aproveitar a viagem" e ligar
-    os dois lados numa story só — a 8.15 tem AC próprio, teste próprio e um `promote_scheduled`
-    irmão.
+    ⚠️ **[Story 8.15] Este teste mudou de NOME e de propósito, e a mudança é a correção.** Ele se
+    chamava `test_ENTRADAS_continuam_so_open_nesta_story` e era a delimitação de escopo da 8.14
+    (*"o lado do recebimento é a Story 8.15"*). A 8.15 chegou: `cash_projection` agora liga
+    `scheduled_status`/`scheduled_at` para `Charge` também (ver os testes abaixo), e manter o nome
+    antigo faria o arquivo afirmar o contrário do que o código faz.
+
+    O que continua valendo — e é o motivo de o teste **ficar** em vez de sumir — é o contrato da
+    parametrização: `_window_sums` **sem** os dois argumentos se comporta byte a byte como antes da
+    8.14. É essa propriedade que permite ligar/desligar a população 2 por chamador, em vez de um
+    `isinstance(model, Payable)` dentro da função.
     """
     from app.modules.receivables.models import STATUS_OPEN as CHARGE_OPEN
     from app.modules.receivables.models import Charge
@@ -718,3 +726,172 @@ def test_ENTRADAS_continuam_so_open_nesta_story(client: TestClient, headers, db:
         db, Charge, open_status=CHARGE_OPEN, today=TODAY, horizons=horizons
     )
     assert somas == [1_000_00, 1_000_00, 1_000_00] and vencido == 0
+
+
+# ══════════════════════════════════════════════════════════════════════════════════════════════
+# Story 8.15 (AC6) — o lado das ENTRADAS herda o mesmo conserto
+# ══════════════════════════════════════════════════════════════════════════════════════════════
+#
+# Sem isto, o espelho EXATO do bug da 8.14 acontece do lado das entradas: um Pix agendado não é
+# `open` (sai das entradas) **e** o movimento bancário dele é futuro (não entra no `saldo_inicial`,
+# que usa `active_balance_total(until=today)`) → **some da Projeção**. O dono veria um caixa mais
+# apertado do que o real, e a tela que responde *"e quando o caixa aperta?"* mentiria por omissão —
+# na direção oposta, mas pela mesma mecânica.
+
+
+def _receber_fora_do_trilho(client, headers, charge_id: str, *, conta_id: str, quando) -> dict:
+    r = client.post(
+        f"/receivables/charges/{charge_id}/settle-externally",
+        json={"bank_account_id": conta_id, "received_on": quando.isoformat()},
+        headers=headers,
+    )
+    assert r.status_code == 200, r.text
+    return r.json()
+
+
+def test_AC6_o_recebimento_agendado_esta_na_projecao_e_fora_do_saldo_inicial(
+    client: TestClient, headers
+):
+    """O cenário único, nas TRÊS leituras ao mesmo tempo — espelho da IV1 da 8.14.
+
+    Saldo de abertura + 1 cobrança RECEBIDA-AGENDADA para D+15 + 1 cobrança ABERTA vencendo D+20:
+      (a) `saldo_inicial` **não** inclui o crédito agendado (o movimento é futuro);
+      (b) a janela de 30 dias **inclui** o agendado, pela data do CRÉDITO;
+      (c) `saldo_projetado(D+30)` = saldo inicial + agendado + aberta.
+    """
+    conta = _conta_bancaria(client, headers)
+    agendada = _charge(client, headers, amount=3_000_00, due=_d(0))
+    _receber_fora_do_trilho(
+        client, headers, agendada["id"], conta_id=conta["id"], quando=TODAY + timedelta(days=15)
+    )
+    _charge(client, headers, amount=1_200_00, due=_d(20))
+
+    body = _projection(client, headers)
+
+    assert body["saldo_inicial_banco_cents"] == SALDO_ABERTURA, (
+        "o saldo inicial somou um crédito FUTURO — `_saldo_inicial` deixou de passar `until=today`"
+    )
+    esperado = body["saldo_inicial_cents"] + 3_000_00 + 1_200_00
+    assert _window(body, 30)["saldo_projetado_cents"] == esperado, (
+        "o recebimento AGENDADO sumiu da Projeção (ou entrou duas vezes) — é o espelho exato do "
+        "bug que a Story 8.14 consertou do lado das saídas"
+    )
+    assert _window(body, 90)["saldo_projetado_cents"] == esperado
+
+
+def test_AC6_o_recebimento_agendado_entra_pela_DATA_DO_CREDITO_nao_pelo_vencimento(
+    client: TestClient, headers
+):
+    """A cobrança **vence hoje** e o Pix caiu para D+45: entra na janela de 60, não na de 30."""
+    conta = _conta_bancaria(client, headers)
+    charge = _charge(client, headers, amount=2_000_00, due=_d(0))
+    _receber_fora_do_trilho(
+        client, headers, charge["id"], conta_id=conta["id"], quando=TODAY + timedelta(days=45)
+    )
+
+    body = _projection(client, headers)
+    assert _window(body, 30)["saldo_projetado_cents"] == body["saldo_inicial_cents"]
+    assert _window(body, 60)["saldo_projetado_cents"] == body["saldo_inicial_cents"] + 2_000_00
+
+
+def test_AC6_o_recebimento_agendado_no_DIA_DO_CREDITO_nao_conta_duas_vezes(
+    client: TestClient, headers, db: Session
+):
+    """⚠️ **O recorte `paid_at::date > today`, do lado das entradas.**
+
+    Entre 00:00 do dia do crédito e a varredura do worker, a `Charge` ainda está `scheduled` **e**
+    o `bank_transaction` já tem `posted_at <= hoje` — logo já entra em `active_balance_total(db,
+    until=today)`, que semeia o `saldo_inicial`. Sem o recorte, o mesmo dinheiro seria **somado
+    duas vezes**.
+
+    ⚠️ O estado do dia D se monta agendando para **amanhã** e pedindo a projeção **de amanhã**:
+    registrar "para hoje" devolve `paid` (a borda é estrita) e o teste passaria pelo motivo errado,
+    sem nenhum `scheduled` no banco.
+    """
+    conta = _conta_bancaria(client, headers)
+    charge = _charge(client, headers, amount=3_000_00, due=_d(0))
+    amanha = TODAY + timedelta(days=1)
+    _receber_fora_do_trilho(client, headers, charge["id"], conta_id=conta["id"], quando=amanha)
+
+    # Pré-condição: chegou o dia D e o worker AINDA NÃO rodou.
+    assert (
+        client.get(f"/receivables/charges/{charge['id']}", headers=headers).json()["status"]
+        == "scheduled"
+    )
+
+    proj = projection_service.cash_projection(db, today=amanha)
+    assert proj.saldo_inicial_banco_cents == SALDO_ABERTURA + 3_000_00
+    for w in proj.windows:
+        assert w.saldo_projetado_cents == proj.saldo_inicial_cents, (
+            f"janela de {w.days} dias somou o crédito do DIA uma segunda vez: ele já está dentro "
+            "do saldo inicial. O recorte `paid_at::date > today` sumiu do lado das entradas."
+        )
+
+
+def test_AC6_ENTRADAS_o_numero_e_IDENTICO_com_e_sem_o_worker(
+    client: TestClient, headers, db: Session
+):
+    """A equivalência, não só a ausência de dobra — a prova do F-D11 do lado das entradas.
+
+    Mesmo cenário medido duas vezes: com a cobrança ainda `scheduled` (worker parado) e depois de
+    `receivables.promote_scheduled` tê-la promovido. **Campo a campo, iguais.** Se um dia
+    divergirem, a corretude da Projeção passou a depender de um processo em background.
+    """
+    from dataclasses import asdict
+
+    from app.modules.receivables import service as receivables_service
+
+    conta = _conta_bancaria(client, headers)
+    charge = _charge(client, headers, amount=3_000_00, due=_d(0))
+    amanha = TODAY + timedelta(days=1)
+    _receber_fora_do_trilho(client, headers, charge["id"], conta_id=conta["id"], quando=amanha)
+    _charge(client, headers, amount=800_00, due=_d(20))
+
+    antes = asdict(projection_service.cash_projection(db, today=amanha))
+
+    tenant_id = client.get("/auth/me", headers=headers).json()["user"]["tenant_id"]
+    promovidas = receivables_service.promote_scheduled(
+        db, tenant_id=tenant_id, actor="system:worker", today=amanha
+    )
+    assert promovidas == 1, "pré-condição: a varredura tinha de ter algo a promover"
+
+    depois = asdict(projection_service.cash_projection(db, today=amanha))
+    assert depois == antes, (
+        "a Projeção MUDOU depois de o worker rodar. O status é rótulo; a aritmética é função da "
+        "data (F-D11)."
+    )
+
+
+def test_AC6_o_recebimento_agendado_nao_entra_em_overdue_inflow(client: TestClient, headers):
+    """Uma cobrança agendada nunca está vencida — nem quando o vencimento dela já passou.
+
+    É o `status == open_status` explícito dentro do `CASE` de `overdue_col`: sem ele, o agendado
+    com vencimento passado cairia em `overdue_inflow_cents` e a régua de cobrança teria um número
+    para justificar um lembrete a quem já pagou.
+    """
+    conta = _conta_bancaria(client, headers)
+    charge = _charge(client, headers, amount=900_00, due=_d(-30))
+    assert _projection(client, headers)["overdue_inflow_cents"] == 900_00
+
+    _receber_fora_do_trilho(
+        client, headers, charge["id"], conta_id=conta["id"], quando=TODAY + timedelta(days=5)
+    )
+    body = _projection(client, headers)
+    assert body["overdue_inflow_cents"] == 0
+    assert _window(body, 30)["saldo_projetado_cents"] == body["saldo_inicial_cents"] + 900_00
+
+
+def test_AC6_cobranca_CANCELADA_e_RECEBIDA_continuam_fora_das_entradas(client: TestClient, headers):
+    """A população de entradas cresceu para `{open, scheduled}` — e **só** para isso."""
+    conta = _conta_bancaria(client, headers)
+    cancelada = _charge(client, headers, amount=4_000_00, due=_d(10))
+    client.post(f"/receivables/charges/{cancelada['id']}/cancel", headers=headers)
+    recebida = _charge(client, headers, amount=2_000_00, due=_d(10))
+    _receber_fora_do_trilho(
+        client, headers, recebida["id"], conta_id=conta["id"], quando=TODAY - timedelta(days=1)
+    )
+
+    body = _projection(client, headers)
+    assert _window(body, 30)["saldo_projetado_cents"] == body["saldo_inicial_cents"], (
+        "cobrança cancelada ou já recebida entrou nos fluxos de entrada"
+    )

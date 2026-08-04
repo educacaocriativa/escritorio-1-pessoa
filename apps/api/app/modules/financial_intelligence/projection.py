@@ -109,6 +109,7 @@ from app.modules.payables.models import STATUS_OPEN as PAYABLE_OPEN
 from app.modules.payables.models import STATUS_SCHEDULED as PAYABLE_SCHEDULED
 from app.modules.payables.models import Payable
 from app.modules.receivables.models import STATUS_OPEN as CHARGE_OPEN
+from app.modules.receivables.models import STATUS_SCHEDULED as CHARGE_SCHEDULED
 from app.modules.receivables.models import Charge
 from app.modules.wallet import service as wallet_service
 
@@ -504,11 +505,24 @@ def cash_projection(
     partida = _saldo_inicial(db, today=today)
     saldo_inicial = partida.total_cents
     saldo_inicial_origem = partida.origem
-    # ⚠️ **Entradas: SÓ `open` nesta story.** O lado do recebimento fora do trilho é a Story 8.15,
-    # que liga o MESMO par de parâmetros aqui (`scheduled_status` + a coluna de data de caixa de
-    # `Charge`). Não ramifique por `isinstance` lá dentro — a parametrização existe para isto.
+    # ⚠️ **[Story 8.15] Entradas: `open` (por vencimento) + `scheduled` (pela data do CRÉDITO, e só
+    # depois de hoje).** O par de parâmetros é o **mesmo** que a 8.14 criou para as saídas — nenhum
+    # `isinstance` dentro de `_window_sums`, que é exatamente para isto que a parametrização existe.
+    #
+    # Sem esta metade, o espelho exato do bug da 8.14 acontece do lado das entradas: um Pix
+    # agendado não é `open` (sai das entradas) **e** o movimento bancário dele é futuro (não entra
+    # no `saldo_inicial`, que usa `active_balance_total(until=today)`) → **some da Projeção**. O
+    # recorte `paid_at::date > today` é a outra metade obrigatória: no dia do crédito, entre 00:00
+    # e a varredura do worker, a cobrança ainda é `scheduled` e o movimento já tem
+    # `posted_at <= hoje` — somá-la aqui a contaria **duas vezes**.
     inflows, overdue_inflow = _window_sums(
-        db, Charge, open_status=CHARGE_OPEN, today=today, horizons=horizons
+        db,
+        Charge,
+        open_status=CHARGE_OPEN,
+        today=today,
+        horizons=horizons,
+        scheduled_status=CHARGE_SCHEDULED,
+        scheduled_at=Charge.paid_at,
     )
     # Saídas: `open` (por vencimento) **+ `scheduled` (pela data do débito, e só depois de hoje)**.
     # Sem a segunda metade, o pagamento agendado some da Projeção — ver a docstring de

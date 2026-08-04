@@ -21,6 +21,65 @@ export interface ContaDeBaixa {
   archived_at: string | null;
 }
 
+// ── O VOCABULÁRIO (Story 8.15) ────────────────────────────────────────────────────────────────
+//
+// A Story 8.15 precisa da MESMA mecânica (seletor colado ao botão, pré-seleção da primária, 409
+// acionável → cadastro embutido → retoma) para o lado das ENTRADAS: *"em qual conta o dinheiro
+// **caiu**?"*. Reescrever o componente lá seria a segunda cópia da lição dos PRs #56/#58 — e a
+// segunda a divergir. Reusar sem parametrizar seria pior: a tela de Cobranças perguntaria "de qual
+// conta o dinheiro **saiu**" sobre um recebimento, e o rótulo do botão diria "sai do Itaú PJ"
+// sobre dinheiro entrando.
+//
+// ⚠️ **Só o vocabulário é parâmetro. A mecânica é uma só, e é isso que garante que a próxima
+// correção de campo (a terceira, se houver) valha para as quatro telas de uma vez.**
+
+export interface VocabularioDaBaixa {
+  /** Rótulo do `<select>` de conta. */
+  rotuloConta: string;
+  /** `aria-label` do `<select>` — é por ele que os testes (e leitores de tela) o encontram. */
+  ariaConta: string;
+  /** Rótulo do campo de data. */
+  rotuloData: string;
+  /** `aria-label` do campo de data. */
+  ariaData: string;
+  /** Colado ao rótulo do botão: *"Confirmar baixa · **sai do** Itaú PJ"*. */
+  preposicao: string;
+  /** A frase do estado "tenant sem conta nenhuma" (o caminho do cadastro embutido). */
+  semConta: string;
+  /** O aviso (não bloqueio) de data futura. */
+  avisoFuturo: string;
+}
+
+/** Saídas — Contas a Pagar (Story 8.13). Os textos são **exatamente** os de antes desta mudança. */
+export const VOCAB_SAIDA: VocabularioDaBaixa = {
+  rotuloConta: "Saiu da conta",
+  ariaConta: "Conta bancária de onde o dinheiro saiu",
+  rotuloData: "Dia do pagamento",
+  ariaData: "Dia em que o dinheiro saiu da conta",
+  preposicao: "sai do",
+  semConta:
+    "Para dar baixa, o e1p precisa saber de qual conta bancária o dinheiro saiu — é isso que faz " +
+    "o movimento aparecer no seu extrato.",
+  avisoFuturo:
+    "Esta data é no futuro: a conta será registrada como AGENDADA. O dinheiro ainda não saiu — " +
+    "ela entra na Projeção de Caixa pelo dia do débito e sai da fila do que você precisa pagar.",
+};
+
+/** Entradas — recebimento fora do trilho (Story 8.15). */
+export const VOCAB_ENTRADA: VocabularioDaBaixa = {
+  rotuloConta: "Caiu na conta",
+  ariaConta: "Conta bancária onde o dinheiro caiu",
+  rotuloData: "Dia do recebimento",
+  ariaData: "Dia em que o dinheiro caiu na conta",
+  preposicao: "caiu no",
+  semConta:
+    "Para registrar que você recebeu direto na conta, o e1p precisa saber em qual conta bancária " +
+    "o dinheiro caiu — é isso que faz o crédito aparecer no seu extrato.",
+  avisoFuturo:
+    "Esta data é no futuro: o recebimento será registrado como AGENDADO. O dinheiro ainda não " +
+    "caiu — ele entra na Projeção de Caixa pelo dia do crédito e a cobrança sai da régua.",
+};
+
 // ── O 409 acionável (contrato da Story 8.12) ──────────────────────────────────────────────────
 
 /** A ação que o backend pede quando não há conta utilizável. Contrato, não texto de tela. */
@@ -79,8 +138,12 @@ export function nomeDaConta(contas: ContaDeBaixa[], contaId: string): string {
  * adicional** — dentro do `<select>` não basta, porque em ~360px o `<select>` é o elemento mais
  * espremido da barra e o nome é o primeiro a ser truncado.
  */
-export function rotuloDaAcao(base: string, nomeConta: string): string {
-  return nomeConta ? `${base} · sai do ${nomeConta}` : base;
+export function rotuloDaAcao(
+  base: string,
+  nomeConta: string,
+  preposicao: string = VOCAB_SAIDA.preposicao,
+): string {
+  return nomeConta ? `${base} · ${preposicao} ${nomeConta}` : base;
 }
 
 // ── Geometria da barra fixa em ~360px (AC9, auditoria estrutural) ─────────────────────────────
@@ -158,11 +221,16 @@ export function tetoDaDataDeBaixa(_hoje: string): string | undefined {
  * em vez de alertar: o dono precisa saber que o registro vai nascer como *agendado* e que o
  * dinheiro ainda não saiu. Avisar antes é honesto; **impedir** seria reimplementar no frontend uma
  * guarda que nem existe mais no backend.
+ *
+ * ⚠️ **[Story 8.15] O texto virou parâmetro** (`vocab`), com o da SAÍDA como default: do lado das
+ * entradas a mesma frase estaria errada em cada substantivo ("o dinheiro ainda não saiu", "a fila
+ * do que você precisa pagar"). A mecânica — avisar sem impedir — é a mesma nos dois.
  */
-export function avisoDeDataFutura(data: string, hoje: string): string | null {
+export function avisoDeDataFutura(
+  data: string,
+  hoje: string,
+  vocab: VocabularioDaBaixa = VOCAB_SAIDA,
+): string | null {
   if (!data || data <= hoje) return null;
-  return (
-    "Esta data é no futuro: a conta será registrada como AGENDADA. O dinheiro ainda não saiu — " +
-    "ela entra na Projeção de Caixa pelo dia do débito e sai da fila do que você precisa pagar."
-  );
+  return vocab.avisoFuturo;
 }

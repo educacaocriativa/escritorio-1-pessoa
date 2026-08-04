@@ -34,6 +34,7 @@ from app.modules.auth.models import Tenant
 from app.modules.funnels import engine as funnels_engine
 from app.modules.notifications import service as notifications_service
 from app.modules.payables import service as payables_service
+from app.modules.receivables import service as receivables_service
 from app.modules.whatsapp_inbox import service as whatsapp_inbox_service
 from app.seed import PLATFORM_SLUG
 
@@ -72,7 +73,18 @@ def run_sweep(
         "funnel_resumed": 0,
         "notifications_processed": 0,
         "whatsapp_media_processed": 0,
-        # Story 8.14 — quantas contas a pagar `scheduled` viraram `paid` porque o dia chegou.
+        # Story 8.14 + 8.15 — quantos lançamentos `scheduled` viraram `paid` porque o dia chegou.
+        #
+        # ⚠️ **É a SOMA dos dois lados do dinheiro (contas a pagar + cobranças), e a escolha é
+        # deliberada** (a 8.15 deixou a decisão ao @dev, exigindo que ela ficasse registrada). O
+        # contador responde a **uma** pergunta — *"quantos lançamentos com dia marcado tiveram o
+        # dia chegado neste sweep?"* — e ela não se parte por módulo: são dois SELECTs da mesma
+        # regra, na mesma etapa, na mesma sessão de tenant. Dois contadores nomeados dariam três
+        # números para uma informação (os dois mais a soma, que qualquer leitor faria de cabeça) e
+        # quebrariam os consumidores existentes deste dicionário sem nada em troca — este número é
+        # observabilidade de sweep, não número de dinheiro. Quem precisar da separação a tem na
+        # trilha de auditoria (`payable.scheduled_promoted` × `receivable.scheduled_promoted`),
+        # que é o lugar onde a granularidade tem consumidor real.
         "scheduled_promoted": 0,
         "errors": [],
     }
@@ -129,12 +141,20 @@ def run_sweep(
         # `scheduled_cents` do resumo ficam velhos. Quem for tentado a fazer alguma soma depender
         # daqui está prestes a transformar um enfeite em componente crítico.
         #
-        # ⚠️ **A Story 8.15 acrescenta a chamada de `receivables` A ESTA MESMA ETAPA**, não uma
-        # quinta: é a mesma pergunta ("já chegou o dia?") sobre os dois lados do dinheiro.
+        # ⚠️ **[Story 8.15] A chamada de `receivables` entrou NESTA MESMA ETAPA**, não numa quinta:
+        # é a mesma pergunta ("já chegou o dia?") sobre os dois lados do dinheiro, e uma etapa
+        # própria seria a mesma regra em dois lugares — com dois isolamentos de falha, dois
+        # contadores e duas chances de uma receber a próxima correção e a outra não. As duas
+        # varreduras moram nos módulos que conhecem a regra (`payables`/`receivables`
+        # `promote_scheduled`, mesma assinatura); o worker só **orquestra**.
         try:
             with tenant_session_factory(tenant_id) as db:
+                hoje = now.date() if now else None
                 promovidas = payables_service.promote_scheduled(
-                    db, tenant_id=tenant_id, actor=actor, today=now.date() if now else None
+                    db, tenant_id=tenant_id, actor=actor, today=hoje
+                )
+                promovidas += receivables_service.promote_scheduled(
+                    db, tenant_id=tenant_id, actor=actor, today=hoje
                 )
             result["scheduled_promoted"] += promovidas
         except Exception as exc:  # noqa: BLE001 — idem: isola a falha por tenant (IV2)

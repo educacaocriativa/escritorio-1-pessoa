@@ -26,7 +26,20 @@ ALL_METHODS = {METHOD_PIX, METHOD_BOLETO, METHOD_CARD}
 STATUS_OPEN = "open"
 STATUS_PAID = "paid"
 STATUS_CANCELED = "canceled"
-ALL_STATUSES = {STATUS_OPEN, STATUS_PAID, STATUS_CANCELED}
+# ⚠️ **[Story 8.15] `scheduled` — o Pix que o cliente AGENDOU e ainda não caiu.** Espelho exato do
+# `payables.STATUS_SCHEDULED` da 8.14: o estado é **derivado da data** (`received_on > hoje ⇒
+# scheduled`) por `app.core.scheduling.status_por_data`, nunca escolhido — nenhum schema de entrada
+# deste módulo tem campo `status`.
+#
+# **Cabe sem migration de tipo:** `charges.status` é `String(12)` e `"scheduled"` tem 9 caracteres
+# (asserção estrutural em `tests/test_receivables_off_rail.py`). A story 8.15 não cria migration.
+#
+# ⚠️ Ele só nasce pelo caminho **fora do trilho** (`settle_off_rail`): o caminho do gateway
+# (`mark_paid`/webhook) crava `paid_at = now()` e continua sem estado agendado — *"é fato externo,
+# atestado por terceiro, e editá-lo transformaria uma testemunha em opinião"*. A assimetria com
+# `payables` é a informação, não um esquecimento.
+STATUS_SCHEDULED = "scheduled"
+ALL_STATUSES = {STATUS_OPEN, STATUS_SCHEDULED, STATUS_PAID, STATUS_CANCELED}
 
 
 class Charge(Base, TenantMixin, TimestampMixin):

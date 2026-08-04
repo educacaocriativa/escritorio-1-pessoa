@@ -1508,3 +1508,153 @@ def test_movimento_agendado_nao_move_o_saldo_do_vizinho(app_url: str) -> None:
         assert agendado_b[acc_b].saida_cents == 0, (
             "o 'Agendado para sair' de B enxergou o movimento futuro de A"
         )
+
+
+# ── Story 8.15 (IV6) — o recebimento FORA DO TRILHO sob RLS real ──────────────────────────────
+#
+# > **[@dev 8.15] Desvio documentado das File Locations da Story 8.15.** Ela pede "rls_e2e: IV6"
+# > sem nomear arquivo; a instrução no topo DESTE arquivo é explícita (*"acrescente casos AQUI em
+# > vez de criar mais um arquivo de testcontainer"*) e a 8.5, a 8.9, a 8.12 e a 8.14 já a
+# > seguiram. Somos os quintos: um arquivo novo custaria um segundo `PostgresContainer` e um
+# > segundo `alembic upgrade head` para exercitar exatamente as mesmas tabelas.
+#
+# O modo de falha desta story é o espelho do da 8.12, e é igualmente grave: `settle_off_rail`
+# **escreve** no razão bancário. Um vazamento não apareceria como "vi uma linha que não é minha" —
+# apareceria como **uma receita minha caindo na conta do vizinho**, e portanto como um crédito
+# inventado no único número que este produto vende como confiável.
+
+
+def _seed_charge(app_url: str, tenant_id: str, *, amount_cents: int, due: date) -> str:
+    from app.modules.receivables.models import Charge
+
+    with _session_for(app_url, tenant_id) as session:
+        c = Charge(
+            tenant_id=tenant_id,
+            description="Consultoria",
+            kind="service",
+            method="pix",
+            amount_cents=amount_cents,
+            due_date=due,
+            competence_date=due,
+        )
+        session.add(c)
+        session.commit()
+        return c.id
+
+
+def test_settle_off_rail_isolamento_cross_tenant(app_url: str) -> None:
+    """**IV6 — A nunca credita a conta de B, e B não vê nem a cobrança nem o crédito.**
+
+    A conta de outro tenant recebe **404 fail-closed**, nunca 200 com movimento vazando e nunca o
+    409 acionável (que confirmaria a existência da linha do vizinho).
+    """
+    from app.modules.bank import service as bank_service
+    from app.modules.bank.models import SOURCE_CHARGE, STATUS_MATCHED, BankTransaction
+    from app.modules.receivables import service as receivables_service
+    from app.modules.receivables.models import STATUS_PAID, Charge
+
+    tenant_a = str(uuid4())
+    tenant_b = str(uuid4())
+    hoje = _hoje_utc()
+    abertura = hoje - timedelta(days=90)
+    acc_a = _seed_account(
+        app_url, tenant_a, name="Recebe A", opening=100_000, number="8150-1", opening_date=abertura
+    )
+    acc_b = _seed_account(
+        app_url, tenant_b, name="Recebe B", opening=100_000, number="8150-2", opening_date=abertura
+    )
+    charge_a = _seed_charge(app_url, tenant_a, amount_cents=340_00, due=hoje)
+
+    # ── (1) A tenta creditar a conta bancária de B → 404, nunca 409 ──────────────────────────
+    with _session_for(app_url, tenant_a) as sa:
+        with pytest.raises(receivables_service.ReceivableError) as exc:
+            receivables_service.settle_off_rail(
+                sa, charge_id=charge_a, tenant_id=tenant_a, actor="a",
+                bank_account_id=acc_b, received_on=hoje,
+            )
+        assert exc.value.status_code == 404, (
+            "cross-tenant deve ser 404 fail-closed. 409 (o erro acionável de 'cadastre uma conta') "
+            "confirmaria que a conta do vizinho existe."
+        )
+        sa.rollback()
+
+    # ── (2) O registro legítimo: crédito POSITIVO, no tenant certo, já conciliado ────────────
+    with _session_for(app_url, tenant_a) as sa:
+        charge = receivables_service.settle_off_rail(
+            sa, charge_id=charge_a, tenant_id=tenant_a, actor="a",
+            bank_account_id=acc_a, received_on=hoje,
+        )
+        assert charge.status == STATUS_PAID
+        assert charge.transaction_id is None, "fora do trilho NUNCA tem transação de carteira"
+
+    with _session_for(app_url, tenant_a) as sa:
+        tx = sa.query(BankTransaction).filter(BankTransaction.origin_id == charge_a).one()
+        assert tx.tenant_id == tenant_a and tx.bank_account_id == acc_a
+        assert tx.amount_cents == 340_00 and tx.source == SOURCE_CHARGE
+        assert tx.status == STATUS_MATCHED
+        saldo = bank_service.derived_balance(sa, bank_account_id=acc_a, until=hoje)
+        assert saldo == 100_000 + 340_00
+
+    # ── (3) B não enxerga nem a cobrança, nem o movimento, nem o efeito no saldo dele ────────
+    with _session_for(app_url, tenant_b) as sb:
+        assert sb.get(Charge, charge_a) is None, "B leu a cobrança de A"
+        assert (
+            sb.query(BankTransaction).filter(BankTransaction.origin_id == charge_a).one_or_none()
+            is None
+        ), "B leu o movimento bancário gerado pela cobrança de A"
+        assert bank_service.derived_balance(sb, bank_account_id=acc_b, until=hoje) == 100_000, (
+            "o saldo de B mudou por causa de um recebimento do tenant A"
+        )
+
+
+def test_promocao_de_cobrancas_agendadas_isolamento_cross_tenant(app_url: str) -> None:
+    """A varredura de A promove **só** as cobranças agendadas de A (a mesma etapa 4 do worker).
+
+    `receivables.promote_scheduled` roda no worker, fora de qualquer request HTTP, num laço que
+    percorre TODOS os tenants — o mesmo risco estrutural que a 8.14 documentou para `payables`, e
+    o SQLite dos unitários não o exercita.
+    """
+    from app.modules.receivables import service as receivables_service
+    from app.modules.receivables.models import STATUS_PAID, STATUS_SCHEDULED, Charge
+
+    tenant_a = str(uuid4())
+    tenant_b = str(uuid4())
+    hoje = _hoje_utc()
+    abertura = hoje - timedelta(days=90)
+    acc_a = _seed_account(
+        app_url, tenant_a, name="Agenda R A", opening=100_000, number="8151-1",
+        opening_date=abertura,
+    )
+    acc_b = _seed_account(
+        app_url, tenant_b, name="Agenda R B", opening=100_000, number="8151-2",
+        opening_date=abertura,
+    )
+    credito = hoje + timedelta(days=10)
+    charge_a = _seed_charge(app_url, tenant_a, amount_cents=500_00, due=hoje)
+    charge_b = _seed_charge(app_url, tenant_b, amount_cents=700_00, due=hoje)
+
+    for tenant, acc, charge_id in ((tenant_a, acc_a, charge_a), (tenant_b, acc_b, charge_b)):
+        with _session_for(app_url, tenant) as s:
+            c = receivables_service.settle_off_rail(
+                s, charge_id=charge_id, tenant_id=tenant, actor="dono",
+                bank_account_id=acc, received_on=credito,
+            )
+            assert c.status == STATUS_SCHEDULED, (
+                "pré-condição: com `today` real anterior ao crédito, o registro nasce agendado"
+            )
+
+    with _session_for(app_url, tenant_a) as sa:
+        promovidas = receivables_service.promote_scheduled(
+            sa, tenant_id=tenant_a, actor="system:worker", today=credito
+        )
+    assert promovidas == 1, (
+        f"a varredura de A promoveu {promovidas} cobranças. Se foi 2, ela enxergou o tenant B — a "
+        "sessão escapou da GUC `app.current_tenant_id`."
+    )
+
+    with _session_for(app_url, tenant_a) as sa:
+        assert sa.get(Charge, charge_a).status == STATUS_PAID
+    with _session_for(app_url, tenant_b) as sb:
+        assert sb.get(Charge, charge_b).status == STATUS_SCHEDULED, (
+            "o sweep do tenant A promoveu a cobrança agendada do tenant B"
+        )

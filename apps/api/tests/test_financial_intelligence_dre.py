@@ -333,3 +333,65 @@ def test_AC14_dre_IDENTICA_campo_a_campo_com_e_sem_conta_agendada(client: TestCl
     assert client.get(
         f"/payables/bills/{bill['id']}", headers=headers
     ).json()["competence_date"] == "2026-07-10"
+
+
+# ── Story 8.15 (IV2) — a cobranca recebida FORA DO TRILHO continua na DRE ─────────────────────
+
+
+def test_IV2_a_cobranca_recebida_fora_do_trilho_CONTINUA_contando_na_dre(
+    client: TestClient, headers
+):
+    """**O dinheiro entrou de verdade — e a DRE tem de dizer isso.**
+
+    `dre.py` agrega `charges` por `competence_date` filtrando `status != canceled`, entao a
+    cobranca liquidada fora do trilho entra como qualquer outra, e o `scheduled` passa direto.
+    Snapshot campo a campo, antes e depois do registro.
+
+    ⚠️ **A consequencia contabil desta story vive aqui e e DESEJADA:** esta receita entra na DRE
+    **sem** gerar `PlatformEarning` (o dinheiro nunca passou pela e1p), entao o painel do Master
+    passa a mostrar um GMV menor que a soma das DREs dos tenants. E correto: sao dois planos
+    diferentes medindo coisas diferentes.
+    """
+    conta_dre = _account(client, headers, "RECEITA", "Servicos")
+    charge = _charge(client, headers, amount=300_000, competence="2026-07-05", account_id=conta_dre)
+    antes = _dre(client, headers)
+    assert _group(antes, "RECEITA")["total_cents"] == 300_000, (
+        "pre-condicao: a receita precisa estar na DRE ANTES do registro, senao o snapshot "
+        "compararia dois zeros"
+    )
+
+    conta = _conta_bancaria_814(client, headers)
+    resp = client.post(
+        f"/receivables/charges/{charge['id']}/settle-externally",
+        json={"bank_account_id": conta["id"]},
+        headers=headers,
+    )
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["status"] == "paid"
+
+    assert _dre(client, headers) == antes, (
+        "a DRE mudou porque a cobranca foi recebida fora do trilho — o regime de COMPETENCIA nao "
+        "conhece a data do caixa, e o `status` novo nao pode alterar agregacao nenhuma"
+    )
+    # E a competencia da cobranca continua onde estava: `received_on` move CAIXA, nunca competencia.
+    assert client.get(
+        f"/receivables/charges/{charge['id']}", headers=headers
+    ).json()["competence_date"] == "2026-07-05"
+
+
+def test_IV2_recebimento_AGENDADO_tambem_passa_direto_pela_dre(client: TestClient, headers):
+    """O estado `scheduled` nao e um buraco na DRE: `status != canceled` continua sendo o filtro."""
+    conta_dre = _account(client, headers, "RECEITA", "Servicos")
+    charge = _charge(client, headers, amount=150_000, competence="2026-07-20", account_id=conta_dre)
+    antes = _dre(client, headers)
+
+    conta = _conta_bancaria_814(client, headers)
+    futuro = datetime.now(UTC).date() + timedelta(days=10)
+    resp = client.post(
+        f"/receivables/charges/{charge['id']}/settle-externally",
+        json={"bank_account_id": conta["id"], "received_on": futuro.isoformat()},
+        headers=headers,
+    )
+    assert resp.status_code == 200 and resp.json()["status"] == "scheduled", resp.text
+
+    assert _dre(client, headers) == antes

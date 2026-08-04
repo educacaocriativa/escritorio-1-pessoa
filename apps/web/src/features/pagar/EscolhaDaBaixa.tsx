@@ -7,6 +7,8 @@ import { hojeISO } from "../financeiro/contas";
 import {
   acaoCadastrarConta,
   type ContaDeBaixa,
+  VOCAB_SAIDA,
+  type VocabularioDaBaixa,
   avisoDeDataFutura,
   contaPreSelecionada,
   contasUtilizaveis,
@@ -27,9 +29,18 @@ import {
  * PRs de fix de campo (#56 e #58) já foram pagos por elemento fora da área visível em ~360px, um
  * deles com uma conta real marcada paga sem o usuário conseguir ver o checkbox. Quem usar este
  * componente numa tela nova (a 8.15 vai) tem de mantê-lo colado ao botão.
+ *
+ * ── ⚠️ **[Story 8.15] UM componente, agora CINCO telas — e dois vocabulários.**
+ *
+ * O recebimento fora do trilho (`CobrancasPage`, `ClientDetailPage`) faz a mesma pergunta com o
+ * dinheiro andando na direção oposta: *"em qual conta o dinheiro **caiu**, e em que dia?"*. O que
+ * mudou aqui foi **só o vocabulário** (`VocabularioDaBaixa`, em `baixa.ts`) — a mecânica inteira é
+ * a mesma instância: pré-seleção da primária, ação desabilitada sem escolha, nome da conta colado
+ * ao botão, 409 acionável → cadastro embutido → **retoma**. Uma cópia para as entradas seria a
+ * segunda a divergir na próxima correção de campo.
  */
 
-/** O que o `useEscolhaDaBaixa` devolve — o estado inteiro da escolha, para as três telas. */
+/** O que o `useEscolhaDaBaixa` devolve — o estado inteiro da escolha, para as cinco telas. */
 export interface EscolhaDaBaixaState {
   contas: ContaDeBaixa[];
   contaId: string;
@@ -59,6 +70,8 @@ export interface EscolhaDaBaixaState {
   recarregar: () => Promise<void>;
   /** Handler do `onSaved` do cadastro: seleciona a conta nova e fecha o formulário. */
   aoCadastrar: (conta?: BankAccount) => void;
+  /** Os textos desta direção do dinheiro (saída = default; entrada = Story 8.15). */
+  vocab: VocabularioDaBaixa;
 }
 
 /**
@@ -69,7 +82,10 @@ export interface EscolhaDaBaixaState {
  *   pq não deu certo no dia"*); **a bandeja passa hoje**, porque o comprovante chega pelo share
  *   sheet no instante do pagamento (ver a nota em `payables/receipts.py::link_receipt`).
  */
-export function useEscolhaDaBaixa(dataPadrao: string): EscolhaDaBaixaState {
+export function useEscolhaDaBaixa(
+  dataPadrao: string,
+  vocab: VocabularioDaBaixa = VOCAB_SAIDA,
+): EscolhaDaBaixaState {
   const [contas, setContas] = useState<ContaDeBaixa[]>([]);
   const [contaId, setContaId] = useState("");
   const [data, setData] = useState(dataPadrao);
@@ -111,8 +127,9 @@ export function useEscolhaDaBaixa(dataPadrao: string): EscolhaDaBaixaState {
     semConta,
     pronto: contaId !== "" && data !== "",
     nomeConta,
-    rotulo: (base: string) => rotuloDaAcao(base, nomeConta),
-    aviso: avisoDeDataFutura(data, hojeISO()),
+    vocab,
+    rotulo: (base: string) => rotuloDaAcao(base, nomeConta, vocab.preposicao),
+    aviso: avisoDeDataFutura(data, hojeISO(), vocab),
     corpo: () => ({ bank_account_id: contaId, paid_on: data }),
     cadastrando,
     abrirCadastro: () => setCadastrando(true),
@@ -168,10 +185,7 @@ export function EscolhaDaBaixa({
   if (estado.semConta) {
     return (
       <div className="rounded-lg bg-amber-50 p-3 text-xs text-amber-800">
-        <p>
-          Para dar baixa, o e1p precisa saber de qual conta bancária o dinheiro saiu — é isso que
-          faz o movimento aparecer no seu extrato.
-        </p>
+        <p>{estado.vocab.semConta}</p>
         <button
           type="button"
           onClick={estado.abrirCadastro}
@@ -190,11 +204,13 @@ export function EscolhaDaBaixa({
           NOME dela aparece por extenso no rótulo do botão (AC5), não só dentro do `<select>`. */}
       <div className="grid grid-cols-2 gap-2">
         <label className="block">
-          <span className="mb-1 block text-xs font-medium text-neutral-600">Saiu da conta</span>
+          <span className="mb-1 block text-xs font-medium text-neutral-600">
+            {estado.vocab.rotuloConta}
+          </span>
           <select
             value={estado.contaId}
             onChange={(e) => estado.setContaId(e.target.value)}
-            aria-label="Conta bancária de onde o dinheiro saiu"
+            aria-label={estado.vocab.ariaConta}
             className={campo}
           >
             {/* Sem primária, nada vem escolhido e a ação fica desabilitada: silêncio, nunca um
@@ -208,7 +224,9 @@ export function EscolhaDaBaixa({
           </select>
         </label>
         <label className="block">
-          <span className="mb-1 block text-xs font-medium text-neutral-600">Dia do pagamento</span>
+          <span className="mb-1 block text-xs font-medium text-neutral-600">
+            {estado.vocab.rotuloData}
+          </span>
           <input
             type="date"
             value={estado.data}
@@ -219,7 +237,7 @@ export function EscolhaDaBaixa({
             // ela que documenta a decisão e é a ela que se volta se o teto precisar retornar; um
             // `max` apagado do JSX não deixa rastro nenhum.
             max={tetoDaDataDeBaixa(hojeISO())}
-            aria-label="Dia em que o dinheiro saiu da conta"
+            aria-label={estado.vocab.ariaData}
             className={campo}
           />
         </label>
@@ -263,17 +281,28 @@ export function DialogDeBaixa({
   dataPadrao,
   onClose,
   onPago,
+  vocab = VOCAB_SAIDA,
+  acao = "Confirmar baixa",
+  acaoEmCurso = "Dando baixa…",
 }: {
   titulo: string;
   descricao: string;
   valor: string;
-  /** Default do campo de data: o `due_date` da conta (AC1/AC7), nunca hoje, nunca `now()`. */
+  /** Default do campo de data: o `due_date` da conta (AC1/AC7), nunca hoje, nunca `now()`.
+   *  No recebimento fora do trilho (8.15) é **hoje** — o dono está olhando o extrato agora. */
   dataPadrao: string;
   onClose: () => void;
   /** Faz o POST. Devolve a promise para o dialog tratar erro/estado — inclusive o 409 acionável. */
   onPago: (corpo: { bank_account_id: string; paid_on: string }) => Promise<void>;
+  /** Story 8.15: `VOCAB_ENTRADA` no recebimento fora do trilho. */
+  vocab?: VocabularioDaBaixa;
+  /** ⚠️ Rótulo do botão que comete a ação. **Nunca "Marcar paga"** do lado das cobranças: aquele
+   *  botão foi removido de propósito, e a diferença importa — aqui o dono declara um fato sobre a
+   *  conta bancária dele, não confirma um pagamento do trilho. */
+  acao?: string;
+  acaoEmCurso?: string;
 }) {
-  const estado = useEscolhaDaBaixa(dataPadrao);
+  const estado = useEscolhaDaBaixa(dataPadrao, vocab);
   const [erro, setErro] = useState<string | null>(null);
   const [enviando, setEnviando] = useState(false);
 
@@ -308,7 +337,7 @@ export function DialogDeBaixa({
             disabled={enviando || !estado.pronto}
             className="w-full rounded-pill bg-accent-400 py-2.5 font-semibold text-white transition hover:bg-accent-500 disabled:opacity-60"
           >
-            {enviando ? "Dando baixa…" : estado.rotulo("Confirmar baixa")}
+            {enviando ? acaoEmCurso : estado.rotulo(acao)}
           </button>
         </div>
       </Modal>
