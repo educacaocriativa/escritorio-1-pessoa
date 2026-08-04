@@ -26,6 +26,39 @@ guard-rail de custo (Regra de Ouro nº 4). Nenhum provedor offsite específico �
 nos docs do projeto, então a flexibilidade de trocar de provedor sem reescrever o script
 foi priorizada. Compatível com a evolução futura p/ S3 real (`docs/AWS-DEPLOYMENT.md`).
 
+## 1.2 Volume `evolution_instances` — credenciais de sessão do WhatsApp (todos os tenants)
+
+**Sensibilidade:** este volume guarda as credenciais de sessão do WhatsApp de TODOS os tenants
+conectados por Evolution API — trate como segredo, não como cache. Backup ausente = todo tenant
+reescaneando QR quando o volume se perder (incidente de suporte multiplicado por N).
+
+**Backup manual/ad-hoc** (adicionar ao cron do `backup.sh` é dívida — ver nota abaixo):
+
+```bash
+# A partir da VPS, com a stack de pé:
+docker run --rm \
+  -v e1p_evolution_instances:/data:ro \
+  -v /opt/e1p-backups:/backup \
+  alpine tar czf /backup/evolution-instances-$(date +%Y%m%d-%H%M%S).tar.gz -C /data .
+```
+
+(O nome exato do volume — `e1p_evolution_instances` ou `infra_evolution_instances` — depende do
+`project name` do Compose; confirme com `docker volume ls | grep evolution`.)
+
+**Restore:**
+
+```bash
+docker run --rm \
+  -v e1p_evolution_instances:/data \
+  -v /opt/e1p-backups:/backup \
+  alpine sh -c "cd /data && tar xzf /backup/evolution-instances-<timestamp>.tar.gz"
+```
+
+**Dívida registrada:** este backup NÃO está automatizado no cron/`backup.sh` ainda — é passo
+manual. Automatizar exige decidir frequência (sessões mudam com uso, não só 1x/dia) e se entra
+no mesmo offsite (rclone) do dump do Postgres. Fora de escopo desta onda (infra base); tratar
+antes de conectar o primeiro tenant real em produção.
+
 ---
 
 ## 2. Configuração inicial (uma vez, na VPS)

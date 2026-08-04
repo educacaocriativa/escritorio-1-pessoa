@@ -173,8 +173,8 @@ def test_collect_with_ai_writes_message_and_notifies(client: TestClient, headers
     assert r.status_code == 200
     body = r.json()
     assert len(body["message"]) > 10
-    assert body["status"] == "logged"
-    # uma notificação de WhatsApp foi registrada
+    assert body["status"] == "queued"
+    # uma notificação de WhatsApp foi enfileirada (entrega real fica pro worker)
     notifs = client.get("/notifications", headers=headers).json()
     assert any(n["channel"] == "whatsapp" for n in notifs)
 
@@ -558,19 +558,14 @@ def _bind_charge_reminder(db, tenant_id: str, template_id: str) -> None:
 
 
 def test_collect_with_ai_without_binding_uses_free_text_with_tenant_credentials(
-    client: TestClient, headers, db, tenant_id, monkeypatch
+    client: TestClient, headers, db, tenant_id
 ):
-    """Sem vínculo configurado: comportamento antigo (mensagem completa de texto livre via
-    `send_text`), mas agora repassando as credenciais do tenant (mesmo vazias no teste)."""
-    from app.core import whatsapp
+    """Sem vínculo configurado: comportamento antigo (mensagem completa de texto livre), agora
+    ENFILEIRADA em vez de enviada na hora (Onda 3) — quem resolve as credenciais do tenant via
+    `profile=` é o worker, na entrega real (`process_pending`), não mais o request."""
+    from sqlalchemy import select
 
-    calls: list[dict] = []
-
-    def fake_send_text(*, to, text, token=None, phone_id=None):
-        calls.append({"to": to, "text": text, "token": token, "phone_id": phone_id})
-        return "logged"
-
-    monkeypatch.setattr(whatsapp, "send_text", fake_send_text)
+    from app.modules.notifications.models import Notification
 
     c = client.post(
         "/receivables/charges",
@@ -581,34 +576,27 @@ def test_collect_with_ai_without_binding_uses_free_text_with_tenant_credentials(
     assert r.status_code == 200
     body = r.json()
     assert len(body["message"]) > 10
-    assert body["status"] == "logged"
-    assert len(calls) == 1
-    # credenciais do tenant repassadas explicitamente (None no teste, mas o parâmetro é usado)
-    assert calls[0]["token"] is None
-    assert calls[0]["phone_id"] is None
+    assert body["status"] == "queued"
+
+    notif = db.scalar(select(Notification).where(Notification.channel == "whatsapp"))
+    assert notif is not None
+    assert notif.status == "pending"
+    assert notif.purpose == "charge_reminder"
+    assert notif.whatsapp_template_name is None  # sem vínculo = texto livre, sem template
 
 
 def test_collect_with_ai_with_approved_binding_uses_template(
-    client: TestClient, headers, db, tenant_id, monkeypatch
+    client: TestClient, headers, db, tenant_id
 ):
-    """Com um template APROVADO vinculado ao propósito, usa `send_template` (não `send_text`),
-    com as 4 variáveis na ordem [nome, frase, valor, vencimento] e a Notification guardando o
-    preview RENDERIZADO (placeholders substituídos)."""
-    from app.core import whatsapp
+    """Com um template APROVADO vinculado ao propósito, a notificação enfileirada carrega o
+    template (não texto livre), com as 4 variáveis na ordem [nome, frase, valor, vencimento] —
+    a entrega real (`send_template` vs `send_text`) acontece só depois, no worker (Onda 3)."""
+    from sqlalchemy import select
+
+    from app.modules.notifications.models import Notification
 
     tpl = _make_template(db, tenant_id)
     _bind_charge_reminder(db, tenant_id, tpl.id)
-
-    text_calls: list[dict] = []
-    template_calls: list[dict] = []
-    monkeypatch.setattr(
-        whatsapp, "send_text",
-        lambda **kw: (text_calls.append(kw), "logged")[1],
-    )
-    monkeypatch.setattr(
-        whatsapp, "send_template",
-        lambda **kw: (template_calls.append(kw), "logged")[1],
-    )
 
     cl = client.post(
         "/crm/clients", json={"name": "Maria Cliente", "phone": "5511999990000"}, headers=headers
@@ -621,11 +609,10 @@ def test_collect_with_ai_with_approved_binding_uses_template(
     r = client.post(f"/receivables/charges/{c['id']}/collect", headers=headers)
     assert r.status_code == 200
 
-    assert not text_calls  # não usou o caminho de texto livre
-    assert len(template_calls) == 1
-    call = template_calls[0]
-    assert call["template_name"] == "cobranca_padrao"
-    variables = call["variables"]
+    notif = db.scalar(select(Notification).where(Notification.channel == "whatsapp"))
+    assert notif is not None
+    assert notif.whatsapp_template_name == "cobranca_padrao"
+    variables = notif.whatsapp_template_variables
     assert len(variables) == 4
     assert variables[0] == "Maria Cliente"
     assert variables[2] == "R$ 150,00"
@@ -633,10 +620,7 @@ def test_collect_with_ai_with_approved_binding_uses_template(
     # frase (variável 2) não deve conter placeholder [NOME] cru nem ficar vazia
     assert variables[1]
 
-    notifs = client.get("/notifications", headers=headers).json()
-    whatsapp_notifs = [n for n in notifs if n["channel"] == "whatsapp"]
-    assert whatsapp_notifs
-    rendered = whatsapp_notifs[0]["message"]
+    rendered = notif.message
     assert "{{" not in rendered  # placeholders substituídos, não crus
     assert "Maria Cliente" in rendered
 
@@ -670,17 +654,13 @@ def test_collect_with_ai_with_pending_binding_falls_back_to_free_text(
 
 
 def test_send_message_manual_uses_tenant_credentials(
-    client: TestClient, headers, monkeypatch
+    client: TestClient, headers, db
 ):
-    """Mensagem manual continua texto livre (não vira template), mas agora repassa as
-    credenciais do tenant para `send_text`."""
-    from app.core import whatsapp
+    """Mensagem manual continua texto livre (não vira template), agora ENFILEIRADA (Onda 3) —
+    quem resolve as credenciais do tenant é o worker, na entrega real."""
+    from sqlalchemy import select
 
-    calls: list[dict] = []
-    monkeypatch.setattr(
-        whatsapp, "send_text",
-        lambda **kw: (calls.append(kw), "logged")[1],
-    )
+    from app.modules.notifications.models import Notification
 
     c = client.post("/receivables/charges", json=_charge(), headers=headers).json()
     r = client.post(
@@ -689,10 +669,12 @@ def test_send_message_manual_uses_tenant_credentials(
         headers=headers,
     )
     assert r.status_code == 200
-    assert len(calls) == 1
-    assert calls[0]["text"] == "Oi, passando para lembrar 🙂"
-    assert "token" in calls[0]
-    assert "phone_id" in calls[0]
+
+    notif = db.scalar(select(Notification).where(Notification.channel == "whatsapp"))
+    assert notif is not None
+    assert notif.message == "Oi, passando para lembrar 🙂"
+    assert notif.status == "pending"
+    assert notif.purpose == "charge_reminder"
 
 
 def test_unset_charge_chart_account(client: TestClient, headers):

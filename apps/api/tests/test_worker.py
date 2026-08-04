@@ -168,3 +168,48 @@ def test_run_sweep_continues_across_tenants(db, monkeypatch):
     assert result["tenants_checked"] == 2
     assert result["notifications_processed"] == 2
     assert len(result["errors"]) == 2  # um erro de tick por tenant, nenhum trava o sweep
+
+
+# --- Etapa 4: monitoramento de sessão Evolution ---------------------------------------------
+
+def test_run_sweep_checks_whatsapp_connections(db, monkeypatch):
+    """4ª etapa: chama whatsapp_session.service.check_connections por tenant, em sessão
+    separada das outras 3 — mesmo padrão de isolamento de falha (IV2) já testado acima."""
+    tenant = _make_tenant(db, slug="wa-check")
+    db.commit()
+
+    calls: list[str] = []
+    monkeypatch.setattr(
+        worker.whatsapp_session_service, "check_connections",
+        lambda db, *, tenant_id: calls.append(tenant_id) or 0,
+    )
+
+    cm = _cm_factory(db)
+    result = run_sweep(session_factory=cm, tenant_session_factory=cm)
+
+    assert calls == [tenant.id]
+    assert result["whatsapp_connections_dropped"] == 0
+    assert result["errors"] == []
+
+
+def test_run_sweep_isolates_whatsapp_stage_failure(db, monkeypatch):
+    # A checagem de conexão lança para o tenant, mas a fila (etapa 2, sessão separada) já
+    # tinha rodado antes — o erro da etapa 4 fica isolado em `errors`, sem derrubar o sweep.
+    tenant = _make_tenant(db, slug="wa-falha")
+    notif_service.enqueue(
+        db, tenant_id=tenant.id, channel="whatsapp", recipient="d@e.com", message="oi"
+    )
+    db.commit()
+
+    def _boom(_db, *, tenant_id):
+        raise RuntimeError("checagem de conexão explodiu")
+
+    monkeypatch.setattr(worker.whatsapp_session_service, "check_connections", _boom)
+
+    cm = _cm_factory(db)
+    result = run_sweep(session_factory=cm, tenant_session_factory=cm)
+
+    assert result["notifications_processed"] == 1  # etapa 2 rodou normalmente
+    assert len(result["errors"]) == 1
+    assert result["errors"][0]["stage"] == "whatsapp_connections"
+    assert result["errors"][0]["tenant_id"] == tenant.id

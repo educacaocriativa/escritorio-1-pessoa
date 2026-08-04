@@ -26,6 +26,47 @@ services:
       timeout: 5s
       retries: 5
 
+  redis:
+    # Exclusivo da Evolution API (sessões Baileys) — o worker do e1p continua fazendo polling
+    # no Postgres, não ganha dependência nova. Ver docs/superpowers/specs/
+    # 2026-07-30-whatsapp-evolution-multi-tenant-design.md §8.
+    image: redis:7-alpine
+    restart: unless-stopped
+    mem_limit: 128m
+    command: redis-server --maxmemory 96mb --maxmemory-policy allkeys-lru
+    volumes:
+      - evolution_redis_data:/data
+
+  evolution:
+    # WhatsApp por Evolution API (Baileys, não-oficial) — transporte alternativo ao Meta Cloud
+    # API. SEM `ports:` — nada publicado, nada no Traefik (o manager web da Evolution não existe
+    # pra fora). mem_limit RÍGIDO: se uma sessão Baileys inchar, o OOM killer mata a Evolution,
+    # não o Postgres (o WhatsApp cai, o produto continua de pé). Versão FIXADA, nunca `:latest`.
+    image: atendai/evolution-api:v2.2.3
+    restart: unless-stopped
+    mem_limit: 1g
+    environment:
+      AUTHENTICATION_API_KEY: ${EVOLUTION_API_KEY:-dev-evolution-key-troque-em-producao}
+      DATABASE_PROVIDER: postgresql
+      # Role e banco PRÓPRIOS (e1p_evolution/evolution_db) — a Evolution é software de
+      # terceiro rodando ao lado do banco do e1p; não tem por que enxergar tabelas com RLS.
+      # ATENÇÃO: este role/banco NÃO são criados automaticamente (mesma situação do e1p_app —
+      # ver CLAUDE.md §9). Antes de subir este serviço de verdade, criar manualmente uma vez:
+      #   docker exec infra-postgres-1 psql -U e1puser -d e1pdb -c \
+      #     "CREATE ROLE e1p_evolution WITH LOGIN PASSWORD 'e1p-evolution-pass'; \
+      #      CREATE DATABASE evolution_db OWNER e1p_evolution;"
+      # Validação end-to-end da Evolution (Onda 1) fica para o checklist manual, na VPS.
+      DATABASE_CONNECTION_URI: postgresql://e1p_evolution:e1p-evolution-pass@postgres:5432/evolution_db
+      REDIS_URI: redis://redis:6379/0
+      DEL_INSTANCE: 'false'
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_started
+    volumes:
+      - evolution_instances:/evolution/instances
+
   api:
     build: ../apps/api
     restart: unless-stopped
@@ -87,3 +128,5 @@ services:
 
 volumes:
   postgres_data:
+  evolution_instances:
+  evolution_redis_data:

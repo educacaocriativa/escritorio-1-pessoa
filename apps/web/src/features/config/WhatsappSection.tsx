@@ -41,8 +41,103 @@ export default function WhatsappSection() {
   return (
     <div className="space-y-6">
       <CredentialsCard />
+      <EvolutionQrCard />
       <TemplatesCard />
       <BindingsCard />
+    </div>
+  );
+}
+
+/** Card "Conectar por QR Code" — onboarding pela Evolution API. Alternativa ao Meta Cloud API
+ * (ver CredentialsCard abaixo): o tenant escaneia o QR, sem colar credencial nenhuma. */
+function EvolutionQrCard() {
+  const [provider, setProvider] = useState<TenantProfile["whatsapp_provider"]>(null);
+  const [qr, setQr] = useState<string | null>(null);
+  const [connecting, setConnecting] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const loadProfile = useCallback(async () => {
+    const { data } = await api.get<TenantProfile>("/settings/profile");
+    setProvider(data.whatsapp_provider);
+  }, []);
+
+  useEffect(() => {
+    loadProfile();
+  }, [loadProfile]);
+
+  useEffect(() => {
+    if (!qr) return;
+    const interval = setInterval(async () => {
+      const { data } = await api.get<{ status: string }>("/whatsapp-session/status");
+      if (data.status === "connected") {
+        await api.post("/whatsapp-session/confirm");
+        setQr(null);
+        setConnecting(false);
+        await loadProfile();
+      }
+    }, 3000);
+    return () => clearInterval(interval);
+  }, [qr, loadProfile]);
+
+  async function connect() {
+    setConnecting(true);
+    setError(null);
+    try {
+      const { data } = await api.post<{ qr_base64: string }>("/whatsapp-session/connect");
+      setQr(data.qr_base64);
+    } catch (err) {
+      setError(apiErrorMessage(err));
+      setConnecting(false);
+    }
+  }
+
+  async function disconnect() {
+    await api.delete("/whatsapp-session");
+    setQr(null);
+    setConnecting(false);
+    await loadProfile();
+  }
+
+  return (
+    <div className="rounded-2xl bg-white p-5 shadow-sm">
+      <div className="mb-1 flex items-center justify-between">
+        <h2 className="font-semibold text-neutral-800">WhatsApp por QR Code (Evolution)</h2>
+        {provider === "evolution" && (
+          <span className="flex items-center gap-1 rounded-pill bg-green-50 px-3 py-1 text-xs font-semibold text-green-700">
+            <Check size={12} /> Conectado
+          </span>
+        )}
+      </div>
+      <p className="mb-4 text-xs text-neutral-400">
+        Alternativa ao WhatsApp Business (Meta) abaixo — escaneie um QR Code com o WhatsApp do
+        seu negócio, sem precisar de conta na Meta.
+      </p>
+
+      {error && (
+        <div className="mb-3 rounded-lg bg-red-50 px-3 py-2 text-sm text-danger">{error}</div>
+      )}
+
+      {provider === "evolution" ? (
+        <button
+          onClick={disconnect}
+          className="rounded-pill border border-neutral-200 px-4 py-2 text-sm font-semibold text-neutral-600 hover:bg-neutral-50"
+        >
+          Desconectar
+        </button>
+      ) : qr ? (
+        <div className="flex flex-col items-center gap-3">
+          <img src={qr} alt="QR Code do WhatsApp" className="h-56 w-56" />
+          <p className="text-xs text-neutral-400">Escaneie com o WhatsApp do seu negócio</p>
+        </div>
+      ) : (
+        <button
+          onClick={connect}
+          disabled={connecting}
+          className="rounded-pill bg-primary-600 px-5 py-2 text-sm font-semibold text-white hover:bg-primary-700 disabled:opacity-50"
+        >
+          {connecting ? "Conectando..." : "Conectar por QR Code"}
+        </button>
+      )}
     </div>
   );
 }

@@ -4,7 +4,12 @@ Cobre: enfileiramento (status=pending), entrega marca sent/logged conforme o ret
 isolamento de falha (uma notificação que lança NÃO impede as demais — IV2), respeito ao `limit`,
 e roteamento por canal (email → email.send_email; senão → whatsapp.send_text). SQLite em memória
 (fixture `db`), providers mockados via monkeypatch (não bate em rede real).
+
+Onda 3 acrescenta: validade (`expires_at`) — vencida nunca tenta entregar — e retry com backoff
+exponencial limitado pela validade (ver classes de teste no final do arquivo).
 """
+from datetime import UTC, datetime, timedelta
+
 from sqlalchemy import select
 
 from app.core import email, whatsapp
@@ -36,7 +41,9 @@ def test_enqueue_creates_pending(db):
 def test_process_pending_marks_sent(db, monkeypatch):
     _pending(db)
     monkeypatch.setattr(
-        whatsapp, "send_text", lambda *, to, text, token=None, phone_id=None: "sent"
+        whatsapp,
+        "send_text",
+        lambda *, to, text, profile=None, token=None, phone_id=None: "sent",
     )
     processed = service.process_pending(db, tenant_id=TENANT)
     assert processed == 1
@@ -55,10 +62,13 @@ def test_process_pending_logged_without_provider(db):
 
 def test_failure_is_isolated_and_recorded(db, monkeypatch):
     # A 1ª notificação (msg "boom") faz o provedor lançar; a 2ª deve ser processada mesmo assim.
+    # Onda 3: sem expires_at, a falha REAGENDA (pending + next_attempt_at) em vez de "failed"
+    # terminal — ver test_failed_delivery_reschedules_with_backoff_within_validity para o caso
+    # com validade, e test_backoff_never_schedules_past_expiry para o caso que expira.
     _pending(db, message="boom")
     _pending(db, message="ok")
 
-    def _flaky(*, to, text, token=None, phone_id=None):
+    def _flaky(*, to, text, profile=None, token=None, phone_id=None):
         if "boom" in text:
             raise RuntimeError("provedor caiu")
         return "sent"
@@ -69,9 +79,10 @@ def test_failure_is_isolated_and_recorded(db, monkeypatch):
 
     failed = db.scalar(select(Notification).where(Notification.message == "boom"))
     ok = db.scalar(select(Notification).where(Notification.message == "ok"))
-    assert failed.status == "failed"
+    assert failed.status == "pending"  # reagendada (backoff), não mais terminal
     assert "provedor caiu" in failed.last_error
     assert failed.attempts == 1
+    assert failed.next_attempt_at is not None
     assert ok.status == "sent"
 
 
@@ -79,7 +90,9 @@ def test_process_pending_respects_limit(db, monkeypatch):
     for i in range(3):
         _pending(db, message=f"msg-{i}")
     monkeypatch.setattr(
-        whatsapp, "send_text", lambda *, to, text, token=None, phone_id=None: "sent"
+        whatsapp,
+        "send_text",
+        lambda *, to, text, profile=None, token=None, phone_id=None: "sent",
     )
     processed = service.process_pending(db, tenant_id=TENANT, limit=2)
     assert processed == 2
@@ -97,7 +110,7 @@ def test_email_channel_uses_email_sender(db, monkeypatch):
         calls["email"] += 1
         return "sent"
 
-    def _whatsapp(*, to, text, token=None, phone_id=None):
+    def _whatsapp(*, to, text, profile=None, token=None, phone_id=None):
         calls["whatsapp"] += 1
         return "sent"
 
@@ -110,7 +123,9 @@ def test_email_channel_uses_email_sender(db, monkeypatch):
 
 
 def test_process_pending_passes_tenant_credentials_to_send_text(db, monkeypatch):
-    """Caminho legado/sem template: token/phone_id do TENANT (não só posicional to/text)."""
+    """Caminho legado/sem template: o TenantProfile do tenant (não token/phone_id crus) chega
+    a send_text via `profile=` — ver despachante em app/core/whatsapp/__init__.py (Onda 0 da
+    feature de WhatsApp por Evolution API)."""
     db.add(
         TenantProfile(
             tenant_id=TENANT, whatsapp_token="tok-123", whatsapp_phone_id="phone-456"
@@ -121,15 +136,15 @@ def test_process_pending_passes_tenant_credentials_to_send_text(db, monkeypatch)
 
     captured: dict = {}
 
-    def _send_text(*, to, text, token=None, phone_id=None):
-        captured.update(to=to, text=text, token=token, phone_id=phone_id)
+    def _send_text(*, to, text, profile=None, token=None, phone_id=None):
+        captured.update(to=to, text=text, profile=profile, token=token, phone_id=phone_id)
         return "sent"
 
     monkeypatch.setattr(whatsapp, "send_text", _send_text)
     processed = service.process_pending(db, tenant_id=TENANT)
     assert processed == 1
-    assert captured["token"] == "tok-123"
-    assert captured["phone_id"] == "phone-456"
+    assert captured["profile"].whatsapp_token == "tok-123"
+    assert captured["profile"].whatsapp_phone_id == "phone-456"
 
 
 def test_process_pending_uses_send_template_when_fields_set(db, monkeypatch):
@@ -148,7 +163,8 @@ def test_process_pending_uses_send_template_when_fields_set(db, monkeypatch):
 
     calls = {"template": 0, "text": 0}
 
-    def _send_template(*, to, token, phone_id, template_name, language, variables):
+    def _send_template(*, to, template_name, language, variables, profile=None, token=None,
+                       phone_id=None):
         calls["template"] += 1
         assert to == "dono@example.com"
         assert template_name == "tmpl_client_moved"
@@ -167,3 +183,83 @@ def test_process_pending_uses_send_template_when_fields_set(db, monkeypatch):
     assert calls["template"] == 1
     assert calls["text"] == 0
     assert db.scalar(select(Notification)).status == "sent"
+
+
+def test_process_pending_expires_past_due_without_attempting_delivery(db, monkeypatch):
+    n = _pending(db)
+    n.expires_at = datetime.now(UTC) - timedelta(minutes=1)
+    db.commit()
+
+    def _boom(**_k):
+        raise AssertionError("não deveria tentar entregar notificação vencida")
+
+    monkeypatch.setattr(whatsapp, "send_text", _boom)
+    processed = service.process_pending(db, tenant_id=TENANT)
+    assert processed == 1  # "processada" = decidida (expirada), não necessariamente entregue
+    assert db.scalar(select(Notification)).status == "expired"
+
+
+def test_process_pending_delivers_when_not_yet_expired(db, monkeypatch):
+    n = _pending(db)
+    n.expires_at = datetime.now(UTC) + timedelta(hours=1)
+    db.commit()
+    monkeypatch.setattr(
+        whatsapp, "send_text",
+        lambda *, to, text, profile=None, token=None, phone_id=None: "sent",
+    )
+    service.process_pending(db, tenant_id=TENANT)
+    assert db.scalar(select(Notification)).status == "sent"
+
+
+def test_failed_delivery_reschedules_with_backoff_within_validity(db, monkeypatch):
+    n = _pending(db, message="boom")
+    n.expires_at = datetime.now(UTC) + timedelta(hours=2)
+    db.commit()
+
+    def _flaky(*, to, text, profile=None, token=None, phone_id=None):
+        raise RuntimeError("provedor caiu")
+
+    monkeypatch.setattr(whatsapp, "send_text", _flaky)
+    service.process_pending(db, tenant_id=TENANT)
+    db.refresh(n)
+    assert n.status == "pending"  # NÃO "failed" terminal — ainda dentro da validade
+    assert n.attempts == 1
+    assert n.next_attempt_at is not None
+    # SQLite devolve datetime naive mesmo para uma coluna timezone=True — normaliza pra UTC
+    # antes de comparar (mesmo padrão já usado em whatsapp_inbox.is_within_session_window).
+    next_attempt = n.next_attempt_at
+    if next_attempt.tzinfo is None:
+        next_attempt = next_attempt.replace(tzinfo=UTC)
+    assert next_attempt > datetime.now(UTC)
+
+
+def test_process_pending_skips_notification_before_next_attempt_at(db, monkeypatch):
+    n = _pending(db)
+    n.next_attempt_at = datetime.now(UTC) + timedelta(minutes=10)
+    db.commit()
+
+    def _boom(**_k):
+        raise AssertionError("não deveria tentar antes de next_attempt_at")
+
+    monkeypatch.setattr(whatsapp, "send_text", _boom)
+    processed = service.process_pending(db, tenant_id=TENANT)
+    assert processed == 0
+    db.refresh(n)
+    assert n.status == "pending"
+
+
+def test_backoff_never_schedules_past_expiry(db, monkeypatch):
+    n = _pending(db, message="boom")
+    n.expires_at = datetime.now(UTC) + timedelta(minutes=5)  # validade curta
+    n.attempts = 5  # backoff 2**5=32min já estouraria a validade de 5min
+    db.commit()
+
+    def _flaky(*, to, text, profile=None, token=None, phone_id=None):
+        raise RuntimeError("falha")
+
+    monkeypatch.setattr(whatsapp, "send_text", _flaky)
+    service.process_pending(db, tenant_id=TENANT)
+    db.refresh(n)
+    # o backoff bateria além da validade — a notificação expira em vez de reagendar pra depois
+    # do próprio prazo de validade.
+    assert n.status == "expired"

@@ -31,6 +31,38 @@ services:
       retries: 5
     networks: [db_internal]
 
+  redis:
+    image: redis:7-alpine
+    restart: always
+    mem_limit: 128m
+    command: redis-server --maxmemory 96mb --maxmemory-policy allkeys-lru
+    volumes:
+      - evolution_redis_data:/data
+    networks: [db_internal]
+
+  evolution:
+    # WhatsApp por Evolution API (Baileys, não-oficial) — transporte alternativo ao Meta Cloud
+    # API. SEM `ports:` e SEM rede `edge` — não é HTTP-facing, não precisa do Traefik
+    # compartilhado. mem_limit RÍGIDO: se uma sessão Baileys inchar, o OOM killer mata a
+    # Evolution, não o Postgres. Versão FIXADA, nunca `:latest`.
+    image: atendai/evolution-api:v2.2.3
+    restart: always
+    mem_limit: 1g
+    environment:
+      AUTHENTICATION_API_KEY: ${EVOLUTION_API_KEY:?defina no .env.prod}
+      DATABASE_PROVIDER: postgresql
+      DATABASE_CONNECTION_URI: postgresql://e1p_evolution:${EVOLUTION_DB_PASSWORD:?defina no .env.prod}@postgres:5432/evolution_db
+      REDIS_URI: redis://redis:6379/0
+      DEL_INSTANCE: 'false'
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_started
+    volumes:
+      - evolution_instances:/evolution/instances
+    networks: [db_internal]
+
   api:
     build: ../apps/api
     restart: always
@@ -168,3 +200,5 @@ volumes:
   postgres_data:
   uploads_data:
   generated_data:
+  evolution_instances:
+  evolution_redis_data:
