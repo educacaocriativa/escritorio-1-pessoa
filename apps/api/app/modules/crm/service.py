@@ -4,6 +4,8 @@ Sessão já isolada por tenant (RLS). tenant_id só carimba novas linhas.
 """
 from __future__ import annotations
 
+from datetime import datetime
+
 from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
@@ -21,6 +23,9 @@ from app.modules.crm.models import (
     PipelineStage,
 )
 from app.modules.crm.schemas import ClientCreate, ClientUpdate, StageCreate, StageUpdate
+# Só o MODELO do inbox, nunca o service dele: `whatsapp_inbox/service.py` importa de `crm`,
+# então importar o service aqui fecharia ciclo. `whatsapp_inbox/models.py` não importa `crm`.
+from app.modules.whatsapp_inbox.models import WhatsappMessage
 
 EVENT_CLIENT_MOVED = "crm.client.moved"
 EVENT_CLIENT_CREATED = "crm.client.created"
@@ -434,6 +439,35 @@ def move_client(
         is_lost=target.is_lost,
     )
     return client
+
+
+def last_interaction_map(db: Session) -> dict[str, datetime]:
+    """Data da última interação por contato, para o card do Kanban.
+
+    Duas consultas AGRUPADAS para o board inteiro, em vez de uma coluna
+    `clients.last_interaction_at`. Coluna seria um valor derivado guardado — a forma exata do
+    bug que a Onda 0 do Epic 8 corrigiu — e dessincronizaria no primeiro caminho de escrita
+    que alguém esquecesse de atualizar. Assim é correto por construção.
+
+    A sessão já está isolada por tenant (RLS): nada de filtro manual de `tenant_id`.
+    """
+    ultimo: dict[str, datetime] = {}
+    for tabela, coluna in (
+        (ClientEvent, ClientEvent.client_id),
+        (WhatsappMessage, WhatsappMessage.client_id),
+    ):
+        linhas = db.execute(
+            select(coluna, func.max(tabela.created_at))
+            .where(coluna.is_not(None))
+            .group_by(coluna)
+        ).all()
+        for client_id, quando in linhas:
+            if quando is None:
+                continue
+            atual = ultimo.get(client_id)
+            if atual is None or quando > atual:
+                ultimo[client_id] = quando
+    return ultimo
 
 
 def build_board(db: Session, tenant_id: str) -> list[tuple[PipelineStage, list[Client]]]:

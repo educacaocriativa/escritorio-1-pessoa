@@ -9,6 +9,7 @@ from app.modules.crm import service, timeline
 from app.modules.crm.models import KIND_NOTE
 from app.modules.crm.schemas import (
     Board,
+    BoardClient,
     BoardColumn,
     ClientCreate,
     ClientOut,
@@ -40,11 +41,18 @@ def get_board(
     db: Session = Depends(get_tenant_db),
 ) -> Board:
     columns = service.build_board(db, user.tenant_id)
+    ultimo = service.last_interaction_map(db)
     return Board(
         columns=[
             BoardColumn(
                 stage=StageOut.model_validate(stage),
-                clients=[ClientOut.model_validate(c) for c in clients],
+                clients=[
+                    BoardClient(
+                        **ClientOut.model_validate(c).model_dump(),
+                        last_interaction_at=ultimo.get(c.id),
+                    )
+                    for c in clients
+                ],
             )
             for stage, clients in columns
         ]

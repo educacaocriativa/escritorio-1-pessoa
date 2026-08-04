@@ -84,3 +84,29 @@ def test_texto_do_evento_sobrevive_a_renomear_a_coluna(client: TestClient, heade
 
     eventos = _eventos(db, criado["id"])
     assert "Proposta" in eventos[1].title  # congelado: conta o que aconteceu naquele dia
+
+
+def _card_do_board(client: TestClient, headers, client_id: str) -> dict:
+    cols = client.get("/crm/board", headers=headers).json()["columns"]
+    return next(c for col in cols for c in col["clients"] if c["id"] == client_id)
+
+
+def test_board_traz_a_data_da_ultima_interacao(client: TestClient, headers):
+    criado = client.post("/crm/clients", json={"name": "Flavio Kato"}, headers=headers).json()
+    card = _card_do_board(client, headers, criado["id"])
+    # já existe o lead_created, então a data nunca vem vazia para contato criado pelo app
+    assert card["last_interaction_at"] is not None
+
+
+def test_data_da_ultima_interacao_avanca_com_o_movimento(client: TestClient, headers):
+    criado = client.post("/crm/clients", json={"name": "Flavio Kato"}, headers=headers).json()
+    antes = _card_do_board(client, headers, criado["id"])["last_interaction_at"]
+
+    cols = client.get("/crm/board", headers=headers).json()["columns"]
+    proposta = next(c["stage"] for c in cols if c["stage"]["name"] == "Proposta")
+    client.post(
+        f"/crm/clients/{criado['id']}/move", json={"stage_id": proposta["id"]}, headers=headers
+    )
+
+    depois = _card_do_board(client, headers, criado["id"])["last_interaction_at"]
+    assert depois >= antes

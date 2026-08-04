@@ -162,9 +162,21 @@ class ClientOut(BaseModel):
 # ── Board (Kanban montado) ─────────────────────────────
 
 
+class BoardClient(ClientOut):
+    """`ClientOut` + a data da última interação.
+
+    Campo separado do `ClientOut` de propósito: só o board calcula isso (via duas consultas
+    agrupadas). Se `last_interaction_at` vivesse em `ClientOut`, todo endpoint que devolve
+    cliente passaria a afirmar `null` — e `null` significaria tanto "sem interação" quanto
+    "não calculei", que são coisas diferentes.
+    """
+
+    last_interaction_at: datetime | None = None
+
+
 class BoardColumn(BaseModel):
     stage: StageOut
-    clients: list[ClientOut]
+    clients: list[BoardClient]
 
 
 class Board(BaseModel):
