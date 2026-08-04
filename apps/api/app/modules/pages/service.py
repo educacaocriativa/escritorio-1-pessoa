@@ -216,7 +216,9 @@ def public_submit(
     from app.modules.crm.schemas import ClientCreate
 
     with session_factory(snap.tenant_id) as tdb:
-        crm_service.create_client(
+        # `absorb_lead` (não `create_client`): quem já existe é complementado com a data e o
+        # texto deste envio, em vez de ganhar um card paralelo no Kanban.
+        crm_service.absorb_lead(
             tdb, tenant_id=snap.tenant_id, actor="pagina:lead",
             data=ClientCreate(
                 name=name, email=email, phone=phone or None, source="landing",
