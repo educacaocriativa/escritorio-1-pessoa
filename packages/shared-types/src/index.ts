@@ -704,6 +704,9 @@ export interface TenantProfile {
   /** WhatsApp Cloud API (Meta) — POR TENANT. true só quando token+phone_id+waba_id
    * estiverem TODOS configurados (ver `whatsapp_configured` no backend). */
   whatsapp_configured: boolean;
+  /** "meta" | "evolution" | null — qual transporte está ativo. Só muda via
+   * POST /whatsapp-session/connect+confirm (QR) ou credenciais Meta completas. */
+  whatsapp_provider: "meta" | "evolution" | null;
   whatsapp_phone_id: string;
   whatsapp_waba_id: string;
   /** Só-leitura: token de verificação do webhook (auto-gerado pelo backend), usado para

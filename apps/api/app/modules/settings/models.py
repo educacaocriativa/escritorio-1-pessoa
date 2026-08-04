@@ -69,3 +69,8 @@ class TenantProfile(Base, TenantMixin, TimestampMixin):
     # Vínculo propósito→template (dict[str, str], chaves em whatsapp_templates.PURPOSES).
     # Propósito ausente/sem valor = fluxo correspondente ainda usa texto livre (send_text).
     whatsapp_template_bindings: Mapped[dict] = mapped_column(JSON, default=dict, nullable=False)
+    # Transporte ativo: "meta" | "evolution" | None. None = nenhum transporte ativo (estado de
+    # hoje — nenhum tenant existente muda de comportamento). Só muda via
+    # POST /whatsapp-session/connect+confirm (QR) ou credenciais Meta completas — nunca
+    # setável direto por PATCH /settings/profile (ver ProfileUpdate).
+    whatsapp_provider: Mapped[str | None] = mapped_column(String(16), nullable=True)

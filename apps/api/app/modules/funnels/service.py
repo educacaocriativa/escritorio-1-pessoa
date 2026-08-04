@@ -12,6 +12,11 @@ from app.core import ai, audit
 from app.modules.funnels.models import Funnel
 from app.modules.funnels.schemas import FunnelCreate, FunnelUpdate
 
+# Propósito do nó de WhatsApp do funil, pra fila de notificações (Onda 3 — não é um dos 5
+# propósitos fixos de whatsapp_templates.models: aqui o conteúdo é livre, configurado pelo
+# usuário no builder, não um vínculo fixo por fluxo do produto).
+PURPOSE_FUNNEL_NODE = "funnel_node"
+
 
 def _i(key: str, label: str, description: str) -> dict:
     return {"key": key, "label": label, "description": description}
@@ -329,11 +334,12 @@ def run_node(
 ) -> dict:
     from datetime import UTC, datetime, timedelta
 
-    from app.core import email, whatsapp
+    from app.core import email
     from app.modules.auth.models import User
     from app.modules.crm import service as crm_service
     from app.modules.crm.models import Client
     from app.modules.crm.schemas import ClientCreate
+    from app.modules.notifications import service as notifications_service
     from app.modules.notifications.models import Notification
     from app.modules.quotes import service as quotes_service
     from app.modules.quotes.schemas import QuoteCreate, QuoteItem
@@ -450,17 +456,12 @@ def run_node(
         to_phone = _team_phone() if to_team else (c.phone or "")
         recipient = to_phone or c.name
         resolved_vars = [_resolve_template_variable(v, c) for v in (params.get("variables") or [])]
-        profile = settings_service.get_profile(db, tenant_id)
-        status = whatsapp.send_template(
-            to=to_phone, token=profile.whatsapp_token or "",
-            phone_id=profile.whatsapp_phone_id or "",
-            template_name=tpl.name, language=tpl.language, variables=resolved_vars,
-        )
         rendered = _render_template_preview(tpl.body_text, resolved_vars)
-        db.add(Notification(
-            tenant_id=tenant_id, channel="whatsapp", recipient=recipient,
-            client_id=c.id, message=rendered, status=status,
-        ))
+        notifications_service.enqueue(
+            db, tenant_id=tenant_id, channel="whatsapp", recipient=recipient, client_id=c.id,
+            message=rendered, purpose=PURPOSE_FUNNEL_NODE, whatsapp_template_name=tpl.name,
+            whatsapp_template_language=tpl.language, whatsapp_template_variables=resolved_vars,
+        )
         audit.record(db, tenant_id=tenant_id, actor=actor, action="funnel.run.message", target=c.id)
         db.commit()
         who = "equipe" if to_team else c.name

@@ -36,6 +36,7 @@ from app.modules.notifications import service as notifications_service
 from app.modules.payables import service as payables_service
 from app.modules.receivables import service as receivables_service
 from app.modules.whatsapp_inbox import service as whatsapp_inbox_service
+from app.modules.whatsapp_session import service as whatsapp_session_service
 from app.seed import PLATFORM_SLUG
 
 logging.basicConfig(level=logging.INFO)
@@ -60,7 +61,7 @@ def run_sweep(
     `conftest.py::_override_factory`): os testes passam factories apontando à sessão SQLite
     compartilhada, sem depender de Postgres real.
 
-    Uma falha em um tenant (ou numa das QUATRO etapas) é logada e NÃO trava o sweep dos demais
+    Uma falha em um tenant (ou numa das CINCO etapas) é logada e NÃO trava o sweep dos demais
     (IV2) — o erro é acumulado na chave `errors` do resultado. Cada etapa abre sessão SEPARADA por
     tenant, para que uma falha numa não impeça as seguintes.
 
@@ -86,6 +87,7 @@ def run_sweep(
         # trilha de auditoria (`payable.scheduled_promoted` × `receivable.scheduled_promoted`),
         # que é o lugar onde a granularidade tem consumidor real.
         "scheduled_promoted": 0,
+        "whatsapp_connections_dropped": 0,
         "errors": [],
     }
 
@@ -163,14 +165,26 @@ def run_sweep(
                 {"tenant_id": tenant_id, "stage": "scheduled_promote", "error": str(exc)}
             )
 
+        # Etapa 5 — monitora quedas de sessão Evolution (sessão SEPARADA das outras quatro).
+        try:
+            with tenant_session_factory(tenant_id) as db:
+                dropped = whatsapp_session_service.check_connections(db, tenant_id=tenant_id)
+            result["whatsapp_connections_dropped"] += dropped
+        except Exception as exc:  # noqa: BLE001 — idem: isola a falha por tenant (IV2)
+            logger.exception("[worker] checagem de conexão whatsapp falhou tenant=%s", tenant_id)
+            result["errors"].append(
+                {"tenant_id": tenant_id, "stage": "whatsapp_connections", "error": str(exc)}
+            )
+
     logger.info(
         "[worker] sweep: tenants=%s funil_resumido=%s notificacoes=%s midia_whatsapp=%s "
-        "agendadas_promovidas=%s erros=%s",
+        "agendadas_promovidas=%s conexoes_whatsapp_caidas=%s erros=%s",
         result["tenants_checked"],
         result["funnel_resumed"],
         result["notifications_processed"],
         result["whatsapp_media_processed"],
         result["scheduled_promoted"],
+        result["whatsapp_connections_dropped"],
         len(result["errors"]),
     )
     return result

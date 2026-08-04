@@ -9,8 +9,10 @@ Story 4.3).
 from __future__ import annotations
 
 import logging
+from datetime import UTC, datetime, timedelta
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.core import email, events, whatsapp
@@ -20,6 +22,7 @@ from app.modules.crm.models import Client, PipelineStage
 from app.modules.crm.service import EVENT_CLIENT_MOVED
 from app.modules.notifications.models import Notification
 from app.modules.settings import service as settings_service
+from app.modules.whatsapp_session.models import PublicWhatsappInstance
 from app.modules.whatsapp_templates.models import (
     PURPOSE_CLIENT_MOVED,
     STATUS_APPROVED,
@@ -72,6 +75,30 @@ def _render_template_preview(body_text: str, variables: list[str]) -> str:
     return rendered
 
 
+# Validade por propósito (spec §7): dinheiro-com-data expira no fim do dia do tenant;
+# operacional expira em 1h. Ausente da tabela (ou purpose=None) = nunca expira (compat).
+_MONEY_PURPOSES = frozenset({"charge_reminder", "contract_send", "quote_send"})
+_ONE_HOUR_PURPOSES = frozenset({"client_moved", "staff_invite", "funnel_node"})
+
+
+def _compute_expires_at(db: Session, *, tenant_id: str, purpose: str | None) -> datetime | None:
+    if purpose is None:
+        return None
+    now = datetime.now(UTC)
+    if purpose in _ONE_HOUR_PURPOSES:
+        return now + timedelta(hours=1)
+    if purpose in _MONEY_PURPOSES:
+        profile = settings_service.get_profile(db, tenant_id)
+        try:
+            tz = ZoneInfo(profile.timezone)
+        except (ZoneInfoNotFoundError, ValueError):
+            tz = ZoneInfo("America/Sao_Paulo")
+        local_now = now.astimezone(tz)
+        end_of_day_local = local_now.replace(hour=23, minute=59, second=59, microsecond=0)
+        return end_of_day_local.astimezone(UTC)
+    return None  # propósito desconhecido — não inventa validade
+
+
 def enqueue(
     db: Session,
     *,
@@ -80,6 +107,7 @@ def enqueue(
     recipient: str,
     message: str,
     client_id: str | None = None,
+    purpose: str | None = None,
     whatsapp_template_name: str | None = None,
     whatsapp_template_language: str | None = None,
     whatsapp_template_variables: list | None = None,
@@ -97,6 +125,10 @@ def enqueue(
     `whatsapp_template_*` (opcionais): template resolvido no ENFILEIRAMENTO (quando o propósito
     tem um vínculo aprovado) — o worker (`process_pending`) usa esses campos pra decidir entre
     `send_template` e `send_text`, sem precisar recalcular o vínculo depois.
+
+    `purpose` (Onda 3): resolve a validade (`expires_at`) — dinheiro-com-data expira no fim do
+    dia do tenant, operacional em 1h. `None` (chamadores anteriores à Onda 3) nunca expira,
+    preservando o comportamento de hoje.
     """
     if not recipient or not recipient.strip():
         raise NotificationError("destinatário (recipient) vazio ou inválido")
@@ -108,6 +140,8 @@ def enqueue(
         client_id=client_id,
         status="pending",
         attempts=0,
+        purpose=purpose,
+        expires_at=_compute_expires_at(db, tenant_id=tenant_id, purpose=purpose),
         whatsapp_template_name=whatsapp_template_name,
         whatsapp_template_language=whatsapp_template_language,
         whatsapp_template_variables=whatsapp_template_variables,
@@ -117,28 +151,92 @@ def enqueue(
     return notification
 
 
+# Freio anti-ban (spec §7) — só para o transporte Evolution. Fixo no código, não configurável
+# pelo tenant (mesma razão da banda de conferência do Epic 8: quem ajusta o próprio limite
+# ajusta até ele parar de proteger).
+_EVOLUTION_MAX_PER_SWEEP = 5
+_EVOLUTION_WARMUP_CAPS = [
+    (3, 20),   # dias 1-3 desde a conexão: 20/dia
+    (7, 50),   # dias 4-7: 50/dia
+]
+_EVOLUTION_STEADY_CAP = 150  # dia 8+
+
+
+def _evolution_daily_cap(instance: PublicWhatsappInstance) -> int:
+    # SQLite devolve datetime naive mesmo para uma coluna timezone=True — normaliza pra UTC
+    # antes de subtrair (mesmo padrão de whatsapp_inbox.is_within_session_window).
+    connected_at = instance.created_at
+    if connected_at.tzinfo is None:
+        connected_at = connected_at.replace(tzinfo=UTC)
+    days_connected = (datetime.now(UTC) - connected_at).days
+    for max_days, cap in _EVOLUTION_WARMUP_CAPS:
+        if days_connected <= max_days:
+            return cap
+    return _EVOLUTION_STEADY_CAP
+
+
+def _evolution_sent_today(db: Session, *, tenant_id: str) -> int:
+    """Conta quantas notificações whatsapp JÁ FORAM entregues hoje (status != pending/expired)
+    — usado só pro teto diário Evolution."""
+    today_start = datetime.now(UTC).replace(hour=0, minute=0, second=0, microsecond=0)
+    return db.scalar(
+        select(func.count()).select_from(Notification).where(
+            Notification.channel == "whatsapp",
+            Notification.status.in_(("sent", "logged")),
+            Notification.updated_at >= today_start,
+        )
+    ) or 0
+
+
 def process_pending(db: Session, *, tenant_id: str, limit: int = 50) -> int:
     """Processa a fila de notificações `pending` do tenant. Retorna quantas foram processadas.
 
     Chamado pelo worker (`app.worker.run_sweep`). Uma falha ao entregar UMA notificação NÃO
-    interrompe as demais (IV2): cada envio é isolado em try/except e o erro fica registrado em
-    `status="failed"`/`last_error`. Só reprocessa linhas `pending` — uma vez entregue (sent/logged)
-    ou falha, a notificação sai do conjunto processável (idempotente; sem retry automático nesta
-    story — `attempts`/`last_error` ficam para uma dívida futura de retry-with-backoff).
+    interrompe as demais (IV2): cada envio é isolado em try/except.
+
+    Onda 3 — validade e retry: uma notificação com `expires_at` vencido nunca tenta entregar,
+    vira `expired` direto. Uma falha de entrega REAGENDA (`next_attempt_at`, backoff
+    exponencial `2**attempts` minutos, capado em 60min) em vez de marcar `failed` terminal —
+    mas nunca além da própria validade: se o backoff estouraria `expires_at`, expira em vez de
+    reagendar pra depois do próprio prazo.
+
+    Onda 3 — freio anti-ban: só para tenants no transporte Evolution. No máximo
+    `_EVOLUTION_MAX_PER_SWEEP` por sweep, e um teto DIÁRIO com aquecimento (mais baixo nos
+    primeiros dias de conexão). Responder quem escreveu primeiro (inbox, síncrono) não passa
+    por aqui — o freio vive só neste caminho da fila.
     """
+    now = datetime.now(UTC)
+    profile = settings_service.get_profile(db, tenant_id)
+    max_this_sweep = limit
+    if profile.whatsapp_provider == "evolution":
+        instance = db.get(PublicWhatsappInstance, f"e1p-{tenant_id}")
+        if instance is not None:
+            daily_cap = _evolution_daily_cap(instance)
+            already_sent = _evolution_sent_today(db, tenant_id=tenant_id)
+            remaining_today = max(0, daily_cap - already_sent)
+            max_this_sweep = min(limit, _EVOLUTION_MAX_PER_SWEEP, remaining_today)
+
     pending = list(
         db.scalars(
             select(Notification)
-            .where(Notification.status == "pending")
+            .where(
+                Notification.status == "pending",
+                (Notification.next_attempt_at.is_(None))
+                | (Notification.next_attempt_at <= now),
+            )
             .order_by(Notification.created_at)
-            .limit(limit)
+            .limit(max_this_sweep)
         ).all()
     )
-    # Carregado uma vez por sweep (não por notificação) — a função já é tenant-scoped (param
-    # `tenant_id`), então o token/phone_id do provedor é o mesmo para todo o lote.
-    profile = settings_service.get_profile(db, tenant_id)
+    # `profile` já foi carregado acima (mesmo lote, mesmo tenant) — reaproveitado aqui pro
+    # send_text/send_template de cada notificação.
     processed = 0
     for notification in pending:
+        if notification.expires_at is not None and notification.expires_at < now:
+            notification.status = "expired"
+            notification.attempts += 1
+            processed += 1
+            continue
         try:
             if notification.channel == "email":
                 status = email.send_email(
@@ -149,8 +247,7 @@ def process_pending(db: Session, *, tenant_id: str, limit: int = 50) -> int:
             elif notification.whatsapp_template_name:
                 status = whatsapp.send_template(
                     to=notification.recipient,
-                    token=profile.whatsapp_token or "",
-                    phone_id=profile.whatsapp_phone_id or "",
+                    profile=profile,
                     template_name=notification.whatsapp_template_name,
                     language=notification.whatsapp_template_language or "pt_BR",
                     variables=notification.whatsapp_template_variables or [],
@@ -159,16 +256,21 @@ def process_pending(db: Session, *, tenant_id: str, limit: int = 50) -> int:
                 status = whatsapp.send_text(
                     to=notification.recipient,
                     text=notification.message,
-                    token=profile.whatsapp_token,
-                    phone_id=profile.whatsapp_phone_id,
+                    profile=profile,
                 )
             notification.status = status
         except Exception as exc:  # noqa: BLE001 — isola a falha de UMA notificação (IV2)
             logger.exception(
                 "[notifications:process_pending] falha ao enviar id=%s", notification.id
             )
-            notification.status = "failed"
             notification.last_error = str(exc)[:500]
+            backoff_minutes = min(2**notification.attempts, 60)
+            candidate_next = now + timedelta(minutes=backoff_minutes)
+            if notification.expires_at is not None and candidate_next > notification.expires_at:
+                notification.status = "expired"  # o backoff estouraria a validade — expira já
+            else:
+                notification.status = "pending"  # continua pending — tenta de novo depois
+                notification.next_attempt_at = candidate_next
         notification.attempts += 1
         processed += 1
     db.commit()
@@ -221,6 +323,7 @@ def on_client_moved(*, tenant_id: str, client_id: str, to_stage: str, **_: objec
                 recipient=recipient,
                 message=message,
                 client_id=client_id,
+                purpose=PURPOSE_CLIENT_MOVED,
                 whatsapp_template_name=whatsapp_template_name,
                 whatsapp_template_language=whatsapp_template_language,
                 whatsapp_template_variables=whatsapp_template_variables,

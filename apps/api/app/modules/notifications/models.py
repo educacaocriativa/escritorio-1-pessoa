@@ -10,7 +10,9 @@ Também é a FILA de envios assíncronos (Story 4.3): uma notificação criada c
 """
 from __future__ import annotations
 
-from sqlalchemy import JSON, Integer, String, Text
+from datetime import datetime
+
+from sqlalchemy import JSON, DateTime, Integer, String, Text
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.db.base import Base, TenantMixin, TimestampMixin, _uuid
@@ -36,3 +38,10 @@ class Notification(Base, TenantMixin, TimestampMixin):
     whatsapp_template_name: Mapped[str | None] = mapped_column(String(512), nullable=True)
     whatsapp_template_language: Mapped[str | None] = mapped_column(String(10), nullable=True)
     whatsapp_template_variables: Mapped[list | None] = mapped_column(JSON, nullable=True)
+    # Propósito do envio (Onda 3) — resolve a validade em notifications/service.py. None =
+    # notificação antiga (pré-Onda 3), nunca expira sozinha.
+    purpose: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    next_attempt_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )

@@ -21,6 +21,39 @@ services:
       retries: 5
     networks: [internal]
 
+  redis:
+    image: redis:7-alpine
+    restart: always
+    mem_limit: 128m
+    command: redis-server --maxmemory 96mb --maxmemory-policy allkeys-lru
+    volumes:
+      - evolution_redis_data:/data
+    networks: [internal]
+
+  evolution:
+    # WhatsApp por Evolution API (Baileys, não-oficial) — transporte alternativo ao Meta Cloud
+    # API. SEM `ports:` — nada publicado, nada no Caddy/Traefik. mem_limit RÍGIDO: se uma sessão
+    # Baileys inchar, o OOM killer mata a Evolution, não o Postgres. Versão FIXADA, nunca `:latest`.
+    image: evoapicloud/evolution-api:v2.3.7
+    restart: always
+    mem_limit: 1g
+    environment:
+      AUTHENTICATION_API_KEY: ${EVOLUTION_API_KEY:?defina no .env.prod}
+      DATABASE_PROVIDER: postgresql
+      DATABASE_CONNECTION_URI: postgresql://e1p_evolution:${EVOLUTION_DB_PASSWORD:?defina no .env.prod}@postgres:5432/evolution_db
+      CACHE_REDIS_ENABLED: 'true'
+      CACHE_REDIS_URI: redis://redis:6379/0
+      CACHE_LOCAL_ENABLED: 'false'
+      DEL_INSTANCE: 'false'
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_started
+    volumes:
+      - evolution_instances:/evolution/instances
+    networks: [internal]
+
   api:
     build: ../apps/api
     restart: always
@@ -101,3 +134,5 @@ volumes:
   generated_data:
   caddy_data:
   caddy_config:
+  evolution_instances:
+  evolution_redis_data:

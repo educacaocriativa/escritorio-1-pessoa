@@ -32,6 +32,10 @@ class ProfileOut(BaseModel):
     # WhatsApp Cloud API (Meta) — por tenant. `whatsapp_token` NUNCA é exposto aqui (só o boolean
     # de status); phone_id/waba_id não são segredos (IDs de conta), seguros para GET.
     whatsapp_configured: bool
+    # "meta" | "evolution" | None — só muda via POST /whatsapp-session/connect+confirm ou
+    # PATCH /settings/profile (credenciais Meta completas). NUNCA exposto em ProfileUpdate:
+    # setar isso direto seria "declarar conectado" sem ter conectado de verdade.
+    whatsapp_provider: str | None
     whatsapp_phone_id: str
     whatsapp_waba_id: str
     whatsapp_verify_token: str

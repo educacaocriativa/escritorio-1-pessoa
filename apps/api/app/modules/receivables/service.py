@@ -12,7 +12,7 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.config import settings
-from app.core import ai, audit, payment_gateway, whatsapp
+from app.core import ai, audit, payment_gateway
 from app.core.recurrence import advance, occurrences
 
 # O estado é DERIVADO da data, nunca escolhido (Story 8.15 AC5, herdando a 8.14). O helper é
@@ -50,6 +50,7 @@ from app.modules.chart_of_accounts import service as chart_service
 from app.modules.contracts import service as contracts_service
 from app.modules.cost_centers import service as cost_centers_service
 from app.modules.crm.models import Client
+from app.modules.notifications import service as notifications_service
 from app.modules.notifications.models import Notification
 from app.modules.receivables.models import (
     STATUS_CANCELED,
@@ -60,6 +61,7 @@ from app.modules.receivables.models import (
 )
 from app.modules.receivables.schemas import ChargeCreate
 from app.modules.wallet import service as wallet_service
+from app.modules.whatsapp_templates.models import PURPOSE_CHARGE_REMINDER
 
 logger = logging.getLogger("e1p.receivables")
 
@@ -1187,11 +1189,7 @@ def collect_with_ai(db: Session, *, charge_id: str, tenant_id: str, actor: str) 
     as credenciais do TENANT em vez do env global morto.
     """
     from app.modules.settings import service as settings_service
-    from app.modules.whatsapp_templates.models import (
-        PURPOSE_CHARGE_REMINDER,
-        STATUS_APPROVED,
-        WhatsappTemplate,
-    )
+    from app.modules.whatsapp_templates.models import STATUS_APPROVED, WhatsappTemplate
 
     charge = get_charge(db, charge_id)
     if charge.status != STATUS_OPEN:
@@ -1211,31 +1209,26 @@ def collect_with_ai(db: Session, *, charge_id: str, tenant_id: str, actor: str) 
             name, charge.amount_cents, charge.due_date, charge.description
         )
         variables = [name, phrase, valor, venc]
-        status = whatsapp.send_template(
-            to=client.phone if client and client.phone else "",
-            token=profile.whatsapp_token or "", phone_id=profile.whatsapp_phone_id or "",
-            template_name=template.name, language=template.language, variables=variables,
-        )
         message = _render_template_preview(template.body_text, variables)
+        notifications_service.enqueue(
+            db, tenant_id=tenant_id, channel="whatsapp", recipient=recipient,
+            client_id=charge.client_id, message=message, purpose=PURPOSE_CHARGE_REMINDER,
+            whatsapp_template_name=template.name, whatsapp_template_language=template.language,
+            whatsapp_template_variables=variables,
+        )
     else:
         message = _compose_dunning(name, charge.amount_cents, charge.due_date, charge.description)
-        status = whatsapp.send_text(
-            to=recipient, text=message,
-            token=profile.whatsapp_token, phone_id=profile.whatsapp_phone_id,
+        notifications_service.enqueue(
+            db, tenant_id=tenant_id, channel="whatsapp", recipient=recipient,
+            client_id=charge.client_id, message=message, purpose=PURPOSE_CHARGE_REMINDER,
         )
 
-    db.add(
-        Notification(
-            tenant_id=tenant_id, channel="whatsapp", recipient=recipient,
-            client_id=charge.client_id, message=message, status=status,
-        )
-    )
     audit.record(
         db, tenant_id=tenant_id, actor=actor, action="receivable.collect.ai",
         target=charge.id, is_ai=True,
     )
     db.commit()
-    return {"message": message, "status": status}
+    return {"message": message, "status": "queued"}
 
 
 def send_message(db: Session, *, charge_id: str, tenant_id: str, actor: str, text: str) -> dict:
@@ -1248,8 +1241,6 @@ def send_message(db: Session, *, charge_id: str, tenant_id: str, actor: str, tex
     envio conforme o estado real da conversa — não precisamos (nem podemos) simular isso aqui.
     Só passamos a usar as credenciais REAIS do tenant em vez do env global (sempre vazio agora).
     """
-    from app.modules.settings import service as settings_service
-
     text = (text or "").strip()
     if not text:
         raise ReceivableError("Mensagem vazia", 400)
@@ -1258,21 +1249,15 @@ def send_message(db: Session, *, charge_id: str, tenant_id: str, actor: str, tex
     recipient = (client.phone if client and client.phone else None) or (
         client.name if client else "cliente"
     )
-    profile = settings_service.get_profile(db, tenant_id)
-    status = whatsapp.send_text(
-        to=recipient, text=text, token=profile.whatsapp_token, phone_id=profile.whatsapp_phone_id,
-    )
-    db.add(
-        Notification(
-            tenant_id=tenant_id, channel="whatsapp", recipient=recipient,
-            client_id=charge.client_id, message=text, status=status,
-        )
+    notifications_service.enqueue(
+        db, tenant_id=tenant_id, channel="whatsapp", recipient=recipient,
+        client_id=charge.client_id, message=text, purpose=PURPOSE_CHARGE_REMINDER,
     )
     audit.record(
         db, tenant_id=tenant_id, actor=actor, action="receivable.message", target=charge.id
     )
     db.commit()
-    return {"message": text, "status": status}
+    return {"message": text, "status": "queued"}
 
 
 def charge_messages(db: Session, *, charge_id: str) -> list[Notification]:

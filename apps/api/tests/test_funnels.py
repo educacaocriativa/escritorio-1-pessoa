@@ -3,7 +3,6 @@ import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy.orm import Session
 
-from app.core import whatsapp as core_whatsapp
 from app.modules.whatsapp_templates.models import (
     STATUS_APPROVED,
     STATUS_PENDING,
@@ -174,13 +173,14 @@ def test_run_create_charge(client: TestClient, headers):
 
 
 def test_run_send_message(
-    client: TestClient, headers, db: Session, tenant_id: str, monkeypatch: pytest.MonkeyPatch
+    client: TestClient, headers, db: Session, tenant_id: str
 ):
-    captured: dict[str, object] = {}
-    monkeypatch.setattr(
-        core_whatsapp, "send_template",
-        lambda **kwargs: (captured.update(kwargs), "sent")[1],
-    )
+    """A notificação enfileirada carrega o template (Onda 3) — a entrega real (send_template)
+    acontece depois, no worker."""
+    from sqlalchemy import select
+
+    from app.modules.notifications.models import Notification
+
     tpl = _template(db, tenant_id)
     cl = client.post(
         "/crm/clients", json={"name": "Contato", "phone": "5511988887777"}, headers=headers
@@ -192,14 +192,14 @@ def test_run_send_message(
         headers=headers,
     )
     assert resp.status_code == 200, resp.text
-    assert captured["template_name"] == tpl.name
-    assert captured["variables"] == ["Maria", "#123"]
-    notifs = client.get("/notifications", headers=headers).json()
+
+    notif = db.scalar(select(Notification).where(Notification.channel == "whatsapp"))
+    assert notif is not None
+    assert notif.purpose == "funnel_node"
+    assert notif.whatsapp_template_name == tpl.name
+    assert notif.whatsapp_template_variables == ["Maria", "#123"]
     # o texto registrado é o template RENDERIZADO (sem {{n}}), não o texto cru.
-    assert any(
-        n["message"] == "Olá Maria, seu pedido #123 foi confirmado!" and n["channel"] == "whatsapp"
-        for n in notifs
-    )
+    assert notif.message == "Olá Maria, seu pedido #123 foi confirmado!"
 
 
 def test_run_send_message_missing_template_is_422(client: TestClient, headers):
@@ -227,13 +227,12 @@ def test_run_send_message_template_not_approved_is_422(
 
 
 def test_run_send_message_resolves_client_keyword_variables(
-    client: TestClient, headers, db: Session, tenant_id: str, monkeypatch: pytest.MonkeyPatch
+    client: TestClient, headers, db: Session, tenant_id: str
 ):
-    captured: dict[str, object] = {}
-    monkeypatch.setattr(
-        core_whatsapp, "send_template",
-        lambda **kwargs: (captured.update(kwargs), "sent")[1],
-    )
+    from sqlalchemy import select
+
+    from app.modules.notifications.models import Notification
+
     tpl = _template(db, tenant_id)
     cl = client.post(
         "/crm/clients", json={"name": "Maria Cliente", "phone": "5511988887777"}, headers=headers
@@ -245,12 +244,12 @@ def test_run_send_message_resolves_client_keyword_variables(
         headers=headers,
     )
     assert resp.status_code == 200, resp.text
+
+    notif = db.scalar(select(Notification).where(Notification.channel == "whatsapp"))
+    assert notif is not None
     # mistura de literal ("#999") + keyword ("{{cliente.nome}}") resolvida contra o cliente.
-    assert captured["variables"] == ["Maria Cliente", "#999"]
-    notifs = client.get("/notifications", headers=headers).json()
-    assert any(
-        n["message"] == "Olá Maria Cliente, seu pedido #999 foi confirmado!" for n in notifs
-    )
+    assert notif.whatsapp_template_variables == ["Maria Cliente", "#999"]
+    assert notif.message == "Olá Maria Cliente, seu pedido #999 foi confirmado!"
 
 
 def test_run_send_email(client: TestClient, headers):

@@ -1,5 +1,8 @@
 """Envio de WhatsApp via WhatsApp Cloud API (Meta).
 
+Provider oficial. Movido para cá na Onda 0 (costura do despachante) sem qualquer mudança de
+comportamento — ver docs/superpowers/specs/2026-07-30-whatsapp-evolution-multi-tenant-design.md.
+
 Sem credenciais configuradas (caso atual), NÃO falha: apenas registra o envio como "logged"
 para que o fluxo do produto funcione. Quando `whatsapp_token` + `whatsapp_phone_id` existirem,
 entrega de verdade pela Graph API.
@@ -13,6 +16,7 @@ import logging
 import httpx
 
 from app.config import settings
+from app.core.whatsapp.inbound import InboundMessage
 
 logger = logging.getLogger("e1p.whatsapp")
 
@@ -267,3 +271,60 @@ def send_media(
     except Exception:
         logger.exception("[whatsapp:failed] mídia para=%s kind=%s", to, kind)
         return "failed"
+
+
+def parse_inbound(payload: dict) -> list[InboundMessage]:
+    """Extrai as mensagens do formato aninhado do payload da Meta. Payload não confiável (a
+    Meta não garante o shape interno) — dois níveis de tolerância, preservados do antigo
+    `whatsapp_inbox.service._extract_messages`:
+
+    - Shape do LOTE quebrado (`value` não é dict, `messages` não é uma lista de dicts) — a
+      Meta não conseguiu nem descrever o que mandou; levanta `ValueError` pro chamador decidir
+      (o router converte em 400 — o remetente está errado, não uma mensagem específica).
+    - Campo de UMA mensagem malformado (`text`/mídia não é dict) — isola só aquela mensagem
+      (não entra na lista), sem afetar as demais do mesmo lote nem levantar erro.
+    """
+    out: list[InboundMessage] = []
+    for entry in payload.get("entry", []):
+        for change in entry.get("changes", []):
+            value = change.get("value", {})
+            if not isinstance(value, dict):
+                raise ValueError("Payload inválido: 'value' malformado")
+            contacts = value.get("contacts", [])
+            try:
+                push_name = contacts[0]["profile"]["name"] if contacts else ""
+            except (AttributeError, TypeError, KeyError) as exc:
+                raise ValueError("Payload inválido: 'contacts' malformado") from exc
+            messages = value.get("messages", [])
+            if not isinstance(messages, list) or any(
+                not isinstance(msg, dict) for msg in messages
+            ):
+                raise ValueError("Payload inválido: 'messages' malformado")
+            for msg in messages:
+                try:
+                    wa_message_id = msg.get("id", "")
+                    from_phone = msg.get("from") or None
+                    kind = msg.get("type", "text")
+                    text_body = ""
+                    media_ref = None
+                    if kind == "text":
+                        text_field = msg.get("text", {})
+                        if not isinstance(text_field, dict):
+                            continue  # isola só esta mensagem — ver docstring
+                        text_body = text_field.get("body", "")
+                    elif kind in ("image", "audio", "document", "video"):
+                        media_obj = msg.get(kind, {})
+                        if not isinstance(media_obj, dict):
+                            continue  # isola só esta mensagem — ver docstring
+                        text_body = media_obj.get("caption", "")
+                        media_ref = media_obj.get("id")
+                    else:
+                        kind = "text"
+                        text_body = "[tipo de mensagem não suportado]"
+                    out.append(InboundMessage(
+                        wa_message_id=wa_message_id, from_phone=from_phone, kind=kind,
+                        text_body=text_body, media_ref=media_ref, push_name=push_name,
+                    ))
+                except (AttributeError, TypeError, KeyError):
+                    continue  # isola só esta mensagem — ver docstring
+    return out

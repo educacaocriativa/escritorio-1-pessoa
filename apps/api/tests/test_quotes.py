@@ -3,7 +3,6 @@ import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy.orm import Session
 
-from app.core import whatsapp as core_whatsapp
 from app.modules.settings import service as settings_service
 from app.modules.whatsapp_templates.models import (
     PURPOSE_QUOTE_SEND,
@@ -90,18 +89,18 @@ def test_send_marks_sent_and_notifies(client: TestClient, headers):
 
 
 def test_send_free_text_uses_tenant_credentials_when_no_template_bound(
-    client: TestClient, headers, db: Session, tenant_id: str, monkeypatch: pytest.MonkeyPatch
+    client: TestClient, headers, db: Session, tenant_id: str
 ):
+    """Sem vínculo: texto livre ENFILEIRADO (Onda 3) — a resolução de credenciais do tenant via
+    `profile=` acontece depois, na entrega real feita pelo worker."""
+    from sqlalchemy import select
+
+    from app.modules.notifications.models import Notification
+
     profile = settings_service.get_profile(db, tenant_id)
     profile.whatsapp_token = "tok-123"
     profile.whatsapp_phone_id = "phone-456"
     db.commit()
-
-    captured: dict[str, object] = {}
-    monkeypatch.setattr(
-        core_whatsapp, "send_text",
-        lambda **kwargs: (captured.update(kwargs), "sent")[1],
-    )
 
     cl = client.post(
         "/crm/clients", json={"name": "Cliente Orca", "phone": "5511977776666"}, headers=headers
@@ -109,27 +108,30 @@ def test_send_free_text_uses_tenant_credentials_when_no_template_bound(
     q = client.post("/quotes", json=_quote(client_id=cl["id"]), headers=headers).json()
     resp = client.post(f"/quotes/{q['id']}/send", headers=headers)
     assert resp.status_code == 200
-    assert resp.json()["status"] == "sent"
-    assert captured["token"] == "tok-123"
-    assert captured["phone_id"] == "phone-456"
-    assert f"Segue sua proposta de {q['title']}" in captured["text"]
+    assert resp.json()["status"] == "sent"  # status do ORÇAMENTO (workflow), não do envio
+
+    notif = db.scalar(select(Notification).where(Notification.channel == "whatsapp"))
+    assert notif is not None
+    assert notif.status == "pending"
+    assert notif.purpose == PURPOSE_QUOTE_SEND
+    assert f"Segue sua proposta de {q['title']}" in notif.message
 
 
 def test_send_uses_approved_bound_template(
-    client: TestClient, headers, db: Session, tenant_id: str, monkeypatch: pytest.MonkeyPatch
+    client: TestClient, headers, db: Session, tenant_id: str
 ):
+    """Com vínculo aprovado, a notificação enfileirada carrega o template (não texto livre) —
+    a entrega real (send_template) acontece depois, no worker (Onda 3)."""
+    from sqlalchemy import select
+
+    from app.modules.notifications.models import Notification
+
     tpl = _template(db, tenant_id)
     profile = settings_service.get_profile(db, tenant_id)
     profile.whatsapp_token = "tok-abc"
     profile.whatsapp_phone_id = "phone-xyz"
     profile.whatsapp_template_bindings = {PURPOSE_QUOTE_SEND: tpl.id}
     db.commit()
-
-    captured: dict[str, object] = {}
-    monkeypatch.setattr(
-        core_whatsapp, "send_template",
-        lambda **kwargs: (captured.update(kwargs), "sent")[1],
-    )
 
     cl = client.post(
         "/crm/clients", json={"name": "Maria Cliente", "phone": "5511988887777"}, headers=headers
@@ -139,46 +141,40 @@ def test_send_uses_approved_bound_template(
     assert resp.status_code == 200
 
     valor = f"R$ {q['total_cents'] / 100:.2f}".replace(".", ",")
-    assert captured["template_name"] == tpl.name
-    assert captured["language"] == tpl.language
-    assert captured["token"] == "tok-abc"
-    assert captured["phone_id"] == "phone-xyz"
-    assert captured["to"] == "5511988887777"
-    link = captured["variables"][3]
-    assert captured["variables"] == ["Maria Cliente", q["title"], valor, link]
+    notif = db.scalar(select(Notification).where(Notification.channel == "whatsapp"))
+    assert notif is not None
+    assert notif.purpose == PURPOSE_QUOTE_SEND
+    assert notif.whatsapp_template_name == tpl.name
+    assert notif.whatsapp_template_language == tpl.language
+    assert notif.recipient == "5511988887777"
+    link = notif.whatsapp_template_variables[3]
+    assert notif.whatsapp_template_variables == ["Maria Cliente", q["title"], valor, link]
 
-    notifs = client.get("/notifications", headers=headers).json()
     expected_msg = f"Olá Maria Cliente, segue sua proposta {q['title']}: {valor}. Veja em {link}"
     assert "{{" not in expected_msg
-    assert any(
-        n["message"] == expected_msg and n["channel"] == "whatsapp" for n in notifs
-    )
+    assert notif.message == expected_msg
 
 
 def test_send_falls_back_to_free_text_when_bound_template_not_approved(
-    client: TestClient, headers, db: Session, tenant_id: str, monkeypatch: pytest.MonkeyPatch
+    client: TestClient, headers, db: Session, tenant_id: str
 ):
+    from sqlalchemy import select
+
+    from app.modules.notifications.models import Notification
+
     tpl = _template(db, tenant_id, status=STATUS_PENDING)
     profile = settings_service.get_profile(db, tenant_id)
     profile.whatsapp_template_bindings = {PURPOSE_QUOTE_SEND: tpl.id}
     db.commit()
 
-    called_template = {"value": False}
-    monkeypatch.setattr(
-        core_whatsapp, "send_template",
-        lambda **kwargs: called_template.__setitem__("value", True) or "sent",
-    )
-    captured: dict[str, object] = {}
-    monkeypatch.setattr(
-        core_whatsapp, "send_text",
-        lambda **kwargs: (captured.update(kwargs), "sent")[1],
-    )
-
     q = client.post("/quotes", json=_quote(), headers=headers).json()
     resp = client.post(f"/quotes/{q['id']}/send", headers=headers)
     assert resp.status_code == 200
-    assert called_template["value"] is False
-    assert f"Segue sua proposta de {q['title']}" in captured["text"]
+
+    notif = db.scalar(select(Notification).where(Notification.channel == "whatsapp"))
+    assert notif is not None
+    assert notif.whatsapp_template_name is None  # não usou o template ainda pendente
+    assert f"Segue sua proposta de {q['title']}" in notif.message
 
 
 def test_approve_generates_charge(client: TestClient, headers):
