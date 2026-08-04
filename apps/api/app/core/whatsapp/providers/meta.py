@@ -324,6 +324,13 @@ def parse_inbound(payload: dict) -> list[InboundMessage]:
                     out.append(InboundMessage(
                         wa_message_id=wa_message_id, from_phone=from_phone, kind=kind,
                         text_body=text_body, media_ref=media_ref, push_name=push_name,
+                        # A Meta não expõe JID: o webhook dela entrega só o telefone (`from`), e
+                        # a Cloud API não entrega grupo de jeito nenhum (a API oficial não tem
+                        # grupos). Derivamos o JID canônico do telefone para que a conversa caia
+                        # no MESMO chat que uma mensagem equivalente da Evolution — o que
+                        # importa num tenant que troque de transporte.
+                        chat_jid=f"{from_phone}@s.whatsapp.net" if from_phone else None,
+                        sender_phone=from_phone, sender_name=push_name or None,
                     ))
                 except (AttributeError, TypeError, KeyError):
                     continue  # isola só esta mensagem — ver docstring

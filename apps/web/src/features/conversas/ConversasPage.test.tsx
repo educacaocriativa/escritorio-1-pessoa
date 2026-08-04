@@ -15,7 +15,7 @@ describe("ConversasPage", () => {
       if (url === "/whatsapp-conversations") {
         return Promise.resolve({
           data: [{
-            client_id: "c1", client_name: "Doro Eventos", client_phone: "5511999999999",
+            chat_id: "c1", kind: "direct" as const, title: "Doro Eventos", phone: "5511999999999", client_id: "c1",
             last_message_at: "2026-07-19T10:00:00Z", last_message_preview: "Oi, quero o cardápio",
             unread: true,
           }],
@@ -25,7 +25,7 @@ describe("ConversasPage", () => {
         return Promise.resolve({
           data: [{
             source: "conversation", direction: "in", kind: "text",
-            text_body: "Oi, quero o cardápio", media_attachment_id: null, purpose_label: null,
+            text_body: "Oi, quero o cardápio", media_attachment_id: null, purpose_label: null, sender_name: null,
             created_at: "2026-07-19T10:00:00Z",
           }],
         });
@@ -55,7 +55,7 @@ describe("ConversasPage", () => {
       if (url === "/whatsapp-conversations") {
         return Promise.resolve({
           data: [{
-            client_id: "c1", client_name: "Murilo Moreschi", client_phone: "5511977776666",
+            chat_id: "c1", kind: "direct" as const, title: "Murilo Moreschi", phone: "5511977776666", client_id: "c1",
             last_message_at: "2026-07-20T17:19:00-03:00", last_message_preview: "Ok",
             unread: false,
           }],
@@ -66,17 +66,17 @@ describe("ConversasPage", () => {
           data: [
             {
               source: "conversation", direction: "in", kind: "text",
-              text_body: "sempre na curva", media_attachment_id: null, purpose_label: null,
+              text_body: "sempre na curva", media_attachment_id: null, purpose_label: null, sender_name: null,
               created_at: "2026-07-19T14:18:00-03:00",
             },
             {
               source: "conversation", direction: "out", kind: "text",
-              text_body: "Ok", media_attachment_id: null, purpose_label: null,
+              text_body: "Ok", media_attachment_id: null, purpose_label: null, sender_name: null,
               created_at: "2026-07-19T14:19:00-03:00",
             },
             {
               source: "conversation", direction: "out", kind: "text",
-              text_body: "Primeira enviada", media_attachment_id: null, purpose_label: null,
+              text_body: "Primeira enviada", media_attachment_id: null, purpose_label: null, sender_name: null,
               created_at: "2026-07-20T17:19:00-03:00",
             },
           ],
@@ -110,12 +110,67 @@ describe("ConversasPage", () => {
     ]);
   });
 
+  it("abre um grupo, nomeia quem falou e permite responder", async () => {
+    // O defeito reportado: grupo caía num balde "Não identificados" com `client_id: null`, que
+    // a tela usava como chave de rota — clicar não abria nada, e o nome do grupo nunca aparecia.
+    vi.mocked(api.get).mockImplementation((url: string) => {
+      if (url === "/whatsapp-conversations") {
+        return Promise.resolve({
+          data: [{
+            chat_id: "g1", kind: "group" as const, title: "Automação Residencial",
+            phone: null, client_id: null,
+            last_message_at: "2026-07-20T11:05:00-03:00",
+            last_message_preview: "Gabriel B: alguém indica?", unread: true,
+          }],
+        });
+      }
+      if (url === "/whatsapp-conversations/g1/timeline") {
+        return Promise.resolve({
+          data: [
+            {
+              source: "conversation", direction: "in", kind: "text",
+              text_body: "alguém indica?", media_attachment_id: null, purpose_label: null,
+              sender_name: "Gabriel B", created_at: "2026-07-20T11:05:00-03:00",
+            },
+            {
+              source: "conversation", direction: "in", kind: "text",
+              text_body: "eu uso a Intelbras", media_attachment_id: null, purpose_label: null,
+              sender_name: "Ana P", created_at: "2026-07-20T11:07:00-03:00",
+            },
+          ],
+        });
+      }
+      // Grupo não tem janela de 24h — o backend responde sempre "aberta".
+      if (url === "/whatsapp-conversations/g1/window") {
+        return Promise.resolve({ data: { within_session_window: true } });
+      }
+      if (url === "/whatsapp-templates") return Promise.resolve({ data: [] });
+      return Promise.resolve({ data: [] });
+    });
+    vi.mocked(api.post).mockResolvedValue({ data: {} } as never);
+
+    render(<ConversasPage />);
+    await waitFor(() => screen.getByText("Automação Residencial"));
+    await userEvent.click(screen.getByText("Automação Residencial"));
+
+    // O fio abriu de verdade — é o que não acontecia antes.
+    await waitFor(() => screen.getByText("alguém indica?"));
+    expect(screen.getByText("eu uso a Intelbras")).toBeInTheDocument();
+
+    // Cada bolha recebida diz quem falou; sem isso o grupo é um muro anônimo.
+    expect(screen.getByText("Gabriel B")).toBeInTheDocument();
+    expect(screen.getByText("Ana P")).toBeInTheDocument();
+
+    // E dá pra responder no grupo (decisão do fundador: grupo não é só leitura).
+    expect(screen.getByPlaceholderText(/mensagem/i)).toBeInTheDocument();
+  });
+
   it("troca pro seletor de template quando a janela de 24h está fechada", async () => {
     vi.mocked(api.get).mockImplementation((url: string) => {
       if (url === "/whatsapp-conversations") {
         return Promise.resolve({
           data: [{
-            client_id: "c2", client_name: "Cliente Antigo", client_phone: "5511888888888",
+            chat_id: "c2", kind: "direct" as const, title: "Cliente Antigo", phone: "5511888888888", client_id: "c2",
             last_message_at: "2026-07-01T10:00:00Z", last_message_preview: "oi",
             unread: false,
           }],
@@ -155,12 +210,12 @@ describe("ConversasPage", () => {
         return Promise.resolve({
           data: [
             {
-              client_id: "c1", client_name: "Cliente A", client_phone: "5511111111111",
+              chat_id: "c1", kind: "direct" as const, title: "Cliente A", phone: "5511111111111", client_id: "c1",
               last_message_at: "2026-07-19T10:00:00Z", last_message_preview: "prévia A",
               unread: false,
             },
             {
-              client_id: "c2", client_name: "Cliente B", client_phone: "5511222222222",
+              chat_id: "c2", kind: "direct" as const, title: "Cliente B", phone: "5511222222222", client_id: "c2",
               last_message_at: "2026-07-19T11:00:00Z", last_message_preview: "prévia B",
               unread: false,
             },
@@ -171,7 +226,7 @@ describe("ConversasPage", () => {
         return Promise.resolve({
           data: [{
             source: "conversation", direction: "in", kind: "text",
-            text_body: "Mensagem da conversa A", media_attachment_id: null, purpose_label: null,
+            text_body: "Mensagem da conversa A", media_attachment_id: null, purpose_label: null, sender_name: null,
             created_at: "2026-07-19T10:00:00Z",
           }],
         });
@@ -183,7 +238,7 @@ describe("ConversasPage", () => {
         return Promise.resolve({
           data: [{
             source: "conversation", direction: "in", kind: "text",
-            text_body: "Mensagem da conversa B", media_attachment_id: null, purpose_label: null,
+            text_body: "Mensagem da conversa B", media_attachment_id: null, purpose_label: null, sender_name: null,
             created_at: "2026-07-19T11:00:00Z",
           }],
         });

@@ -84,6 +84,35 @@ def send_media(
         return "failed"
 
 
+def fetch_group_subject(*, instance: str, group_jid: str) -> str | None:
+    """O assunto (nome) do grupo. **Não vem no payload da mensagem** — `messages.upsert` só
+    entrega o JID do grupo —, então é uma chamada à parte, cacheada em `whatsapp_chats.title`
+    pelo chamador (uma vez por grupo, não por mensagem).
+
+    Degradação graciosa, mesmo contrato de `send_text`: NUNCA propaga exceção e devolve `None`
+    quando não dá pra saber (Evolution desligada, grupo do qual o dono saiu, timeout). `None` é
+    "não sei", e a tela mostra um rótulo honesto — nunca um nome inventado."""
+    if not settings.evolution_api_key:
+        return None
+    try:
+        resp = httpx.get(
+            f"{settings.evolution_api_url}/group/findGroupInfos/{instance}",
+            headers={"apikey": settings.evolution_api_key},
+            params={"groupJid": group_jid},
+            timeout=10,
+        )
+        resp.raise_for_status()
+        body = resp.json()
+        subject = body.get("subject") if isinstance(body, dict) else None
+        return subject.strip() or None if isinstance(subject, str) else None
+    except Exception:
+        logger.warning(
+            "[whatsapp.evolution] nao foi possivel obter o nome do grupo instancia=%s jid=%s",
+            instance, group_jid,
+        )
+        return None
+
+
 def send_template(**_kwargs: object) -> str:
     raise EvolutionUnsupportedError(
         "Evolution API não suporta templates aprovados (capabilities.EVOLUTION.templates=False)"
@@ -146,10 +175,47 @@ def _extract_media(message: dict) -> tuple[str | None, dict | None]:
     return None, None
 
 
+def _phone_from_jid(jid: object) -> str | None:
+    """Só dígitos, e SÓ de um JID que de fato carrega telefone (`@s.whatsapp.net`). Um `@lid`
+    (`86170130210977@lid`) parece um número mas NÃO é — é um identificador opaco do WhatsApp, e
+    tratá-lo como telefone criaria contato com um número que não existe e mandaria mensagem pro
+    lugar errado. `None` é a resposta honesta."""
+    if not isinstance(jid, str) or not jid.endswith("@s.whatsapp.net"):
+        return None
+    phone = jid.split("@", 1)[0].split(":", 1)[0]  # `:device` aparece em JID multi-dispositivo
+    return phone or None
+
+
 def parse_inbound(payload: dict) -> list[InboundMessage]:
-    """Extrai a mensagem do formato da Evolution API (evento `messages.upsert`). `@lid` no
-    lugar do telefone → `from_phone=None` — NUNCA adivinhado por heurística (ver bandeja "Não
-    identificados", Onda 3).
+    """Extrai a mensagem do formato da Evolution API (evento `messages.upsert`).
+
+    **Três formas de `key.remoteJid`**, confirmadas em payload real de produção (v2.3.7,
+    capturado 2026-08-04) — nenhuma delas assumida:
+
+    - `5511988887777@s.whatsapp.net` — conversa direta, telefone à vista.
+    - `120363280378740969@g.us` — GRUPO. Não tem telefone e não vira cliente do CRM
+      (`from_phone=None`); vira uma conversa própria, chaveada pelo JID.
+    - `86170130210977@lid` — conversa direta com o telefone mascarado. Aqui entra
+      `key.remoteJidAlt`, que a Evolution preenche com o `@s.whatsapp.net` real: com ele o
+      contato É resolvido, e a conversa deixa de cair no balde "Não identificados" (eram 60
+      mensagens em 12h no tenant do fundador). Sem ele, `from_phone` continua `None` — nunca
+      adivinhado por heurística, e `@lid` NÃO é telefone (ver `_phone_from_jid`).
+
+    `chat_jid` é CANÔNICO, não cru: quando o telefone é conhecido devolvemos sempre
+    `{telefone}@s.whatsapp.net`, mesmo que o evento tenha chegado como `@lid`. Sem isso o mesmo
+    contato viraria duas conversas — uma por modo de endereçamento — e o histórico se partiria
+    no meio.
+
+    Em GRUPO, quem falou vem em `key.participantAlt` (telefone real) / `key.participant`
+    (mascarado) + `pushName`. O ASSUNTO do grupo **não vem no payload da mensagem** — só o JID;
+    é buscado à parte em `fetch_group_subject`.
+
+    `key.fromMe` distingue QUEM ESCREVEU: o Baileys espelha no mesmo evento `messages.upsert`
+    tanto o que o contato mandou quanto o que o DONO digitou no WhatsApp do próprio celular.
+    Sem ler este campo, as duas pontas da conversa entram como `direction="in"` e a tela de
+    Conversas fica sem autor — todas as bolhas iguais, do mesmo lado. Note que em mensagem
+    `fromMe` o `remoteJid` continua sendo o do CONTATO (é o destinatário), então `from_phone`
+    resolve o cliente certo nos dois casos; só a autoria muda.
 
     `key.fromMe` distingue QUEM ESCREVEU: o Baileys espelha no mesmo evento `messages.upsert`
     tanto o que o contato mandou quanto o que o DONO digitou no WhatsApp do próprio celular.
@@ -173,12 +239,35 @@ def parse_inbound(payload: dict) -> list[InboundMessage]:
         wa_message_id = key.get("id", "")
         if not wa_message_id:
             return []
-        from_phone = None
-        if remote_jid.endswith("@s.whatsapp.net"):
-            from_phone = remote_jid.split("@")[0]
+        is_group = remote_jid.endswith("@g.us")
         from_me = bool(key.get("fromMe"))
         push_name = data.get("pushName", "")
         message = data.get("message", {})
+
+        if is_group:
+            # Grupo não tem telefone de conversa e não resolve cliente do CRM. Quem falou vem do
+            # participante — `participantAlt` primeiro, que é o que carrega o telefone real.
+            from_phone = None
+            chat_jid = remote_jid
+            sender_phone = (
+                _phone_from_jid(key.get("participantAlt"))
+                or _phone_from_jid(key.get("participant"))
+            )
+        else:
+            from_phone = (
+                _phone_from_jid(remote_jid) or _phone_from_jid(key.get("remoteJidAlt"))
+            )
+            # Canônico quando sabemos o telefone (ver docstring): evita que `@lid` e
+            # `@s.whatsapp.net` do MESMO contato virem duas conversas.
+            chat_jid = f"{from_phone}@s.whatsapp.net" if from_phone else remote_jid
+            sender_phone = from_phone
+
+        common = {
+            "wa_message_id": wa_message_id, "from_phone": from_phone, "push_name": push_name,
+            "from_me": from_me, "chat_jid": chat_jid or None,
+            "chat_kind": "group" if is_group else "direct",
+            "sender_phone": sender_phone, "sender_name": push_name or None,
+        }
 
         media_kind, media_obj = _extract_media(message)
         if media_kind is None:
@@ -186,18 +275,16 @@ def parse_inbound(payload: dict) -> list[InboundMessage]:
                 "extendedTextMessage", {}
             ).get("text", "")
             return [InboundMessage(
-                wa_message_id=wa_message_id, from_phone=from_phone, kind="text",
-                text_body=text_body, media_ref=None, push_name=push_name, from_me=from_me,
+                kind="text", text_body=text_body, media_ref=None, **common,
             )]
 
         raw_b64 = message.get("base64")
         media_bytes = base64.b64decode(raw_b64) if raw_b64 else None
         mime_type = (media_obj.get("mimetype") or "application/octet-stream").split(";")[0].strip()
         return [InboundMessage(
-            wa_message_id=wa_message_id, from_phone=from_phone, kind=media_kind,
-            text_body=media_obj.get("caption", ""), media_ref=None, push_name=push_name,
-            from_me=from_me, media_bytes=media_bytes, media_mime_type=mime_type,
-            media_filename=media_obj.get("fileName") or media_obj.get("title"),
+            kind=media_kind, text_body=media_obj.get("caption", ""), media_ref=None,
+            media_bytes=media_bytes, media_mime_type=mime_type,
+            media_filename=media_obj.get("fileName") or media_obj.get("title"), **common,
         )]
     except (AttributeError, TypeError, KeyError, ValueError):
         return []

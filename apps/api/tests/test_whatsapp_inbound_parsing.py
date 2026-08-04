@@ -45,6 +45,8 @@ def test_meta_parse_inbound_text() -> None:
     assert messages == [InboundMessage(
         wa_message_id="wamid.123", from_phone="5511988887777", kind="text",
         text_body="Olá, tudo bem?", media_ref=None, push_name="Maria Cliente",
+        chat_jid="5511988887777@s.whatsapp.net", sender_phone="5511988887777",
+        sender_name="Maria Cliente",
     )]
 
 
@@ -53,6 +55,8 @@ def test_evolution_parse_inbound_text_with_phone() -> None:
     assert messages == [InboundMessage(
         wa_message_id="3EB0ABC123", from_phone="5511988887777", kind="text",
         text_body="Olá, tudo bem?", media_ref=None, push_name="Maria Cliente",
+        chat_jid="5511988887777@s.whatsapp.net", sender_phone="5511988887777",
+        sender_name="Maria Cliente",
     )]
 
 

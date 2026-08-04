@@ -783,10 +783,17 @@ export interface WhatsappTemplateCreate {
 }
 
 // ── Inbox de WhatsApp (conversa de verdade com clientes) ────
+/**
+ * Uma CONVERSA (`whatsapp_chats`), não um cliente — é o que permite grupo existir na caixa de
+ * entrada. `client_id` é vínculo opcional com o CRM: `null` em grupo (que por decisão de
+ * produto nunca vira contato) e em conversa direta cujo telefone o WhatsApp não revelou.
+ */
 export interface ConversationSummary {
-  client_id: UUID;
-  client_name: string;
-  client_phone: string | null;
+  chat_id: UUID;
+  kind: "direct" | "group";
+  title: string;
+  phone: string | null;
+  client_id: UUID | null;
   last_message_at: string | null;
   last_message_preview: string;
   unread: boolean;
@@ -799,6 +806,8 @@ export interface TimelineEntry {
   text_body: string;
   media_attachment_id: string | null;
   purpose_label: string | null;
+  /** Quem falou, em grupo. `null` em conversa direta e em mensagem nossa. */
+  sender_name: string | null;
   created_at: string;
 }
 

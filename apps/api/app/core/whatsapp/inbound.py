@@ -12,7 +12,9 @@ from dataclasses import dataclass
 @dataclass(frozen=True)
 class InboundMessage:
     wa_message_id: str
-    from_phone: str | None  # só dígitos, sem "+". None quando o provider não entrega o número
+    from_phone: str | None  # só dígitos, sem "+". None quando o provider não entrega o número.
+    # SEMPRE None em grupo: `from_phone` é o telefone da CONVERSA (usado pra resolver o cliente
+    # do CRM), e grupo não tem um. Quem falou dentro do grupo é `sender_phone`, abaixo.
     kind: str  # text | image | audio | document | video
     text_body: str
     media_ref: str | None  # referência de mídia OPACA que exige um fetch depois (meta_media_id
@@ -25,6 +27,15 @@ class InboundMessage:
     # tudo que acontece no aparelho, inclusive o que o dono digitou no WhatsApp do celular
     # (`key.fromMe=true`). A Meta nunca entrega mensagem própria no array `messages` do
     # webhook (só status de entrega, em `statuses`), então o provider Meta deixa no default.
+    # A CONVERSA de onde veio (`key.remoteJid` cru). É a chave da caixa de entrada desde a Onda
+    # 4 — `from_phone` não consegue representar grupo. `None` só no provider Meta, que ainda não
+    # foi migrado (ele deriva o JID do próprio telefone; ver `providers/meta.py`).
+    chat_jid: str | None = None
+    chat_kind: str = "direct"  # direct | group (ver `models.CHAT_KIND_*`)
+    # Quem escreveu, dentro da conversa. Só interessa de fato em GRUPO: `key.participantAlt` traz
+    # o telefone real mesmo quando `key.participant` vem mascarado como `@lid`.
+    sender_phone: str | None = None
+    sender_name: str | None = None
     media_bytes: bytes | None = None  # mídia JÁ decodificada (Evolution, quando webhookBase64
     # está ligado) — ingest cria o Attachment na hora, sem depender do worker.
     media_mime_type: str | None = None

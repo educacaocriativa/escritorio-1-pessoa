@@ -157,25 +157,34 @@ def list_conversations(
     return service.list_conversations(db, user.tenant_id)
 
 
-@router.get("/{client_id}/timeline")
+@router.get("/{chat_id}/timeline")
 def get_timeline(
-    client_id: str, user: CurrentUser = Depends(_guard), db: Session = Depends(get_tenant_db)
+    chat_id: str, user: CurrentUser = Depends(_guard), db: Session = Depends(get_tenant_db)
 ) -> list[dict]:
-    return service.get_timeline(db, client_id=client_id)
+    # Conversa inexistente vira 404 explícito (o service levanta): antes o id era de cliente e
+    # um id desconhecido devolvia 200 com lista vazia — indistinguível de "conversa sem
+    # mensagem" e péssimo pra diagnosticar.
+    try:
+        return service.get_timeline(db, chat_id=chat_id)
+    except service.WhatsappInboxError as e:
+        raise _err(e) from e
 
 
-@router.get("/{client_id}/window")
+@router.get("/{chat_id}/window")
 def get_window(
-    client_id: str, user: CurrentUser = Depends(_guard), db: Session = Depends(get_tenant_db)
+    chat_id: str, user: CurrentUser = Depends(_guard), db: Session = Depends(get_tenant_db)
 ) -> dict:
-    return {"within_session_window": service.is_within_session_window(db, client_id=client_id)}
+    return {"within_session_window": service.is_within_session_window(db, chat_id=chat_id)}
 
 
-@router.post("/{client_id}/read", status_code=204)
+@router.post("/{chat_id}/read", status_code=204)
 def mark_read(
-    client_id: str, user: CurrentUser = Depends(_guard), db: Session = Depends(get_tenant_db)
+    chat_id: str, user: CurrentUser = Depends(_guard), db: Session = Depends(get_tenant_db)
 ):
-    service.mark_read(db, tenant_id=user.tenant_id, client_id=client_id)
+    try:
+        service.mark_read(db, tenant_id=user.tenant_id, chat_id=chat_id)
+    except service.WhatsappInboxError as e:
+        raise _err(e) from e
 
 
 def _msg_out(msg) -> dict:
@@ -185,29 +194,29 @@ def _msg_out(msg) -> dict:
     }
 
 
-@router.post("/{client_id}/messages/text")
+@router.post("/{chat_id}/messages/text")
 def send_text_reply(
-    client_id: str, data: SendTextRequest,
+    chat_id: str, data: SendTextRequest,
     user: CurrentUser = Depends(_guard), db: Session = Depends(get_tenant_db),
 ) -> dict:
     try:
         msg = service.send_reply_text(
-            db, tenant_id=user.tenant_id, actor=user.user_id, client_id=client_id, text=data.text,
+            db, tenant_id=user.tenant_id, actor=user.user_id, chat_id=chat_id, text=data.text,
         )
     except service.WhatsappInboxError as e:
         raise _err(e) from e
     return _msg_out(msg)
 
 
-@router.post("/{client_id}/messages/media")
+@router.post("/{chat_id}/messages/media")
 async def send_media_reply(
-    client_id: str, caption: str = Form(""), file: UploadFile = File(...),
+    chat_id: str, caption: str = Form(""), file: UploadFile = File(...),
     user: CurrentUser = Depends(_guard), db: Session = Depends(get_tenant_db),
 ) -> dict:
     data = await file.read()
     try:
         msg = service.send_reply_media(
-            db, tenant_id=user.tenant_id, actor=user.user_id, client_id=client_id,
+            db, tenant_id=user.tenant_id, actor=user.user_id, chat_id=chat_id,
             file_bytes=data, filename=file.filename or "arquivo",
             mime_type=file.content_type or "application/octet-stream", caption=caption,
         )
@@ -216,14 +225,14 @@ async def send_media_reply(
     return _msg_out(msg)
 
 
-@router.post("/{client_id}/messages/template")
+@router.post("/{chat_id}/messages/template")
 def send_template_reply(
-    client_id: str, data: SendTemplateRequest,
+    chat_id: str, data: SendTemplateRequest,
     user: CurrentUser = Depends(_guard), db: Session = Depends(get_tenant_db),
 ) -> dict:
     try:
         msg = service.send_reply_template(
-            db, tenant_id=user.tenant_id, actor=user.user_id, client_id=client_id,
+            db, tenant_id=user.tenant_id, actor=user.user_id, chat_id=chat_id,
             template_id=data.template_id, variables=data.variables,
         )
     except service.WhatsappInboxError as e:
