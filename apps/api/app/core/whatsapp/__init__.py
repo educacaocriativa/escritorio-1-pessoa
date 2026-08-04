@@ -54,6 +54,13 @@ def _resolve(profile: TenantProfile | None):
     return meta
 
 
+def _evolution_instance(profile: TenantProfile | None) -> str:
+    """Mesmo formato de `whatsapp_session/service.py::_instance_name` — só chamada quando
+    `_resolve` já confirmou `profile.whatsapp_provider == "evolution"`, então `profile` nunca é
+    None aqui (garantia do chamador, não repetida em runtime)."""
+    return f"e1p-{profile.tenant_id}"  # type: ignore[union-attr]
+
+
 def send_text(
     *,
     to: str,
@@ -63,6 +70,10 @@ def send_text(
     phone_id: str | None = None,
 ) -> str:
     provider = _resolve(profile)
+    if provider is evolution:
+        # Evolution não usa token/phone_id por tenant (credencial GLOBAL) — identifica a
+        # instância pelo tenant_id, não por essas duas credenciais da Meta.
+        return provider.send_text(to=to, text=text, instance=_evolution_instance(profile))
     if profile is not None:
         token = profile.whatsapp_token
         phone_id = profile.whatsapp_phone_id
@@ -104,6 +115,11 @@ def send_media(
     phone_id: str | None = None,
 ) -> str:
     provider = _resolve(profile)
+    if provider is evolution:
+        return provider.send_media(
+            to=to, instance=_evolution_instance(profile), kind=kind, media_id=media_id,
+            caption=caption,
+        )
     if profile is not None:
         token = profile.whatsapp_token or ""
         phone_id = profile.whatsapp_phone_id or ""
@@ -127,6 +143,12 @@ def upload_media(
     phone_id: str | None = None,
 ) -> str:
     provider = _resolve(profile)
+    if provider is evolution:
+        # Evolution não tem endpoint de upload separado (ver docstring de
+        # providers/evolution.py::upload_media) — não usa token/phone_id.
+        return provider.upload_media(
+            file_bytes=file_bytes, filename=filename, mime_type=mime_type,
+        )
     if profile is not None:
         token = profile.whatsapp_token or ""
         phone_id = profile.whatsapp_phone_id or ""
