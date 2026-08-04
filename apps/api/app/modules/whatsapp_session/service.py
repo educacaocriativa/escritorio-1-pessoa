@@ -89,19 +89,29 @@ def connect(db: Session, *, tenant_id: str) -> dict:
     webhook_secret = existing.webhook_secret if existing else secrets.token_urlsafe(32)
 
     try:
-        httpx.post(
+        # v2.3.7 espera o payload ANINHADO sob "webhook" (com "enabled"/"byEvents") — um corpo
+        # solto ({"url":..., "webhook_by_events":...}) é ignorado sem erro visível pra quem
+        # chama (achado ao vivo: webhook/find devolvia null mesmo após esse POST "ter sucesso").
+        resp = httpx.post(
             f"{settings.evolution_api_url}/webhook/set/{instance}",
             headers=_headers(),
             json={
-                "url": (
-                    f"{settings.internal_api_base_url}"
-                    f"/internal/whatsapp/evolution/webhook/{webhook_secret}"
-                ),
-                "webhook_by_events": False,
-                "events": ["MESSAGES_UPSERT"],
+                "webhook": {
+                    "enabled": True,
+                    "url": (
+                        f"{settings.internal_api_base_url}"
+                        f"/internal/whatsapp/evolution/webhook/{webhook_secret}"
+                    ),
+                    "byEvents": False,
+                    "events": ["MESSAGES_UPSERT"],
+                }
             },
             timeout=15,
         )
+        if resp.status_code >= 400:
+            raise WhatsappSessionError(
+                f"Falha ao configurar webhook na Evolution: {resp.text}", 502
+            )
     except httpx.HTTPError as exc:
         raise WhatsappSessionError(f"Falha de rede ao configurar webhook: {exc}", 502) from exc
 
