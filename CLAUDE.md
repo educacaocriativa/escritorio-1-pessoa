@@ -260,6 +260,36 @@ Ao criar/alterar qualquer funcionalidade:
 - **Dívida:** `scripts/check.sh` resolve `ruff`/`python` do PATH (que pode não ser o do venv) e **mascara falha de frontend** com `|| true` no vitest — rode as etapas individualmente até isso ser corrigido.
 - **Dívida:** o **Epic 5 (Inteligência Financeira) nunca foi documentado aqui.** DRE, DRE em matriz, Lucratividade por contrato, Projeção de Caixa, Diagnóstico, Plano de Contas, Centros de Custo e Investimentos **existem e estão em produção**, mas quem lê só este arquivo conclui que não. Ver `docs/prd/epic-5-inteligencia-financeira.md`.
 
+## WhatsApp Evolution: em produção de verdade (deploy 2026-08-04)
+
+O transporte Evolution (Onda 0-3, ver `[[e1p-whatsapp-evolution-merged]]` na memória / PR #62)
+foi **implantado e validado ponta-a-ponta em produção** nesta sessão: Evolution+Redis subiram na
+VPS, um tenant real escaneou o QR, conectou de verdade, recebeu mensagem de texto E mídia de um
+contato real, e respondeu — via UI, não via teste automatizado. **Cada etapa achou um bug real que
+nenhum teste local pegava**, porque cada um dependia de infraestrutura viva (rede da VPS, a
+Evolution real, o schema real da resposta dela) que o CI/testes locais não têm como exercitar.
+Lição geral que se repetiu 6 vezes: **nunca confie no formato de request/response de uma API de
+terceiro por suposição — teste ao vivo ou leia o código-fonte real dela** (`evolution-foundation/
+evolution-api` no GitHub; ver padrão de investigação com `gh api`/`WebFetch` nos PRs abaixo).
+
+**Bugs achados e corrigidos, nesta ordem** (cada um só apareceu depois que o anterior foi resolvido
+e uma tentativa real de conexão avançou mais um passo):
+1. **PR #63** — `mem_limit` da Evolution reduzido de 1g→512m só no `docker-compose.traefik.yml` (VPS compartilhada com pouca memória livre); `docker-compose.prod.yml` (VPS dedicada) ficou em 1g.
+2. **PR #64** — imagem `atendai/evolution-api` não existe mais; o registro real é `evoapicloud/evolution-api`.
+3. **PR #65** — `REDIS_URI` não é a env var certa; é `CACHE_REDIS_ENABLED`+`CACHE_REDIS_URI` (+`CACHE_LOCAL_ENABLED=false`). Sem isso, cache cai pra filesystem em silêncio + loop de erro nos logs.
+4. **PR #66** — `evolution` só estava na rede `db_internal` (`internal: true`, sem saída pra internet — isola Postgres/Redis de propósito). O Baileys precisa alcançar a internet de verdade (servidores do WhatsApp); sem isso, DNS externo falhava dentro do container e a conexão entrava num loop silencioso de reinício, nunca completando o handshake do QR. Fix: `evolution` entra também na rede `edge` (mesmo mecanismo que já dá saída ao `api`), sem label de Traefik — continua inalcançável de fora.
+5. **PR #67** — `/instance/fetchInstances` da v2.3.7 devolve os campos direto no item (`name`/`connectionStatus`), não aninhado (`instance.instanceName`/`instance.status`, formato de uma versão mais antiga que nosso código assumia). `get_status()`/`confirm()` sempre viam "desconectado" mesmo já conectado.
+6. **PR #68** — `POST /webhook/set/{instance}` espera o corpo **aninhado** sob `"webhook"` (`{webhook: {enabled, url, byEvents, events, base64}}`), não solto. Sem isso, nenhum webhook era configurado — mensagens recebidas nunca chegavam na plataforma.
+7. **PR #69** — mídia recebida (imagem/áudio/documento/vídeo) nunca tinha sido implementada, só texto. Payload real capturado ao vivo confirmou `imageMessage`/`audioMessage`/`documentMessage`/`documentWithCaptionMessage` (este último embrulha um nível a mais) e o mecanismo: com `webhook.base64=true`, a Evolution baixa e decifra a mídia (ela tem a `mediaKey`) e injeta em `message.base64` — evita reimplementar a criptografia de mídia do WhatsApp na mão. `ingest_webhook_payload` agora cria o `Attachment` **sincronamente** pra mídia da Evolution (ela não tem endpoint de resolução separado como a Meta — o worker assíncrono existente é Meta-only).
+8. **PR #70** — despachante (`core/whatsapp/__init__.py`) nunca tinha sido de fato adaptado pra Evolution em `send_text`/`send_media`/`upload_media`: sempre chamava com `token=`/`phone_id=` (parâmetros da Meta), que a Evolution não aceita (`instance=`, credencial global). `TypeError` ao tentar responder qualquer conversa real — só apareceu porque foi a PRIMEIRA resposta de verdade enviada por um tenant Evolution.
+9. **PR #72** — UX: miniatura de imagem inline (busca o blob autenticado, `<img src={objectURL}>`) em vez de só um link "Ver imagem".
+
+**Duas armadilhas operacionais da VPS** (não são bug de código, são do processo de deploy):
+- Depois de mudar a config do webhook via `/webhook/set` numa instância **já conectada**, a mudança pode não valer pro processo em memória (cache do canal Baileys carregado na conexão) — precisou **reiniciar o container `evolution`** (não só recriar) pra pegar a config nova. Sessões reconectam sozinhas (credenciais persistidas no Postgres/Redis), sem precisar de novo QR.
+- `docker compose up -d --build <serviço>` só reconstrói o serviço **nomeado**. Rebuildar só `api` depois de um PR que também mudou frontend deixa o `web` com o build antigo, **em silêncio** (sem erro, só o comportamento antigo persistindo). Depois de qualquer merge, checar QUAIS serviços mudaram no diff antes de escolher o que rebuildar — ou rebuildar todos (`up -d --build` sem nome, como o `reference_e1p_prod_deploy` já recomendava).
+
+**Estado atual:** conectado e funcionando ponta-a-ponta pro tenant `70c1f435-a21e-4148-a8c6-32a7e346a818` (flaviokato76@gmail.com) — QR, texto recebido, mídia recebida (imagem com miniatura inline), resposta de texto enviada, tudo validado com conversas reais em produção.
+
 ## 6.0 Correções importantes
 - **[CORRIGIDO] Agenda não mostrava cobranças/contas a pagar (bug de fuso).** Eventos de dia inteiro (cobranca_receber/cobranca_pagar/prazo) são gravados à **meia-noite UTC** da data de vencimento. A Agenda casava o evento ao dia com `new Date(starts_at)` (horário LOCAL) → em fuso negativo (Brasil UTC-3) o evento "voltava" um dia e, nas bordas do mês, caía fora do range → sumia. Fix (frontend, `AgendaPage.tsx`): eventos all-day casam por **data de calendário** (`starts_at.slice(0,10)` = data UTC) e o range da busca usa fronteiras **UTC-date** (`${ymd}T00:00:00Z`), não local→UTC. Idem para a cor "atrasado". Backend sempre injetou o evento corretamente (validado). **Lição (reverberar): toda data de negócio que vira evento all-day deve ser comparada por data de calendário, nunca por horário local.**
 - **[CRÍTICO, CORRIGIDO] RLS perdia o tenant no refresh pós-commit (afetava TODOS os módulos).** A `Session` ligada à Engine devolvia a conexão ao pool no `commit()`; o `db.refresh()` seguinte pegava outra conexão sem a GUC `app.current_tenant_id` → RLS escondia a linha → 500 "Could not refresh instance". Funcionava só quando o pool reusava a mesma conexão. **Fix:** `tenant_session` agora prende a Session a UMA conexão dedicada (`engine.connect()`) por todo o request; o refresh pós-commit usa a mesma conexão (GUC setada). Validado: criar em tenant novo OK em todos os módulos + isolamento entre tenants intacto. Regra: qualquer novo helper de sessão de tenant DEVE usar conexão dedicada, nunca a Engine direto.
