@@ -53,7 +53,12 @@ saudável e esconde dois problemas**. Por isso `ConferenciaReport` sempre carreg
 
 **`None` significa NÃO SEI — e não é a mesma coisa que zero.** Quando não há checkpoint útil na
 janela, `divergencia_cents = None` quer dizer **não avaliável**; um `0` ali diria "conferi e está
-batendo", que é uma afirmação que o sistema não tem lastro para fazer. Também é **proibido** cair
+batendo", que é uma afirmação que o sistema não tem lastro para fazer. **São DOIS os motivos**
+(Story 8.20): não houve saldo informado no período, **ou** o saldo informado é da própria data de
+abertura da conta — caso em que a comparação seria **tautológica** (ver `_conferir_conta`). O
+`saldo_banco_data` distingue os dois; a nota **por conta** diz qual é. Nenhuma superfície agregada
+pode afirmar o motivo: um relatório que diz *"sem saldo informado"* sobre uma conta que **tem**
+saldo informado só mudou a mentira de lugar. Também é **proibido** cair
 para "compara com o saldo de hoje", "compara com o último checkpoint de qualquer data" ou "compara
 contra zero" — este último inventaria uma divergência inteira do tamanho do saldo.
 
@@ -136,14 +141,29 @@ def tolerance_cents(
 class ConferenciaConta:
     """A conferência de UMA conta. Cada campo de saldo viaja com o irmão `*_origem` (§1.3c).
 
-    Dois estados possíveis, e a diferença entre eles é o coração da story:
+    **TRÊS** estados possíveis, e a diferença entre eles é o coração da story:
 
     - **avaliável** — havia checkpoint utilizável na janela: `saldo_banco_cents`,
       `saldo_sistema_cents`, `divergencia_cents` e `dentro_da_tolerancia` são números/booleano;
       `saldo_banco_origem = ORIGEM_BANCO`.
-    - **não avaliável** — os quatro são `None`, `saldo_banco_origem = ORIGEM_INDISPONIVEL`,
-      `saldo_banco_fonte = None` (não houve porta de entrada) e `tolerancia_cents = 0`. **`None` não
-      é zero**: zero afirmaria "conferi e bateu".
+    - **não avaliável, sem declaração** — não houve checkpoint na janela. Os quatro são `None`,
+      `saldo_banco_origem = ORIGEM_INDISPONIVEL`, `saldo_banco_fonte = None` (não houve porta de
+      entrada), `saldo_banco_data = None` e `tolerancia_cents = 0`. **`None` não é zero**: zero
+      afirmaria "conferi e bateu".
+    - **declarado, porém não comparável** (Story 8.20) — houve checkpoint na janela, mas o
+      `reference_date` dele é a **própria data de abertura da conta**. O estado numérico é
+      **idêntico** ao anterior, com **um** desvio deliberado: `saldo_banco_data` fica
+      **preenchido**. É o único discriminador que o consumidor tem entre *"você não me informou
+      saldo nenhum"* e *"você me informou, mas nesta data isso não decide nada"* — sem ele a tela
+      responderia
+      *"declare o saldo para eu conferir"* a quem acabou de declarar, em laço. Por que a comparação
+      não vale: `derived_balance(until=opening_date) ≡ opening_balance_cents` para **toda** conta
+      (`service._movements_sums` só soma `posted_at > opening_date`), então ela é **tautológica** —
+      dá zero por construção quando as duas declarações coincidem e inventa um furo quando elas
+      discordam. Por que a declaração mesmo assim é aceita (e não vira 422 em
+      `service._validate_reference_date`): ela é **verdadeira** — o degenerado é a **comparação**,
+      não a declaração, e recusá-la apagaria uma afirmação legítima do dono (princípio da Onda 0:
+      *"suprimir a afirmação, nunca o número"*). Ela continua contando no **bloco 4**.
 
     `saldo_sistema_origem` é **sempre** `ORIGEM_BANCO`, inclusive no estado não avaliável: a
     procedência do saldo derivado não muda por não haver checkpoint — o que fica desconhecido é o
@@ -163,7 +183,9 @@ class ConferenciaConta:
     # EIXO B (porta de entrada do saldo externo): `manual` | `ofx`, valor CRU do checkpoint, sem
     # tradução nenhuma para o eixo A (design §1.3.1). `None` quando não houve porta.
     saldo_banco_fonte: str | None
-    # A data em que os DOIS saldos foram apurados. É o `reference_date` do checkpoint.
+    # A data do saldo informado — o `reference_date` do checkpoint. No caminho avaliável é também a
+    # data em que os DOIS saldos foram apurados. Quando `divergencia_cents is None` e este campo
+    # **não** é `None`, houve **declaração** e o que faltou foi a **comparação** (Story 8.20).
     saldo_banco_data: date | None
     # O que o SISTEMA calculou, na MESMA data acima (`derived_balance(until=saldo_banco_data)`).
     saldo_sistema_cents: int | None
@@ -230,11 +252,37 @@ _NOTE_SEM_CHECKPOINT = (
 )
 
 
+def _note_comparacao_degenerada(reference_date: date) -> str:
+    """A nota do terceiro estado (Story 8.20): **declarado, porém não comparável**.
+
+    Vira função (e não constante) porque carrega a data — mesmo motivo de `_note_total_parcial`.
+
+    ⚠️ **É proibido reusar `_NOTE_SEM_CHECKPOINT` aqui.** A conta **tem** saldo informado; repetir
+    *"Nenhum saldo informado para esta conta dentro do período"* trocaria uma afirmação falsa por
+    outra — o mesmo defeito uma camada acima. E o vocabulário é o do UX-001 (8.7): esta nota fala do
+    lado *"o que o banco diz"*; a string `"no banco"` pertence à parcela da Projeção e **não** entra
+    aqui, nem sinônimo locacional.
+    """
+    return (
+        f"Você informou o saldo desta conta em {reference_date.isoformat()}, o mesmo dia em que a "
+        "conta foi aberta no e1p. Nesse dia o e1p ainda não tinha movimento nenhum para somar: a "
+        "comparação sairia do saldo de abertura contra ele mesmo e não conseguiria encontrar "
+        "lançamento faltante nenhum. Informe o saldo de um dia posterior para o e1p conferir de "
+        "verdade."
+    )
+
+
 def _note_total_parcial(sem_checkpoint: int) -> str:
+    """⚠️ A substring `"não cobre todas as contas"` é contrato de teste — preserve-a.
+
+    O motivo saiu da frase (Story 8.20): existem **dois** motivos para uma conta não ser avaliada
+    (sem saldo informado × declarado na data de abertura), e afirmar aqui o primeiro seria mentir
+    sobre o segundo. O motivo de cada conta está na nota **dela**.
+    """
     plural = "s" if sem_checkpoint > 1 else ""
     return (
-        f"O total não cobre todas as contas: {sem_checkpoint} conta{plural} sem saldo informado no "
-        f"período (não avaliada{plural})."
+        f"O total não cobre todas as contas: {sem_checkpoint} conta{plural} não avaliada{plural} "
+        f"no período — o motivo está na nota de cada conta."
     )
 
 
@@ -308,6 +356,18 @@ def _conferir_conta(
 
     O filtro de janela mora **aqui**, e não em `latest_checkpoint`: ele é filtro de relatório, não
     regra de domínio da 8.4 — que só conhece `on_or_before`.
+
+    **A comparação DEGENERADA (Story 8.20).** Um checkpoint com
+    `reference_date == account.opening_date` passa no filtro de janela e ainda assim **não decide
+    nada**: `derived_balance(until=opening_date) ≡ opening_balance_cents` para toda conta, sempre
+    (`service._movements_sums` só soma `posted_at > opening_date`, e `_validate_posted_at` impede
+    lançar movimento na própria data de abertura). Comparar os dois lados ali é comparar **duas
+    declarações do mesmo dono sobre o mesmo dia**: se elas coincidem, a divergência é zero **por
+    construção** e o motor emite o 🟢 *"está tudo batendo"* para um razão bancário vazio; se elas
+    discordam, a divergência estoura a banda e o motor manda o dono caçar um lançamento que não
+    existe. Por isso o bloco 1 sai como **não avaliável** e `derived_balance` **nem é chamada**.
+    A **declaração** continua legítima (ver `service._validate_reference_date`, que a aceita de
+    propósito) e continua contando no **bloco 4**: o degenerado é a comparação, não o ato.
     """
     checkpoint = service.latest_checkpoint(
         db, bank_account_id=account.id, on_or_before=end
@@ -329,8 +389,16 @@ def _conferir_conta(
         checkpoint if checkpoint is not None and checkpoint.reference_date >= start else None
     )
 
-    if na_janela is None:
-        # AC3 — o relatório DIZ que não sabe. Nenhum número de divergência é produzido aqui.
+    # Story 8.20 — a comparação DEGENERADA (ver a docstring acima). Calculada DEPOIS do `na_janela`
+    # e ANTES de qualquer chamada a `derived_balance`: não há o que derivar para comparar.
+    degenerada = na_janela is not None and na_janela.reference_date == account.opening_date
+
+    if na_janela is None or degenerada:
+        # UMA construção para os DOIS motivos de "não avaliável" — duas quase iguais divergiriam na
+        # primeira manutenção. O estado numérico é o mesmo; variam só `saldo_banco_data` (o
+        # discriminador do caso degenerado) e a nota, que diz QUAL dos dois motivos é.
+        # Dentro deste bloco, `na_janela is not None` ⟺ `degenerada` — a forma abaixo é a mesma
+        # condição escrita de um jeito que o type checker acompanha.
         return ConferenciaConta(
             bank_account_id=account.id,
             bank_account_name=account.name,
@@ -338,16 +406,25 @@ def _conferir_conta(
             saldo_banco_cents=None,
             saldo_banco_origem=ORIGEM_INDISPONIVEL,
             saldo_banco_fonte=None,
-            saldo_banco_data=None,
+            # O ÚNICO desvio entre os dois caminhos: no degenerado houve declaração, e é este campo
+            # que impede a tela de mandar o dono repetir o ato que ele acabou de fazer.
+            saldo_banco_data=na_janela.reference_date if na_janela is not None else None,
             saldo_sistema_cents=None,
             # A procedência do derivado não muda por não haver checkpoint — o que falta é o VALOR.
             saldo_sistema_origem=ORIGEM_BANCO,
             divergencia_cents=None,
             dentro_da_tolerancia=None,
             tolerancia_cents=0,
+            # AC8 (8.20): o bloco 4 NÃO é silenciado no caso degenerado. Ele mede o **ato de
+            # declarar**, e o ato aconteceu; o bloco 1 mede a **comparação**. Colapsar os dois é o
+            # erro de fundo que esta correção existe para desfazer.
             dias_desde_ultima_conferencia=dias_desde_ultima_conferencia,
             movimentos_ignorados=movimentos_ignorados,
-            notes=[_NOTE_SEM_CHECKPOINT],
+            notes=[
+                _note_comparacao_degenerada(na_janela.reference_date)
+                if na_janela is not None
+                else _NOTE_SEM_CHECKPOINT
+            ],
         )
 
     saldo_banco_cents = na_janela.balance_cents

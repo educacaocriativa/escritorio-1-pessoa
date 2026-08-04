@@ -188,12 +188,12 @@ def _completeness_signals(data: CompletenessInput | None) -> list[Signal]:
     | todas avaliáveis, dentro da banda e frescas | 🟢 | 1 |
 
     **Uma conta gera no máximo UM 🟡 de "não sei"** (ratificação D-2 Ajuste 2): as duas regras de
-    "não sei" do rascunho — *"sem saldo declarado na janela"* e *"não confirmado há N dias"* — são
-    **uma só**, cujo texto diz qual dos casos é. Num tenant com 3 contas nenhuma conferida, a versão
-    separada produziria **seis** sinais dizendo a mesma coisa: ruído que treina o usuário a ignorar
-    a tela — o mesmo vício que a banda de tolerância existe para evitar. Um 🔴 de fora-da-banda
-    **pode** coexistir com o 🟡 da mesma conta: são afirmações diferentes (*"está fora da banda em
-    R$ X"* e *"e essa medição é de 60 dias atrás"*).
+    "não sei" do rascunho — *"sem comparação avaliável no período"* e *"não confirmado há N dias"*
+    — são **uma só**, cujo texto diz qual dos casos é. Num tenant com 3 contas nenhuma conferida, a
+    versão separada produziria **seis** sinais dizendo a mesma coisa: ruído que treina o usuário a
+    ignorar a tela — o mesmo vício que a banda de tolerância existe para evitar. Um 🔴 de
+    fora-da-banda **pode** coexistir com o 🟡 da mesma conta: são afirmações diferentes (*"está
+    fora da banda em R$ X"* e *"e essa medição é de 60 dias atrás"*).
 
     O motor decide por `abs(divergencia) > tolerancia` e **não** pelo `dentro_da_tolerancia` que a
     conferência já calcula — não porque o booleano esteja errado, mas para não haver **duas
@@ -245,7 +245,14 @@ def _completeness_signals(data: CompletenessInput | None) -> list[Signal]:
         # 🟡 — "não sei", no MÁXIMO um por conta, dizendo QUAL dos casos é.
         motivos: list[str] = []
         if c.divergencia_cents is None:
-            motivos.append("sem saldo declarado na janela")
+            # Story 8.20: "sem comparação avaliável" e não "sem saldo declarado" — existem DOIS
+            # motivos para `divergencia_cents is None` (nenhum saldo declarado no período **ou**
+            # saldo declarado na própria data de abertura, cuja comparação é tautológica), e o motor
+            # é PURO: ele recebe só o número e não tem como saber qual. A frase nova é verdadeira
+            # nos dois; a precisão fica na nota por conta, na tela de Conferência, que é para onde
+            # este sinal leva. Distinguir aqui exigiria um campo novo em `CompletenessAccountInput`
+            # — é da Story 8.16, que já acrescenta campos ao motor.
+            motivos.append("sem comparação avaliável no período")
         if c.dias_desde_ultima_conferencia is None:
             motivos.append("nunca confirmado")
         elif c.dias_desde_ultima_conferencia > _COMPLETENESS_STALE_DAYS:

@@ -207,6 +207,47 @@ describe("AC4 — a frase vem ANTES da tabela, e nomeia a conta", () => {
     expect(screen.getAllByText("Não sei").length).toBeGreaterThan(0);
     expect(screen.queryByText(/R\$\s*0,00/)).toBeNull();
   });
+
+  it("Story 8.20 — saldo informado na data de ABERTURA: a tela não manda declarar de novo", async () => {
+    vi.mocked(api.get).mockResolvedValue({
+      data: report([
+        conta({
+          bank_account_name: "C6 PJ",
+          saldo_banco_cents: null,
+          saldo_banco_origem: "indisponivel",
+          saldo_banco_fonte: null,
+          // O discriminador: houve DECLARAÇÃO; o que faltou foi a COMPARAÇÃO.
+          saldo_banco_data: "2026-07-30",
+          saldo_sistema_cents: null,
+          divergencia_cents: null,
+          dentro_da_tolerancia: null,
+          tolerancia_cents: 0,
+          dias_desde_ultima_conferencia: 0,
+          notes: [
+            "Você informou o saldo desta conta em 2026-07-30, o mesmo dia em que a conta foi " +
+              "aberta no e1p.",
+          ],
+        }),
+      ]),
+    } as never);
+
+    const { container } = renderPage();
+
+    await waitFor(() =>
+      expect(screen.getByText(/Você informou o saldo da conta C6 PJ/)).toBeInTheDocument(),
+    );
+    // ⚠️ A asserção NEGATIVA é o ponto: mandar "declare o saldo para eu conferir" a quem acabou de
+    // declarar fecha um laço — o dono declara, a tela pede de novo, e o produto perde a confiança.
+    expect(screen.queryByText(/declare o saldo para eu conferir/)).toBeNull();
+    expect(screen.queryByText(/Não sei o saldo da conta C6 PJ/)).toBeNull();
+    // Nem o bloco 4 mente: `0` é "confirmado hoje", e não "nunca teve saldo informado".
+    expect(screen.queryByText(/nunca teve saldo informado/)).toBeNull();
+    // A data declarada continua visível na coluna do lado do banco (o campo segue preenchido).
+    const corpo = container.querySelector("tbody") as HTMLElement;
+    expect(within(corpo).getByText(/em 30\/07\/2026/)).toBeInTheDocument();
+    // Nenhum ícone de alerta: é "não dá para conferir", não é erro.
+    expect(screen.queryByLabelText("Divergência fora da tolerância")).toBeNull();
+  });
 });
 
 describe("AC6 — o consolidado nunca aparece sozinho (epic §3.2, decisão do fundador F3)", () => {
@@ -280,7 +321,10 @@ describe("AC6 — o consolidado nunca aparece sozinho (epic §3.2, decisão do f
     await waitFor(() =>
       expect(screen.getByText(/Esta soma não cobre todas as suas contas/)).toBeInTheDocument(),
     );
-    expect(screen.getByText(/1 conta está sem saldo informado/)).toBeInTheDocument();
+    // Story 8.20 — "não avaliada", e não "sem saldo informado": há dois motivos para a conta ficar
+    // de fora, e o agregado não sabe qual é.
+    expect(screen.getByText(/1 conta não foi avaliada/)).toBeInTheDocument();
+    expect(screen.queryByText(/sem saldo informado no período/)).toBeNull();
   });
 
   it("a ordem de leitura é 'o que dói primeiro' — não avaliáveis por último", async () => {

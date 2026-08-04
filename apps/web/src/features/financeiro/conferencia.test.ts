@@ -112,6 +112,59 @@ describe("fraseConferencia — os quatro casos do AC4", () => {
     expect(f.texto).not.toContain("R$");
   });
 
+  it("Story 8.20 — saldo informado na DATA DE ABERTURA: não manda declarar de novo", () => {
+    // O caso degenerado: houve declaração (`saldo_banco_data` preenchido) e mesmo assim a
+    // comparação não decide nada. Pedir "declare o saldo para eu conferir" aqui mandaria o dono
+    // repetir exatamente o ato que ele acabou de fazer — em laço.
+    const f = fraseConferencia(
+      conta({
+        bank_account_name: "C6 PJ",
+        saldo_banco_cents: null,
+        saldo_banco_origem: "indisponivel",
+        saldo_banco_fonte: null,
+        saldo_banco_data: "2026-07-30",
+        saldo_sistema_cents: null,
+        divergencia_cents: null,
+        dentro_da_tolerancia: null,
+        tolerancia_cents: 0,
+        dias_desde_ultima_conferencia: 0,
+      }),
+    );
+    expect(f.tom).toBe("desconhecido");
+    expect(f.texto).toContain("C6 PJ");
+    expect(f.texto).toContain("30/07/2026");
+    expect(f.texto).toContain("mesmo dia em que ela foi aberta no e1p");
+    expect(f.texto).toContain("dia posterior");
+    // ⚠️ A asserção NEGATIVA é o ponto do teste.
+    expect(f.texto).not.toContain("declare o saldo para eu conferir");
+    expect(f.texto).not.toContain("Não sei o saldo da conta");
+    // Nenhum tom novo, nenhuma cor nova, nenhum ícone de alerta (AC5 da 8.7, intacto).
+    expect(tomVisual(f.tom).alerta).toBe(false);
+    expect(tomVisual(f.tom).emoji).toBe("⚪");
+  });
+
+  it("Story 8.20 — os DOIS ramos do 'não sei' têm o MESMO tom, e textos diferentes", () => {
+    const base = {
+      saldo_banco_cents: null,
+      saldo_banco_origem: "indisponivel",
+      saldo_sistema_cents: null,
+      divergencia_cents: null,
+      dentro_da_tolerancia: null,
+      tolerancia_cents: 0,
+    } as const;
+    const semDeclaracao = fraseConferencia(
+      conta({ ...base, saldo_banco_fonte: null, saldo_banco_data: null }),
+    );
+    const degenerada = fraseConferencia(
+      conta({ ...base, saldo_banco_fonte: null, saldo_banco_data: "2026-07-30" }),
+    );
+    expect(semDeclaracao.tom).toBe("desconhecido");
+    expect(degenerada.tom).toBe("desconhecido");
+    expect(semDeclaracao.texto).not.toBe(degenerada.texto);
+    // O ramo comum continua convidando a declarar — a correção não pode custar esse convite.
+    expect(semDeclaracao.texto).toContain("declare o saldo para eu conferir");
+  });
+
   it("divergência ZERO avaliada é 'batendo', não 'não sei' (0 ≠ ausência)", () => {
     // A guarda é pelos campos serem `null`, nunca por falsidade: `!0` mandaria uma conta conferida
     // e exata para o caminho "não sei".
@@ -205,10 +258,23 @@ describe("AC6 — o consolidado nunca é veredito (cenário das três contas do 
 
   it("avisoTotalParcial fala quando o total NÃO cobre todas as contas", () => {
     expect(avisoTotalParcial(report({ contas_sem_checkpoint: 0 }))).toBeNull();
-    expect(avisoTotalParcial(report({ contas_sem_checkpoint: 1 }))).toContain("1 conta está");
+    const um = avisoTotalParcial(report({ contas_sem_checkpoint: 1 }));
+    expect(um).toContain("1 conta não foi avaliada");
     const dois = avisoTotalParcial(report({ contas_sem_checkpoint: 2 }));
-    expect(dois).toContain("2 contas estão");
+    expect(dois).toContain("2 contas não foram avaliadas");
     expect(dois).toContain("ficaram de fora");
+  });
+
+  it("Story 8.20 — o aviso NÃO afirma o motivo: 'sem saldo informado' seria falso", () => {
+    // Existem dois motivos para uma conta ficar de fora do total (nenhum saldo informado × saldo
+    // informado na data de abertura). O agregado não sabe qual é — afirmar um deles moveria a
+    // mentira de lugar em vez de removê-la. O motivo está na nota de cada conta.
+    for (const n of [1, 2, 7]) {
+      const aviso = avisoTotalParcial(report({ contas_sem_checkpoint: n })) ?? "";
+      expect(aviso).not.toContain("sem saldo informado");
+      expect(aviso).not.toContain("sem saldo declarado");
+      expect(aviso).toContain("não cobre todas as suas contas");
+    }
   });
 });
 

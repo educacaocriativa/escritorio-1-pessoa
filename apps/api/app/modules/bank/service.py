@@ -1368,10 +1368,32 @@ def _validate_reference_date(reference_date: date, account: BankAccount) -> date
 
     ⚠️ Note a assimetria deliberada com `_validate_posted_at` (movimento), que exige
     `posted_at > opening_date`, **estritamente**. Aqui `reference_date == opening_date` é
-    **aceito**, e é o caso mais sadio que existe: `opening_balance_cents` é, por definição, o saldo
-    ao fim do dia de abertura, então `derived_balance(until=opening_date)` devolve exatamente ele e
-    a comparação vale. Para o movimento, o mesmo dia significaria contar duas vezes um dinheiro que
-    já está dentro do saldo de abertura — daí um `>` lá e um `>=` aqui.
+    **aceito** — e o que essa aceitação significa precisa ficar escrito com o sinal certo, porque a
+    versão anterior desta docstring afirmava o **oposto** da própria premissa dela e foi por isso
+    que o defeito da Story 8.20 sobreviveu a 36 testes:
+
+    - **premissa (correta):** `opening_balance_cents` é, por definição, o saldo ao fim do dia de
+      abertura, então `derived_balance(until=opening_date)` devolve **exatamente ele** — sempre,
+      para toda conta (`_movements_sums` só soma `posted_at > opening_date`).
+    - **conclusão (o oposto do que estava aqui):** justamente por isso a comparação resultante é
+      **tautológica**. Ela não tem poder de detectar lançamento faltante nenhum: coincidindo as duas
+      declarações, a divergência é zero **por construção**; discordando, ela inventa um furo que não
+      existe. Por isso o bloco 1 da conferência a trata como **NÃO AVALIÁVEL** — ver
+      `app/modules/bank/reconciliation.py::_conferir_conta`.
+    - **e mesmo assim a data continua aceita**, sem 422: o saldo da conta no dia em que ela abriu é
+      uma **declaração legítima**, e recusá-la apagaria uma afirmação verdadeira do dono (o inverso
+      exato do princípio da Onda 0, *"suprimir a afirmação, nunca o número"*). O degenerado é a
+      **comparação**, não a declaração — que segue contando como conferência recente no bloco 4.
+
+    Para o **movimento** a assimetria permanece por outro motivo, e ele não mudou: o mesmo dia
+    significaria contar duas vezes um dinheiro que já está dentro do saldo de abertura — isso
+    **corrompe um número**, e corromper número é motivo para 422. Concordar por construção não é.
+    Daí um `>` lá e um `>=` aqui.
+
+    **Lição de método (não reintroduza a frase antiga):** *"o valor é bem definido"* e *"o valor
+    é informativo"* são afirmações diferentes, e a primeira não implica a segunda. Esta função
+    responde *"posso gravar?"*; quem responde *"isto serve para conferir?"* é o
+    `reconciliation.py`.
     """
     if reference_date > _today():
         raise BankError(

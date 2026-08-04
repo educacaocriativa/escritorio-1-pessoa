@@ -225,7 +225,11 @@ function ConsolidadoCard({
         <p className="text-xs text-neutral-500">
           {report.contas_avaliadas}{" "}
           {report.contas_avaliadas === 1 ? "conta conferida" : "contas conferidas"} ·{" "}
-          {report.contas_sem_checkpoint} sem saldo informado
+          {/* Story 8.20 — "não avaliada(s)": há dois motivos para a conta ficar fora do total
+              (nenhum saldo informado × saldo informado na data de abertura), e afirmar aqui o
+              primeiro seria falso para o segundo. O motivo está na nota de cada conta. */}
+          {report.contas_sem_checkpoint}{" "}
+          {report.contas_sem_checkpoint === 1 ? "não avaliada" : "não avaliadas"}
         </p>
       </div>
       <p className="mt-3 max-w-2xl text-xs text-neutral-500">

@@ -173,6 +173,47 @@ def test_conta_conferida_e_dentro_da_banda_fica_verde_e_silenciosa(
     assert "R$ 3,50" in sinais[0]["explanation"]
 
 
+# ── Story 8.20 — o 🟢 FALSO: saldo declarado na própria data de abertura ──────────────────────
+
+
+def test_saldo_declarado_na_data_de_abertura_nao_produz_verde_de_completude(
+    client: TestClient, headers
+) -> None:
+    """**O teste de maior valor da Story 8.20.** O dono cadastra a conta e informa o saldo no mesmo
+    dia — o passo 1 do mutirão, e o estado vivo do tenant do fundador.
+
+    Antes desta correção o relatório comparava `opening_balance_cents` com
+    `derived_balance(until=opening_date)`, que são **iguais por definição da fórmula**
+    (`_movements_sums` só soma `posted_at > opening_date`). Divergência zero **por construção**,
+    dentro de qualquer banda, `dias == 0` → `todas_batendo` verdadeiro → 🟢 *"Está tudo batendo"*
+    para um tenant com **zero movimento** no razão bancário. O épico inteiro existe para medir isso,
+    e este caso o enganava.
+
+    A asserção é a **ausência de qualquer sinal `level=verde` com `source="completude"`**, e não a
+    ausência de uma string: a string muda, o verde não. E o que sobra é 🟡 — porque o produto
+    realmente **não sabe** se os lançamentos estão completos.
+    """
+    conta = _account(client, headers, name="C6 PJ", opening=0)
+    # `opening_date` das contas desta suíte é `START` — declarar em `START` é declarar no dia do
+    # cadastro, exatamente o caso degenerado.
+    _declarar(client, headers, conta["id"], balance_cents=0, reference_date=START)
+
+    sinais = _completude(_diagnostics(client, headers))
+    assert [s for s in sinais if s["level"] == "verde"] == [], (
+        "o 🟢 'está tudo batendo' foi emitido a partir de uma comparação do saldo de abertura com "
+        "ele mesmo — o sistema se auto-aprovou sobre um razão bancário vazio"
+    )
+    assert len(sinais) == 1, f"1 conta = no máximo 1 🟡 de 'não sei': {sinais}"
+    assert sinais[0]["level"] == "amarelo"
+    assert "C6 PJ" in sinais[0]["explanation"]
+    assert "sem comparação avaliável no período" in sinais[0]["explanation"]
+    # O bloco 4 continua contando a declaração (AC8): ela é recente, então NÃO entra como motivo.
+    assert "nunca confirmado" not in sinais[0]["explanation"], (
+        "o bloco 4 foi silenciado junto com o bloco 1: o dono DECLAROU de fato — o degenerado é a "
+        "comparação, não a declaração"
+    )
+
+
 # ── IV4 (d) — sem `ANTHROPIC_API_KEY`: os sinais são os mesmos ────────────────────────────────
 
 

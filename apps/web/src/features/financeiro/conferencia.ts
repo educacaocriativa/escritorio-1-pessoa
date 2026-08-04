@@ -10,6 +10,7 @@
  * é um diagnóstico. Por isso `fraseConferencia` é uma função pura testada, e não um `<p>` montado
  * dentro do `.tsx`.
  */
+import { formatDateBR } from "./contas";
 import { formatBRL } from "./dre";
 
 // ── Tipos (espelho de `ConferenciaReportOut`, Story 8.5) ─────────────────────────────────────
@@ -31,7 +32,12 @@ export interface ConferenciaConta {
   saldo_banco_origem: string;
   /** Eixo B (porta de entrada): `manual` | `ofx` | `null`. Rótulo em `FONTE_LABEL`, aqui. */
   saldo_banco_fonte: string | null;
-  /** Data em que os DOIS saldos foram apurados (o `reference_date` do checkpoint). */
+  /**
+   * Data do saldo informado (o `reference_date` do checkpoint); no caminho avaliável é também a
+   * data em que os DOIS saldos foram apurados. **Não-`null` com `divergencia_cents === null`
+   * significa: houve declaração, o que faltou foi a comparação** (Story 8.20 — o saldo foi
+   * informado na própria data de abertura da conta, e ali a comparação é tautológica).
+   */
   saldo_banco_data: string | null;
   saldo_sistema_cents: number | null;
   /** Eixo A do derivado: SEMPRE `banco`, inclusive quando o valor é `null`. */
@@ -131,7 +137,8 @@ export const LADOS_GRUPO_LABEL = "Os dois lados da conferência";
  *   dinheiro a mais na conta do que o e1p registrou é falha de registro, não buraco no caixa.
  * - `alerta` — fora da banda, banco ABAIXO do sistema (falta lançamento de SAÍDA). Vermelho: é o
  *   achado de maior valor do épico (REQ-14) — o dinheiro saiu e o e1p não sabe.
- * - `desconhecido` — sem saldo informado na janela. Não é erro nem sucesso: é "não sei".
+ * - `desconhecido` — a comparação não é avaliável (sem saldo informado na janela **ou** saldo
+ *   informado na data de abertura da conta). Não é erro nem sucesso: é "não dá para conferir".
  */
 export type TomConferencia = "ok" | "atencao" | "alerta" | "desconhecido";
 
@@ -148,6 +155,12 @@ export interface FraseConferencia {
  * uma conta que nunca foi conferida seria afirmar que está batendo. A ausência do número é a
  * informação.
  *
+ * O caso `desconhecido` tem **dois ramos** (Story 8.20), porque tem dois motivos: *nenhum saldo
+ * informado* (o comum, e o texto convida a declarar) × *saldo informado na própria data de abertura
+ * da conta*, em que a comparação seria tautológica e pedir "declare o saldo" mandaria o dono repetir
+ * o ato que ele acabou de fazer. O discriminador é `saldo_banco_data`, que o backend mantém
+ * preenchido no segundo caso.
+ *
  * A frase é **acionável**, não apenas numérica: divergência negativa diz *"provavelmente faltam
  * lançamentos de saída"*, porque o critério de sucesso do fundador é *"quantos lançamentos
  * faltantes foram encontrados"*, nunca *"fechou em zero"* (REQ-13/REQ-14).
@@ -160,6 +173,20 @@ export function fraseConferencia(c: ConferenciaConta): FraseConferencia {
   // Guarda pelos DOIS campos (e não `!c.divergencia_cents`): `0` é uma divergência avaliada e
   // legítima — "conferi, bateu exatamente" — e a forma negada a mandaria para o caso "não sei".
   if (c.divergencia_cents === null || c.dentro_da_tolerancia === null) {
+    // Story 8.20 — DOIS motivos para "não avaliável", e eles pedem ações diferentes. O
+    // discriminador é `saldo_banco_data` (o backend o mantém preenchido quando houve declaração):
+    // sem ele, a tela mandaria "declare o saldo" para quem acabou de declarar, em laço. Os dois
+    // ramos continuam com o tom `desconhecido` — nenhum tom novo, nenhuma cor nova, nenhum alerta.
+    if (c.saldo_banco_data !== null) {
+      return {
+        tom: "desconhecido",
+        texto:
+          `Você informou o saldo da conta ${c.bank_account_name} em ` +
+          `${formatDateBR(c.saldo_banco_data)}, o mesmo dia em que ela foi aberta no e1p — ` +
+          "nesse dia ainda não havia movimento para somar, então essa comparação não decide " +
+          "nada. Informe o saldo de um dia posterior para eu conferir de verdade.",
+      };
+    }
     return {
       tom: "desconhecido",
       texto:
@@ -267,9 +294,12 @@ export function ordenarContas(contas: ConferenciaConta[]): ConferenciaConta[] {
 export function avisoTotalParcial(report: ConferenciaReport): string | null {
   const n = report.contas_sem_checkpoint;
   if (n <= 0) return null;
+  // Story 8.20 — "não avaliada", e não "sem saldo informado": há DOIS motivos para uma conta ficar
+  // de fora do total, e afirmar aqui o primeiro seria mentir sobre o segundo. O motivo de cada
+  // conta está na nota dela, logo acima nesta mesma tela.
   return n === 1
-    ? "Esta soma não cobre todas as suas contas: 1 conta está sem saldo informado no período e ficou de fora."
-    : `Esta soma não cobre todas as suas contas: ${n} contas estão sem saldo informado no período e ficaram de fora.`;
+    ? "Esta soma não cobre todas as suas contas: 1 conta não foi avaliada no período e ficou de fora."
+    : `Esta soma não cobre todas as suas contas: ${n} contas não foram avaliadas no período e ficaram de fora.`;
 }
 
 /**

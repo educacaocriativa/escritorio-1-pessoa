@@ -512,13 +512,182 @@ def test_dias_desde_ultima_conferencia_usa_min_entre_end_e_today(
 
 
 def test_checkpoint_na_borda_do_start_serve(client: TestClient, headers, db: Session):
-    """`reference_date == start` está DENTRO da janela (as duas pontas são inclusivas)."""
-    conta = _account(client, headers, opening=1_000_000)
+    """`reference_date == start` está DENTRO da janela (as duas pontas são inclusivas).
+
+    ⚠️ A conta é aberta em 01/06, e **não** no `OPENING` default (01/07) — porque `START` também é
+    01/07. Com a data de abertura no default, este cenário cairia por acidente na **comparação
+    degenerada** da Story 8.20 (`reference_date == opening_date`, não avaliável) e o teste passaria
+    a medir aquilo, e não a borda da janela que ele existe para medir. Não "simplifique" a data de
+    volta: o afastamento é o que mantém as duas asserções abaixo falando da janela.
+    """
+    conta = _account(client, headers, opening=1_000_000, opening_date=date(2026, 6, 1))
     _declarar(client, headers, conta["id"], balance_cents=1_000_000, reference_date=START)
 
     c = _so_conta(_report(db))
     assert c.saldo_banco_data == START
     assert c.divergencia_cents == 0
+
+
+# ── Story 8.20 — a COMPARAÇÃO DEGENERADA (checkpoint na data de abertura) ────────────────────
+#
+# `derived_balance(until=opening_date) ≡ opening_balance_cents` para toda conta, sempre — o escopo
+# de `service._movements_sums` é `posted_at > opening_date`, estrito. Comparar os dois lados nessa
+# data é comparar DUAS DECLARAÇÕES DO MESMO DONO SOBRE O MESMO DIA, e o resultado é errado nos dois
+# ramos possíveis: coincidindo, dá zero por construção e o Diagnóstico emite o 🟢 "está tudo
+# batendo" sobre um razão bancário vazio; discordando, estoura a banda e o motor manda o dono caçar
+# um lançamento que não existe. Por isso o remédio é "a comparação não vale", e NUNCA "se der zero,
+# ignore" — este segundo passaria no ramo A e deixaria o ramo B vivo.
+
+
+def _assert_degenerada(
+    c: reconciliation.ConferenciaConta, *, reference_date: date
+) -> None:
+    """O estado do AC1: o mesmo de "sem checkpoint", com UM desvio — `saldo_banco_data`."""
+    assert c.saldo_banco_cents is None
+    assert c.saldo_banco_origem == ORIGEM_INDISPONIVEL
+    assert c.saldo_banco_fonte is None
+    assert c.saldo_sistema_cents is None, (
+        "o saldo derivado foi apurado num caminho que não compara nada — `derived_balance` não "
+        "deve ser chamada aqui"
+    )
+    assert c.saldo_sistema_origem == ORIGEM_BANCO
+    assert c.divergencia_cents is None, (
+        "o relatório produziu uma divergência a partir de uma comparação TAUTOLÓGICA: o saldo "
+        "informado é da própria data de abertura, e ali o lado do e1p é o saldo de abertura por "
+        "definição. Zero ali não é 'conferi e bateu' — é 'comparei um número com ele mesmo'"
+    )
+    assert c.dentro_da_tolerancia is None
+    assert c.tolerancia_cents == 0
+    # O desvio deliberado (AC3): houve DECLARAÇÃO; o que faltou foi a COMPARAÇÃO.
+    assert c.saldo_banco_data == reference_date, (
+        "sem este campo o payload não distingue 'você não me informou saldo nenhum' de 'você me "
+        "informou, mas nesta data isso não decide nada' — e a tela mandaria o dono repetir o ato "
+        "que ele acabou de fazer"
+    )
+    nota = " ".join(c.notes)
+    assert reconciliation._NOTE_SEM_CHECKPOINT not in c.notes, (
+        "a nota de 'nenhum saldo informado' foi reusada numa conta que TEM saldo informado — "
+        "trocar uma afirmação falsa por outra é o mesmo defeito uma camada acima"
+    )
+    assert reference_date.isoformat() in nota
+    assert "mesmo dia em que a conta foi aberta" in nota
+    assert "dia posterior" in nota, "a nota precisa dizer o que fazer, não só o que houve"
+    # UX-001 (8.7): o vocabulário do lado externo não usa "no banco" (é a parcela da Projeção).
+    assert "no banco" not in nota
+
+
+def test_checkpoint_na_data_de_abertura_nao_e_conferencia(
+    client: TestClient, headers, db: Session
+):
+    """**Ramo A — o comum, e o caro.** As duas declarações coincidem → hoje, 🟢 falso.
+
+    Cenário real do tenant do fundador: conta cadastrada com saldo de abertura e, no mesmo dia, o
+    dono informa no app o mesmo número que a UI já lhe mostrou. Antes desta correção o relatório
+    devolvia `divergencia_cents == 0` e `dentro_da_tolerancia is True` — "está tudo batendo" para
+    uma conta com **zero movimento** lançado. O sistema se auto-aprovava.
+    """
+    conta = _account(client, headers, opening=1_000_000)
+    _declarar(client, headers, conta["id"], balance_cents=1_000_000, reference_date=OPENING)
+
+    report = _report(db)
+    c = _so_conta(report)
+    _assert_degenerada(c, reference_date=OPENING)
+
+    assert report.contas_avaliadas == 0
+    assert report.contas_sem_checkpoint == 1
+    assert report.total_divergencia_cents is None
+    assert report.contas_fora_da_banda == []
+
+
+def test_checkpoint_na_data_de_abertura_que_DISCORDA_nao_inventa_furo(
+    client: TestClient, headers, db: Session
+):
+    """**Ramo B — o silencioso.** As duas declarações discordam → hoje, 🔴 falso.
+
+    O dono corrigiu a memória (ou o saldo de abertura mudou depois, via `update_account`) e informa
+    R$ 40.000 numa conta aberta com R$ 10.000, na data de abertura. A divergência de R$ 30.000
+    estoura qualquer banda, a conta entra em `contas_fora_da_banda` e o motor escreve *"faltam
+    R$ 30.000 em lançamentos — provavelmente faltam lançamentos de saída"*. **Não falta lançamento
+    nenhum**: o dono se contradisse em duas declarações sobre o mesmo dia.
+
+    Este é o teste que impede o remédio de degenerar em *"se der zero, ignore"* — essa variante
+    passaria no ramo A e deixaria este diagnóstico falso vivo.
+    """
+    conta = _account(client, headers, opening=1_000_000)
+    _declarar(client, headers, conta["id"], balance_cents=4_000_000, reference_date=OPENING)
+
+    report = _report(db)
+    _assert_degenerada(_so_conta(report), reference_date=OPENING)
+    assert report.contas_fora_da_banda == [], (
+        "o relatório acusou um furo de R$ 30.000 numa comparação que não compara nada — a "
+        "divergência é inventada pelo próprio relatório, o modo de falha que este módulo inteiro "
+        "existe para impedir"
+    )
+    assert report.total_divergencia_cents is None
+
+
+def test_checkpoint_na_data_de_abertura_CONTA_no_bloco_4(client: TestClient, headers, db: Session):
+    """AC8 — o bloco 4 não é silenciado: o dono **declarou de fato**, e é isso que ele mede.
+
+    O bloco 1 mede a **comparação**; o bloco 4 mede o **ato de declarar**. Colapsar os dois é o
+    erro de fundo que esta correção desfaz — e `None` ali significaria *"nunca confirmado"*, que
+    seria falso e faria a tela dizer "Esta conta nunca teve saldo informado."
+    """
+    conta = _account(client, headers, opening=1_000_000)
+    _declarar(client, headers, conta["id"], balance_cents=1_000_000, reference_date=OPENING)
+
+    # `end == today == opening_date`: o dia do cadastro. "Confirmado hoje" = 0, e 0 não é `None`.
+    c = _so_conta(_report(db, end=OPENING, today=OPENING))
+    assert c.dias_desde_ultima_conferencia == 0, (
+        "o bloco 4 perdeu a declaração: `0` é 'confirmado hoje' e `None` é 'nunca confirmado' — "
+        "não são a mesma coisa, e só um dos dois é verdade aqui"
+    )
+    assert c.dias_desde_ultima_conferencia is not None
+    # E na janela cheia do relatório o contador anda normalmente (28/07 − 01/07 = 27 dias… mas
+    # `min(end, today)` manda o `end` = 25/07 → 24 dias).
+    assert _so_conta(_report(db)).dias_desde_ultima_conferencia == 24
+
+
+def test_checkpoint_UM_DIA_depois_da_abertura_continua_avaliavel(
+    client: TestClient, headers, db: Session
+):
+    """O NÃO-MEMBRO do conjunto degenerado — a guarda contra a correção virar bloqueio geral.
+
+    Um dia depois da abertura o lado do e1p já carrega os movimentos daquele dia, e é exatamente
+    por isso que a comparação decide alguma coisa. Aqui ela encontra o furo de R$ 5.000.
+    """
+    dia_seguinte = date(2026, 7, 2)
+    conta = _account(client, headers, opening=1_000_000)
+    _lancar(client, headers, conta["id"], amount_cents=-100_000, posted_at=dia_seguinte)
+    _declarar(client, headers, conta["id"], balance_cents=400_000, reference_date=dia_seguinte)
+
+    c = _so_conta(_report(db))
+    assert c.saldo_banco_cents == 400_000
+    assert c.saldo_banco_origem == ORIGEM_BANCO
+    assert c.saldo_sistema_cents == 900_000
+    assert c.divergencia_cents == -500_000
+    assert c.dentro_da_tolerancia is False
+    assert c.notes == []
+
+
+def test_conta_com_checkpoint_degenerado_E_outro_posterior_usa_o_posterior(
+    client: TestClient, headers, db: Session
+):
+    """A detecção olha o checkpoint **escolhido**, não "existe algum na data de abertura".
+
+    Declarar na abertura e declarar de novo depois é o caminho normal do mutirão: o segundo saldo
+    é comparável e é ele que o relatório usa. Se a guarda fosse "a conta tem checkpoint na data de
+    abertura", a conta ficaria não avaliável para sempre.
+    """
+    conta = _account(client, headers, opening=1_000_000)
+    _declarar(client, headers, conta["id"], balance_cents=1_000_000, reference_date=OPENING)
+    _lancar(client, headers, conta["id"], amount_cents=-100_000, posted_at=date(2026, 7, 10))
+    _declarar(client, headers, conta["id"], balance_cents=900_000, reference_date=REF)
+
+    c = _so_conta(_report(db))
+    assert c.saldo_banco_data == REF
+    assert c.divergencia_cents == 0
+    assert c.dentro_da_tolerancia is True
 
 
 # ── AC7 — o consolidado nunca vem sem a decomposição ─────────────────────────────────────────
