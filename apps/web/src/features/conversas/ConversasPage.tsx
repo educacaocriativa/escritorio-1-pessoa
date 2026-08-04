@@ -1,9 +1,10 @@
 import type {
   ConversationSummary, TimelineEntry, WhatsappTemplate,
 } from "@e1p/shared-types";
-import { Paperclip, Send, Users } from "lucide-react";
+import { History, Paperclip, Send, Users, X } from "lucide-react";
 import { Fragment, useCallback, useEffect, useRef, useState } from "react";
 import { api, apiErrorMessage } from "../../lib/api";
+import ClientTimeline from "../crm/ClientTimeline";
 
 const POLL_MS = 7000;
 
@@ -39,6 +40,9 @@ function listStamp(iso: string | null): string {
 export default function ConversasPage() {
   const [conversations, setConversations] = useState<ConversationSummary[]>([]);
   const [selected, setSelected] = useState<string | null>(null);
+  // Abaixo de `lg` o painel de histórico é uma GAVETA, não uma coluna (ver o comentário no
+  // <aside>). Este estado só governa a gaveta; em `lg+` a coluna aparece sempre.
+  const [historicoAberto, setHistoricoAberto] = useState(false);
 
   const loadConversations = useCallback(async () => {
     const { data } = await api.get<ConversationSummary[]>("/whatsapp-conversations");
@@ -50,6 +54,8 @@ export default function ConversasPage() {
     const id = setInterval(loadConversations, POLL_MS);
     return () => clearInterval(id);
   }, [loadConversations]);
+
+  const conversaSelecionada = conversations.find((c) => c.chat_id === selected) ?? null;
 
   return (
     <div className="flex h-[calc(100vh-8rem)] gap-4">
@@ -63,7 +69,10 @@ export default function ConversasPage() {
           conversations.map((c) => (
             <button
               key={c.chat_id}
-              onClick={() => setSelected(c.chat_id)}
+              onClick={() => {
+                setSelected(c.chat_id);
+                setHistoricoAberto(false);
+              }}
               className={`block w-full border-b border-neutral-50 px-4 py-3 text-left hover:bg-neutral-50 ${
                 selected === c.chat_id ? "bg-primary-50" : ""
               }`}
@@ -103,6 +112,61 @@ export default function ConversasPage() {
           </div>
         )}
       </div>
+
+      {/* Histórico do contato.
+          Em `lg+` é a terceira coluna. ABAIXO de `lg` é uma GAVETA sobreposta: uma coluna
+          fixa de ~320px num aparelho de 360px repete o incidente do PR #56 (AppShell sem
+          breakpoint escondeu o checkbox "marcar como paga" e uma conta real foi baixada sem
+          o dono ver). */}
+      {selected && (
+        <>
+          <button
+            onClick={() => setHistoricoAberto(true)}
+            className="fixed bottom-4 right-4 z-20 rounded-full bg-primary-600 p-3 text-white shadow-lg lg:hidden"
+            aria-label="Abrir histórico do contato"
+          >
+            <History size={18} />
+          </button>
+
+          {historicoAberto && (
+            <div
+              className="fixed inset-0 z-20 bg-neutral-900/30 lg:hidden"
+              onClick={() => setHistoricoAberto(false)}
+            />
+          )}
+
+          <aside
+            data-testid="painel-historico"
+            className={`z-30 shrink-0 overflow-y-auto rounded-2xl bg-white p-4 shadow-sm ${
+              historicoAberto
+                ? "fixed inset-y-0 right-0 w-80 max-w-[85vw] lg:static lg:max-w-none"
+                : "hidden lg:block lg:w-80"
+            }`}
+          >
+            <div className="mb-3 flex items-center justify-between">
+              <h2 className="font-semibold text-neutral-800">Histórico</h2>
+              <button
+                onClick={() => setHistoricoAberto(false)}
+                className="text-neutral-400 lg:hidden"
+                aria-label="Fechar histórico"
+              >
+                <X size={16} />
+              </button>
+            </div>
+            {conversaSelecionada?.client_id ? (
+              <ClientTimeline clientId={conversaSelecionada.client_id} />
+            ) : (
+              // Grupo NÃO vira contato do CRM (decisão do fundador, 2026-08-04). Dizer isso
+              // em TEXTO, em vez de aparecer vazio como se não houvesse nada.
+              <p className="text-sm text-neutral-400">
+                {conversaSelecionada?.kind === "group"
+                  ? "Conversa de grupo — não está ligada a um contato do CRM."
+                  : "Esta conversa não está ligada a um contato do CRM."}
+              </p>
+            )}
+          </aside>
+        </>
+      )}
     </div>
   );
 }

@@ -39,9 +39,24 @@ export default function ClientTimeline({ clientId }: { clientId: string }) {
   const [salvando, setSalvando] = useState(false);
 
   const load = useCallback(async () => {
-    const { data } = await api.get<ClientTimelineOut>(`/crm/clients/${clientId}/timeline`);
-    setEntries(data.entries);
-    setTruncated(data.truncated);
+    // Falha aqui NÃO pode derrubar quem hospeda o painel. Na tela de Conversas este
+    // componente é uma coluna lateral: se ele estourasse, levaria junto a leitura e a
+    // resposta de mensagens — o trabalho principal da tela — por causa de um histórico que
+    // não carregou. Degrada para um aviso e mantém o resto de pé.
+    try {
+      const { data } = await api.get<ClientTimelineOut>(`/crm/clients/${clientId}/timeline`);
+      // `Array.isArray`, e não `data?.entries ?? []`: se a resposta vier como um array (por
+      // exemplo de um endpoint que mudou de contrato), `data.entries` NÃO é `undefined` — é
+      // `Array.prototype.entries`, uma função. O `??` deixaria passar, e um setter de estado
+      // que recebe função a trata como updater e a EXECUTA, estourando dentro do React.
+      setEntries(Array.isArray(data?.entries) ? data.entries : []);
+      setTruncated(data?.truncated === true);
+      setErro("");
+    } catch (e) {
+      setEntries([]);
+      setTruncated(false);
+      setErro(apiErrorMessage(e));
+    }
   }, [clientId]);
 
   useEffect(() => {
