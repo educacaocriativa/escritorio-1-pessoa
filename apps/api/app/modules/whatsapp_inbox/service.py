@@ -321,6 +321,16 @@ def list_conversations(db: Session, tenant_id: str) -> list[dict]:
 
     out = []
     for client_id, last_msg in last_msgs.items():
+        if client_id is None:
+            out.append({
+                "client_id": None,
+                "client_name": "Não identificados",
+                "client_phone": "",
+                "last_message_at": last_msg.created_at,
+                "last_message_preview": last_msg.text_body or f"[{last_msg.kind}]",
+                "unread": last_msg.direction == DIRECTION_IN,
+            })
+            continue
         client = db.get(Client, client_id)
         if client is None:
             continue
