@@ -1,4 +1,6 @@
 """`absorb_lead`: o lead que volta complementa o contato, não abre um card novo."""
+from datetime import UTC, datetime
+
 import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy import select
@@ -152,18 +154,24 @@ def test_retorno_reabre_card_em_coluna_terminal(db, tenant_id, coluna):
 
 
 def test_multiplos_candidatos_escolhe_o_mais_antigo(db, tenant_id):
-    """Os duplicados legados não foram mesclados — o retorno precisa cair sempre no mesmo."""
+    """Os duplicados legados não foram mesclados — o retorno precisa cair sempre no mesmo.
+
+    Os `created_at` são explícitos porque `Client.created_at` é `server_default=func.now()`:
+    duas linhas criadas no mesmo segundo (SQLite) ou na mesma transação (Postgres) recebem
+    timestamp IDÊNTICO, e aí "o mais antigo" não é uma propriedade observável — o desempate
+    cai no `id`, que é uuid aleatório. Sem estas datas o teste seria uma moeda.
+    """
     antigo = Client(
         tenant_id=tenant_id, name="Flavio 1", phone="(11) 99999-8888",
         phone_key="5511999998888", source="landing",
+        created_at=datetime(2026, 7, 1, 10, 0, tzinfo=UTC),
     )
-    db.add(antigo)
-    db.flush()
     novo = Client(
         tenant_id=tenant_id, name="Flavio 2", phone="(11) 99999-8888",
         phone_key="5511999998888", source="landing",
+        created_at=datetime(2026, 8, 1, 10, 0, tzinfo=UTC),
     )
-    db.add(novo)
+    db.add_all([antigo, novo])
     db.commit()
 
     achado, criou = _absorve(
@@ -171,6 +179,28 @@ def test_multiplos_candidatos_escolhe_o_mais_antigo(db, tenant_id):
     )
     assert criou is False
     assert achado.id == antigo.id
+
+
+def test_multiplos_candidatos_com_a_mesma_data_e_deterministico(db, tenant_id):
+    """Empate de `created_at` não pode fazer o retorno alternar entre cards.
+
+    Quando o timestamp empata, "o mais antigo" deixa de existir como fato — o que a garantia
+    precisa entregar então é ESTABILIDADE: a mesma escolha em toda chamada, para o histórico
+    não se partir entre os duplicados. Isso vem do `id` como segundo critério de ordenação.
+    """
+    mesma_data = datetime(2026, 7, 1, 10, 0, tzinfo=UTC)
+    for nome in ("Flavio 1", "Flavio 2", "Flavio 3"):
+        db.add(Client(
+            tenant_id=tenant_id, name=nome, phone="(11) 99999-8888",
+            phone_key="5511999998888", source="landing", created_at=mesma_data,
+        ))
+    db.commit()
+
+    escolhidos = {
+        _absorve(db, tenant_id, name="Flavio", phone="(11) 99999-8888", source="landing")[0].id
+        for _ in range(3)
+    }
+    assert len(escolhidos) == 1
 
 
 def test_retorno_emite_evento_no_barramento(db, tenant_id):

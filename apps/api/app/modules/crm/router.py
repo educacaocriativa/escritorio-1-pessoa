@@ -5,14 +5,18 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Response
 from sqlalchemy.orm import Session
 
 from app.core.tenancy import CurrentUser, get_tenant_db, require_module
-from app.modules.crm import service
+from app.modules.crm import service, timeline
+from app.modules.crm.models import KIND_NOTE
 from app.modules.crm.schemas import (
     Board,
     BoardColumn,
     ClientCreate,
     ClientOut,
+    ClientTimelineEntry,
+    ClientTimelineOut,
     ClientUpdate,
     MoveClientRequest,
+    NoteCreate,
     StageCreate,
     StageOut,
     StageUpdate,
@@ -174,6 +178,48 @@ def update_client(
     except service.CrmError as e:
         raise _err(e) from e
     return ClientOut.model_validate(client)
+
+
+# ── Linha do tempo ─────────────────────────────────────
+
+
+@router.get("/clients/{client_id}/timeline", response_model=ClientTimelineOut)
+def get_timeline(
+    client_id: str,
+    _user: CurrentUser = Depends(_guard),
+    db: Session = Depends(get_tenant_db),
+) -> ClientTimelineOut:
+    try:
+        service.get_client(db, client_id)  # 404 fail-closed antes de montar qualquer coisa
+    except service.CrmError as e:
+        raise _err(e) from e
+    entries, truncated = timeline.build(db, client_id=client_id)
+    return ClientTimelineOut(
+        entries=[ClientTimelineEntry(**e) for e in entries], truncated=truncated
+    )
+
+
+@router.post("/clients/{client_id}/notes", response_model=ClientTimelineEntry, status_code=201)
+def create_note(
+    client_id: str,
+    data: NoteCreate,
+    user: CurrentUser = Depends(_guard),
+    db: Session = Depends(get_tenant_db),
+) -> ClientTimelineEntry:
+    try:
+        service.get_client(db, client_id)
+    except service.CrmError as e:
+        raise _err(e) from e
+    event = service.record_event(
+        db, tenant_id=user.tenant_id, client_id=client_id, kind=KIND_NOTE,
+        title=data.title, body=data.body, actor=user.user_id, is_ai=user.is_ai,
+    )
+    db.commit()
+    db.refresh(event)
+    return ClientTimelineEntry(
+        id=event.id, kind=event.kind, title=event.title, body=event.body,
+        actor=event.actor, is_ai=event.is_ai, at=event.created_at,
+    )
 
 
 @router.post("/clients/{client_id}/move", response_model=ClientOut)

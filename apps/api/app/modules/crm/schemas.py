@@ -169,3 +169,38 @@ class BoardColumn(BaseModel):
 
 class Board(BaseModel):
     columns: list[BoardColumn]
+
+
+# ── Linha do tempo do contato ──────────────────────────
+
+
+class ClientTimelineEntry(BaseModel):
+    id: str
+    kind: str
+    title: str
+    body: str
+    actor: str
+    is_ai: bool
+    # `at`, e não `created_at`: para a cobrança paga o instante do fato é o `paid_at`. Um
+    # nome só, um significado só, para as duas fontes poderem ser ordenadas juntas.
+    at: datetime
+
+
+class ClientTimelineOut(BaseModel):
+    entries: list[ClientTimelineEntry]
+    # `True` quando alguma fonte bateu no teto de 100. A tela avisa em vez de fingir que
+    # aquilo é o histórico inteiro.
+    truncated: bool
+
+
+class NoteCreate(BaseModel):
+    title: str = Field(min_length=1, max_length=140)
+    body: str = Field(default="", max_length=5000)
+
+    @field_validator("title")
+    @classmethod
+    def _title(cls, v: str) -> str:
+        v = v.strip()
+        if not v:
+            raise ValueError("a nota precisa de um título")
+        return v

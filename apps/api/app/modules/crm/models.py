@@ -5,17 +5,19 @@ Cada Client é um card que vive em um estágio. Tabelas de NEGÓCIO → RLS na m
 """
 from __future__ import annotations
 
-from datetime import date
+from datetime import UTC, date, datetime
 
 from sqlalchemy import (
     JSON,
     Boolean,
     Date,
+    DateTime,
     ForeignKey,
     Integer,
     String,
     Text,
     UniqueConstraint,
+    func,
 )
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -123,3 +125,17 @@ class ClientEvent(Base, TenantMixin, TimestampMixin):
     actor: Mapped[str] = mapped_column(String(64), nullable=False)
     # Regra de Ouro nº 3: toda ação da IA deixa rastro identificável.
     is_ai: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+
+    # `created_at` com default do lado do PYTHON, sobrescrevendo o `server_default=func.now()`
+    # do TimestampMixin. No Postgres, `now()` é o timestamp da TRANSAÇÃO: dois eventos
+    # gravados no MESMO commit — o que `absorb_lead` faz com `lead_return` + `reopened` —
+    # sairiam com instante idêntico, e o desempate cairia no `id`, que é uuid aleatório. A
+    # timeline mostraria "Reaberto em Entrada" acima de "Voltou pelo site", invertendo a
+    # causalidade na tela. Com default em Python cada linha ganha seu próprio microssegundo.
+    # O `server_default` fica para qualquer INSERT que não passe pelo ORM.
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        default=lambda: datetime.now(UTC),
+        server_default=func.now(),
+        nullable=False,
+    )
