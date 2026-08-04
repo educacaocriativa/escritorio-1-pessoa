@@ -162,14 +162,48 @@ def ingest_webhook_payload(
                 )
                 client_id = client.id
 
-            db.add(WhatsappMessage(
+            msg_row = WhatsappMessage(
                 tenant_id=tenant_id, client_id=client_id, direction=DIRECTION_IN, kind=msg.kind,
-                text_body=msg.text_body,
-                media_status=MEDIA_STATUS_PENDING if msg.media_ref else MEDIA_STATUS_NONE,
-                wa_message_id=msg.wa_message_id,
-                meta_media_id=msg.media_ref if msg.kind != "text" else None,
-                status="sent",
-            ))
+                text_body=msg.text_body, media_status=MEDIA_STATUS_NONE,
+                wa_message_id=msg.wa_message_id, status="sent",
+            )
+            db.add(msg_row)
+            # `default=_uuid` da coluna só materializa `msg_row.id` no FLUSH (não ao construir o
+            # objeto Python) — precisa disso ANTES de usar como owner_id do Attachment.
+            db.flush()
+
+            if msg.media_bytes:
+                # Evolution: bytes já vieram decodificados no payload (webhookBase64) — cria o
+                # Attachment NA HORA, sem depender do worker (que é Meta-only, ver
+                # `providers/evolution.py::fetch_media_url`, que recusa por design).
+                content_type = (
+                    msg.media_mime_type
+                    if msg.media_mime_type in ALLOWED_TYPES
+                    else "application/octet-stream"
+                )
+                try:
+                    attachment = attachments_service.create_attachment(
+                        db, tenant_id=tenant_id, actor="whatsapp:inbox",
+                        owner_type="whatsapp_message", owner_id=msg_row.id, label="outro",
+                        filename=msg.media_filename or f"{msg.kind}-{msg_row.id}",
+                        content_type=content_type, data=msg.media_bytes,
+                    )
+                    msg_row.media_attachment_id = attachment.id
+                    msg_row.media_status = MEDIA_STATUS_DOWNLOADED
+                except AttachmentError as exc:
+                    # Mensagem ainda é registrada (com legenda, se houver) — só sem anexo. Mesmo
+                    # princípio de isolamento do resto da função: um anexo problemático (tipo/
+                    # tamanho) não pode derrubar o recebimento da mensagem em si.
+                    logger.warning(
+                        "[whatsapp_inbox] falha ao anexar mídia recebida, mensagem fica sem "
+                        "anexo: wa_message_id=%s: %s", msg.wa_message_id, exc,
+                    )
+                    msg_row.media_status = MEDIA_STATUS_FAILED
+            elif msg.media_ref:
+                # Meta: só a referência opaca chegou — o worker resolve depois (assíncrono).
+                msg_row.media_status = MEDIA_STATUS_PENDING
+                msg_row.meta_media_id = msg.media_ref
+
             audit.record(
                 db, tenant_id=tenant_id, actor="whatsapp:inbox",
                 action="whatsapp_inbox.message.received", target=client_id or "unidentified",

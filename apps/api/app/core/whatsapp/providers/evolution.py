@@ -123,13 +123,41 @@ def download_media(**_kwargs: object) -> bytes:
     )
 
 
+# message[key] -> kind normalizado (ver InboundMessage.kind). "documentWithCaptionMessage"
+# embrulha um documentMessage (documento com legenda) num nível extra — tratado à parte abaixo.
+_MEDIA_MESSAGE_KEYS = {
+    "imageMessage": "image",
+    "audioMessage": "audio",
+    "videoMessage": "video",
+    "documentMessage": "document",
+}
+
+
+def _extract_media(message: dict) -> tuple[str | None, dict | None]:
+    """Devolve (kind, objeto da mídia) pro primeiro tipo de mídia reconhecido em `message`, ou
+    (None, None) se for texto puro. `documentWithCaptionMessage` embrulha o documentMessage real
+    um nível a mais (documento enviado com legenda) — desembrulha antes de checar os demais."""
+    wrapped = message.get("documentWithCaptionMessage", {}).get("message", {})
+    if "documentMessage" in wrapped:
+        return "document", wrapped["documentMessage"]
+    for key, kind in _MEDIA_MESSAGE_KEYS.items():
+        if key in message:
+            return kind, message[key]
+    return None, None
+
+
 def parse_inbound(payload: dict) -> list[InboundMessage]:
     """Extrai a mensagem do formato da Evolution API (evento `messages.upsert`). `@lid` no
     lugar do telefone → `from_phone=None` — NUNCA adivinhado por heurística (ver bandeja "Não
     identificados", Onda 3).
 
-    Mídia inbound (imagem/áudio/documento) não é parseada ainda — só texto (dívida registrada
-    na spec §12: o shape exato varia por tipo e exige payload de exemplo real).
+    Mídia (imagem/áudio/documento/vídeo): a Evolution não tem endpoint de resolução separado
+    (ver `fetch_media_url`/`download_media` acima) — os bytes só chegam se o webhook foi
+    configurado com `webhook.base64=true` (ver `whatsapp_session/service.py::connect`), inline
+    em `message.base64` (confirmado contra o código-fonte da Evolution: `whatsapp.baileys.
+    service.ts`, `messageRaw.message.base64 = buffer.toString('base64')`). Se a Evolution não
+    conseguiu baixar (erro dela, ou webhookBase64 desligado), `media_bytes` fica None — a
+    mensagem ainda é registrada (com legenda, se houver), só sem anexo.
     """
     try:
         data = payload.get("data", payload)
@@ -143,12 +171,25 @@ def parse_inbound(payload: dict) -> list[InboundMessage]:
             from_phone = remote_jid.split("@")[0]
         push_name = data.get("pushName", "")
         message = data.get("message", {})
-        text_body = message.get("conversation", "") or message.get(
-            "extendedTextMessage", {}
-        ).get("text", "")
+
+        media_kind, media_obj = _extract_media(message)
+        if media_kind is None:
+            text_body = message.get("conversation", "") or message.get(
+                "extendedTextMessage", {}
+            ).get("text", "")
+            return [InboundMessage(
+                wa_message_id=wa_message_id, from_phone=from_phone, kind="text",
+                text_body=text_body, media_ref=None, push_name=push_name,
+            )]
+
+        raw_b64 = message.get("base64")
+        media_bytes = base64.b64decode(raw_b64) if raw_b64 else None
+        mime_type = (media_obj.get("mimetype") or "application/octet-stream").split(";")[0].strip()
         return [InboundMessage(
-            wa_message_id=wa_message_id, from_phone=from_phone, kind="text",
-            text_body=text_body, media_ref=None, push_name=push_name,
+            wa_message_id=wa_message_id, from_phone=from_phone, kind=media_kind,
+            text_body=media_obj.get("caption", ""), media_ref=None, push_name=push_name,
+            media_bytes=media_bytes, media_mime_type=mime_type,
+            media_filename=media_obj.get("fileName") or media_obj.get("title"),
         )]
-    except (AttributeError, TypeError, KeyError):
+    except (AttributeError, TypeError, KeyError, ValueError):
         return []

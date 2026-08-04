@@ -69,6 +69,7 @@ def test_connect_creates_instance_configures_webhook_and_returns_qr(
     webhook_payload = webhook_call["json"]["webhook"]
     assert webhook_payload["enabled"] is True
     assert webhook_payload["byEvents"] is False
+    assert webhook_payload["base64"] is True  # mídia recebida vem decodificada no payload
     assert webhook_payload["url"].startswith(
         "http://api:8000/internal/whatsapp/evolution/webhook/"
     )

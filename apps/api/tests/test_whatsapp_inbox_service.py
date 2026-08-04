@@ -7,6 +7,7 @@ from sqlalchemy.exc import IntegrityError
 
 from app.core import whatsapp
 from app.core.audit import AuditEntry
+from app.core.whatsapp.inbound import InboundMessage
 from app.core.whatsapp.providers import meta
 from app.modules.attachments.models import Attachment
 from app.modules.crm.models import Client
@@ -17,6 +18,8 @@ from app.modules.whatsapp_inbox import service as inbox_service
 from app.modules.whatsapp_inbox.models import (
     DIRECTION_IN,
     DIRECTION_OUT,
+    MEDIA_STATUS_DOWNLOADED,
+    MEDIA_STATUS_FAILED,
     MEDIA_STATUS_PENDING,
     PublicWhatsappAccount,
     WhatsappConversationState,
@@ -217,6 +220,69 @@ def test_ingest_image_message_marks_media_pending(db):
     msg = db.scalar(select(WhatsappMessage).where(WhatsappMessage.wa_message_id == "wamid.img"))
     assert msg.kind == "image"
     assert msg.media_status == MEDIA_STATUS_PENDING
+
+
+def test_ingest_evolution_media_creates_attachment_synchronously(db):
+    # Evolution entrega bytes já decodificados (webhookBase64) — diferente do fluxo Meta acima
+    # (media_ref opaco + worker assíncrono), o Attachment é criado NA HORA, dentro do próprio
+    # ingest_webhook_payload.
+    _configure_credentials(db)
+    msg = InboundMessage(
+        wa_message_id="3EB0IMG1", from_phone="5511922223333", kind="image",
+        text_body="olha essa foto", media_ref=None, push_name="Cliente Evolution",
+        media_bytes=b"fake-jpeg-bytes", media_mime_type="image/jpeg",
+        media_filename=None,
+    )
+    inbox_service.ingest_webhook_payload(db, tenant_id=TENANT_ID, messages=[msg])
+
+    row = db.scalar(select(WhatsappMessage).where(WhatsappMessage.wa_message_id == "3EB0IMG1"))
+    assert row is not None
+    assert row.media_status == MEDIA_STATUS_DOWNLOADED
+    assert row.media_attachment_id is not None
+    assert row.text_body == "olha essa foto"
+
+    attachment = db.get(Attachment, row.media_attachment_id)
+    assert attachment is not None
+    assert attachment.content_type == "image/jpeg"
+    assert attachment.owner_type == "whatsapp_message"
+    assert attachment.owner_id == row.id
+
+
+def test_ingest_evolution_media_unknown_mime_falls_back_to_octet_stream(db):
+    # .md e outros tipos exóticos não estão em ALLOWED_TYPES — cai pro genérico em vez de
+    # rejeitar o anexo (mesmo padrão já usado no envio de resposta com mídia).
+    _configure_credentials(db)
+    msg = InboundMessage(
+        wa_message_id="3EB0DOC1", from_phone="5511922224444", kind="document",
+        text_body="segue o arquivo", media_ref=None, push_name="Cliente Evolution",
+        media_bytes=b"# markdown", media_mime_type="text/markdown",
+        media_filename="learnings.md",
+    )
+    inbox_service.ingest_webhook_payload(db, tenant_id=TENANT_ID, messages=[msg])
+
+    row = db.scalar(select(WhatsappMessage).where(WhatsappMessage.wa_message_id == "3EB0DOC1"))
+    attachment = db.get(Attachment, row.media_attachment_id)
+    assert attachment.content_type == "application/octet-stream"
+    assert attachment.filename == "learnings.md"
+
+
+def test_ingest_evolution_media_over_size_limit_fails_gracefully(db):
+    # Anexo grande demais: a mensagem AINDA é registrada (com legenda), só sem o anexo — mesmo
+    # princípio de isolamento por mensagem do resto da função.
+    _configure_credentials(db)
+    msg = InboundMessage(
+        wa_message_id="3EB0BIG1", from_phone="5511922225555", kind="image",
+        text_body="foto gigante", media_ref=None, push_name="Cliente Evolution",
+        media_bytes=b"x" * (11 * 1024 * 1024), media_mime_type="image/jpeg",
+        media_filename=None,
+    )
+    inbox_service.ingest_webhook_payload(db, tenant_id=TENANT_ID, messages=[msg])
+
+    row = db.scalar(select(WhatsappMessage).where(WhatsappMessage.wa_message_id == "3EB0BIG1"))
+    assert row is not None
+    assert row.text_body == "foto gigante"
+    assert row.media_status == MEDIA_STATUS_FAILED
+    assert row.media_attachment_id is None
 
 
 # NOTA (Onda 3): os testes de shape do LOTE malformado (`value` não-dict, `messages` não é uma
