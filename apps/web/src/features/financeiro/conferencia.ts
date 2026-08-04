@@ -70,6 +70,24 @@ export interface ConferenciaReport {
   contas_sem_checkpoint: number;
   contas_fora_da_banda: ContaForaDaBanda[];
   notes: string[];
+  /**
+   * Story 8.16 — os termos da **pré-condição do gate**: o que o e1p sabe que moveu dinheiro numa
+   * conta real e ainda não virou movimento bancário no período.
+   *
+   * ⚠️ **ANOTAM, NUNCA SUBTRAEM.** Nenhum deles entra em `divergencia_cents`, `tolerancia_cents`,
+   * `dentro_da_tolerancia`, `total_divergencia_cents` nem `contas_fora_da_banda` — descontá-los
+   * levaria a divergência a zero por construção sempre que o sistema soubesse explicar a diferença,
+   * e a métrica primária do épico morreria. A tela **não recalcula nada** com estes números: a
+   * frase de cada termo já vem pronta em `notes`, do backend (uma redação, um lugar).
+   *
+   * São do RELATÓRIO e não por conta porque a conta é justamente o que falta nas duas primeiras
+   * populações ("não informa de qual conta saiu").
+   */
+  lancamentos_sem_conta_informada: number;
+  valor_sem_conta_informada_cents: number;
+  /** Fecha na **Onda 2b**, não nesta — por isso tem contador e frase próprios. */
+  rendimentos_sem_perna_bancaria: number;
+  valor_rendimentos_sem_perna_cents: number;
 }
 
 // ── Eixo B: a PORTA por onde o saldo externo entrou ──────────────────────────────────────────

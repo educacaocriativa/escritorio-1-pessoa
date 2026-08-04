@@ -23,9 +23,9 @@ chama o estado é quem tem a coluna.
 """
 from __future__ import annotations
 
-from datetime import date
+from datetime import UTC, date, datetime, time, timedelta
 
-__all__ = ["status_por_data"]
+__all__ = ["janela_de_caixa", "status_por_data"]
 
 
 def status_por_data(
@@ -59,3 +59,23 @@ def status_por_data(
         status_pago: como o módulo chamador chama o estado "já aconteceu".
     """
     return status_agendado if data > today else status_pago
+
+
+def janela_de_caixa(start: date, end: date) -> tuple[datetime, datetime]:
+    """`[start, end]` (datas de calendário, **inclusivas**) → `[de, ate)` em TIMESTAMP UTC.
+
+    Serve para filtrar `paid_at` — que é `DateTime`, gravado na **meia-noite UTC** da data de caixa
+    por `payables.apply_paid` e `receivables.settle_off_rail` — por uma janela de **datas**.
+
+    **Por que limites de timestamp e não `paid_at::date`:** `::date` não existe no SQLite da suíte,
+    e o repositório já resolvia isso assim em `paid_before`, `summary` e `probe_pagamento_duplicado`
+    (Story 8.16 só parou de copiar a expressão pela quarta vez). **O teto é EXCLUSIVO** — meia-noite
+    do dia seguinte a `end` — justamente para que `end` continue inclusivo mesmo se um dia houver
+    hora diferente de zero no campo; um `<= meia-noite de end` perderia o dia inteiro de `end`.
+
+    PURA, sem relógio e sem banco: recebe as duas pontas e devolve as duas pontas.
+    """
+    return (
+        datetime.combine(start, time.min, tzinfo=UTC),
+        datetime.combine(end + timedelta(days=1), time.min, tzinfo=UTC),
+    )

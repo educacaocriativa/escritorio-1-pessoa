@@ -93,6 +93,7 @@ from __future__ import annotations
 from collections.abc import Sequence
 from dataclasses import dataclass, field
 from datetime import UTC, date, datetime
+from typing import Protocol
 
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
@@ -232,6 +233,40 @@ class ConferenciaReport:
     o sistema nem conferiu. Quando `contas_sem_checkpoint > 0`, `notes` diz explicitamente que o
     total **não cobre todas as contas**: um número parcial sem essa ressalva é um número que mente
     por omissão.
+
+    ── **Os contadores da PRÉ-CONDIÇÃO DO GATE (Story 8.16, AC7/AC8)** ──────────────────────────
+
+    Quatro termos decidem se a divergência deste ciclo **pode ser lida** como medida do furo (e não
+    como medida da própria incompletude do sistema). Três são contados aqui; o quarto é declarado:
+
+    | # | O que é | Zera na |
+    |---|---|---|
+    | P1 | baixa de conta a pagar sem conta bancária informada | Onda 2 (por construção) |
+    | P2 | recebimento fora da cobrança do e1p sem conta informada | Onda 2 |
+    | P3 | rendimento de aplicação sem perna bancária | **Onda 2b** |
+    | P4 | payout da Carteira liquidado sem perna bancária | Onda 3 |
+
+    `lancamentos_sem_conta_informada` é **P1 + P2** (as duas populações fecham na MESMA onda e
+    pedem a MESMA ação do dono, então uma frase só as cobre); P3 tem contador e nota **próprios**
+    porque **não fecha nesta onda** — achatá-lo dentro de P1/P2 prometeria na tela um prazo falso,
+    que é a mesma classe de afirmação sem lastro que a Onda 0 removeu da Projeção.
+
+    **P4 é declarado e NÃO é contado**, de propósito: a população é **vazia por construção** hoje
+    (o payout só marca a solicitação como sacada — nenhum dinheiro sai de conta real), e contá-la
+    exigiria uma dependência deste módulo para o plano da plataforma, proibida pela Regra dos
+    Planos, em troca de um contador cosmético sobre conjunto vazio.
+
+    ⚠️ **Os contadores são do RELATÓRIO, e não por conta — e isso é uma DECISÃO, não um esquecimento
+    (desvio registrado da redação do AC7).** P1 e P2 são definidos por *"não informa de qual conta
+    saiu"*: a conta é justamente o que **falta**, então não existe conta a que atribuí-los. P3 não
+    tem perna bancária nenhuma. Um campo por conta aqui seria zero em todas ou o mesmo número
+    repetido em todas — as duas formas mentem.
+
+    ⚠️ **ANOTA, NUNCA SUBTRAI:** `divergencia_cents`, `dentro_da_tolerancia`, `tolerancia_cents`,
+    `total_divergencia_cents` e `contas_fora_da_banda` **não mudam de valor** por causa destes
+    contadores. Descontar o termo conhecido da divergência seria *o checkpoint corrigindo o saldo
+    derivado com outra roupa* (Regra 5 do `CLAUDE.md`): a divergência iria a zero por construção
+    sempre que o sistema soubesse explicar a diferença, e a métrica primária do épico morreria.
     """
 
     start: date
@@ -242,6 +277,116 @@ class ConferenciaReport:
     contas_sem_checkpoint: int
     contas_fora_da_banda: list[ContaForaDaBanda]
     notes: list[str] = field(default_factory=list)
+    # P1 + P2 — fecham na Onda 2.
+    lancamentos_sem_conta_informada: int = 0
+    valor_sem_conta_informada_cents: int = 0
+    # P3 — fecha na Onda 2b. Contador PRÓPRIO: ele tem outro prazo.
+    rendimentos_sem_perna_bancaria: int = 0
+    valor_rendimentos_sem_perna_cents: int = 0
+
+
+# ── A porta de saída dos termos do gate (Story 8.16) ──────────────────────────────────────────
+#
+# Este relatório precisa **contar** obrigações de negócio (baixas de conta a pagar sem conta
+# informada, recebimentos fora da cobrança do e1p, rendimentos de aplicação) — e o gate estrutural
+# da Story 8.9 (`tests/test_money_planes.py`) proíbe este módulo de importar os módulos de negócio.
+# A regra que decide todas as alternativas está na ratificação §C-5.1:
+#
+#     **Evadir um gate é pior do que quebrá-lo às claras.** Quebrado às claras, alguém vê no diff;
+#     evadido, o gate fica verde e a proibição está morta.
+#
+# Por isso import lazy dentro da função e SQL cru sobre a tabela do outro módulo estão **reprovados
+# por definição**: os dois passam no gate de AST e violam exatamente o que ele protege.
+#
+# **A forma ratificada é a mesma da Story 8.17: inversão de dependência.** Este módulo declara o
+# contrato (o DTO + o `Protocol` + o registrador) e **não sabe** quem o implementa; os módulos de
+# negócio implementam (eles **podem** importar `bank`); `app/main.py` liga os dois. Direção final:
+# `main → bank`, `main → negócio`, `negócio → bank`. O gate fica verde **porque a dependência
+# sumiu**, não porque foi escondida.
+
+
+@dataclass(frozen=True)
+class TermosDoGate:
+    """Os três termos CONTADOS da pré-condição do gate, apurados **fora** deste módulo.
+
+    Vocabulário deliberadamente **neutro** ("lançamento", "rendimento de aplicação"), pelo mesmo
+    motivo do `referencia_id` opaco de `DuplicataCandidato`: quem monta o DTO é o implementador do
+    `TermosDoGateProbe`; este módulo não precisa saber de que entidade cada número veio.
+
+    `lancamentos_sem_conta_informada` = **P1 + P2** (as duas fecham na Onda 2);
+    `rendimentos_sem_perna_bancaria` = **P3** (fecha na Onda 2b — outro prazo, contador próprio).
+    P4 **não** entra: população vazia por construção hoje, e contá-la exigiria alcançar o plano da
+    plataforma a partir daqui. Ver a docstring de `ConferenciaReport`.
+    """
+
+    lancamentos_sem_conta_informada: int
+    valor_sem_conta_informada_cents: int
+    rendimentos_sem_perna_bancaria: int
+    valor_rendimentos_sem_perna_cents: int
+
+
+class TermosDoGateProbe(Protocol):
+    """A contagem que este módulo **não** sabe fazer. Recebe o `db` do request; nunca abre sessão.
+
+    ⚠️ **O `db` é parâmetro, e isso é normativo** (mesma regra do `DuplicataProbe`, ratificação
+    §C-5.4): a contagem roda na sessão do request, sob RLS, sem nenhum filtro manual de `tenant_id`
+    (Regra de Ouro nº 1). Abrir sessão própria dentro do probe escaparia da GUC do tenant e o
+    relatório de A passaria a contar lançamentos de B.
+
+    **Somente leitura** — a conferência é read-only e continua sendo (IV5).
+    """
+
+    def __call__(self, db: Session, *, start: date, end: date) -> TermosDoGate: ...
+
+
+_termos_do_gate_probe: TermosDoGateProbe | None = None
+
+
+def register_termos_do_gate_probe(probe: TermosDoGateProbe) -> None:
+    """Liga a implementação concreta. Chamada **uma vez**, na composição (`app/main.py`)."""
+    global _termos_do_gate_probe
+    _termos_do_gate_probe = probe
+
+
+def termos_do_gate_probe_registrado() -> bool:
+    """A guarda de BOOT pergunta isto — ver `app.main.verifica_fiacao_dos_termos_do_gate`."""
+    return _termos_do_gate_probe is not None
+
+
+def _probe_termos_do_gate(db: Session, *, start: date, end: date) -> TermosDoGate:
+    """A **segunda** guarda do fail-closed — inalcançável se a de boot funcionar.
+
+    ⚠️ **Fail-closed, e a hora certa é o BOOT** (ratificação §C-5.2): *"um erro de fiação é condição
+    de startup, não de request"*. Cair para `TermosDoGate(0, 0, 0, 0)` seria o pior modo de falha
+    possível **desta** story: as notas sumiriam em silêncio e a tela passaria a dizer, por omissão,
+    *"nenhum termo pendente — o gate pode ser lido"* — que é exatamente a leitura errada que custou
+    a decisão de produto uma vez neste épico. Zero por ausência de medição não é zero.
+    """
+    if _termos_do_gate_probe is None:
+        raise service.BankError(
+            "A contagem dos termos da pré-condição do gate não está ligada nesta instância — o "
+            "relatório foi recusado em vez de ser devolvido sem as notas. Isto é erro de "
+            "configuração do servidor (a composição da aplicação não registrou a contagem), não do "
+            "seu pedido. Verifique `liga_os_termos_do_gate` em app/main.py.",
+            500,
+        )
+    return _termos_do_gate_probe(db, start=start, end=end)
+
+
+def _brl(cents: int) -> str:
+    """Centavos → reais legíveis (`312000` → `"R$ 3.120,00"`), com aritmética **inteira**.
+
+    Cópia deliberada da fórmula (a dívida de consolidar as ~9 formatações de moeda do repositório
+    está registrada e não é desta story). Não importamos a de `engine.py`: aquela é privada **por
+    contrato** — o motor de diagnóstico não pode depender de nada de fora, e um helper compartilhado
+    ali dentro seria a primeira brecha na pureza (IV1). `divmod` em vez de `cents / 100` pelo mesmo
+    motivo da 8.6: dinheiro é `int` em centavos e um `float` reapareceria justamente no texto que o
+    dono vai ler.
+    """
+    sinal = "-" if cents < 0 else ""
+    inteiros, centavos = divmod(abs(cents), 100)
+    milhares = format(inteiros, ",").replace(",", ".")
+    return f"{sinal}R$ {milhares},{centavos:02d}"
 
 
 # A nota do estado não avaliável, num lugar só: ela é lida pela UI (8.7) e pelo motor (8.6), e duas
@@ -283,6 +428,45 @@ def _note_total_parcial(sem_checkpoint: int) -> str:
     return (
         f"O total não cobre todas as contas: {sem_checkpoint} conta{plural} não avaliada{plural} "
         f"no período — o motivo está na nota de cada conta."
+    )
+
+
+# ── As notas dos termos do gate (Story 8.16 AC7) — bloco 4, "o sistema declara o que não sabe" ──
+#
+# ⚠️ **UMA REDAÇÃO, UM LUGAR — e TRÊS frases possíveis, cada uma nomeando a ONDA que a fecha.**
+# Moram aqui, ao lado de `_NOTE_SEM_CHECKPOINT` e `_note_total_parcial`, pelo mesmo motivo delas:
+# duas redações do mesmo fato viram duas frases diferentes na tela conforme o caminho.
+#
+# **Por que P1/P2 e P3 têm frases separadas, e não uma só com a soma:** P1 e P2 **somem sozinhos**
+# quando o dono terminar de corrigir os lançamentos legados — a ação existe e é dele. P3 **não some
+# nesta onda**: fecha na Onda 2b, e não há nada que ele possa fazer à mão. Uma nota que promete
+# *"isso some quando você terminar o mutirão"* sobre um termo que não some é a mesma classe de
+# afirmação sem lastro que a Onda 0 removeu da Projeção — e nomear a onda em cada nota é o que
+# impede o dono de caçar um termo que software nenhum consegue fechar ainda.
+#
+# **Zero termo não-zero ⇒ zero nota.** Silêncio, mesma disciplina anti-ruído do resto do épico — e
+# é exatamente esse silêncio que sinaliza *"agora o gate pode ser lido"*.
+
+
+def _note_sem_conta_informada(quantidade: int, valor_cents: int) -> str:
+    """P1 + P2 — o termo que **fecha na Onda 2**, por construção, quando o legado for corrigido."""
+    plural = "s" if quantidade > 1 else ""
+    return (
+        f"{quantidade} lançamento{plural} deste período não informa{'m' if quantidade > 1 else ''} "
+        f"de qual conta saiu ou entrou ({_brl(valor_cents)}). A divergência abaixo **inclui** esse "
+        "valor. Este termo fecha na Onda 2: assim que todo lançamento informar a conta, ele vai a "
+        "zero sozinho."
+    )
+
+
+def _note_rendimento_sem_perna(quantidade: int, valor_cents: int) -> str:
+    """P3 — o termo que **NÃO fecha nesta onda**. A frase diz isso, para ninguém tentar
+    corrigi-lo à mão."""
+    plural = "s" if quantidade > 1 else ""
+    return (
+        f"{quantidade} rendimento{plural} de aplicação deste período ({_brl(valor_cents)}) ainda "
+        f"não gera{'m' if quantidade > 1 else ''} movimento bancário. A divergência abaixo "
+        "**inclui** esse valor. Este termo só fecha na Onda 2b — não há o que corrigir à mão."
     )
 
 
@@ -540,6 +724,23 @@ def reconciliation_report(
     if contas_sem_checkpoint:
         notes.append(_note_total_parcial(contas_sem_checkpoint))
 
+    # Story 8.16 — os termos da pré-condição do gate. Contados FORA deste módulo (inversão de
+    # dependência) e **somente anotados**: nenhuma linha abaixo toca em divergência, tolerância ou
+    # total. Ver a docstring de `ConferenciaReport` ("ANOTA, NUNCA SUBTRAI").
+    termos = _probe_termos_do_gate(db, start=start, end=end)
+    if termos.lancamentos_sem_conta_informada:
+        notes.append(
+            _note_sem_conta_informada(
+                termos.lancamentos_sem_conta_informada, termos.valor_sem_conta_informada_cents
+            )
+        )
+    if termos.rendimentos_sem_perna_bancaria:
+        notes.append(
+            _note_rendimento_sem_perna(
+                termos.rendimentos_sem_perna_bancaria, termos.valor_rendimentos_sem_perna_cents
+            )
+        )
+
     return ConferenciaReport(
         start=start,
         end=end,
@@ -555,4 +756,8 @@ def reconciliation_report(
         contas_sem_checkpoint=contas_sem_checkpoint,
         contas_fora_da_banda=_fora_da_banda(contas),
         notes=notes,
+        lancamentos_sem_conta_informada=termos.lancamentos_sem_conta_informada,
+        valor_sem_conta_informada_cents=termos.valor_sem_conta_informada_cents,
+        rendimentos_sem_perna_bancaria=termos.rendimentos_sem_perna_bancaria,
+        valor_rendimentos_sem_perna_cents=termos.valor_rendimentos_sem_perna_cents,
     )

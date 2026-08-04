@@ -469,6 +469,16 @@ class ConferenciaReportOut(BaseModel):
     `total_divergencia_cents` soma **apenas** as contas avaliáveis e é `None` quando nenhuma é.
     `contas_avaliadas`/`contas_sem_checkpoint` existem para que o consumidor saiba **o que o total
     cobre** sem precisar recontar a lista, e `notes` avisa em texto quando ele é parcial.
+
+    **Os quatro campos da Story 8.16 ANOTAM, nunca subtraem.** Eles medem a **pré-condição do
+    gate** — o que o e1p sabe que moveu dinheiro numa conta real e ainda não virou movimento
+    bancário no período. Nenhum deles entra em `divergencia_cents`, `tolerancia_cents`,
+    `dentro_da_tolerancia`, `total_divergencia_cents` nem `contas_fora_da_banda`: descontá-los
+    a divergência a zero por construção sempre que o sistema soubesse explicar a diferença, e a
+    métrica primária do épico morreria (Regra 5 do `CLAUDE.md`).
+
+    São do RELATÓRIO e não por conta porque a conta é justamente o que falta nas duas primeiras
+    populações — ver `reconciliation.ConferenciaReport`.
     """
 
     start: date
@@ -479,3 +489,11 @@ class ConferenciaReportOut(BaseModel):
     contas_sem_checkpoint: int
     contas_fora_da_banda: list[ContaForaDaBandaOut]
     notes: list[str]
+    # P1 + P2 — baixa de conta a pagar e recebimento fora da cobrança do e1p, sem conta informada.
+    # Fecham na **Onda 2**, e a nota correspondente em `notes` diz isso.
+    lancamentos_sem_conta_informada: int = 0
+    valor_sem_conta_informada_cents: int = 0
+    # P3 — rendimento de aplicação sem perna bancária. Contador PRÓPRIO porque fecha na **Onda 2b**,
+    # não nesta: achatá-lo dentro do par acima prometeria na tela um prazo falso.
+    rendimentos_sem_perna_bancaria: int = 0
+    valor_rendimentos_sem_perna_cents: int = 0

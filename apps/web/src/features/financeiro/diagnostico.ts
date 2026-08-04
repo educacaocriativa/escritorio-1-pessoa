@@ -67,7 +67,19 @@ export function countByLevel(signals: Signal[]): Record<SignalLevel, number> {
   return counts;
 }
 
-/** Rótulo humano da origem do sinal (source do backend → texto PT-BR). Puro. */
+/**
+ * Rótulo humano da origem do sinal (source do backend → texto PT-BR). Puro.
+ *
+ * ⚠️ **Nenhum rótulo pode conter "trilho", "split" ou "plataforma"** — o jargão interno do Epic 8
+ * não vaza para a tela do dono. `recebimento_externo` vira só **"Recebimentos"**: o sinal é sobre o
+ * interesse dele (a cobrança que não fecha sozinha), nunca sobre a receita da e1p.
+ *
+ * ⚠️ **`debito_nao_confirmado` é "Saídas", e NUNCA "Agendamentos"** (ratificação §C-2.3, ajuste 1).
+ * Depois que o worker promove `scheduled → paid`, nada no dado distingue *"agendei e o banco não
+ * executou"* de *"paguei no caixa e o banco não compensou"* — um rótulo que promete um recorte que
+ * o dado não sustenta é o defeito D-3 na superfície mais cara, a que o dono lê. Há varredura de
+ * texto contra o radical "agendad" neste arquivo (backend e vitest).
+ */
 export function sourceLabel(source: string): string {
   switch (source) {
     case "lucratividade":
@@ -78,6 +90,10 @@ export function sourceLabel(source: string): string {
       return "Investimentos";
     case "completude":
       return "Completude dos lançamentos";
+    case "recebimento_externo":
+      return "Recebimentos";
+    case "debito_nao_confirmado":
+      return "Saídas";
     default:
       return source;
   }

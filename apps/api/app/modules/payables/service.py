@@ -11,7 +11,7 @@ from app.core.recurrence import advance, occurrences
 
 # O estado é DERIVADO da data, nunca escolhido (Story 8.14 AC2). O helper é **público e neutro**
 # (`app/core/`) porque a Story 8.15 o consome para `Charge` — **importar, nunca copiar**.
-from app.core.scheduling import status_por_data
+from app.core.scheduling import janela_de_caixa, status_por_data
 from app.db.base import _uuid
 
 # ⚠️ **Duas palavras `scheduled` neste arquivo, e elas NÃO são a mesma coisa.** O `scheduled` da
@@ -896,6 +896,42 @@ def probe_pagamento_duplicado(
         valor_cents=escolhido.amount_cents,
         data=escolhido.due_date,
     )
+
+
+def contar_saidas_sem_conta_informada(
+    db: Session, *, start: date, end: date
+) -> tuple[int, int]:
+    """**P1 da pré-condição do gate** (Story 8.16 AC8): baixas sem conta bancária informada.
+
+    > `Payable`, `status ∈ {paid, scheduled}`, `paid_at::date` na janela, `bank_account_id IS NULL`
+
+    Devolve `(quantidade, soma_dos_valores_em_centavos)`. **Somente leitura.**
+
+    **Membro:** uma conta paga em 12/07 com `bank_account_id IS NULL` — uma das legadas, anteriores
+    à Story 8.12 → conta.
+    **Não-membro:** uma conta paga em 12/07 com a conta bancária informada → o movimento bancário
+    dela **existe**, e ela não é termo nenhum da pré-condição.
+    **Não-membro 2:** uma conta `open` ou `canceled` → não moveu dinheiro (e `paid_at` é `NULL`).
+
+    Este termo **vai a zero por construção** quando o legado for corrigido: desde a 8.12 a coluna é
+    obrigatória em toda baixa nova, então nada novo entra nesta população. É por isso que a nota
+    correspondente promete a Onda 2 — e a promessa é verdadeira.
+
+    Quem consome é `bank.reconciliation`, **pela porta registrada** (`TermosDoGateProbe`): a direção
+    `bank → payables` é proibida (Regra dos Planos §1.3d), então este módulo é chamado, nunca
+    importado de lá. A fiação está em `app/main.py`.
+    """
+    de, ate = janela_de_caixa(start, end)
+    row = db.execute(
+        select(func.count(), func.coalesce(func.sum(Payable.amount_cents), 0)).where(
+            Payable.status.in_((STATUS_PAID, STATUS_SCHEDULED)),
+            Payable.bank_account_id.is_(None),
+            Payable.paid_at.is_not(None),
+            Payable.paid_at >= de,
+            Payable.paid_at < ate,
+        )
+    ).one()
+    return int(row[0] or 0), int(row[1] or 0)
 
 
 def list_categories(db: Session) -> list[str]:

@@ -597,6 +597,12 @@ def _conferencia_out(r: reconciliation.ConferenciaReport) -> ConferenciaReportOu
             for f in r.contas_fora_da_banda
         ],
         notes=r.notes,
+        # Story 8.16 — os termos da pré-condição do gate. ANOTAM, nunca subtraem: nenhum campo de
+        # divergência acima é recalculado por causa deles.
+        lancamentos_sem_conta_informada=r.lancamentos_sem_conta_informada,
+        valor_sem_conta_informada_cents=r.valor_sem_conta_informada_cents,
+        rendimentos_sem_perna_bancaria=r.rendimentos_sem_perna_bancaria,
+        valor_rendimentos_sem_perna_cents=r.valor_rendimentos_sem_perna_cents,
     )
 
 
@@ -621,12 +627,22 @@ def reconciliation_report(
     tudo o que aconteceu no meio — e por isso contas diferentes podem ter datas de referência
     diferentes no mesmo relatório.
 
-    **`indisponivel` é resposta legítima, não um erro.** Conta sem saldo informado no período vem
-    com `saldo_banco_origem='indisponivel'` e `divergencia_cents=null`: o e1p **diz que não sabe**
-    em vez de comparar contra zero, que inventaria uma divergência inteira com cara de fato.
+    **`indisponivel` é resposta legítima, não um erro, e tem DOIS motivos** (Story 8.20): a conta
+    não teve saldo informado no período, **ou** o saldo informado é da própria data de abertura da
+    conta, em que a comparação seria tautológica — os dois vêm com
+    `saldo_banco_origem='indisponivel'` e `divergencia_cents=null` (o discriminador é
+    `saldo_banco_data`, preenchido só no segundo, e a nota **da conta** diz qual é). O e1p **diz que
+    não sabe** em vez de comparar contra zero, que inventaria uma divergência inteira com cara de
+    fato.
 
     **O consolidado nunca vem sozinho:** `total_divergencia_cents` cobre só as contas avaliáveis e
     viaja sempre com `contas` e `contas_fora_da_banda` (epic §3.2).
+
+    **Os contadores da pré-condição do gate ANOTAM, nunca subtraem** (Story 8.16):
+    `lancamentos_sem_conta_informada` e `rendimentos_sem_perna_bancaria` dizem o que o e1p sabe que
+    ainda **não** virou movimento bancário no período, e `notes` traz a frase de cada termo não-zero
+    nomeando a onda que o fecha. Nenhum deles altera `divergencia_cents`, `tolerancia_cents`,
+    `dentro_da_tolerancia`, `total_divergencia_cents` ou `contas_fora_da_banda`.
 
     `end < start` → 422. `bank_account_id` inexistente ou de outro tenant → 404 fail-closed.
     """

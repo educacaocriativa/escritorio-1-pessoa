@@ -30,7 +30,7 @@ import ast
 import pathlib
 import re
 from dataclasses import asdict
-from datetime import date
+from datetime import UTC, date, datetime, time
 
 import pytest
 from fastapi.testclient import TestClient
@@ -39,6 +39,7 @@ from sqlalchemy.orm import Session
 
 from app.core.money_planes import ORIGEM_BANCO, ORIGEM_INDISPONIVEL, ORIGENS
 from app.modules.bank import reconciliation
+from app.modules.bank import service as bank_service
 from app.modules.bank.models import (
     KIND_CHECKING,
     KIND_INVESTMENT,
@@ -1165,3 +1166,269 @@ def test_movimento_bancario_nao_altera_dre(client: TestClient, headers, db: Sess
     assert depois == antes
     for campo in antes:
         assert depois[campo] == antes[campo], f"campo da DRE contaminado pelo plano 3: {campo}"
+
+
+# ── Story 8.16 — os TERMOS DA PRÉ-CONDIÇÃO DO GATE: anota, nunca subtrai ─────────────────────
+#
+# O bloco 4 ("o sistema declara o que não sabe") passa a contar o que o e1p **sabe** que moveu
+# dinheiro numa conta real e ainda não virou movimento bancário na janela. Quatro termos; três
+# contados (P1+P2 juntos, P3 separado) e o P4 declarado e não contado.
+#
+# O teste que mais importa deste bloco é o **IV3**: a divergência tem de ficar IDÊNTICA com e sem
+# esses lançamentos. Descontar o termo conhecido seria o checkpoint corrigindo o saldo derivado com
+# outra roupa — a divergência iria a zero por construção sempre que o sistema soubesse explicar a
+# diferença, e a métrica primária do épico morreria (Regra 5 do `CLAUDE.md`).
+
+
+def _payable_legado(db: Session, tenant_id: str, *, valor: int, pago_em: date) -> Payable:
+    """Uma baixa SEM conta bancária informada — uma das legadas, anteriores à Story 8.12 (P1)."""
+    p = Payable(
+        tenant_id=tenant_id,
+        description="Fornecedor legado",
+        category="operacional",
+        amount_cents=valor,
+        due_date=pago_em,
+        status="paid",
+        paid_at=datetime.combine(pago_em, time.min, tzinfo=UTC),
+    )
+    db.add(p)
+    db.commit()
+    return p
+
+
+def _charge_sem_conta(db: Session, tenant_id: str, *, valor: int, pago_em: date) -> Charge:
+    """Recebimento fora da cobrança do e1p, sem conta informada (P2)."""
+    c = Charge(
+        tenant_id=tenant_id,
+        description="Pix antigo",
+        amount_cents=valor,
+        due_date=pago_em,
+        method="pix",
+        kind="service",
+        status="paid",
+        paid_at=datetime.combine(pago_em, time.min, tzinfo=UTC),
+    )
+    db.add(c)
+    db.commit()
+    return c
+
+
+def _charge_de_rendimento(db: Session, tenant_id: str, *, valor: int, pago_em: date) -> Charge:
+    """A `Charge` SINTÉTICA de rendimento de aplicação (P3) — o achado A-1.
+
+    Ela nasce `paid`, `paid_at=now()`, **sem** `transaction_id` e **sem** `bank_account_id`: cai
+    inteira na população de P2 se o predicado de exclusão não estiver lá. O `external_ref` é o
+    discriminador, e o predicado que o lê mora em UM lugar só.
+    """
+    c = Charge(
+        tenant_id=tenant_id,
+        description="Rendimento CDB",
+        amount_cents=valor,
+        due_date=pago_em,
+        method="pix",
+        kind="service",
+        status="paid",
+        external_ref="investment:abc-123",
+        paid_at=datetime.combine(pago_em, time.min, tzinfo=UTC),
+    )
+    db.add(c)
+    db.commit()
+    return c
+
+
+def test_iv3_a_divergencia_nao_se_move_por_causa_da_nota(client: TestClient, headers, db: Session):
+    """**IV3 — a verificação que esta story existe para não falhar.**
+
+    Snapshot do relatório inteiro, campo a campo, com e sem lançamentos sem conta informada:
+    `divergencia_cents`, `tolerancia_cents`, `dentro_da_tolerancia`, `total_divergencia_cents` e
+    `contas_fora_da_banda` **idênticos**. Só `notes` e os contadores novos diferem.
+    """
+    tenant_id = _tenant_id(client, headers)
+    conta = _account(client, headers, opening=1_000_000)
+    _lancar(client, headers, conta["id"], amount_cents=-70_000, posted_at=date(2026, 7, 10))
+    _declarar(client, headers, conta["id"], balance_cents=1_000_000)
+
+    antes = asdict(_report(db))
+    assert antes["lancamentos_sem_conta_informada"] == 0
+    assert antes["notes"] == []
+    assert antes["contas"][0]["divergencia_cents"] == 70_000, (
+        "o cenário precisa ter divergência REAL para o teste valer"
+    )
+
+    _payable_legado(db, tenant_id, valor=312_000, pago_em=date(2026, 7, 12))
+    _charge_sem_conta(db, tenant_id, valor=45_000, pago_em=date(2026, 7, 14))
+    depois = asdict(_report(db))
+
+    # O que NÃO pode mudar — campo a campo, inclusive dentro de cada conta.
+    for campo in ("total_divergencia_cents", "contas_avaliadas", "contas_sem_checkpoint",
+                  "contas_fora_da_banda"):
+        assert depois[campo] == antes[campo], f"a nota mexeu em {campo} — ANOTA, NUNCA SUBTRAI"
+    for campo in ("divergencia_cents", "tolerancia_cents", "dentro_da_tolerancia",
+                  "saldo_banco_cents", "saldo_sistema_cents"):
+        assert depois["contas"][0][campo] == antes["contas"][0][campo], campo
+
+    # O que MUDA: só a anotação.
+    assert depois["lancamentos_sem_conta_informada"] == 2
+    assert depois["valor_sem_conta_informada_cents"] == 357_000
+    assert len(depois["notes"]) == 1
+    assert "2 lançamentos deste período" in depois["notes"][0]
+    assert "R$ 3.570,00" in depois["notes"][0]
+    assert "Onda 2" in depois["notes"][0], "a nota tem de nomear a onda que fecha o termo"
+
+
+def test_a1_o_rendimento_de_aplicacao_nao_entra_no_termo_de_conta_informada(
+    client: TestClient, headers, db: Session
+):
+    """**O achado A-1, o bloqueio 3 da onda** — o teste dedicado que a story pediu.
+
+    Cenário: **uma** `Charge` de rendimento na janela e **zero** outros pendentes.
+      → P1+P2 = **0**, P3 = **1**, e a nota que sai é a do rendimento, nomeando a **Onda 2b**.
+
+    **Mutante que este teste mata:** remover o `_not_investment_yield()` do P2. Com ele removido, o
+    rendimento passa a contar em P1+P2 (e também em P3, ou seja, DUAS vezes), a nota de "lançamentos
+    sem conta informada" aparece indevidamente — e **o gate nunca abriria para nenhum tenant que
+    registre rendimento**, para sempre, até a Onda 2b. Verificado por mutação na implementação.
+    """
+    tenant_id = _tenant_id(client, headers)
+    conta = _account(client, headers, opening=1_000_000)
+    _declarar(client, headers, conta["id"], balance_cents=1_000_000)
+    _charge_de_rendimento(db, tenant_id, valor=48_000, pago_em=date(2026, 7, 14))
+
+    r = _report(db)
+    assert r.lancamentos_sem_conta_informada == 0, (
+        "a Charge sintética de rendimento caiu em P1/P2 — é o achado A-1 de volta, e com ele o "
+        "gate não abre para nenhum tenant que registre rendimento"
+    )
+    assert r.valor_sem_conta_informada_cents == 0
+    assert r.rendimentos_sem_perna_bancaria == 1
+    assert r.valor_rendimentos_sem_perna_cents == 48_000
+
+    assert len(r.notes) == 1
+    nota = r.notes[0]
+    assert "1 rendimento de aplicação" in nota
+    assert "R$ 480,00" in nota
+    assert "Onda 2b" in nota, "o termo P3 NÃO fecha nesta onda — a nota tem de dizer isso"
+    assert "não há o que corrigir à mão" in nota
+
+
+def test_os_dois_termos_geram_duas_notas_com_ondas_diferentes(
+    client: TestClient, headers, db: Session
+):
+    """Uma nota **por termo não-zero**, cada uma nomeando a sua onda (ratificação §C-1.5).
+
+    A v0.1 tinha UMA nota e UM par de contadores, o que achatava P3 dentro de P1/P2. Prometer
+    *"isso some quando você terminar o mutirão"* sobre um termo que só fecha na Onda 2b é a mesma
+    classe de afirmação sem lastro que a Onda 0 removeu da Projeção.
+    """
+    tenant_id = _tenant_id(client, headers)
+    conta = _account(client, headers, opening=1_000_000)
+    _declarar(client, headers, conta["id"], balance_cents=1_000_000)
+    _payable_legado(db, tenant_id, valor=312_000, pago_em=date(2026, 7, 12))
+    _charge_de_rendimento(db, tenant_id, valor=48_000, pago_em=date(2026, 7, 14))
+
+    r = _report(db)
+    assert r.lancamentos_sem_conta_informada == 1 and r.rendimentos_sem_perna_bancaria == 1
+    assert len(r.notes) == 2
+    assert "Onda 2:" in r.notes[0] and "Onda 2b" not in r.notes[0]
+    assert "Onda 2b" in r.notes[1]
+
+
+def test_zero_termo_nao_zero_e_zero_nota(client: TestClient, headers, db: Session):
+    """Silêncio — e é exatamente esse silêncio que sinaliza *"agora o gate pode ser lido"*."""
+    conta = _account(client, headers, opening=1_000_000)
+    _declarar(client, headers, conta["id"], balance_cents=1_000_000)
+    r = _report(db)
+    assert (r.lancamentos_sem_conta_informada, r.rendimentos_sem_perna_bancaria) == (0, 0)
+    assert r.notes == []
+
+
+def test_lancamento_fora_da_janela_nao_conta(client: TestClient, headers, db: Session):
+    """A pré-condição é **por ciclo de conferência**: o que aconteceu fora da janela é de outro."""
+    tenant_id = _tenant_id(client, headers)
+    conta = _account(client, headers, opening=1_000_000)
+    _declarar(client, headers, conta["id"], balance_cents=1_000_000)
+    _payable_legado(db, tenant_id, valor=312_000, pago_em=date(2026, 6, 20))  # antes de START
+
+    assert _report(db).lancamentos_sem_conta_informada == 0
+    # E a borda: `end` é INCLUSIVO nas duas pontas (datas de calendário).
+    _payable_legado(db, tenant_id, valor=100_000, pago_em=END)
+    assert _report(db).lancamentos_sem_conta_informada == 1
+
+
+def test_baixa_com_conta_informada_nao_e_termo_nenhum(client: TestClient, headers, db: Session):
+    """O não-membro por construção: o movimento bancário dela **existe**, então ela não é pendência.
+
+    É a diferença entre P1 e o caminho normal do produto desde a Story 8.12 — se este teste cair,
+    o termo passou a contar o que já está resolvido e a nota nunca iria a zero.
+    """
+    tenant_id = _tenant_id(client, headers)
+    conta = _account(client, headers, opening=1_000_000)
+    _declarar(client, headers, conta["id"], balance_cents=1_000_000)
+    p = _payable_legado(db, tenant_id, valor=312_000, pago_em=date(2026, 7, 12))
+    p.bank_account_id = conta["id"]
+    db.commit()
+
+    assert _report(db).lancamentos_sem_conta_informada == 0
+
+
+def test_iv5_os_contadores_novos_nao_escrevem_nada(client: TestClient, headers, db: Session):
+    """**IV5** — a conferência continua read-only **com** o bloco 4 novo ligado.
+
+    A contagem é `SELECT count(), sum()` e nada mais: nenhum lançamento é "corrigido", nenhuma conta
+    é atribuída a nada, nenhum movimento nasce para fechar a diferença.
+    """
+    tenant_id = _tenant_id(client, headers)
+    conta = _account(client, headers, opening=1_000_000)
+    _declarar(client, headers, conta["id"], balance_cents=900_000)
+    _payable_legado(db, tenant_id, valor=312_000, pago_em=date(2026, 7, 12))
+    _charge_de_rendimento(db, tenant_id, valor=48_000, pago_em=date(2026, 7, 14))
+
+    before = _snapshot(db)
+    _report(db)
+    _get(client, headers)
+    assert _snapshot(db) == before
+
+
+def test_a_contagem_dos_termos_e_uma_porta_registrada():
+    """O outro lado do fail-closed: a porta EXISTE e é ligada por composição, fora de `bank`.
+
+    Sem esta asserção, os testes acima ficariam verdes do jeito mais fácil possível — devolvendo
+    `TermosDoGate(0, 0, 0, 0)` fixo. E a inversão de dependência é o que mantém o gate estrutural
+    `bank ↛ payables/receivables` verde **porque a dependência sumiu**, não porque foi escondida.
+    """
+    assert reconciliation.termos_do_gate_probe_registrado(), (
+        "app/main.py deixou de ligar `register_termos_do_gate_probe`"
+    )
+    assert set(reconciliation.TermosDoGate.__dataclass_fields__) == {
+        "lancamentos_sem_conta_informada",
+        "valor_sem_conta_informada_cents",
+        "rendimentos_sem_perna_bancaria",
+        "valor_rendimentos_sem_perna_cents",
+    }
+    # E quem implementa a contagem vive do lado do NEGÓCIO, que pode importar `bank`.
+    from app.modules.payables.service import contar_saidas_sem_conta_informada
+    from app.modules.receivables.service import (
+        contar_entradas_sem_conta_informada,
+        contar_rendimentos_sem_perna_bancaria,
+    )
+
+    assert callable(contar_saidas_sem_conta_informada)
+    assert callable(contar_entradas_sem_conta_informada)
+    assert callable(contar_rendimentos_sem_perna_bancaria)
+
+
+def test_sem_a_porta_registrada_o_relatorio_recusa_em_vez_de_zerar(
+    client: TestClient, headers, db: Session, monkeypatch
+):
+    """**Fail-closed:** sem a contagem, o relatório levanta — nunca devolve zero por ausência.
+
+    Zero por ausência de medição **não é zero**: as notas sumiriam em silêncio e a tela passaria a
+    dizer, por omissão, *"nenhum termo pendente, o gate pode ser lido"*. É exatamente a leitura
+    errada que custou uma decisão de produto neste épico.
+    """
+    _account(client, headers, opening=1_000_000)
+    monkeypatch.setattr(reconciliation, "_termos_do_gate_probe", None)
+    with pytest.raises(bank_service.BankError) as e:
+        _report(db)
+    assert e.value.status_code == 500
+    assert "não está ligada" in str(e.value)

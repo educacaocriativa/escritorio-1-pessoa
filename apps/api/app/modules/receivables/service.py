@@ -18,7 +18,7 @@ from app.core.recurrence import advance, occurrences
 # O estado é DERIVADO da data, nunca escolhido (Story 8.15 AC5, herdando a 8.14). O helper é
 # **público e neutro** (`app/core/`) exatamente para que os dois lados do dinheiro o compartilhem —
 # **importar, nunca copiar** (`app/core/scheduling.py`, docstring).
-from app.core.scheduling import status_por_data
+from app.core.scheduling import janela_de_caixa, status_por_data
 from app.db.base import _uuid
 
 # ⚠️ **Duas palavras `scheduled` neste arquivo, e elas NÃO são a mesma coisa** — a mesma colisão que
@@ -857,6 +857,83 @@ def update_off_rail_payment(
     db.commit()
     db.refresh(charge)
     return charge
+
+
+def contar_entradas_sem_conta_informada(
+    db: Session, *, start: date, end: date
+) -> tuple[int, int]:
+    """**P2 da pré-condição do gate** (Story 8.16 AC8): recebimento fora do trilho sem conta.
+
+    > `Charge`, `status ∈ {paid, scheduled}`, `paid_at::date` na janela, `transaction_id IS NULL`,
+    > `bank_account_id IS NULL`, **e `_not_investment_yield()`**
+
+    Devolve `(quantidade, soma_dos_valores_em_centavos)`. **Somente leitura.**
+
+    ⚠️ **O `_not_investment_yield()` deste predicado é o BLOQUEIO 3 da onda (achado A-1), e sem ele
+    o gate NUNCA abriria para nenhum tenant que registre rendimento.** A `Charge` sintética de
+    rendimento de aplicação nasce `status='paid'`, `paid_at=now()`, `transaction_id=NULL` e
+    `bank_account_id=NULL` (`investments.register_yield`): ela cai **inteira** nesta população se
+    não for excluída — e a perna bancária dela é escopo da Onda 2b, declaradamente fora desta onda.
+    Ela é **P3**, com contador e nota próprios (`contar_rendimentos_sem_perna_bancaria`).
+
+    O predicado é **reusado, nunca reescrito**: ele já mora neste arquivo e inclui a guarda de
+    lógica ternária SQL (`coalesce(external_ref, '')`) que um reescritor distraído perderia,
+    excluindo **todas** as cobranças normais em silêncio. *"Duas cópias divergem — e já divergiram
+    uma vez, entre dois @sm que não conversam"*: a Story 8.15 lembrou este predicado, a 8.16 o
+    esqueceu, e é por isso que ele tem um lugar só.
+
+    **Fora da população, por construção e não por omissão:** `Charge` do **trilho**
+    (`transaction_id IS NOT NULL`). O dinheiro dela está na **Carteira**, não numa conta do dono, e
+    ela **não deve** gerar movimento bancário até o payout (Regra dos Planos). Incluí-la é
+    exatamente a leitura que tornava a pré-condição do gate **insatisfazível**.
+
+    **Membro:** um Pix de R$ 1.400 registrado em 12/07 antes de a conta bancária existir → conta.
+    **Não-membro:** uma cobrança paga pelo webhook do gateway em 12/07 → tem `transaction_id`.
+    **Não-membro 2:** a `Charge` de rendimento de 12/07 → excluída aqui, contada em P3.
+    """
+    de, ate = janela_de_caixa(start, end)
+    row = db.execute(
+        select(func.count(), func.coalesce(func.sum(Charge.amount_cents), 0)).where(
+            Charge.status.in_((STATUS_PAID, STATUS_SCHEDULED)),
+            Charge.transaction_id.is_(None),
+            Charge.bank_account_id.is_(None),
+            _not_investment_yield(),
+            Charge.paid_at.is_not(None),
+            Charge.paid_at >= de,
+            Charge.paid_at < ate,
+        )
+    ).one()
+    return int(row[0] or 0), int(row[1] or 0)
+
+
+def contar_rendimentos_sem_perna_bancaria(
+    db: Session, *, start: date, end: date
+) -> tuple[int, int]:
+    """**P3 da pré-condição do gate** (Story 8.16 AC8): rendimento de aplicação sem perna bancária.
+
+    > `Charge` com `external_ref LIKE 'investment:%'`, `paid_at::date` na janela
+
+    Devolve `(quantidade, soma_dos_valores_em_centavos)`. **Somente leitura.**
+
+    **Contador PRÓPRIO, e a separação é normativa** (ratificação §C-1.5): este termo **não fecha na
+    Onda 2**. Ele fecha na **Onda 2b**, quando `register_yield` passar a gerar o movimento bancário
+    correspondente. Somá-lo a P1/P2 prometeria na tela um prazo falso — *"isso some quando você
+    terminar de corrigir os lançamentos"* sobre um termo que o dono **não tem como** corrigir.
+
+    O predicado é a **negação** do mesmo `_not_investment_yield()` usado em P2 — literalmente o
+    complemento, e não uma segunda escrita do `LIKE 'investment:%'`. As duas populações particionam
+    as cobranças pelo mesmo corte, então elas não podem divergir.
+    """
+    de, ate = janela_de_caixa(start, end)
+    row = db.execute(
+        select(func.count(), func.coalesce(func.sum(Charge.amount_cents), 0)).where(
+            ~_not_investment_yield(),
+            Charge.paid_at.is_not(None),
+            Charge.paid_at >= de,
+            Charge.paid_at < ate,
+        )
+    ).one()
+    return int(row[0] or 0), int(row[1] or 0)
 
 
 def promote_scheduled(

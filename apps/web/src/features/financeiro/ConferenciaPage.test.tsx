@@ -69,6 +69,12 @@ function report(contas: ConferenciaConta[], over: Partial<ConferenciaReport> = {
         tolerancia_cents: c.tolerancia_cents,
       })),
     notes: [],
+    // Story 8.16 — os termos da pré-condição do gate. Zero no default: o cenário limpo é o
+    // silêncio, e é dele que a tela não deve mudar por causa da anotação.
+    lancamentos_sem_conta_informada: 0,
+    valor_sem_conta_informada_cents: 0,
+    rendimentos_sem_perna_bancaria: 0,
+    valor_rendimentos_sem_perna_cents: 0,
     ...over,
   };
 }
@@ -500,5 +506,85 @@ describe("Contrato consumido e estados de borda", () => {
     const wrapper = screen.getByRole("table").parentElement;
     expect(wrapper?.className).toContain("overflow-x-auto");
     expect(container.querySelectorAll(".overflow-hidden")).toHaveLength(0);
+  });
+});
+
+describe("Story 8.16 — as notas do bloco 4 na tela: declaração de limite, não alerta", () => {
+  const NOTA_P1P2 =
+    "7 lançamentos deste período não informam de qual conta saiu ou entrou (R$ 3.120,00). " +
+    "A divergência abaixo **inclui** esse valor. Este termo fecha na Onda 2: assim que todo " +
+    "lançamento informar a conta, ele vai a zero sozinho.";
+  const NOTA_P3 =
+    "3 rendimentos de aplicação deste período (R$ 480,00) ainda não geram movimento bancário. " +
+    "A divergência abaixo **inclui** esse valor. Este termo só fecha na Onda 2b — não há o que " +
+    "corrigir à mão.";
+
+  it("as notas aparecem JUNTO das que já existem, sem bloco novo e sem cor de alerta", async () => {
+    // AC10: a nota é declaração de limite, não problema. Ela entra no mesmo `<ul>` de `notes` que a
+    // 8.5 já renderiza — nenhum componente novo, nenhuma cor de erro.
+    vi.mocked(api.get).mockResolvedValue({
+      data: report(
+        [conta({ divergencia_cents: 0, dentro_da_tolerancia: true })],
+        {
+          lancamentos_sem_conta_informada: 7,
+          valor_sem_conta_informada_cents: 312_000,
+          rendimentos_sem_perna_bancaria: 3,
+          valor_rendimentos_sem_perna_cents: 48_000,
+          notes: [NOTA_P1P2, NOTA_P3],
+        },
+      ),
+    } as never);
+
+    const { container } = renderPage();
+
+    await waitFor(() => expect(screen.getByText(NOTA_P1P2)).toBeInTheDocument());
+    expect(screen.getByText(NOTA_P3)).toBeInTheDocument();
+    // As duas notas são irmãs no MESMO container — sem bloco novo.
+    expect(screen.getByText(NOTA_P1P2).parentElement).toBe(
+      screen.getByText(NOTA_P3).parentElement,
+    );
+    // Sem cor de alerta: a conta está dentro da banda e continua 🟢 e muda.
+    expect(container.querySelectorAll("[class*='text-red']")).toHaveLength(0);
+    expect(container.querySelectorAll("[class*='bg-red']")).toHaveLength(0);
+    expect(container.querySelectorAll("[class*='amber']")).toHaveLength(0);
+    expect(screen.getByText("🟢")).toBeInTheDocument();
+  });
+
+  it("a frase da conta é a MESMA com e sem as notas (ANOTA, NUNCA SUBTRAI)", async () => {
+    // A divergência exibida não pode se mover por causa da anotação: descontar o termo conhecido
+    // seria o checkpoint corrigindo o saldo derivado com outra roupa (Regra 5 do CLAUDE.md).
+    const fora = conta({
+      saldo_banco_cents: 2_570_000,
+      divergencia_cents: 70_000,
+      dentro_da_tolerancia: false,
+      tolerancia_cents: 12_850,
+    });
+
+    vi.mocked(api.get).mockResolvedValue({ data: report([fora]) } as never);
+    const limpo = renderPage();
+    await waitFor(() => expect(screen.getByText(/O banco diz que a conta/)).toBeInTheDocument());
+    const fraseSemNota = screen.getByText(/O banco diz que a conta/).textContent;
+    limpo.unmount();
+
+    vi.mocked(api.get).mockResolvedValue({
+      data: report([fora], {
+        lancamentos_sem_conta_informada: 7,
+        valor_sem_conta_informada_cents: 312_000,
+        notes: [NOTA_P1P2],
+      }),
+    } as never);
+    renderPage();
+    await waitFor(() => expect(screen.getByText(NOTA_P1P2)).toBeInTheDocument());
+    expect(screen.getByText(/O banco diz que a conta/).textContent).toBe(fraseSemNota);
+    // O número continua sendo o mesmo R$ 700,00 (`\\s` porque `formatBRL` usa espaço não-quebrável).
+    expect(fraseSemNota).toMatch(/R\$\s700,00/);
+  });
+
+  it("zero termo não-zero ⇒ nenhuma nota na tela", async () => {
+    vi.mocked(api.get).mockResolvedValue({ data: report([conta()]) } as never);
+    renderPage();
+    await waitFor(() => expect(screen.getByRole("table")).toBeInTheDocument());
+    expect(screen.queryByText(/não informam de qual conta/)).toBeNull();
+    expect(screen.queryByText(/rendimentos de aplicação/)).toBeNull();
   });
 });
