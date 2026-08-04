@@ -41,7 +41,9 @@ services:
       AUTHENTICATION_API_KEY: ${EVOLUTION_API_KEY:?defina no .env.prod}
       DATABASE_PROVIDER: postgresql
       DATABASE_CONNECTION_URI: postgresql://e1p_evolution:${EVOLUTION_DB_PASSWORD:?defina no .env.prod}@postgres:5432/evolution_db
-      REDIS_URI: redis://redis:6379/0
+      CACHE_REDIS_ENABLED: 'true'
+      CACHE_REDIS_URI: redis://redis:6379/0
+      CACHE_LOCAL_ENABLED: 'false'
       DEL_INSTANCE: 'false'
     depends_on:
       postgres:
