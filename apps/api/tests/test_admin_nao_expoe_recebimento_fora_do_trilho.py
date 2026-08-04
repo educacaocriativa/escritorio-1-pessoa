@@ -86,18 +86,35 @@ def test_platform_e_o_unico_router_com_prefixo_admin() -> None:
     Um teste de ausência precisa de um teste de presença ao lado, senão ele mede o vazio: se um dia
     outro módulo montar um `APIRouter(prefix="/admin")`, esta suíte inteira passaria a olhar para o
     lugar errado — e ficaria verde.
+
+    ⚠️ **[CORREÇÃO DO @QA, gate da Onda 2, CR-1]** A versão anterior filtrava rotas por
+    `path.startswith("/admin/")` e depois extraía `path.split("/")[1]` — que é `"admin"` **por
+    construção**, para qualquer rota que passe no próprio filtro. `donos == {"admin"}` era
+    tautológico: media o vazio, não a posse. A verificação real é sobre o **endpoint que vive por
+    trás de cada rota `/admin`** — se algum módulo fora de `platform/` registrar um handler ali, o
+    módulo do endpoint (`__module__`) o denuncia, mesmo que o texto do arquivo nunca contenha a
+    string `"/admin"` literal (ex.: prefixo montado por variável, ou por inclusão de sub-router).
     """
     from app.main import app
 
-    donos = {
-        rota.path.split("/")[1]
+    rotas_admin = [
+        rota
         for rota in app.routes
-        if getattr(rota, "path", "").startswith("/admin/")
-    }
-    assert donos == {"admin"}
-    # E o módulo que os declara é `platform`.
-    fontes = {p.read_text(encoding="utf-8") for p in _arquivos_de_platform()}
-    assert any('prefix="/admin"' in f for f in fontes)
+        if getattr(rota, "path", "").startswith("/admin/") and hasattr(rota, "endpoint")
+    ]
+    assert rotas_admin, "nenhuma rota /admin encontrada — o app mudou, revise este teste"
+
+    forasteiras = [
+        f"{rota.path} -> {rota.endpoint.__module__}"
+        for rota in rotas_admin
+        if not rota.endpoint.__module__.startswith("app.modules.platform")
+    ]
+    assert not forasteiras, (
+        f"rota /admin cujo endpoint NÃO vive em app.modules.platform: {forasteiras}. "
+        "A varredura estrutural e comportamental deste arquivo só vale enquanto platform/ for o "
+        "único dono de /admin — se outro módulo passou a responder por uma rota /admin, ele "
+        "precisa da mesma proibição que este arquivo aplica a platform/."
+    )
 
 
 def test_nenhum_arquivo_de_platform_menciona_o_recebimento_fora_do_trilho() -> None:
