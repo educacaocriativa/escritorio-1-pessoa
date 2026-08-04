@@ -68,11 +68,13 @@ def connect(db: Session, *, tenant_id: str) -> dict:
     settings_service.get_profile(db, tenant_id)  # garante que o profile existe
 
     try:
+        # timeout generoso: a Evolution só responde depois que o Baileys termina o handshake
+        # inicial com o WhatsApp pra gerar o QR — em produção isso já levou mais de 15s.
         resp = httpx.post(
             f"{settings.evolution_api_url}/instance/create",
             headers=_headers(),
             json={"instanceName": instance, "qrcode": True, "integration": "WHATSAPP-BAILEYS"},
-            timeout=15,
+            timeout=45,
         )
         # A Evolution devolve erro se a instância já existir — idempotente: ignoramos esse
         # caso específico (detectado pelo texto da resposta) e seguimos pro resto do fluxo.
@@ -117,7 +119,7 @@ def connect(db: Session, *, tenant_id: str) -> dict:
     try:
         resp = httpx.get(
             f"{settings.evolution_api_url}/instance/connect/{instance}",
-            headers=_headers(), timeout=15,
+            headers=_headers(), timeout=45,
         )
         resp.raise_for_status()
     except httpx.HTTPError as exc:
@@ -188,7 +190,7 @@ def refresh_qr(db: Session, *, tenant_id: str) -> str:
     try:
         resp = httpx.get(
             f"{settings.evolution_api_url}/instance/connect/{instance}",
-            headers=_headers(), timeout=15,
+            headers=_headers(), timeout=45,
         )
         resp.raise_for_status()
     except httpx.HTTPError as exc:

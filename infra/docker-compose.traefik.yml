@@ -42,9 +42,22 @@ services:
 
   evolution:
     # WhatsApp por Evolution API (Baileys, não-oficial) — transporte alternativo ao Meta Cloud
-    # API. SEM `ports:` e SEM rede `edge` — não é HTTP-facing, não precisa do Traefik
-    # compartilhado. mem_limit RÍGIDO: se uma sessão Baileys inchar, o OOM killer mata a
-    # Evolution, não o Postgres. Versão FIXADA, nunca `:latest`.
+    # API. SEM `ports:` e SEM labels de Traefik — não é HTTP-facing, não é roteado pelo Traefik
+    # compartilhado (só ganha `edge` por causa da saída à internet, ver `networks:` abaixo).
+    # mem_limit RÍGIDO: se uma sessão Baileys inchar, o OOM killer mata a Evolution, não o
+    # Postgres. Versão FIXADA, nunca `:latest`.
+    #
+    # PRECISA da rede `edge` (achado 2026-08-04): `db_internal` é `internal: true` (sem rota
+    # pra internet, de propósito — isola Postgres/Redis). Só com `db_internal` a Evolution
+    # conversa com a API/Postgres/Redis só por Docker DNS interno, mas o Baileys por si só
+    # precisa alcançar os servidores REAIS do WhatsApp (web.whatsapp.com etc.) — sem `edge`,
+    # a resolução DNS externa falhava (`ESERVFAIL` até pra `google.com`, dentro do container)
+    # e a conexão Baileys entrava num loop silencioso de reinício, nunca completando o
+    # handshake pra gerar o QR. Sintoma no produto: "Falha de rede ao criar instância: timed
+    # out" no botão Conectar (nosso httpx com timeout=15 nunca recebia resposta do
+    # `/instance/create`, que trava esperando o Baileys conectar). Mesmo padrão do comentário
+    # do `api` abaixo ("edge... dá saída à internet") — SEM label de Traefik aqui, então
+    # continua inalcançável de fora, só ganha a rota de saída.
     #
     # 512m (não o 1g da spec original — ver docker-compose.prod.yml, cenário de VPS dedicada):
     # esta VPS específica é COMPARTILHADA com vários outros clientes (axisgov/fiscalize,
@@ -72,7 +85,7 @@ services:
         condition: service_started
     volumes:
       - evolution_instances:/evolution/instances
-    networks: [db_internal]
+    networks: [db_internal, edge]
 
   api:
     build: ../apps/api
