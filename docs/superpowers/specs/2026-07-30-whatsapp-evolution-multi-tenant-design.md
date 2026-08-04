@@ -463,6 +463,20 @@ A partir de `0061`:
   tenant herda essa premissa.
 - **Suporte a header customizado no webhook da Evolution** precisa ser confirmado na versão
   fixada; se ausente, o segredo vira segmento de path.
+- **Mídia inbound da Evolution** (imagem/áudio/documento) não tem parser ainda — só texto.
+  Payload de exemplo real de uma instância viva é pré-requisito antes de implementar, para não
+  adivinhar o shape (mesmo cuidado já tomado com o parser de texto).
+- **`resolve_by_webhook_secret` é O(n) nas instâncias conectadas** (varre todas comparando o
+  segredo decifrado) — aceitável pelo volume esperado (uma linha por tenant conectado, não por
+  mensagem), mas não escala indefinidamente. Se o volume de tenants Evolution crescer muito,
+  considerar um índice sobre um HASH do segredo (não o valor cifrado em si).
+- **Correção de framing durante a Onda 3:** a decisão original falava em migrar "os 4 fluxos
+  síncronos" (cobrança/contrato/orçamento/convite) para a fila — o levantamento dos call sites
+  reais achou um **5º**, o nó de WhatsApp do Funil de Vendas, também síncrono e citado como uma
+  das duas motivações originais do freio. Migrado junto (propósito local `funnel_node`); ver
+  commit "refactor: contracts/quotes/platform/funnels enfileiram...".
+- **Backup do volume `evolution_instances`** (Onda 1) segue manual, não automatizado no
+  cron/`backup.sh` — ver `docs/RUNBOOK-BACKUP-RESTORE.md` §1.2.
 
 ## 13. Faseamento
 
