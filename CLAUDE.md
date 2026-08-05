@@ -315,6 +315,47 @@ e uma tentativa real de conexão avançou mais um passo):
     - **Migration validada contra Postgres REAL** (container descartável, rodando como o papel não-superusuário `e1p_app`, com dados legados semeados): backfill preservou as 7 mensagens de teste, 0 ficaram sem conversa, `last_read_at` migrou, RLS `FORCE` restaurada nas 4 tabelas e isolamento cross-tenant fail-closed conferido (sem GUC → 0 linhas). O backfill **desabilita a RLS na sua janela** — sem isso ele seria um no-op silencioso (armadilha da `0046`, que o SQLite dos testes não pega).
     - **Dívida:** `whatsapp_conversation_states` fica órfã (o estado de leitura mudou de casa); não foi dropada porque `DROP TABLE` é irreversível e vale manter um ciclo para conferência — dropar numa migration posterior.
 
+12. **As regras da Meta seguiam valendo sob a Evolution, porque `capabilities.py` não tinha
+    consumidor nenhum.** Sintoma reportado: o nó de WhatsApp do funil respondia *"Selecione um
+    template de WhatsApp aprovado"* num tenant conectado por QR code — que não tem template
+    nenhum e não consegue criar (a Evolution recusa templates por design). **Template aprovado e
+    janela de 24h são artefatos da Cloud API da Meta**, e o módulo que já codificava exatamente
+    isso (`app/core/whatsapp/capabilities.py`, `EVOLUTION.templates=False`,
+    `session_window=False`) existia desde a Onda 0 com **zero call sites em produção** — só o
+    próprio teste unitário. Sua docstring **afirmava** que 3 consumidores o consultavam; nenhum
+    dos 3 tinha sido escrito.
+    - **A lição de método:** um módulo de capacidades sem consumidor não protege ninguém — ele
+      documenta uma intenção, e a docstring que descreve consumidores inexistentes *impede* que
+      alguém note a lacuna (é a mesma classe de erro da **INSTANCIAÇÃO OBRIGATÓRIA** do Epic 8:
+      conjunto definido por descrição, sem membro escrito, sem consumidor mecânico que proteste).
+      **Regra que fica: capacidade nova nasce com o consumidor no mesmo passo**, e a lista de
+      consumidores na docstring tem que ser verificável por grep.
+    - **Três instâncias do mesmo defeito**, todas corrigidas aqui: (a) o nó do funil exigindo
+      template (`funnels/service.py::run_node` → agora texto livre sob Evolution, com
+      `{{cliente.*}}` resolvido; `engine._params` passou a carregar `config.body` até a ação, sem
+      o que a jornada automática continuaria muda); (b) `is_within_session_window` aplicando a
+      janela de 24h — **beco sem saída**, porque fora da janela a única saída oferecida é
+      template, que ali não existe: a conversa emudeceria 24h após a última mensagem do contato;
+      (c) achado durante a implementação — **os 5 pontos do domínio que resolvem vínculo
+      propósito→template no ENFILEIRAMENTO** (quotes, contracts, receivables, platform,
+      `on_client_moved`) não sabem por qual transporte a mensagem sai, então um tenant que usou a
+      Meta e migrou pro QR mantinha os vínculos e cada notificação chamaria `send_template` →
+      falha garantida + retry com backoff até expirar. Guarda posta no **ponto de entrega**
+      (`process_pending`), onde o transporte é conhecido: cai em `send_text` sem perder conteúdo,
+      porque `notification.message` já é o template renderizado.
+    - **`_resolve` do despachante agora DERIVA de `capabilities.for_profile`** em vez de repetir
+      a comparação `whatsapp_provider == "evolution"`. Se divergissem, um consumidor concluiria
+      "posso mandar texto livre" enquanto o despachante entregaria pela Meta — e a falha
+      apareceria no worker, longe de quem poderia relacionar as duas decisões. Gate em
+      `tests/test_whatsapp_capabilities.py::test_capabilities_e_despachante_nunca_divergem`.
+    - Frontend espelha o mesmo dado em `apps/web/src/lib/whatsappCapabilities.ts` (o builder lê
+      `GET /settings/profile` uma vez e passa o transporte aos dois modais). Conversas **não
+      precisou mudar**: o backend passou a responder `within_session_window: true` e a caixa de
+      texto livre que já existia aparece sozinha.
+    - **Dívida:** o espelho do TS é mantido à mão (mesma dívida geral de `shared-types`) — se
+      surgir um 3º transporte, os dois arquivos precisam mudar juntos, e nada no CI reprova o
+      esquecimento.
+
 **Duas armadilhas operacionais da VPS** (não são bug de código, são do processo de deploy):
 - Depois de mudar a config do webhook via `/webhook/set` numa instância **já conectada**, a mudança pode não valer pro processo em memória (cache do canal Baileys carregado na conexão) — precisou **reiniciar o container `evolution`** (não só recriar) pra pegar a config nova. Sessões reconectam sozinhas (credenciais persistidas no Postgres/Redis), sem precisar de novo QR.
 - `docker compose up -d --build <serviço>` só reconstrói o serviço **nomeado**. Rebuildar só `api` depois de um PR que também mudou frontend deixa o `web` com o build antigo, **em silêncio** (sem erro, só o comportamento antigo persistindo). Depois de qualquer merge, checar QUAIS serviços mudaram no diff antes de escolher o que rebuildar — ou rebuildar todos (`up -d --build` sem nome, como o `reference_e1p_prod_deploy` já recomendava).

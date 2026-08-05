@@ -24,6 +24,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
+from app.core.whatsapp import capabilities
 from app.core.whatsapp.providers import evolution, meta
 from app.core.whatsapp.providers.meta import WhatsappApiError
 
@@ -47,12 +48,13 @@ __all__ = [
 
 
 def _resolve(profile: TenantProfile | None):
-    """Escolhe o provider pelo transporte do tenant. `None` (perfil ausente) ou qualquer valor
-    diferente de "evolution" cai em `meta` — inclusive `None`/"meta" (estado de hoje, ou tenant
-    que nunca conectou por QR)."""
-    if profile is not None and profile.whatsapp_provider == "evolution":
-        return evolution
-    return meta
+    """Escolhe o provider pelo transporte do tenant.
+
+    DERIVA de `capabilities.for_profile` em vez de repetir a comparação: assim o que os
+    consumidores de domínio checam (posso mandar texto livre?) e o que este módulo faz de fato
+    (por qual API o texto sai) não conseguem divergir. Gate em
+    `tests/test_whatsapp_capabilities.py::test_capabilities_e_despachante_nunca_divergem`."""
+    return evolution if capabilities.for_profile(profile) is capabilities.EVOLUTION else meta
 
 
 def _evolution_instance(profile: TenantProfile | None) -> str:

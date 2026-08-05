@@ -100,7 +100,12 @@ def _params(data: dict) -> dict:
                 "message": cfg.get("body") or cfg.get("message", ""),
                 "recipient": cfg.get("recipient", "client")}
     if action == "send_message":
+        # `message` (texto livre, transporte Evolution) e `template_id`/`variables` (Meta) andam
+        # JUNTOS: o nó pode ter sido configurado num transporte e executado noutro, e quem decide
+        # qual dos dois vale é o service, consultando as capabilities do tenant — não este
+        # dicionário, que só entrega o que o nó guardou.
         return {"template_id": cfg.get("template_id"), "variables": cfg.get("variables") or [],
+                "message": cfg.get("body") or cfg.get("message", ""),
                 "recipient": cfg.get("recipient", "client")}
     if action == "create_client":
         return {"name": cfg.get("name", "")}

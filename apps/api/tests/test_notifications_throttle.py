@@ -50,6 +50,61 @@ def test_evolution_tenant_respects_max_per_sweep(db, monkeypatch: pytest.MonkeyP
     assert processed <= 5  # teto por sweep, spec §7
 
 
+def test_vinculo_de_template_da_meta_nao_vaza_para_a_evolution(
+    db, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Notificação enfileirada COM template, entregue por um tenant no transporte Evolution.
+
+    Acontece de verdade com quem usou a Meta e depois migrou pro QR code: os vínculos
+    propósito→template ficam salvos no perfil, e os 5 pontos do domínio que os resolvem no
+    enfileiramento não sabem por qual transporte a mensagem vai sair. Chamar `send_template`
+    aqui seria falha garantida (a Evolution recusa templates por design) e o retry repetiria
+    até expirar. Cai em `send_text` com a mensagem JÁ renderizada."""
+    _evolution_tenant(db)
+    service.enqueue(
+        db, tenant_id=TENANT_ID, channel="whatsapp", recipient="5511999998888",
+        message="Olá Maria, seu pedido #123 foi confirmado!",  # template já renderizado
+        whatsapp_template_name="confirmacao_pedido", whatsapp_template_language="pt_BR",
+        whatsapp_template_variables=["Maria", "#123"],
+    )
+    db.commit()
+
+    enviados: list[str] = []
+    monkeypatch.setattr(
+        whatsapp, "send_text",
+        lambda *, to, text, profile=None, token=None, phone_id=None: (
+            enviados.append(text), "sent")[1],
+    )
+    monkeypatch.setattr(
+        whatsapp, "send_template",
+        lambda **kw: pytest.fail("send_template não pode ser chamado no transporte Evolution"),
+    )
+
+    assert service.process_pending(db, tenant_id=TENANT_ID) == 1
+    assert enviados == ["Olá Maria, seu pedido #123 foi confirmado!"]  # conteúdo preservado
+
+
+def test_vinculo_de_template_continua_valendo_na_meta(
+    db, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Contraprova: no transporte da Meta o template continua sendo usado (sem regressão)."""
+    service.enqueue(
+        db, tenant_id=TENANT_ID, channel="whatsapp", recipient="5511999998888",
+        message="Olá Maria, seu pedido #123 foi confirmado!",
+        whatsapp_template_name="confirmacao_pedido", whatsapp_template_language="pt_BR",
+        whatsapp_template_variables=["Maria", "#123"],
+    )
+    db.commit()
+
+    usados: list[str] = []
+    monkeypatch.setattr(
+        whatsapp, "send_template",
+        lambda **kw: (usados.append(kw["template_name"]), "sent")[1],
+    )
+    assert service.process_pending(db, tenant_id=TENANT_ID) == 1
+    assert usados == ["confirmacao_pedido"]
+
+
 def test_meta_tenant_is_not_throttled(db, monkeypatch: pytest.MonkeyPatch) -> None:
     # Sem instância Evolution — profile.whatsapp_provider permanece None/"meta". Sem freio.
     _enqueue_n(db, 8)

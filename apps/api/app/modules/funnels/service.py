@@ -335,6 +335,7 @@ def run_node(
     from datetime import UTC, datetime, timedelta
 
     from app.core import email
+    from app.core.whatsapp import capabilities as whatsapp_capabilities
     from app.modules.auth.models import User
     from app.modules.crm import service as crm_service
     from app.modules.crm.models import Client
@@ -446,25 +447,43 @@ def run_node(
 
     if action == "send_message":
         c = _client()
-        template_id = params.get("template_id")
-        if not template_id:
-            raise FunnelError("Selecione um template de WhatsApp aprovado", 422)
-        tpl = db.get(WhatsappTemplate, template_id)
-        if tpl is None or tpl.status != STATUS_APPROVED:
-            raise FunnelError("Template não encontrado ou ainda não aprovado pela Meta", 422)
         to_team = params.get("recipient") == "team"
         to_phone = _team_phone() if to_team else (c.phone or "")
         recipient = to_phone or c.name
-        resolved_vars = [_resolve_template_variable(v, c) for v in (params.get("variables") or [])]
-        rendered = _render_template_preview(tpl.body_text, resolved_vars)
-        notifications_service.enqueue(
-            db, tenant_id=tenant_id, channel="whatsapp", recipient=recipient, client_id=c.id,
-            message=rendered, purpose=PURPOSE_FUNNEL_NODE, whatsapp_template_name=tpl.name,
-            whatsapp_template_language=tpl.language, whatsapp_template_variables=resolved_vars,
-        )
+        who = "equipe" if to_team else c.name
+        profile = settings_service.get_profile(db, tenant_id)
+
+        if not whatsapp_capabilities.for_profile(profile).templates:
+            # Evolution (Baileys): template aprovado não existe nesse transporte — a mensagem é
+            # texto livre, escrito no nó. Um `template_id` guardado de quando o tenant ainda era
+            # Meta é IGNORADO de propósito: reaproveitá-lo faria o worker chamar send_template,
+            # que a Evolution recusa por design (providers/evolution.py).
+            body = (params.get("message") or "").strip()
+            if not body:
+                raise FunnelError("Escreva a mensagem do WhatsApp no nó antes de executar", 422)
+            notifications_service.enqueue(
+                db, tenant_id=tenant_id, channel="whatsapp", recipient=recipient, client_id=c.id,
+                message=_render_client_placeholders(body, c), purpose=PURPOSE_FUNNEL_NODE,
+            )
+        else:
+            template_id = params.get("template_id")
+            if not template_id:
+                raise FunnelError("Selecione um template de WhatsApp aprovado", 422)
+            tpl = db.get(WhatsappTemplate, template_id)
+            if tpl is None or tpl.status != STATUS_APPROVED:
+                raise FunnelError("Template não encontrado ou ainda não aprovado pela Meta", 422)
+            resolved_vars = [
+                _resolve_template_variable(v, c) for v in (params.get("variables") or [])
+            ]
+            notifications_service.enqueue(
+                db, tenant_id=tenant_id, channel="whatsapp", recipient=recipient, client_id=c.id,
+                message=_render_template_preview(tpl.body_text, resolved_vars),
+                purpose=PURPOSE_FUNNEL_NODE, whatsapp_template_name=tpl.name,
+                whatsapp_template_language=tpl.language, whatsapp_template_variables=resolved_vars,
+            )
+
         audit.record(db, tenant_id=tenant_id, actor=actor, action="funnel.run.message", target=c.id)
         db.commit()
-        who = "equipe" if to_team else c.name
         return {"message": f"Mensagem registrada para {who} (whatsapp)", "kind": "message",
                 "ref_id": c.id}
 
