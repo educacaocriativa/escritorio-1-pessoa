@@ -43,7 +43,12 @@ def upgrade() -> None:
     )
 
     # --- backfill (ver a ARMADILHA no docstring: sem esta janela, tudo abaixo é no-op) ---
+    # AS DUAS tabelas: `clients` porque é o alvo do UPDATE, e `client_events` porque é a
+    # FONTE da subconsulta. A RLS filtra SELECT também — com ela ligada em `client_events` o
+    # UPDATE roda, não falha, e todo card cai no fallback `created_at`, perdendo em silêncio
+    # exatamente a informação de movimentação que este backfill existe para recuperar.
     op.execute("ALTER TABLE clients DISABLE ROW LEVEL SECURITY")
+    op.execute("ALTER TABLE client_events DISABLE ROW LEVEL SECURITY")
 
     op.execute(
         """
@@ -57,6 +62,8 @@ def upgrade() -> None:
 
     op.execute("ALTER TABLE clients ENABLE ROW LEVEL SECURITY")
     op.execute("ALTER TABLE clients FORCE ROW LEVEL SECURITY")
+    op.execute("ALTER TABLE client_events ENABLE ROW LEVEL SECURITY")
+    op.execute("ALTER TABLE client_events FORCE ROW LEVEL SECURITY")
 
     op.alter_column(
         "clients",

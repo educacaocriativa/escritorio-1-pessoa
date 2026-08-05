@@ -90,7 +90,9 @@ Três passos, nesta ordem — a coluna é `NOT NULL` no destino, mas não pode n
 
 ```python
 # ⚠️ ARMADILHA: sem esta janela, todo o UPDATE abaixo é no-op SILENCIOSO.
+# AS DUAS tabelas — alvo E fonte. Ver abaixo.
 op.execute("ALTER TABLE clients DISABLE ROW LEVEL SECURITY")
+op.execute("ALTER TABLE client_events DISABLE ROW LEVEL SECURITY")
 
 op.execute("""
     UPDATE clients SET stage_entered_at = COALESCE(
@@ -102,6 +104,8 @@ op.execute("""
 
 op.execute("ALTER TABLE clients ENABLE ROW LEVEL SECURITY")
 op.execute("ALTER TABLE clients FORCE ROW LEVEL SECURITY")
+op.execute("ALTER TABLE client_events ENABLE ROW LEVEL SECURITY")
+op.execute("ALTER TABLE client_events FORCE ROW LEVEL SECURITY")
 ```
 
 **Por que a janela.** `clients` tem `FORCE ROW LEVEL SECURITY`, e a migration roda como o papel
@@ -110,6 +114,17 @@ para **zero linhas, sem erro nenhum** — e o sintoma em produção não seria u
 "a fila continua fora de ordem", com a coluna inteira parada no default. É a mesma armadilha
 documentada na `0046`, `0066` e `0067`, e a suíte SQLite é **estruturalmente incapaz** de pegá-la
 (os testes unitários montam o schema por `Base.metadata.create_all`, sem passar por alembic).
+
+**Por que as DUAS tabelas** (achado na implementação, pelo teste `rls_e2e` — a primeira versão
+abria só `clients` e estava errada): a RLS filtra **SELECT** também, e `client_events` é a **fonte
+da subconsulta**. Com ela ligada, a subconsulta devolve `NULL` para todo mundo, o `COALESCE` cai no
+`created_at` e o backfill **completa com sucesso aparente** tendo perdido exatamente a informação
+de movimentação que ele existe para recuperar. Não é o caso "zero linhas afetadas": é pior, porque
+o número de linhas atualizadas fica certo e só o valor é que está errado.
+
+**A regra que fica:** numa janela de backfill, a RLS precisa ser aberta em **toda tabela que a
+consulta toca** — alvo e fontes — e fechada em todas depois. Abrir só o alvo é o erro que passa
+despercebido, porque produz dado plausível em vez de falha.
 
 DDL é transacional no Postgres e a migration roda offline, então não há janela de exposição.
 
