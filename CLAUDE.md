@@ -356,6 +356,52 @@ e uma tentativa real de conexão avançou mais um passo):
       surgir um 3º transporte, os dois arquivos precisam mudar juntos, e nada no CI reprova o
       esquecimento.
 
+13. **"Mensagem registrada" e nada chegava: o telefone ia sem código do país.** Achado logo após
+    o deploy do item 12 — o funil parou de dar 422, completou a jornada, gravou
+    *"Mensagem registrada para Flavio Kato (whatsapp)"* e **nenhuma mensagem chegou**. A
+    `Notification` ficou `failed` com `last_error` VAZIO (o provider devolve `"failed"` sem
+    levantar, então nada preenchia o campo) e o worker logava só `400 Bad Request`.
+    - **Causa:** o contato estava gravado como `43984074017` — o que o dono digitou, sem o `55`.
+      A sondagem de `/chat/whatsappNumbers` em produção fechou o caso: `43984074017` →
+      `exists:false`; `5543984074017` → `exists:true`. **A forma correta JÁ existia no banco**
+      (`clients.phone_key`, calculado por `normalize_br` na PR #76) — o caminho de envio é que
+      usava `clients.phone`, o cru.
+    - **Por que a resposta no inbox sempre funcionou e isto não:** contato criado pelo webhook
+      nasce com o telefone que veio do WhatsApp, já completo. Contato digitado/importado, não.
+    - **Fix na FRONTEIRA (`whatsapp.__init__._addressable`), não em cada call site:** são **seis**
+      caminhos que resolvem destinatário de campo de telefone cru (funil, alerta pra equipe,
+      convite de funcionário, orçamento, cobrança, contrato) e só `Client` tem gêmeo
+      normalizado — consertar um por um deixaria quatro quebrados. O despachante é por onde todo
+      envio passa (mesma razão de `capabilities` viver lá). O que está GUARDADO não muda:
+      `clients.phone` segue sendo a evidência do que a pessoa digitou.
+    - **Nem todo `to` é telefone** e reescrever os outros trocaria falha visível por entrega no
+      lugar errado: grupo é JID `@g.us`, não identificado é `@lid`, `_owner_recipient` cai em
+      e-mail e o funil cai no NOME do contato. Guarda explícita para `@`; o resto sai intacto
+      porque `normalize_br` devolve `None` fora do formato BR.
+    - ⚠️ **Suposição BR-only, decidida pelo fundador** (coerente com CPF/CNPJ, boleto, Pix): um
+      celular estrangeiro de 10-11 dígitos É reescrito como brasileiro e a mensagem iria para
+      outra pessoa — pior que falhar. Por isso **toda reescrita é logada em INFO**: o caso
+      estrangeiro precisa aparecer. Se um dia houver contato internacional, este é o ponto.
+    - **Dívida (não corrigida):** `crm.update_client` faz `setattr` genérico e **não recalcula
+      `phone_key`** — editar o telefone de um contato deixa a chave velha. Não afeta mais o
+      envio (a fronteira normaliza), mas afeta a deduplicação de lead.
+    - **Lacuna de diagnóstico fechada junto:** `providers/evolution.py` chamava
+      `raise_for_status()` e logava só o código — o CORPO da resposta da Evolution, que já
+      explicava o erro, era descartado. Investigar exigiu sondar a API à mão em produção. Agora
+      `send_text`/`send_media` logam a resposta (truncada em 400 chars). **Regra: ao integrar
+      terceiro, o corpo do erro dele faz parte do log — o status sozinho não diagnostica nada.**
+
+**⚠️ `migrations/env.py` silenciava o logging de TODA a aplicação** (achado no mesmo ciclo, por um
+teste que passava sozinho e falhava na suíte inteira). `fileConfig()` tem
+`disable_existing_loggers=True` por PADRÃO: ele marca `disabled=True` em todo logger já
+existente e não nomeado no `alembic.ini` — `e1p.whatsapp`, `e1p.notifications`, `e1p.worker`.
+Depois disso `logger.info`/`logger.exception` viram no-op silencioso pelo resto do processo.
+Produção escapa **por acidente de topologia** (o compose roda `sh -c "alembic upgrade head &&
+uvicorn ..."`, processos separados); dentro do pytest, um único teste que aplica migrations
+silencia os testes seguintes. Corrigido com `disable_existing_loggers=False`. É a mesma família
+do bug já registrado abaixo ("logs que somem" por falta de `basicConfig`) — **quando um log
+sumir, verifique também quem chamou `fileConfig`/`dictConfig` antes**, não só handler ausente.
+
 **Duas armadilhas operacionais da VPS** (não são bug de código, são do processo de deploy):
 - Depois de mudar a config do webhook via `/webhook/set` numa instância **já conectada**, a mudança pode não valer pro processo em memória (cache do canal Baileys carregado na conexão) — precisou **reiniciar o container `evolution`** (não só recriar) pra pegar a config nova. Sessões reconectam sozinhas (credenciais persistidas no Postgres/Redis), sem precisar de novo QR.
 - `docker compose up -d --build <serviço>` só reconstrói o serviço **nomeado**. Rebuildar só `api` depois de um PR que também mudou frontend deixa o `web` com o build antigo, **em silêncio** (sem erro, só o comportamento antigo persistindo). Depois de qualquer merge, checar QUAIS serviços mudaram no diff antes de escolher o que rebuildar — ou rebuildar todos (`up -d --build` sem nome, como o `reference_e1p_prod_deploy` já recomendava).

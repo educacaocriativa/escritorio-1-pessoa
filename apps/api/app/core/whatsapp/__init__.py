@@ -22,14 +22,18 @@ SQLAlchemy já detached — ver nota nesse arquivo).
 """
 from __future__ import annotations
 
+import logging
 from typing import TYPE_CHECKING
 
+from app.core.phone import normalize_br
 from app.core.whatsapp import capabilities
 from app.core.whatsapp.providers import evolution, meta
 from app.core.whatsapp.providers.meta import WhatsappApiError
 
 if TYPE_CHECKING:
     from app.modules.settings.models import TenantProfile
+
+logger = logging.getLogger("e1p.whatsapp")
 
 __all__ = [
     "WhatsappApiError",
@@ -55,6 +59,43 @@ def _resolve(profile: TenantProfile | None):
     (por qual API o texto sai) não conseguem divergir. Gate em
     `tests/test_whatsapp_capabilities.py::test_capabilities_e_despachante_nunca_divergem`."""
     return evolution if capabilities.for_profile(profile) is capabilities.EVOLUTION else meta
+
+
+def _addressable(to: str) -> str:
+    """Transforma o destinatário GUARDADO num endereço que o WhatsApp entende.
+
+    Bug real de produção (2026-08-05): o funil registrava a mensagem e ela nunca chegava. A
+    Evolution devolvia `400` porque o contato estava gravado como `43984074017` — o que o dono
+    digitou, sem código do país — e esse número simplesmente NÃO existe no WhatsApp
+    (`/chat/whatsappNumbers` confirmou: `exists:false`; com `55` na frente, `exists:true`).
+
+    Por que aqui e não em cada call site: seis caminhos resolvem destinatário de campos de
+    telefone crus (funil, alerta pra equipe, convite de funcionário, orçamento, cobrança,
+    contrato) e só `Client` tem o gêmeo normalizado (`phone_key`, PR #76). Consertar um por um
+    deixaria quatro quebrados. O despachante é por onde TODO envio passa — mesma razão de
+    `capabilities` viver aqui em vez de `if` espalhado.
+
+    Isto NÃO reescreve o que está guardado: `clients.phone` continua sendo a evidência do que a
+    pessoa digitou, no mesmo par `raw_description`/`user_description` de `bank_transactions`.
+
+    **Nem todo `to` é telefone** e reescrever os outros trocaria uma falha visível por uma
+    entrega no lugar errado: grupo é JID (`...@g.us`), contato não identificado é `@lid`, o
+    destinatário do owner cai em e-mail (placeholder histórico de `_owner_recipient`) e o funil
+    cai no NOME do contato quando não há telefone. Tudo que tem `@` sai intacto por guarda
+    explícita; o resto sai intacto porque `normalize_br` devolve `None` quando não é BR.
+
+    ⚠️ **Suposição BR-only** (decisão do fundador, coerente com CPF/CNPJ, boleto e Pix): um
+    celular estrangeiro de 10-11 dígitos é reescrito como se fosse brasileiro, e aí a mensagem
+    vai para outra pessoa — pior que falhar. É por isso que toda reescrita é logada: o caso
+    estrangeiro precisa APARECER, não sumir.
+    """
+    if "@" in to:
+        return to
+    normalized = normalize_br(to)
+    if normalized is None or normalized == to:
+        return to
+    logger.info("[whatsapp] destinatário normalizado: %s -> %s", to, normalized)
+    return normalized
 
 
 def _evolution_instance(profile: TenantProfile | None) -> str:
@@ -84,6 +125,7 @@ def send_text(
     phone_id: str | None = None,
 ) -> str:
     provider = _resolve(profile)
+    to = _addressable(to)
     if provider is evolution:
         # Evolution não usa token/phone_id por tenant (credencial GLOBAL) — identifica a
         # instância pelo tenant_id, não por essas duas credenciais da Meta.
@@ -105,6 +147,7 @@ def send_template(
     phone_id: str | None = None,
 ) -> str:
     provider = _resolve(profile)
+    to = _addressable(to)
     if profile is not None:
         token = profile.whatsapp_token or ""
         phone_id = profile.whatsapp_phone_id or ""
@@ -129,6 +172,7 @@ def send_media(
     phone_id: str | None = None,
 ) -> str:
     provider = _resolve(profile)
+    to = _addressable(to)
     if provider is evolution:
         return provider.send_media(
             to=to, instance=_evolution_instance(profile), kind=kind, media_id=media_id,
