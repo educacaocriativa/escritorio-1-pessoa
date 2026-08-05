@@ -148,8 +148,14 @@ def gateway_reference(tenant_id: str, charge_id: str) -> str:
     return f"{tenant_id}:{charge_id}"
 
 
-def is_overdue(charge: Charge, today: date | None = None) -> bool:
-    today = today or datetime.now(UTC).date()
+def is_overdue(charge: Charge, today: date) -> bool:
+    """*"Esta cobrança está atrasada?"* — depende de QUE DIA É HOJE **para o dono**.
+
+    `today` é **obrigatório**, espelhando `payables.is_overdue` (a simetria entre os dois lados do
+    dinheiro é normativa). O fallback antigo era `datetime.now(UTC).date()`: em UTC−3, das 21h à
+    meia-noite, marcava como atrasada uma cobrança que só vence amanhã — e era o dono ligando
+    para o cliente cobrar uma dívida que não existia ainda.
+    """
     return charge.status == STATUS_OPEN and charge.due_date < today
 
 
@@ -439,7 +445,7 @@ def protest_charge(db: Session, *, charge_id: str, tenant_id: str, actor: str) -
     charge = get_charge(db, charge_id)
     if charge.status != STATUS_OPEN:
         raise ReceivableError("Só cobranças em aberto podem ser protestadas", 409)
-    if not is_overdue(charge):
+    if not is_overdue(charge, _today(db)):
         raise ReceivableError("Só cobranças vencidas podem ser protestadas", 409)
     if charge.protested_at is not None:
         return charge  # idempotente
@@ -527,9 +533,11 @@ def mark_paid(db: Session, *, charge_id: str, tenant_id: str, actor: str, by_ai:
 # em `tests/test_receivables_off_rail.py`. **Nenhuma delas é "tomar cuidado".**
 
 
-def _today() -> date:
-    """Hoje em UTC — a MESMA âncora de `is_overdue`, `summary` e `payables._today`."""
-    return datetime.now(UTC).date()
+def _today(db: Session, *, now: datetime | None = None) -> date:
+    """Hoje NO FUSO DO TENANT — a MESMA âncora de `is_overdue`, `summary` e `payables._today`."""
+    from app.modules.settings.service import hoje_do_tenant
+
+    return hoje_do_tenant(db, now=now)
 
 
 def _traduz_bank_error(call):
@@ -743,11 +751,11 @@ def settle_off_rail(
     # `bank.origin.sync_origin_movement`).
     acc = _conta_do_recebimento(db, bank_account_id)
     received_on = _valida_data_do_recebimento(
-        received_on if received_on is not None else _today(), acc
+        received_on if received_on is not None else _today(db), acc
     )
 
     charge.status = status_por_data(
-        received_on, _today(), status_agendado=STATUS_SCHEDULED, status_pago=STATUS_PAID
+        received_on, _today(db), status_agendado=STATUS_SCHEDULED, status_pago=STATUS_PAID
     )
     # Meia-noite UTC da data de caixa — mesma convenção de `payables.apply_paid` e o mesmo cuidado
     # de data-de-calendário que o bug de fuso da Agenda (`CLAUDE.md` §6.0) ensinou.
@@ -837,7 +845,7 @@ def update_off_rail_payment(
 
     charge.paid_at = datetime.combine(received_on, time.min, tzinfo=UTC)
     charge.status = status_por_data(
-        received_on, _today(), status_agendado=STATUS_SCHEDULED, status_pago=STATUS_PAID
+        received_on, _today(db), status_agendado=STATUS_SCHEDULED, status_pago=STATUS_PAID
     )
     client = db.get(Client, charge.client_id) if charge.client_id else None
     _sincroniza_movimento(
@@ -969,7 +977,7 @@ def promote_scheduled(
     um contador preso ao relógio da máquina não é testável. Isolamento por RLS, sem filtro manual
     de `tenant_id` (Regra de Ouro nº 1).
     """
-    today = today or _today()
+    today = today or _today(db)
     # Limite de TIMESTAMP em vez de `::date` (dialeto-agnóstico — o SQLite dos testes não tem
     # `::date`), mesmo padrão de `payables.promote_scheduled`. "A data já chegou" é
     # `paid_at::date <= today`, ou seja, `paid_at < meia-noite UTC de today+1`.
@@ -1275,7 +1283,7 @@ def charge_messages(db: Session, *, charge_id: str) -> list[Notification]:
 
 
 def summary(db: Session) -> dict:
-    today = datetime.now(UTC).date()
+    today = _today(db)
     # open/overdue filtram por STATUS_OPEN — a Charge de rendimento nasce STATUS_PAID, então já não
     # entra aqui (não precisa do filtro de investimento). Só `paid` (abaixo) somaria o rendimento.
     open_charges = list(db.scalars(select(Charge).where(Charge.status == STATUS_OPEN)).all())

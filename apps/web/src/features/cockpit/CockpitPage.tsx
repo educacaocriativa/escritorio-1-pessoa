@@ -4,7 +4,8 @@ import { type ReactNode, useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 import Modal from "../../components/Modal";
 import { api } from "../../lib/api";
-import { useAuth } from "../../store/auth";
+import { formatDay, today } from "../../lib/datetime";
+import { useAuth, useFuso } from "../../store/auth";
 
 const EMPTY: CockpitSummary = {
   agenda: { today_count: 0, today_events: [], upcoming_critical: [] },
@@ -15,18 +16,23 @@ const EMPTY: CockpitSummary = {
 
 export default function CockpitPage() {
   const { user } = useAuth();
+  const fuso = useFuso();
   const [summary, setSummary] = useState<CockpitSummary>(EMPTY);
   const [collecting, setCollecting] = useState<string | null>(null);
   const [aiMessage, setAiMessage] = useState<string | null>(null);
 
   useEffect(() => {
-    const day = new Date().toISOString().slice(0, 10);
+    // `toISOString()` devolve o dia em UTC: das 21h à meia-noite o Cockpit pedia ao servidor
+    // o resumo do dia SEGUINTE. O dia é o do dono.
+    const day = today(fuso);
     api
       .get<CockpitSummary>(`/cockpit/summary?day=${day}`)
       // mescla sobre os defaults: uma resposta parcial/antiga nunca derruba a tela toda
       .then(({ data }) => setSummary({ ...EMPTY, ...data }))
       .catch(() => setSummary(EMPTY));
-  }, []);
+    // `fuso` na lista: se a sessão chegar depois (localStorage antigo sem `timezone`), o resumo
+    // é rebuscado no dia certo em vez de ficar preso ao que foi pedido com o fuso padrão.
+  }, [fuso]);
 
   async function collect(chargeId: string) {
     setCollecting(chargeId);
@@ -94,7 +100,7 @@ export default function CockpitPage() {
                     <span className="ml-2 text-xs text-neutral-500">{o.description}</span>
                   )}
                   <span className="block text-xs text-neutral-400">
-                    {brl(o.amount_cents)} · venceu {new Date(o.due_date + "T00:00").toLocaleDateString("pt-BR")}
+                    {brl(o.amount_cents)} · venceu {formatDay(o.due_date)}
                   </span>
                 </div>
                 <button

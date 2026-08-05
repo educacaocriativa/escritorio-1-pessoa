@@ -3,6 +3,8 @@ import { ChevronLeft, FileText, Trash2 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
 import { api, apiErrorMessage } from "../../lib/api";
+import { formatDay, today } from "../../lib/datetime";
+import { useFuso } from "../../store/auth";
 import {
   CadastroDeContaEmbutido,
   EscolhaDaBaixa,
@@ -20,19 +22,20 @@ interface ReceiptInfo {
 const brl = (c: number) => (c / 100).toLocaleString("pt-BR", { style: "currency", currency: "BRL" });
 const kb = (n: number) =>
   n < 1024 * 1024 ? `${Math.round(n / 1024)} KB` : `${(n / 1024 / 1024).toFixed(1)} MB`;
-const dia = (iso: string) => new Date(`${iso}T00:00:00Z`).toLocaleDateString("pt-BR", { timeZone: "UTC" });
+// Data de calendário: formatada pela string, sem `Date` — não há fuso a errar.
+const dia = (iso: string) => formatDay(iso);
 
 /**
- * Data de HOJE no fuso LOCAL, no formato YYYY-MM-DD. `toISOString()` formataria o instante em
- * UTC — à noite no Brasil (UTC-3) o instante UTC já é o dia seguinte, então o campo de
+ * Data de HOJE no fuso do TENANT, no formato YYYY-MM-DD. `toISOString()` formataria o instante
+ * em UTC — à noite no Brasil (UTC−3) o instante UTC já é o dia seguinte, então o campo de
  * vencimento pré-preenchido viraria "amanhã" silenciosamente. Não "simplificar" isso de volta
  * para `new Date().toISOString().slice(0, 10)`.
+ *
+ * Era o fuso do NAVEGADOR (montado das partes de uma `Date` local); agora é o do tenant, o
+ * mesmo que o backend usa para decidir se a data é futura (`bank.service._today`).
  */
-function localToday(): string {
-  const d = new Date();
-  const mm = String(d.getMonth() + 1).padStart(2, "0");
-  const dd = String(d.getDate()).padStart(2, "0");
-  return `${d.getFullYear()}-${mm}-${dd}`;
+function localToday(tz: string): string {
+  return today(tz);
 }
 
 /** Converte "45,00" / "45.00" / "4500" em centavos. Vazio ou inválido → 0. */
@@ -53,6 +56,7 @@ function chip(p: Payable): { label: string; cls: string } {
  * toque por conta, e a ação principal fixa no rodapé.
  */
 export default function ComprovantePage() {
+  const fuso = useFuso();
   const { id = "" } = useParams();
   const navigate = useNavigate();
   const [candidates, setCandidates] = useState<Payable[]>([]);
@@ -78,7 +82,7 @@ export default function ComprovantePage() {
    * O que mudou é que "hoje" deixou de ser decisão invisível do backend: virou um campo **visível
    * e editável**, dentro da barra fixa, ao lado do botão. O usuário confirma; não constrói.
    */
-  const escolha = useEscolhaDaBaixa(localToday());
+  const escolha = useEscolhaDaBaixa(localToday(fuso));
 
   // Identifica QUAL comprovante está na tela. Não existe `GET /payables/receipts/{id}`, mas a
   // bandeja é curta por construção (teto de 30), então filtrar a lista basta e evita rota nova.
@@ -379,7 +383,8 @@ function NewBillForm({
   const [supplier, setSupplier] = useState("");
   const [category, setCategory] = useState("Geral");
   const [amount, setAmount] = useState("");
-  const [dueDate, setDueDate] = useState(localToday);
+  const fuso = useFuso();
+  const [dueDate, setDueDate] = useState(() => localToday(fuso));
   const [busy, setBusy] = useState(false);
 
   async function submit() {

@@ -1,8 +1,6 @@
 """Regras de Produtos, Cupons e Alunos. Vender cria Transaction (split) + matricula o Aluno."""
 from __future__ import annotations
 
-from datetime import UTC, datetime
-
 from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
@@ -21,6 +19,7 @@ from app.modules.products.schemas import (
     ProductUpdate,
     SellRequest,
 )
+from app.modules.settings.service import hoje_do_tenant
 from app.modules.wallet import service as wallet_service
 from app.modules.wallet.models import KIND_PRODUCT
 
@@ -138,7 +137,7 @@ def _valid_coupon(db: Session, code: str, product_id: str) -> Coupon:
         raise ProductError("Cupom não vale para este produto", 422)
     if coupon.max_uses is not None and coupon.uses >= coupon.max_uses:
         raise ProductError("Cupom esgotado", 409)
-    if coupon.expires_at is not None and coupon.expires_at < datetime.now(UTC).date():
+    if coupon.expires_at is not None and coupon.expires_at < hoje_do_tenant(db):
         raise ProductError("Cupom expirado", 409)
     return coupon
 

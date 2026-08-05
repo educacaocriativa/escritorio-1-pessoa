@@ -92,7 +92,7 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 from dataclasses import dataclass, field
-from datetime import UTC, date, datetime
+from datetime import date, datetime
 from typing import Protocol
 
 from sqlalchemy import func, select
@@ -511,9 +511,11 @@ def _note_rendimento_sem_perna(quantidade: int, valor_cents: int) -> str:
 # ── Leituras locais deste relatório ───────────────────────────────────────────────────────────
 
 
-def _today() -> date:
-    """Hoje em UTC — mesma âncora de `projection.cash_projection` e de `bank.service._today`."""
-    return datetime.now(UTC).date()
+def _today(db: Session, *, now: datetime | None = None) -> date:
+    """Hoje NO FUSO DO TENANT — mesma âncora de `projection` e de `bank.service._today`."""
+    from app.modules.settings.service import hoje_do_tenant
+
+    return hoje_do_tenant(db, now=now)
 
 
 def _ignored_counts(
@@ -757,7 +759,7 @@ def reconciliation_report(
     intenção mais provável e zeraria a divergência **por construção**, destruindo a métrica que o
     épico inteiro existe para produzir (ver o aviso (c) em `BankBalanceCheckpoint`).
     """
-    hoje = today or _today()
+    hoje = today or _today(db)
     accounts = (
         [service.get_account(db, bank_account_id)]
         if bank_account_id

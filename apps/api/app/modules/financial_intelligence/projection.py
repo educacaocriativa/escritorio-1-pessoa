@@ -461,6 +461,14 @@ def _window_sums(
     return values[:-1], values[-1]
 
 
+def _hoje_do_tenant(db: Session) -> date:
+    """Hoje no fuso do tenant. Import tardio: `settings` já é importado por módulos de negócio,
+    e trazê-lo para o topo daqui fecharia um ciclo (mesmo padrão do Cockpit e da Agenda)."""
+    from app.modules.settings.service import hoje_do_tenant
+
+    return hoje_do_tenant(db)
+
+
 def cash_projection(
     db: Session,
     *,
@@ -491,7 +499,9 @@ def cash_projection(
     saem idênticos ao que saíam antes.
 
     SOMENTE LEITURA: não escreve nada (IV1)."""
-    today = today or datetime.now(UTC).date()
+    # "Hoje" no FUSO DO TENANT, não em UTC: em UTC−3, das 21h à meia-noite, a âncora UTC já era
+    # o dia seguinte e a projeção inteira (saldo inicial, janelas, burn rate) deslizava um dia.
+    today = today or _hoje_do_tenant(db)
     # Janelas ascendentes e sem duplicatas — o cálculo cumulativo assume ordem crescente; o
     # horizonte de burn é a maior. Ignora valores não-positivos (janela de 0 dia não faz sentido).
     ordered = sorted({w for w in windows if w > 0})

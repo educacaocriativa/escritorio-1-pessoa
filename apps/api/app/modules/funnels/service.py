@@ -11,6 +11,7 @@ from app.config import settings
 from app.core import ai, audit
 from app.modules.funnels.models import Funnel
 from app.modules.funnels.schemas import FunnelCreate, FunnelUpdate
+from app.modules.settings.service import hoje_do_tenant
 
 # Propósito do nó de WhatsApp do funil, pra fila de notificações (Onda 3 — não é um dos 5
 # propósitos fixos de whatsapp_templates.models: aqui o conteúdo é livre, configurado pelo
@@ -332,7 +333,7 @@ def _valid_amount(params: dict) -> int:
 def run_node(
     db: Session, *, tenant_id: str, actor: str, action: str, client_id: str | None, params: dict
 ) -> dict:
-    from datetime import UTC, datetime, timedelta
+    from datetime import timedelta
 
     from app.core import email
     from app.core.whatsapp import capabilities as whatsapp_capabilities
@@ -419,7 +420,7 @@ def run_node(
             db, tenant_id=tenant_id, actor=actor,
             data=ChargeCreate(
                 client_id=c.id, description=desc, kind="service", method=method,
-                amount_cents=amount, due_date=datetime.now(UTC).date() + timedelta(days=7),
+                amount_cents=amount, due_date=hoje_do_tenant(db) + timedelta(days=7),
             ),
         )
         return {"message": f"Cobrança ({method}) criada para {c.name}", "kind": "charge",

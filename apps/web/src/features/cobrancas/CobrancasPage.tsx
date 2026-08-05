@@ -14,6 +14,7 @@ import { type ChartAccount, GRUPOS_DRE } from "../financeiro/planoContas";
 import { VOCAB_ENTRADA } from "../pagar/baixa";
 import { DialogDeBaixa } from "../pagar/EscolhaDaBaixa";
 import { rotuloDaRota } from "./rota";
+import { formatDay } from "../../lib/datetime";
 
 /** Grupos DRE cabíveis numa RECEITA (Cobranças nunca lança em Despesa/Tributo/Investimento). */
 const REVENUE_GROUPS = GRUPOS_DRE.filter((g) => g === "RECEITA");
@@ -210,7 +211,7 @@ export default function CobrancasPage() {
                       {(c.cost_center_id && costCenterLabel[c.cost_center_id]) || "—"}
                     </td>
                     <td className="px-4 py-3 tabular-nums text-neutral-600">
-                      {new Date(c.due_date + "T00:00").toLocaleDateString("pt-BR")}
+                      {formatDay(c.due_date)}
                     </td>
                     <td className="px-4 py-3 font-medium tabular-nums">{brl(c.amount_cents)}</td>
                     <td className="px-4 py-3">
@@ -272,7 +273,7 @@ export default function CobrancasPage() {
         <DialogDeBaixa
           titulo="Recebi direto na conta"
           descricao={recebendo.client_name || recebendo.description || "Cobrança"}
-          valor={`${brl(recebendo.amount_cents)} · vence ${new Date(recebendo.due_date + "T00:00").toLocaleDateString("pt-BR")}`}
+          valor={`${brl(recebendo.amount_cents)} · vence ${formatDay(recebendo.due_date)}`}
           // Default = HOJE (não o vencimento): o gesto aqui é "caiu na minha conta", um fato que o
           // dono está observando agora — a assimetria com a baixa de Contas a Pagar é deliberada.
           dataPadrao={hojeISO()}

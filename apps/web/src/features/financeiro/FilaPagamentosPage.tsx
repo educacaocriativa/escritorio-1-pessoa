@@ -11,6 +11,7 @@ import {
 import { type ReactNode, useCallback, useEffect, useState } from "react";
 import { api, apiErrorMessage } from "../../lib/api";
 import { DialogDeBaixa } from "../pagar/EscolhaDaBaixa";
+import { formatDay } from "../../lib/datetime";
 
 /**
  * Fila de Pagamentos (Story 5.9) — painel único do que pagar hoje e nos próximos dias, com baixa
@@ -189,7 +190,7 @@ export default function FilaPagamentosPage() {
         <DialogDeBaixa
           titulo="Dar baixa nesta conta"
           descricao={pagando.description || pagando.supplier || "Conta"}
-          valor={`${brl(pagando.amount_cents)} · vence ${new Date(pagando.due_date + "T00:00").toLocaleDateString("pt-BR")}`}
+          valor={`${brl(pagando.amount_cents)} · vence ${formatDay(pagando.due_date)}`}
           dataPadrao={pagando.due_date}
           onClose={() => setPagando(null)}
           onPago={(corpo) => pay(pagando.id, corpo)}
@@ -242,7 +243,7 @@ function Bucket({
               <span className="text-neutral-800">{p.description || p.supplier || "Conta"}</span>
               <span className="block text-xs text-neutral-400">
                 {p.supplier ? `${p.supplier} · ` : ""}
-                vence {new Date(p.due_date + "T00:00").toLocaleDateString("pt-BR")}
+                vence {formatDay(p.due_date)}
               </span>
             </div>
             <span className="shrink-0 font-medium tabular-nums text-neutral-800">
@@ -269,7 +270,7 @@ function Bucket({
               // A data do DÉBITO, não o vencimento: numa agendada as duas divergem por construção.
               p.paid_at && (
                 <span className="shrink-0 text-xs font-medium text-sky-700">
-                  sai {new Date(p.paid_at).toLocaleDateString("pt-BR", { timeZone: "UTC" })}
+                  sai {formatDay(p.paid_at)}
                 </span>
               )
             )}

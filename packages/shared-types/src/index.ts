@@ -24,6 +24,12 @@ export interface Tenant {
   legal_name: string;
   document: string; // CNPJ/CPF
   created_at: string;
+  /**
+   * Fuso IANA do tenant (ex.: "America/Sao_Paulo"). Vem junto com a sessão porque TODA
+   * formatação de data/hora da UI depende dele — ver `lib/datetime.ts`. Opcional no tipo
+   * para tolerar uma sessão gravada no localStorage ANTES deste campo existir.
+   */
+  timezone?: string;
 }
 
 export interface User {

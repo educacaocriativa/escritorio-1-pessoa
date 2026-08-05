@@ -30,6 +30,7 @@ from fastapi.testclient import TestClient
 from sqlalchemy.orm import Session
 
 from app.core.money_planes import ORIGEM_MISTO
+from app.core.tz import DEFAULT_TENANT_TIMEZONE, tenant_today
 from app.modules.bank import service
 from app.modules.bank.models import (
     KIND_CHECKING,
@@ -62,6 +63,11 @@ REGISTER = {
 OPENING = date(2026, 7, 1)
 OPENING_CENTS = 1_500_00
 
+
+
+def _hoje() -> date:
+    """A MESMA âncora do service (`service._today`) — fuso do tenant, nunca UTC solto."""
+    return tenant_today(DEFAULT_TENANT_TIMEZONE)
 
 @pytest.fixture()
 def headers(client: TestClient) -> dict[str, str]:
@@ -822,7 +828,9 @@ def test_AC4_toda_origem_de_SISTEMA_aceita_data_futura(client: TestClient, heade
     acc = _account(client, headers)
     amanha = datetime.now(UTC).date() + timedelta(days=1)
     assert (
-        service._validate_posted_at(amanha, service.get_account(db, acc["id"]), source=source)
+        service._validate_posted_at(
+            amanha, service.get_account(db, acc["id"]), _hoje(), source=source
+        )
         == amanha
     )
 
@@ -835,7 +843,9 @@ def test_AC4_toda_origem_EXTERNA_recusa_data_futura(client: TestClient, headers,
     acc = _account(client, headers)
     amanha = datetime.now(UTC).date() + timedelta(days=1)
     with pytest.raises(service.BankError) as exc:
-        service._validate_posted_at(amanha, service.get_account(db, acc["id"]), source=source)
+        service._validate_posted_at(
+            amanha, service.get_account(db, acc["id"]), _hoje(), source=source
+        )
     assert exc.value.status_code == 422
     assert "futura" in str(exc.value)
 
@@ -852,7 +862,7 @@ def test_AC4_source_desconhecido_e_422_e_nao_ganha_a_isencao(client: TestClient,
     amanha = datetime.now(UTC).date() + timedelta(days=1)
     with pytest.raises(service.BankError) as exc:
         service._validate_posted_at(
-            amanha, service.get_account(db, acc["id"]), source="origem_inventada"
+            amanha, service.get_account(db, acc["id"]), _hoje(), source="origem_inventada"
         )
     assert exc.value.status_code == 422
     assert "inválida" in str(exc.value)
@@ -868,7 +878,9 @@ def test_AC4_o_PISO_vale_para_TODA_origem_sem_excecao(client: TestClient, header
     """
     acc = _account(client, headers)
     with pytest.raises(service.BankError) as exc:
-        service._validate_posted_at(OPENING, service.get_account(db, acc["id"]), source=source)
+        service._validate_posted_at(
+            OPENING, service.get_account(db, acc["id"]), _hoje(), source=source
+        )
     assert exc.value.status_code == 422
     assert "posterior" in str(exc.value)
 

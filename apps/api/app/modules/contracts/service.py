@@ -10,6 +10,7 @@ from sqlalchemy.orm import Session
 
 from app.config import settings
 from app.core import audit
+from app.core.tz import format_date_br
 from app.modules.auth.models import Tenant
 from app.modules.contracts.models import (
     STATUS_CANCELLED,
@@ -142,9 +143,22 @@ def _publish(db: Session, contract: Contract, company_name: str) -> None:
 
 
 # ── Contratos ───────────────────────────────────────────────────────────────
-def _auto_vars(db: Session, tenant_id: str, client_id: str | None, company: str) -> dict[str, str]:
-    today = datetime.now(UTC).strftime("%d/%m/%Y")
-    auto = {"DATA": today, "EMPRESA": company}
+def _auto_vars(
+    db: Session,
+    tenant_id: str,
+    client_id: str | None,
+    company: str,
+    *,
+    now: datetime | None = None,
+) -> dict[str, str]:
+    """As variáveis que o contrato preenche sozinho — `{{DATA}}` é a data no fuso do TENANT.
+
+    Era `datetime.now(UTC)`: um contrato criado às 22h de 5/8 em São Paulo saía datado 06/08.
+    Data errada em documento assinado não é detalhe cosmético — é a data que vale juridicamente.
+    """
+    from app.modules.settings.service import hoje_do_tenant
+
+    auto = {"DATA": format_date_br(hoje_do_tenant(db, now=now)), "EMPRESA": company}
     if client_id:
         client = db.get(Client, client_id)
         if client:

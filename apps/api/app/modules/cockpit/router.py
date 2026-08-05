@@ -1,13 +1,13 @@
 """Rota do Cockpit — resumo do dia. Exige tenant autenticado (módulo 'cockpit')."""
 from __future__ import annotations
 
-from datetime import UTC, date, datetime
+from datetime import date
 
 from fastapi import APIRouter, Depends, Query
 from sqlalchemy.orm import Session
 
 from app.core.tenancy import CurrentUser, get_tenant_db, require_module
-from app.core.tz import day_window_utc
+from app.core.tz import day_window_utc, tenant_today
 from app.modules.agenda.schemas import EventOut
 from app.modules.cockpit import service
 from app.modules.cockpit.schemas import (
@@ -37,8 +37,9 @@ def summary(
     # acoplar o Cockpit ao módulo settings (mesmo padrão da Agenda).
     from app.modules.settings.service import get_profile
 
-    base = day if day else datetime.now(UTC).date()
     profile = get_profile(db, _user.tenant_id)
+    # 'Hoje' é o dia do DONO, não o do servidor: sem isto o Cockpit virava a página às 21h.
+    base = day if day else tenant_today(profile.timezone)
     day_start, day_end = day_window_utc(base, profile.timezone)
 
     today_count, today_events, upcoming = service.agenda_summary(

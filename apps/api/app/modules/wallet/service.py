@@ -1,7 +1,7 @@
 """Regras da Carteira & Split: cálculo do split, transações, saldos e ganhos da plataforma."""
 from __future__ import annotations
 
-from datetime import UTC, date, datetime
+from datetime import date
 
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
@@ -9,6 +9,7 @@ from sqlalchemy.orm import Session
 from app.core import audit
 from app.modules.chart_of_accounts import service as chart_service
 from app.modules.cost_centers import service as cost_centers_service
+from app.modules.settings.service import hoje_do_tenant
 from app.modules.wallet.models import (
     DEFAULT_SPLIT_PCT,
     KIND_PRODUCT,
@@ -139,7 +140,7 @@ def build_transaction(
         status=status,
         client_id=client_id,
         external_ref=external_ref,
-        competence_date=competence_date or datetime.now(UTC).date(),
+        competence_date=competence_date or hoje_do_tenant(db),
         chart_account_id=chart_account_id,
         cost_center_id=cost_center_id,
     )

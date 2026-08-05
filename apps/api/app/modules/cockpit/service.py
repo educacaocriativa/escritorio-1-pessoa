@@ -6,7 +6,7 @@ no seu lugar.
 """
 from __future__ import annotations
 
-from datetime import UTC, datetime
+from datetime import datetime
 
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
@@ -101,7 +101,9 @@ def crm_summary(db: Session) -> dict:
 
 def overdue_charges(db: Session) -> list[dict]:
     """Cobranças vencidas e não pagas — com o nome do cliente resolvido (p/ cobrar com IA)."""
-    today = datetime.now(UTC).date()
+    from app.modules.settings.service import hoje_do_tenant
+
+    today = hoje_do_tenant(db)
     rows = list(
         db.scalars(
             select(Charge)

@@ -4,40 +4,46 @@ import type {
 import { History, Paperclip, Send, Users, X } from "lucide-react";
 import { Fragment, useCallback, useEffect, useRef, useState } from "react";
 import { api, apiErrorMessage } from "../../lib/api";
+import { formatDate, formatTime } from "../../lib/datetime";
+import { useFuso } from "../../store/auth";
 import ClientTimeline from "../crm/ClientTimeline";
 
 const POLL_MS = 7000;
 
 // ── Datas ───────────────────────────────────────────────────────────────────
-// Tudo abaixo trabalha no fuso LOCAL do usuário de propósito: `created_at` é um INSTANTE
-// (timestamptz, ver TimestampMixin), não uma data de negócio — então a regra da Agenda
-// ("compare all-day por data de calendário UTC") não vale aqui; é o caso oposto. Agrupar por
-// `created_at.slice(0,10)` colocaria uma mensagem das 22h de Brasília no dia seguinte.
+// `created_at` é um INSTANTE (timestamptz, ver TimestampMixin), não uma data de negócio — então
+// a regra da Agenda ("compare all-day por data de calendário UTC") não vale aqui; é o caso
+// oposto. Agrupar por `created_at.slice(0,10)` colocaria uma mensagem das 22h de Brasília no dia
+// seguinte.
+//
+// O fuso é o do TENANT, passado por parâmetro. Antes era o do navegador (`toLocaleDateString`
+// sem `timeZone`): o mesmo histórico de conversa quebrava os dias em pontos diferentes conforme
+// a máquina que abrisse a tela.
 
-const dayKey = (iso: string) => new Date(iso).toLocaleDateString("pt-BR");
+const dayKey = (iso: string, tz: string) => formatDate(iso, tz);
 
-const hhmm = (iso: string) =>
-  new Date(iso).toLocaleTimeString("pt-BR", { hour: "2-digit", minute: "2-digit" });
+const hhmm = (iso: string, tz: string) => formatTime(iso, tz);
 
-function dayLabel(iso: string): string {
-  const key = dayKey(iso);
+function dayLabel(iso: string, tz: string): string {
+  const key = dayKey(iso, tz);
   const hoje = new Date();
   const ontem = new Date(hoje);
   ontem.setDate(hoje.getDate() - 1);
-  if (key === dayKey(hoje.toISOString())) return "Hoje";
-  if (key === dayKey(ontem.toISOString())) return "Ontem";
+  if (key === dayKey(hoje.toISOString(), tz)) return "Hoje";
+  if (key === dayKey(ontem.toISOString(), tz)) return "Ontem";
   return new Date(iso).toLocaleDateString("pt-BR", {
-    weekday: "short", day: "2-digit", month: "2-digit", year: "numeric",
+    weekday: "short", day: "2-digit", month: "2-digit", year: "numeric", timeZone: tz,
   });
 }
 
 /** Carimbo da lista de conversas: horário se foi hoje, senão a data (critério do WhatsApp). */
-function listStamp(iso: string | null): string {
+function listStamp(iso: string | null, tz: string): string {
   if (!iso) return "";
-  return dayKey(iso) === dayKey(new Date().toISOString()) ? hhmm(iso) : dayKey(iso);
+  return dayKey(iso, tz) === dayKey(new Date().toISOString(), tz) ? hhmm(iso, tz) : dayKey(iso, tz);
 }
 
 export default function ConversasPage() {
+  const fuso = useFuso();
   const [conversations, setConversations] = useState<ConversationSummary[]>([]);
   const [selected, setSelected] = useState<string | null>(null);
   // Abaixo de `lg` o painel de histórico é uma GAVETA, não uma coluna (ver o comentário no
@@ -87,7 +93,7 @@ export default function ConversasPage() {
                   </span>
                 </span>
                 <span className="flex shrink-0 items-center gap-1.5 text-[11px] text-neutral-400">
-                  {listStamp(c.last_message_at)}
+                  {listStamp(c.last_message_at, fuso)}
                   {c.unread && <span className="h-2 w-2 rounded-full bg-primary-600" />}
                 </span>
               </div>
@@ -174,6 +180,7 @@ export default function ConversasPage() {
 function ConversationThread({
   chatId, chat, onSent,
 }: { chatId: string; chat: ConversationSummary | null; onSent: () => void }) {
+  const fuso = useFuso();
   const [timeline, setTimeline] = useState<TimelineEntry[]>([]);
   const [withinWindow, setWithinWindow] = useState(true);
   const [approvedTemplates, setApprovedTemplates] = useState<WhatsappTemplate[]>([]);
@@ -291,13 +298,13 @@ function ConversationThread({
               : entry.direction === "out" ? "out"
                 : "in";
           const showDay =
-            i === 0 || dayKey(entry.created_at) !== dayKey(timeline[i - 1].created_at);
+            i === 0 || dayKey(entry.created_at, fuso) !== dayKey(timeline[i - 1].created_at, fuso);
           return (
             <Fragment key={i}>
               {showDay && (
                 <div className="flex justify-center py-2">
                   <span className="rounded-pill bg-neutral-100 px-3 py-1 text-[11px] font-medium text-neutral-500">
-                    {dayLabel(entry.created_at)}
+                    {dayLabel(entry.created_at, fuso)}
                   </span>
                 </div>
               )}
@@ -358,7 +365,7 @@ function ConversationThread({
                     tone === "out" ? "text-right text-white/70" : "text-neutral-400"
                   }`}
                 >
-                  {tone === "out" ? "Você · " : ""}{hhmm(entry.created_at)}
+                  {tone === "out" ? "Você · " : ""}{hhmm(entry.created_at, fuso)}
                 </p>
               </div>
             </Fragment>

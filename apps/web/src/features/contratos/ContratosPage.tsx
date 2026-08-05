@@ -3,6 +3,8 @@ import { useCallback, useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { api } from "../../lib/api";
 import { usePrimaryAction } from "../../store/pageActions";
+import { formatDate } from "../../lib/datetime";
+import { useFuso } from "../../store/auth";
 
 const statusInfo: Record<Contract["status"], { label: string; cls: string }> = {
   draft: { label: "Rascunho", cls: "bg-neutral-100 text-neutral-500" },
@@ -12,6 +14,7 @@ const statusInfo: Record<Contract["status"], { label: string; cls: string }> = {
 };
 
 export default function ContratosPage() {
+  const fuso = useFuso();
   const navigate = useNavigate();
   const empty: ContractsSummary = { draft_count: 0, sent_count: 0, signed_count: 0 };
   const [summary, setSummary] = useState<ContractsSummary>(empty);
@@ -88,7 +91,7 @@ export default function ContratosPage() {
                         {c.signer_name}
                         {c.signed_at && (
                           <span className="block text-neutral-400">
-                            {new Date(c.signed_at).toLocaleDateString("pt-BR")}
+                            {formatDate(c.signed_at, fuso)}
                           </span>
                         )}
                       </>

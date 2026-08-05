@@ -5,6 +5,7 @@ import { useNavigate } from "react-router-dom";
 import Modal, { Field } from "../../components/Modal";
 import { api, apiErrorMessage } from "../../lib/api";
 import { usePrimaryAction } from "../../store/pageActions";
+import { useFuso } from "../../store/auth";
 
 export default function CrmPage() {
   const [board, setBoard] = useState<Board>({ columns: [] });
@@ -179,6 +180,7 @@ function Column({
 }
 
 function Card({ client, stageId }: { client: BoardClient; stageId: string }) {
+  const fuso = useFuso();
   const navigate = useNavigate();
   return (
     <div
@@ -206,6 +208,7 @@ function Card({ client, stageId }: { client: BoardClient; stageId: string }) {
           <p className="mt-1 text-[10px] text-neutral-400">
             última interação:{" "}
             {new Date(client.last_interaction_at).toLocaleDateString("pt-BR", {
+              timeZone: fuso,
               day: "2-digit",
               month: "2-digit",
             })}

@@ -13,6 +13,8 @@ import { applyBrandTheme } from "../../lib/theme";
 import CelularSection from "./CelularSection";
 import IntegrationsSection from "./IntegrationsSection";
 import WhatsappSection from "./WhatsappSection";
+import { formatTime } from "../../lib/datetime";
+import { useFuso } from "../../store/auth";
 
 const FONTS = ["Inter", "Poppins", "Raleway", "Georgia", "Arial"];
 const safeSrc = (u: string) => (/^(https?:\/\/|\/)/i.test(u.trim()) ? u.trim() : "");
@@ -25,6 +27,7 @@ const TABS: { key: Tab; label: string; icon: typeof SlidersHorizontal }[] = [
 ];
 
 export default function ConfiguracoesPage() {
+  const fuso = useFuso();
   const [tab, setTab] = useState<Tab>("perfil");
   const [p, setP] = useState<TenantProfile | null>(null);
   const [saving, setSaving] = useState(false);
@@ -51,7 +54,7 @@ export default function ConfiguracoesPage() {
       const { data } = await api.patch<TenantProfile>("/settings/profile", p);
       setP(data);
       applyBrandTheme(data);
-      setSavedAt(new Date().toLocaleTimeString("pt-BR", { hour: "2-digit", minute: "2-digit" }));
+      setSavedAt(formatTime(new Date().toISOString(), fuso));
     } catch (err) {
       setError(apiErrorMessage(err));
     } finally {

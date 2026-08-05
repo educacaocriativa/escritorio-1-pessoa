@@ -19,15 +19,18 @@ from app.modules.payables.schemas import (
     PayableUpdate,
     PaymentQueueOut,
 )
+from app.modules.settings.service import hoje_do_tenant
 
 router = APIRouter(prefix="/payables", tags=["payables"])
 
 _guard = require_module("payables")
 
 
-def _out(p: Payable) -> PayableOut:
+def _out(db: Session, p: Payable) -> PayableOut:
     # Montagem canônica do PayableOut vive no service (reutilizada pela fila da Story 5.9).
-    return service.payable_out(p)
+    # `db` entra por causa de `is_overdue`: "atrasada" depende do dia de HOJE no fuso do tenant,
+    # e o fuso vem do perfil. Sem isso o servidor (UTC) antecipava o vencimento em 3h.
+    return service.payable_out(p, hoje_do_tenant(db))
 
 
 def _err(e: service.PayableError) -> HTTPException:
@@ -72,7 +75,12 @@ def list_bills(
     _user: CurrentUser = Depends(_guard),
     db: Session = Depends(get_tenant_db),
 ) -> list[PayableOut]:
-    return [_out(p) for p in service.list_payables(db, status=status)]
+    # Fuso resolvido UMA vez para a lista inteira: `_out` por linha faria uma consulta de perfil
+    # por conta (N+1). Mesmo cuidado da listagem de `receivables`.
+    hoje = hoje_do_tenant(db)
+    return [
+        service.payable_out(p, hoje) for p in service.list_payables(db, status=status)
+    ]
 
 
 @router.get("/bills/paid-before", response_model=PayablesPaidBeforeOut)
@@ -100,7 +108,7 @@ def get_bill(
     db: Session = Depends(get_tenant_db),
 ) -> PayableOut:
     try:
-        return _out(service.get_payable(db, payable_id))
+        return _out(db, service.get_payable(db, payable_id))
     except service.PayableError as e:
         raise _err(e) from e
 
@@ -115,7 +123,7 @@ def create_bill(
         p = service.create_payable(db, tenant_id=user.tenant_id, actor=user.user_id, data=data)
     except service.PayableError as e:
         raise _err(e) from e
-    return _out(p)
+    return _out(db, p)
 
 
 @router.patch("/bills/{payable_id}", response_model=PayableOut)
@@ -131,7 +139,7 @@ def update_bill(
         )
     except service.PayableError as e:
         raise _err(e) from e
-    return _out(p)
+    return _out(db, p)
 
 
 @router.post("/bills/{payable_id}/pay", response_model=PayableOut)
@@ -159,7 +167,7 @@ def pay_bill(
         )
     except service.PayableError as e:
         raise _err(e) from e
-    return _out(p)
+    return _out(db, p)
 
 
 @router.patch("/bills/{payable_id}/payment", response_model=PayableOut)
@@ -189,7 +197,7 @@ def update_bill_payment(
         )
     except service.PayableError as e:
         raise _err(e) from e
-    return _out(p)
+    return _out(db, p)
 
 
 @router.post("/bills/{payable_id}/cancel", response_model=PayableOut)
@@ -204,7 +212,7 @@ def cancel_bill(
         )
     except service.PayableError as e:
         raise _err(e) from e
-    return _out(p)
+    return _out(db, p)
 
 
 @router.post("/bills/{payable_id}/reverse", response_model=PayableOut)
@@ -219,4 +227,4 @@ def reverse_bill(
         )
     except service.PayableError as e:
         raise _err(e) from e
-    return _out(p)
+    return _out(db, p)

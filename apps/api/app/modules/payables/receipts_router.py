@@ -16,6 +16,7 @@ from app.modules.payables import receipts
 from app.modules.payables import service as payables_service
 from app.modules.payables.receipts_schemas import ReceiptLinkIn, ReceiptNewBillIn, ReceiptOut
 from app.modules.payables.schemas import PayableCreate, PayableOut
+from app.modules.settings.service import hoje_do_tenant
 
 router = APIRouter(prefix="/payables/receipts", tags=["payables-receipts"])
 
@@ -85,7 +86,8 @@ def list_candidates(
 ) -> list[PayableOut]:
     """Contas que podem receber o comprovante. Reusa PayableOut para o front não precisar de
     um tipo novo (o cartão mostra descrição, fornecedor, valor, vencimento e is_overdue)."""
-    return [payables_service.payable_out(p) for p in receipts.list_candidates(db, q=q)]
+    hoje = hoje_do_tenant(db)  # uma leitura de fuso para a lista inteira, não uma por linha
+    return [payables_service.payable_out(p, hoje) for p in receipts.list_candidates(db, q=q)]
 
 
 @router.post("/{attachment_id}/link", response_model=PayableOut)
@@ -106,7 +108,7 @@ def link_receipt(
         raise _err(e, e.status_code) from e
     except payables_service.PayableError as e:
         raise _err(e, e.status_code) from e
-    return payables_service.payable_out(p)
+    return payables_service.payable_out(p, hoje_do_tenant(db))
 
 
 @router.post("/{attachment_id}/new-bill", response_model=PayableOut, status_code=201)
@@ -131,7 +133,7 @@ def new_bill_from_receipt(
         raise _err(e, e.status_code) from e
     except payables_service.PayableError as e:
         raise _err(e, e.status_code) from e
-    return payables_service.payable_out(p)
+    return payables_service.payable_out(p, hoje_do_tenant(db))
 
 
 @router.delete("/{attachment_id}", status_code=204)

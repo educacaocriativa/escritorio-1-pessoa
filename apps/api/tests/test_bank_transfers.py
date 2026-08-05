@@ -30,13 +30,14 @@ SECURITY` da tabela nova são de fato exercidos.
 """
 from __future__ import annotations
 
-from datetime import UTC, date, datetime, timedelta
+from datetime import date, timedelta
 
 import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from app.core.tz import DEFAULT_TENANT_TIMEZONE, tenant_today
 from app.db.base import TenantMixin
 from app.modules.bank import service as bank_service
 from app.modules.bank import transfers as transfers_service
@@ -65,8 +66,12 @@ REGISTER = {
 
 
 def _hoje() -> date:
-    """A MESMA âncora de `bank.service._today()` — UTC, nunca local (`CLAUDE.md` §6.1)."""
-    return datetime.now(UTC).date()
+    """A MESMA âncora do service (`service._today`), nunca `date.today()` solto.
+
+    O service passou a ancorar "hoje" no FUSO DO TENANT; o teste segue. Como o tenant de teste
+    fica com o fuso padrão, basta a primitiva pura — sem `db`, sem um segundo relógio.
+    """
+    return tenant_today(DEFAULT_TENANT_TIMEZONE)
 
 
 # Datas RELATIVAS a hoje, e não fixas: a guarda de data futura ancora no relógio real, então uma
@@ -598,11 +603,11 @@ def test_a_guarda_de_futuro_nao_mora_na_guarda_generica_do_modulo():
     amanha = _hoje() + timedelta(days=1)
     # A guarda genérica ACEITA — é o comportamento da 8.14, e ele não mudou.
     assert (
-        bank_service._validate_posted_at(amanha, conta, source=SOURCE_TRANSFER) == amanha
+        bank_service._validate_posted_at(amanha, conta, _hoje(), source=SOURCE_TRANSFER) == amanha
     ), "a 8.14 regrediu: a guarda genérica voltou a recusar futuro para origem de sistema"
     # E a guarda específica RECUSA.
     with pytest.raises(bank_service.BankError) as exc:
-        transfers_service._validate_nao_futura(amanha)
+        transfers_service._validate_nao_futura(amanha, _hoje())
     assert exc.value.status_code == 422
 
 
