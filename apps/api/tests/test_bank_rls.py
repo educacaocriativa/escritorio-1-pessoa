@@ -120,10 +120,14 @@ def _session_for(app_url: str, tenant_id: str | None):
 
 
 def _hoje_utc() -> date:
-    """A MESMA âncora de `bank.service._today()` e de `payables` — UTC, nunca local."""
-    from app.modules.bank import service as bank_service
+    """A MESMA âncora de `bank.service._today` e de `payables` — o FUSO DO TENANT, nunca UTC.
 
-    return bank_service._today()
+    O nome ficou por compatibilidade com os call sites; a semântica é a do service, que deixou
+    de ancorar "hoje" em UTC (ver `core/tz.tenant_today`).
+    """
+    from app.core.tz import DEFAULT_TENANT_TIMEZONE, tenant_today
+
+    return tenant_today(DEFAULT_TENANT_TIMEZONE)
 
 
 def _seed_account(
@@ -879,7 +883,7 @@ def test_corte_de_data_sob_rls_cross_tenant(app_url: str) -> None:
     from app.modules.bank import service as bank_service
     from app.modules.bank.models import BankTransaction
 
-    hoje = bank_service._today()
+    hoje = _hoje_utc()
     tenant_a = str(uuid4())
     tenant_b = str(uuid4())
     acc_a = _seed_account(app_url, tenant_a, name="A corte", opening=100_000, number="7710-1")

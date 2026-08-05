@@ -1,6 +1,8 @@
 import type { DeviceToken } from "@e1p/shared-types";
 import { useCallback, useEffect, useState } from "react";
 import { api, apiErrorMessage } from "../../lib/api";
+import { formatDate } from "../../lib/datetime";
+import { useFuso } from "../../store/auth";
 
 /**
  * Configuração das duas portas de entrada do comprovante pelo celular.
@@ -10,6 +12,7 @@ import { api, apiErrorMessage } from "../../lib/api";
  * autoriza o upload do comprovante, nada mais.
  */
 export default function CelularSection() {
+  const fuso = useFuso();
   const [tokens, setTokens] = useState<DeviceToken[]>([]);
   const [name, setName] = useState("");
   const [fresh, setFresh] = useState<string | null>(null);
@@ -119,7 +122,7 @@ export default function CelularSection() {
               <span className="min-w-0 flex-1 truncate text-neutral-700">{t.name}</span>
               <span className="shrink-0 text-xs text-neutral-400">
                 {t.last_used_at
-                  ? `usado em ${new Date(t.last_used_at).toLocaleDateString("pt-BR")}`
+                  ? `usado em ${formatDate(t.last_used_at, fuso)}`
                   : "nunca usado"}
               </span>
               <button

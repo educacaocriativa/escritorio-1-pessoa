@@ -5,6 +5,8 @@ import Attachments from "../../components/Attachments";
 import Modal, { Field } from "../../components/Modal";
 import { api, apiErrorMessage, getGoogleStatus } from "../../lib/api";
 import { usePrimaryAction } from "../../store/pageActions";
+import { formatDateTime, formatDay, formatTime, today } from "../../lib/datetime";
+import { useFuso } from "../../store/auth";
 
 // Tipos de evento que geram Meet automaticamente quando o Google está conectado (Story 4.1).
 const MEET_KINDS = new Set(["reuniao", "atendimento", "audiencia"]);
@@ -35,6 +37,19 @@ const startOfWeek = (d: Date) => addDays(d, -d.getDay()); // semana começa no d
 const sameDay = (a: Date, b: Date) => a.toDateString() === b.toDateString();
 const ymd = (d: Date) =>
   `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+/**
+ * "Hoje" no fuso do TENANT, como `Date` local — a âncora da grade do calendário.
+ *
+ * A grade inteira (`startOfDay`, `addDays`, `startOfWeek`, `ymd`) trabalha em `Date` local, e
+ * isso é coerente: são posições numa grade, não instantes. O que NÃO podia continuar local era
+ * o ponto de partida — `new Date()` num navegador em UTC começava a grade no dia errado.
+ * Montamos o dia certo pelas PARTES, para que a `Date` resultante seja a meia-noite local desse
+ * dia e toda a aritmética seguinte continue valendo.
+ */
+const hojeDoTenant = (tz: string) => {
+  const [a, m, d] = today(tz).split("-").map(Number);
+  return new Date(a, m - 1, d);
+};
 // só a primeira letra maiúscula (ex.: "junho de 2026" -> "Junho de 2026")
 const sentenceCase = (s: string) => (s ? s.charAt(0).toUpperCase() + s.slice(1) : s);
 
@@ -55,8 +70,9 @@ function rangeFor(view: View, anchor: Date): { start: Date; end: Date; days: Dat
 }
 
 export default function AgendaPage() {
+  const fuso = useFuso();
   const [view, setView] = useState<View>("month");
-  const [anchor, setAnchor] = useState(() => new Date());
+  const [anchor, setAnchor] = useState(() => hojeDoTenant(fuso));
   const [events, setEvents] = useState<AgendaEvent[]>([]);
   const [modalDate, setModalDate] = useState<Date | null>(null);
   const [open, setOpen] = useState(false);
@@ -115,7 +131,7 @@ export default function AgendaPage() {
             <ChevronRight size={18} />
           </button>
           <button
-            onClick={() => setAnchor(new Date())}
+            onClick={() => setAnchor(hojeDoTenant(fuso))}
             className="rounded-pill border border-neutral-200 px-3 py-1 text-sm text-neutral-600 hover:bg-neutral-50"
           >
             Hoje
@@ -165,19 +181,18 @@ export default function AgendaPage() {
 
 // ── cor por tipo/situação ──────────────────────────────
 // a receber = verde · a pagar = laranja · atrasada (não paga e vencida) = vermelho
-function eventColor(e: AgendaEvent): string {
+function eventColor(e: AgendaEvent, hoje: string): string {
   // Atrasado = não pago/cancelado e com data ANTERIOR a hoje. Compara por data de calendário
   // (eventYmd trata o all-day em UTC sem "voltar" um dia no fuso).
   const overdue =
-    e.status !== "done" && e.status !== "cancelled" && eventYmd(e) < ymd(new Date());
+    e.status !== "done" && e.status !== "cancelled" && eventYmd(e) < hoje;
   if (e.kind === "cobranca_receber") return overdue ? "bg-red-100 text-red-700" : "bg-accent-100 text-accent-700";
   if (e.kind === "cobranca_pagar") return overdue ? "bg-red-100 text-red-700" : "bg-orange-100 text-orange-700";
   if (e.priority === "critical") return "bg-red-100 text-red-700";
   if (e.kind === "prazo") return "bg-amber-100 text-amber-700";
   return "bg-primary-100 text-primary-700";
 }
-const hhmm = (iso: string) =>
-  new Date(iso).toLocaleTimeString("pt-BR", { hour: "2-digit", minute: "2-digit" });
+const hhmm = (iso: string, tz: string) => formatTime(iso, tz);
 // Card: mostra o nome do cliente/fornecedor quando houver (cobranças/contas), senão o título.
 const chipLabel = (e: AgendaEvent) => e.client_name || e.title;
 // Eventos de dia inteiro (cobranças, contas a pagar, prazos) são gravados à meia-noite UTC:
@@ -203,7 +218,9 @@ function MonthGrid({
   onDayClick: (d: Date) => void;
   onEventClick: (e: AgendaEvent) => void;
 }) {
-  const today = new Date();
+  const fuso = useFuso();
+  const today = hojeDoTenant(fuso);
+  const hoje = ymd(today);
   return (
     <div className="overflow-hidden rounded-2xl border border-neutral-100 bg-white">
       <div className="grid grid-cols-7 border-b border-neutral-100 text-center text-xs font-medium text-neutral-400">
@@ -240,9 +257,9 @@ function MonthGrid({
                       ev.stopPropagation();
                       onEventClick(e);
                     }}
-                    className={`cursor-pointer truncate rounded px-1 py-0.5 text-[11px] hover:opacity-80 ${eventColor(e)}`}
+                    className={`cursor-pointer truncate rounded px-1 py-0.5 text-[11px] hover:opacity-80 ${eventColor(e, hoje)}`}
                   >
-                    {!e.all_day && <span className="tabular-nums">{hhmm(e.starts_at)} </span>}
+                    {!e.all_day && <span className="tabular-nums">{hhmm(e.starts_at, fuso)} </span>}
                     {chipLabel(e)}
                   </div>
                 ))}
@@ -269,7 +286,9 @@ function WeekView({
   onDayClick: (d: Date) => void;
   onEventClick: (e: AgendaEvent) => void;
 }) {
-  const today = new Date();
+  const fuso = useFuso();
+  const today = hojeDoTenant(fuso);
+  const hoje = ymd(today);
   return (
     <div className="grid grid-cols-7 gap-2">
       {days.map((d) => {
@@ -294,9 +313,9 @@ function WeekView({
                 <div
                   key={e.id}
                   onClick={() => onEventClick(e)}
-                  className={`cursor-pointer rounded px-1.5 py-1 text-[11px] hover:opacity-80 ${eventColor(e)}`}
+                  className={`cursor-pointer rounded px-1.5 py-1 text-[11px] hover:opacity-80 ${eventColor(e, hoje)}`}
                 >
-                  {!e.all_day && <div className="tabular-nums opacity-70">{hhmm(e.starts_at)}</div>}
+                  {!e.all_day && <div className="tabular-nums opacity-70">{hhmm(e.starts_at, fuso)}</div>}
                   <div className="truncate font-medium">{chipLabel(e)}</div>
                 </div>
               ))}
@@ -317,6 +336,8 @@ function DayView({
   events: AgendaEvent[];
   onEventClick: (e: AgendaEvent) => void;
 }) {
+  const fuso = useFuso();
+  const hoje = ymd(hojeDoTenant(fuso));
   const dayEvents = eventsOfDay(events, day);
   return (
     <div className="rounded-2xl border border-neutral-100 bg-white p-4">
@@ -331,7 +352,7 @@ function DayView({
               className="flex cursor-pointer items-center gap-3 py-3 hover:bg-neutral-50"
             >
               <span className="w-28 shrink-0 text-sm tabular-nums text-neutral-500">
-                {e.all_day ? "Dia inteiro" : `${hhmm(e.starts_at)}–${hhmm(e.ends_at)}`}
+                {e.all_day ? "Dia inteiro" : `${hhmm(e.starts_at, fuso)}–${hhmm(e.ends_at, fuso)}`}
               </span>
               <div className="min-w-0 flex-1">
                 <span className="font-medium text-neutral-800">{chipLabel(e)}</span>
@@ -347,7 +368,7 @@ function DayView({
                   <Video size={12} /> Entrar
                 </a>
               )}
-              <span className={`rounded-pill px-2 py-0.5 text-xs ${eventColor(e)}`}>{e.kind}</span>
+              <span className={`rounded-pill px-2 py-0.5 text-xs ${eventColor(e, hoje)}`}>{e.kind}</span>
             </li>
           ))}
         </ul>
@@ -357,6 +378,7 @@ function DayView({
 }
 
 function EventDetailModal({ event, onClose }: { event: AgendaEvent; onClose: () => void }) {
+  const fuso = useFuso();
   const isReceber = event.kind === "cobranca_receber" && !!event.external_ref;
   const isPagar = event.kind === "cobranca_pagar" && !!event.external_ref;
   const [charge, setCharge] = useState<Charge | null>(null);
@@ -391,9 +413,11 @@ function EventDetailModal({ event, onClose }: { event: AgendaEvent; onClose: () 
     }
   }
 
+  // all_day é DATA DE CALENDÁRIO (gravada à meia-noite UTC): formata pela string, sem `Date`.
+  // Com horário é INSTANTE: converte para o fuso do tenant.
   const when = event.all_day
-    ? new Date(event.starts_at).toLocaleDateString("pt-BR")
-    : `${new Date(event.starts_at).toLocaleString("pt-BR", { dateStyle: "short", timeStyle: "short" })} – ${hhmm(event.ends_at)}`;
+    ? formatDay(event.starts_at)
+    : `${formatDateTime(event.starts_at, fuso)} – ${hhmm(event.ends_at, fuso)}`;
 
   return (
     <Modal title={event.title} open onClose={onClose}>
@@ -427,7 +451,7 @@ function EventDetailModal({ event, onClose }: { event: AgendaEvent; onClose: () 
             <p className="font-medium text-neutral-800">{payable.description || "Conta a pagar"}</p>
             <p className="text-xs text-neutral-500">
               {payable.supplier && `${payable.supplier} · `}
-              {payable.category} · vence {new Date(payable.due_date + "T00:00").toLocaleDateString("pt-BR")}
+              {payable.category} · vence {formatDay(payable.due_date)}
             </p>
             <p className="mt-1 text-xs">
               Status: <strong>{payable.status === "paid" ? "Pago" : payable.is_overdue ? "Atrasado" : "A pagar"}</strong>
@@ -458,7 +482,7 @@ function EventDetailModal({ event, onClose }: { event: AgendaEvent; onClose: () 
                 <p className="font-medium text-neutral-800">{charge.client_name ?? "Cobrança"}</p>
                 <p className="text-xs text-neutral-500">
                   {charge.description} · vence{" "}
-                  {new Date(charge.due_date + "T00:00").toLocaleDateString("pt-BR")} ·{" "}
+                  {formatDay(charge.due_date)} ·{" "}
                   {charge.status === "paid" ? "Recebido" : charge.is_overdue ? "Vencido" : "A vencer"}
                 </p>
               </div>
@@ -476,7 +500,7 @@ function EventDetailModal({ event, onClose }: { event: AgendaEvent; onClose: () 
                     <li key={m.id} className="rounded-lg bg-neutral-50 p-2 text-xs text-neutral-700">
                       <p>{m.message}</p>
                       <p className="mt-1 text-[10px] text-neutral-400">
-                        {new Date(m.created_at).toLocaleString("pt-BR")} · {m.status}
+                        {formatDateTime(m.created_at, fuso)} · {m.status}
                       </p>
                     </li>
                   ))}

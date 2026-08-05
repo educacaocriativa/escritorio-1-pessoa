@@ -20,6 +20,9 @@ vi.mock("../../lib/api", () => ({
 // (que registra um interceptor no `api` real — desnecessário e ruidoso no teste). `user` pode ser null.
 vi.mock("../../store/auth", () => ({
   useAuth: () => ({ user: null }),
+  // O Cockpit pede `/cockpit/summary?day=` com o dia NO FUSO DO TENANT — sem isto o mock
+  // derruba a tela antes de qualquer asserção.
+  useFuso: () => "America/Sao_Paulo",
 }));
 
 const EMPTY = {
@@ -93,5 +96,27 @@ describe("CockpitPage — Cobrar com IA e resiliência (Story 7.15, Task 3)", ()
     );
     expect(screen.getByText("Faturamento Líquido")).toBeInTheDocument();
     expect(screen.getByText("Taxa de Conversão")).toBeInTheDocument();
+  });
+
+  it("pede o resumo do dia NO FUSO DO TENANT, não do dia UTC", async () => {
+    // Às 23:30 em São Paulo já é o dia seguinte em UTC. O código antigo montava o parâmetro com
+    // `new Date().toISOString().slice(0, 10)` e pedia ao servidor o resumo do dia SEGUINTE —
+    // toda noite, das 21h à meia-noite, o Cockpit mostrava o dia errado.
+    //
+    // A data é deliberadamente distante de hoje: se os fake timers não pegassem, a asserção
+    // cairia na data real e o teste falharia em vez de passar por engano.
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    vi.setSystemTime(new Date("2027-03-15T02:30:00Z")); // = 14/03/2027 23:30 em São Paulo
+    vi.mocked(api.get).mockResolvedValue({ data: EMPTY } as never);
+
+    renderPage();
+
+    await waitFor(() => expect(api.get).toHaveBeenCalled());
+    const url = vi
+      .mocked(api.get)
+      .mock.calls.find(([u]) => String(u).startsWith("/cockpit/summary"))?.[0];
+    expect(url).toBe("/cockpit/summary?day=2027-03-14"); // e NÃO ?day=2027-03-15 (o dia UTC)
+
+    vi.useRealTimers();
   });
 });

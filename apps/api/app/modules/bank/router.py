@@ -46,6 +46,7 @@ from app.modules.bank.schemas import (
     ContaForaDaBandaOut,
     IgnoreRequest,
 )
+from app.modules.settings.service import hoje_do_tenant
 
 router = APIRouter(prefix="/bank", tags=["bank"])
 
@@ -317,7 +318,7 @@ def account_balance(
     O corte é resolvido **uma vez** e passado explicitamente para o saldo, de modo que o número e a
     data do mesmo payload venham do mesmo relógio (ver `service.resolve_until`).
     """
-    corte = service.resolve_until(until)
+    corte = service.resolve_until(until, hoje_do_tenant(db))
     try:
         saldo = service.derived_balance(db, bank_account_id=account_id, until=corte)
     except service.BankError as e:

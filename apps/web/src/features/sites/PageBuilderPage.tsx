@@ -5,6 +5,8 @@ import { useNavigate, useParams } from "react-router-dom";
 import ImageUploadButton from "../../components/ImageUploadButton";
 import { api, apiErrorMessage } from "../../lib/api";
 import PageBlocks, { type ExtraField } from "./PageBlocks";
+import { formatTime } from "../../lib/datetime";
+import { useFuso } from "../../store/auth";
 
 const BLOCK_TYPES: [string, string][] = [
   ["heading", "Título"], ["text", "Texto"], ["image", "Imagem"], ["button", "Botão"],
@@ -26,6 +28,7 @@ function blankBlock(type: string): PageBlock {
 }
 
 export default function PageBuilderPage() {
+  const fuso = useFuso();
   const { id = "" } = useParams();
   const navigate = useNavigate();
   const [page, setPage] = useState<Page | null>(null);
@@ -72,7 +75,7 @@ export default function PageBuilderPage() {
       });
       setPage(data);
       setBlocks(data.blocks);
-      setSavedAt(new Date().toLocaleTimeString("pt-BR", { hour: "2-digit", minute: "2-digit" }));
+      setSavedAt(formatTime(new Date().toISOString(), fuso));
       return data;
     } catch (err) {
       setError(apiErrorMessage(err));

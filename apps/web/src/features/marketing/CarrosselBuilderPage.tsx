@@ -5,6 +5,8 @@ import { useNavigate, useParams } from "react-router-dom";
 import ImageUploadButton from "../../components/ImageUploadButton";
 import { api, apiErrorMessage } from "../../lib/api";
 import CarouselViewer from "./CarouselSlideView";
+import { formatTime } from "../../lib/datetime";
+import { useFuso } from "../../store/auth";
 
 const FONTS = ["Raleway", "Inter", "Poppins", "Georgia", "Arial"];
 const KINDS: Slide["kind"][] = ["cover", "editorial", "accent", "cta"];
@@ -18,6 +20,7 @@ const blankSlide = (): Slide => ({
 });
 
 export default function CarrosselBuilderPage() {
+  const fuso = useFuso();
   const { id } = useParams();
   const navigate = useNavigate();
   const isNew = !id || id === "novo";
@@ -144,7 +147,7 @@ export default function CarrosselBuilderPage() {
         window.history.replaceState(null, "", `/marketing/${c.id}`);
       }
       hydrate(c);
-      setSavedAt(new Date().toLocaleTimeString("pt-BR", { hour: "2-digit", minute: "2-digit" }));
+      setSavedAt(formatTime(new Date().toISOString(), fuso));
     } catch (err) {
       setError(apiErrorMessage(err));
     } finally {

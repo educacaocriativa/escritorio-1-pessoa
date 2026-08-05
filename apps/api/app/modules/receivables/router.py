@@ -1,6 +1,8 @@
 """Rotas de Contas a Receber."""
 from __future__ import annotations
 
+from datetime import date as date_type
+
 from fastapi import APIRouter, Body, Depends, Header, HTTPException, Query
 from sqlalchemy.orm import Session
 
@@ -21,13 +23,16 @@ from app.modules.receivables.schemas import (
     MessageRequest,
     RescheduleRequest,
 )
+from app.modules.settings.service import hoje_do_tenant
 
 router = APIRouter(prefix="/receivables", tags=["receivables"])
 
 _guard = require_module("receivables")
 
 
-def _out(charge: Charge, db: Session) -> ChargeOut:
+def _out(charge: Charge, db: Session, hoje: date_type) -> ChargeOut:
+    """`hoje` entra por parâmetro (e não por uma leitura interna) para evitar N+1: a listagem
+    resolve o fuso do tenant UMA vez e reusa para todas as linhas."""
     client = db.get(Client, charge.client_id) if charge.client_id else None
     return ChargeOut(
         id=charge.id,
@@ -45,7 +50,7 @@ def _out(charge: Charge, db: Session) -> ChargeOut:
         contract_id=charge.contract_id,
         cost_center_id=charge.cost_center_id,
         status=charge.status,
-        is_overdue=service.is_overdue(charge),
+        is_overdue=service.is_overdue(charge, hoje),
         protested_at=charge.protested_at,
         recurrence=charge.recurrence,
         recurrence_group=charge.recurrence_group,
@@ -110,7 +115,11 @@ def list_charges(
     _user: CurrentUser = Depends(_guard),
     db: Session = Depends(get_tenant_db),
 ) -> list[ChargeOut]:
-    return [_out(c, db) for c in service.list_charges(db, status=status, client_id=client_id)]
+    hoje = hoje_do_tenant(db)
+    return [
+        _out(c, db, hoje)
+        for c in service.list_charges(db, status=status, client_id=client_id)
+    ]
 
 
 @router.post("/charges", response_model=ChargeOut, status_code=201)
@@ -123,7 +132,7 @@ def create_charge(
         charge = service.create_charge(db, tenant_id=user.tenant_id, actor=user.user_id, data=data)
     except service.ReceivableError as e:
         raise _err(e) from e
-    return _out(charge, db)
+    return _out(charge, db, hoje_do_tenant(db))
 
 
 @router.post("/charges/{charge_id}/pay", response_model=ChargeOut)
@@ -138,7 +147,7 @@ def pay_charge(
         )
     except service.ReceivableError as e:
         raise _err(e) from e
-    return _out(charge, db)
+    return _out(charge, db, hoje_do_tenant(db))
 
 
 @router.post("/charges/{charge_id}/settle-externally", response_model=ChargeOut)
@@ -169,7 +178,7 @@ def settle_charge_externally(
         )
     except service.ReceivableError as e:
         raise _err(e) from e
-    return _out(charge, db)
+    return _out(charge, db, hoje_do_tenant(db))
 
 
 @router.patch("/charges/{charge_id}/payment", response_model=ChargeOut)
@@ -197,7 +206,7 @@ def update_charge_payment(
         )
     except service.ReceivableError as e:
         raise _err(e) from e
-    return _out(charge, db)
+    return _out(charge, db, hoje_do_tenant(db))
 
 
 @router.get("/charges/{charge_id}", response_model=ChargeOut)
@@ -207,7 +216,7 @@ def get_charge(
     db: Session = Depends(get_tenant_db),
 ) -> ChargeOut:
     try:
-        return _out(service.get_charge(db, charge_id), db)
+        return _out(service.get_charge(db, charge_id), db, hoje_do_tenant(db))
     except service.ReceivableError as e:
         raise _err(e) from e
 
@@ -225,7 +234,7 @@ def update_charge(
         )
     except service.ReceivableError as e:
         raise _err(e) from e
-    return _out(charge, db)
+    return _out(charge, db, hoje_do_tenant(db))
 
 
 @router.get("/charges/{charge_id}/messages", response_model=list[NotificationOut])
@@ -285,7 +294,7 @@ def cancel_charge(
         )
     except service.ReceivableError as e:
         raise _err(e) from e
-    return _out(charge, db)
+    return _out(charge, db, hoje_do_tenant(db))
 
 
 @router.post("/charges/{charge_id}/reschedule", response_model=ChargeOut)
@@ -302,7 +311,7 @@ def reschedule_charge(
         )
     except service.ReceivableError as e:
         raise _err(e) from e
-    return _out(charge, db)
+    return _out(charge, db, hoje_do_tenant(db))
 
 
 @router.post("/charges/{charge_id}/protest", response_model=ChargeOut)
@@ -317,4 +326,4 @@ def protest_charge(
         )
     except service.ReceivableError as e:
         raise _err(e) from e
-    return _out(charge, db)
+    return _out(charge, db, hoje_do_tenant(db))

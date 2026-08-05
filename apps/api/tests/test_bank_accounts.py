@@ -35,6 +35,7 @@ from fastapi.testclient import TestClient
 from sqlalchemy.orm import Session
 
 from app.core.money_planes import ORIGEM_BANCO, ORIGEM_MISTO, ORIGEM_PLATAFORMA, ORIGENS
+from app.core.tz import DEFAULT_TENANT_TIMEZONE, tenant_today
 from app.modules.bank import reconciliation, service
 from app.modules.bank.models import (
     KIND_CASH,
@@ -151,7 +152,7 @@ def test_balance_devolve_a_data_de_corte(client: TestClient, headers):
     """
     acc = _create(client, headers)
     sem_corte = client.get(f"/bank/accounts/{acc['id']}/balance", headers=headers).json()
-    assert sem_corte["until"] == service._today().isoformat()
+    assert sem_corte["until"] == tenant_today(DEFAULT_TENANT_TIMEZONE).isoformat()
 
     com_corte = client.get(
         f"/bank/accounts/{acc['id']}/balance", params={"until": "2026-07-15"}, headers=headers

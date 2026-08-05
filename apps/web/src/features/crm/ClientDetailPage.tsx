@@ -12,6 +12,8 @@ import {
 import { useCallback, useEffect, useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
 import { api, apiErrorMessage } from "../../lib/api";
+import { formatDate, formatDay } from "../../lib/datetime";
+import { useFuso } from "../../store/auth";
 import { rotaDaCobranca } from "../cobrancas/rota";
 import ClientTimeline from "./ClientTimeline";
 import { hojeISO } from "../financeiro/contas";
@@ -19,9 +21,11 @@ import { VOCAB_ENTRADA } from "../pagar/baixa";
 import { DialogDeBaixa } from "../pagar/EscolhaDaBaixa";
 
 const brl = (c: number) => (c / 100).toLocaleString("pt-BR", { style: "currency", currency: "BRL" });
-const dt = (s: string) => new Date(s + (s.length === 10 ? "T00:00" : "")).toLocaleDateString("pt-BR");
+/** Aceita as DUAS espécies: `"2026-08-05"` (data de calendário) e ISO completo (instante). */
+const dt = (s: string, tz: string) => (s.length === 10 ? formatDay(s) : formatDate(s, tz));
 
 export default function ClientDetailPage() {
+  const fuso = useFuso();
   const { id = "" } = useParams();
   const navigate = useNavigate();
   const [client, setClient] = useState<Client | null>(null);
@@ -180,7 +184,7 @@ export default function ClientDetailPage() {
               <li key={d.id} className="flex items-center justify-between py-2.5">
                 <button onClick={() => navigate(`/juridico/${d.id}`)} className="text-left text-sm font-medium text-neutral-700 hover:text-primary-600">
                   {d.title}
-                  <span className="ml-2 text-xs text-neutral-400">{dt(d.created_at)}</span>
+                  <span className="ml-2 text-xs text-neutral-400">{dt(d.created_at, fuso)}</span>
                 </button>
                 <StatusBadge status={d.status} />
               </li>
@@ -199,7 +203,7 @@ export default function ClientDetailPage() {
               <li key={j.id} className="flex items-center justify-between py-2.5">
                 <button onClick={() => navigate(`/funis/${j.funnel_id}`)} className="text-left text-sm font-medium text-neutral-700 hover:text-primary-600">
                   Funil
-                  <span className="ml-2 text-xs text-neutral-400">{j.step_count} passo(s) · {dt(j.created_at)}</span>
+                  <span className="ml-2 text-xs text-neutral-400">{j.step_count} passo(s) · {dt(j.created_at, fuso)}</span>
                 </button>
                 <StatusBadge status={j.status} />
               </li>
@@ -214,7 +218,7 @@ export default function ClientDetailPage() {
         <DialogDeBaixa
           titulo="Recebi direto na conta"
           descricao={recebendo.description || client.name}
-          valor={`${brl(recebendo.amount_cents)} · vence ${dt(recebendo.due_date)}`}
+          valor={`${brl(recebendo.amount_cents)} · vence ${dt(recebendo.due_date, fuso)}`}
           dataPadrao={hojeISO()}
           vocab={VOCAB_ENTRADA}
           acao="Confirmar recebimento"
@@ -247,6 +251,7 @@ function ChargeRow({
   onReschedule: (id: string, due: string) => void;
   onReceberForaDoTrilho: (c: Charge) => void;
 }) {
+  const fuso = useFuso();
   const [due, setDue] = useState(c.due_date);
   const [showDate, setShowDate] = useState(false);
   return (
@@ -259,7 +264,7 @@ function ChargeRow({
           )}
         </p>
         <p className="text-xs text-neutral-400">
-          {c.description || "Cobrança"} · vence {dt(c.due_date)}
+          {c.description || "Cobrança"} · vence {dt(c.due_date, fuso)}
         </p>
       </div>
       <div className="flex items-center gap-2">

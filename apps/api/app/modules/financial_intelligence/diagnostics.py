@@ -20,7 +20,7 @@ contratos ASSINADOS entram (ativos) — rascunhos/cancelados não representam op
 """
 from __future__ import annotations
 
-from datetime import UTC, date, datetime, timedelta
+from datetime import date, datetime, timedelta
 
 from sqlalchemy import and_, func, or_, select
 from sqlalchemy.orm import Session
@@ -110,14 +110,16 @@ def _investment_returns(db: Session, *, start: date, end: date) -> list[engine.I
     return out
 
 
-def _today() -> date:
-    """Hoje em UTC — a mesma âncora de `bank.reconciliation._today` e de `projection`.
+def _today(db: Session, *, now: datetime | None = None) -> date:
+    """Hoje NO FUSO DO TENANT — a mesma âncora de `bank.reconciliation._today` e de `projection`.
 
     Existe para que `today` seja **injetável** em `_debitos_suspeitos` (mesmo padrão das 8.5/8.6):
     uma regra cuja população depende do relógio da máquina não é testável. O relógio mora **aqui**,
     nunca no `engine.py` (IV1).
     """
-    return datetime.now(UTC).date()
+    from app.modules.settings.service import hoje_do_tenant
+
+    return hoje_do_tenant(db, now=now)
 
 
 def _completeness(
@@ -256,7 +258,7 @@ def _debitos_suspeitos(
     recebe `data_debito` pronta e não compara nada com hoje (IV1). Nenhum filtro manual de
     `tenant_id` — RLS e só RLS (Regra de Ouro nº 1).
     """
-    hoje = today or _today()
+    hoje = today or _today(db)
     # Só as contas com divergência POSITIVA avaliada, indexadas pelo id. `saldo_banco_data` é o
     # `reference_date` do checkpoint — a data em que os dois saldos foram apurados.
     alvos = {

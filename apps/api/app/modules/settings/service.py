@@ -2,11 +2,13 @@
 from __future__ import annotations
 
 import secrets
+from datetime import date, datetime
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.core import audit
+from app.core.tz import DEFAULT_TENANT_TIMEZONE, tenant_today
 from app.modules.auth.models import Tenant
 from app.modules.settings.models import TenantProfile
 from app.modules.settings.schemas import ProfileUpdate
@@ -58,6 +60,52 @@ _FIELDS = (
     "bg_color", "font", "timezone",
     "whatsapp_token", "whatsapp_phone_id", "whatsapp_waba_id", "whatsapp_app_secret",
 )
+
+
+def tenant_timezone(db: Session) -> str:
+    """O fuso IANA do tenant da sessão — o resolvedor que TODO módulo usa para ancorar "hoje".
+
+    Difere de `get_profile` de propósito em duas coisas:
+
+    - **não cria** perfil e **não commita**. É chamado de dentro de regras de negócio (baixa de
+      conta, projeção de caixa); um efeito colateral de escrita ali seria uma armadilha;
+    - **não pede `tenant_id`**. A sessão já é RLS-escopada (Regra de Ouro nº 1) e a query traz o
+      perfil do tenant corrente — o mesmo motivo pelo qual `get_profile` faz `select(TenantProfile)`
+      sem filtro manual.
+
+    Fail-safe por construção: tenant ainda sem perfil (ou coluna nula) cai no fuso padrão, nunca
+    levanta. A validação de que a string É um fuso IANA mora em `tenant_zone`, que também não
+    levanta — juntas, garantem que fuso ruim no banco jamais derruba uma request.
+    """
+    return db.scalar(select(TenantProfile.timezone)) or DEFAULT_TENANT_TIMEZONE
+
+
+def timezone_of(db: Session, tenant_id: str) -> str:
+    """O fuso de um tenant NOMEADO — para contextos **sem** sessão RLS.
+
+    `tenant_timezone(db)` depende do escopo RLS da sessão; `/auth/login`, `/auth/register` e
+    `/auth/me` rodam com `get_db` (sessão crua, ainda sem tenant no contexto) e ali um `select`
+    sem `where` traria o perfil errado num banco multi-tenant. Por isso o filtro é explícito
+    aqui — e é a única situação em que ele é correto.
+    """
+    return (
+        db.scalar(select(TenantProfile.timezone).where(TenantProfile.tenant_id == tenant_id))
+        or DEFAULT_TENANT_TIMEZONE
+    )
+
+
+def hoje_do_tenant(db: Session, *, now: datetime | None = None) -> date:
+    """*"Que dia é hoje para o dono?"* — a ÚNICA âncora de "hoje" do sistema.
+
+    É **pública** e mora aqui pelo mesmo critério de `core/scheduling.janela_de_caixa`: quem a
+    importa está fora deste módulo (routers de `payables`/`receivables`, `bank`, `projection`) e
+    um símbolo com `_` importado de fora é a costura frouxa que vira duas cópias no primeiro
+    ajuste. Mora em `settings` porque é aqui que o fuso do tenant é configurado — `core/tz` é
+    puro por contrato e não toca no banco.
+
+    `now` é injetável: sem isso, todo teste da borda das 21h dependeria da hora da suíte.
+    """
+    return tenant_today(tenant_timezone(db), now=now)
 
 
 def get_profile(db: Session, tenant_id: str) -> TenantProfile:

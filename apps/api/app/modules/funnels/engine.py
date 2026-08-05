@@ -22,6 +22,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.core import audit
+from app.core.tz import format_datetime_br
 from app.modules.crm.models import Client
 from app.modules.funnels import service
 from app.modules.funnels.models import (
@@ -149,6 +150,20 @@ def _pick_next(db: Session, funnel: Funnel, run: FunnelRun, node: dict) -> str |
 
 
 # ── Log ─────────────────────────────────────────────────────────────────────
+def _mensagem_de_espera(db: Session, resume_at: datetime) -> str:
+    """A linha que o dono lê na jornada do contato — em português e no fuso dele.
+
+    Era `f"Aguardando até {resume_at.isoformat()}"`, que imprimia
+    `Aguardando até 2026-08-05T11:11:32.812731+00:00` na tela. Duas coisas erradas na mesma
+    string: formato de máquina para olho humano, e o horário em UTC (3h adiantado).
+
+    O campo `at` de `_log` continua ISO/UTC de propósito — aquilo é DADO, isto é TEXTO.
+    """
+    from app.modules.settings.service import tenant_timezone
+
+    return f"Aguardando até {format_datetime_br(resume_at, tenant_timezone(db))}"
+
+
 def _log(run: FunnelRun, node: dict, status: str, message: str) -> None:
     data = node.get("data") or {}
     step = {
@@ -189,7 +204,7 @@ def _drive(db: Session, *, tenant_id: str, actor: str, funnel: Funnel, run: Funn
                 break
             run.resume_at = _now() + timedelta(seconds=_delay_seconds(data.get("config") or {}))
             run.status = RUN_WAITING
-            _log(run, node, "wait", f"Aguardando até {run.resume_at.isoformat()}")
+            _log(run, node, "wait", _mensagem_de_espera(db, run.resume_at))
             break
 
         # Nó de AÇÃO REAL.

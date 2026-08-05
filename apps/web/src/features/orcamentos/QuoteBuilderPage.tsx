@@ -14,6 +14,8 @@ import { useNavigate, useParams } from "react-router-dom";
 import ImageUploadButton from "../../components/ImageUploadButton";
 import { api, apiErrorMessage } from "../../lib/api";
 import ProposalView from "./ProposalView";
+import { formatTime } from "../../lib/datetime";
+import { useFuso } from "../../store/auth";
 
 const brl = (c: number) => (c / 100).toLocaleString("pt-BR", { style: "currency", currency: "BRL" });
 const toCents = (s: string) => Math.round(parseFloat((s || "").replace(",", ".") || "0") * 100);
@@ -29,6 +31,7 @@ type Tab = (typeof TABS)[number];
 const blankService = (): Service => ({ description: "", subtitle: "", quantity: 1, price: "" });
 
 export default function QuoteBuilderPage() {
+  const fuso = useFuso();
   const { id } = useParams();
   const navigate = useNavigate();
   const isNew = !id || id === "novo";
@@ -197,7 +200,7 @@ export default function QuoteBuilderPage() {
       }
       hydrate(q);
       setLinkPassword("");
-      setSavedAt(new Date().toLocaleTimeString("pt-BR", { hour: "2-digit", minute: "2-digit" }));
+      setSavedAt(formatTime(new Date().toISOString(), fuso));
       return q.id;
     } catch (err) {
       setError(apiErrorMessage(err));

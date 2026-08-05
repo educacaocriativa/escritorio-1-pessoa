@@ -118,14 +118,21 @@ class ContaBancariaNecessaria(PayableError):
         self.detail = {"acao": ACAO_CADASTRAR_CONTA, "mensagem": mensagem}
 
 
-def is_overdue(p: Payable, today: date | None = None) -> bool:
-    today = today or datetime.now(UTC).date()
+def is_overdue(p: Payable, today: date) -> bool:
+    """*"Esta conta está atrasada?"* — e a resposta depende de QUE DIA É HOJE **para o dono**.
+
+    `today` é **obrigatório**, não opcional com fallback. O fallback antigo era
+    `datetime.now(UTC).date()`: das 21h à meia-noite em UTC−3 ele adiantava um dia e pintava de
+    "atrasada" uma conta que vence amanhã. Quem chama tem `db` e portanto tem o fuso — exigir o
+    parâmetro é o que impede o relógio errado de voltar por descuido.
+    """
     return p.status == STATUS_OPEN and p.due_date < today
 
 
-def payable_out(p: Payable, today: date | None = None) -> PayableOut:
+def payable_out(p: Payable, today: date) -> PayableOut:
     """Serialização canônica de um Payable → PayableOut (usada pelo router e pela fila da Story 5.9,
-    para não duplicar a montagem do schema). `today` opcional só afeta o cálculo de is_overdue."""
+    para não duplicar a montagem do schema). `today` alimenta `is_overdue` e é obrigatório pelo
+    mesmo motivo que lá."""
     return PayableOut(
         id=p.id,
         tenant_id=p.tenant_id,
@@ -324,12 +331,19 @@ def list_payables(
     return list(db.scalars(stmt.limit(limit).offset(max(0, offset))).all())
 
 
-def _today() -> date:
-    """Hoje em UTC — a MESMA âncora de `is_overdue`, `summary` e `bank.service._today`.
+def _today(db: Session, *, now: datetime | None = None) -> date:
+    """Hoje NO FUSO DO TENANT — a MESMA âncora de `is_overdue`, `summary` e `bank.service._today`.
 
-    A dívida geral de fuso por tenant está registrada no `CLAUDE.md` §6.1 e não é resolvida aqui.
+    Era `datetime.now(UTC).date()` (a dívida do `CLAUDE.md` §6.1). Em UTC−3, das 21h à meia-noite
+    o "hoje" do servidor já era o dia seguinte: uma conta paga às 22h de segunda nascia
+    `scheduled` com data de terça, e o mesmo dinheiro aparecia duas vezes na Projeção.
+
+    `now` é injetável pelo mesmo motivo de `core/scheduling.status_por_data`: sem isso o teste
+    da borda das 21h dependeria da hora em que a suíte roda.
     """
-    return datetime.now(UTC).date()
+    from app.modules.settings.service import hoje_do_tenant
+
+    return hoje_do_tenant(db, now=now)
 
 
 def _conta_de_baixa(db: Session, bank_account_id: str) -> BankAccount:
@@ -546,7 +560,7 @@ def apply_paid(
 
     # [8.14] Derivado da data, nunca escolhido — e pelo helper PÚBLICO, que a 8.15 importa.
     p.status = status_por_data(
-        paid_on, _today(), status_agendado=STATUS_SCHEDULED, status_pago=STATUS_PAID
+        paid_on, _today(db), status_agendado=STATUS_SCHEDULED, status_pago=STATUS_PAID
     )
     # Meia-noite UTC da data de caixa — mesma convenção de `paid_before` e de `summary`, e o mesmo
     # cuidado de data-de-calendário que o bug de fuso da Agenda (`CLAUDE.md` §6.0) ensinou.
@@ -649,7 +663,7 @@ def update_payment(
     # divergiriam no primeiro ajuste — e a correção da data é justamente onde a fronteira
     # `paid ⇄ scheduled` é atravessada.
     p.status = status_por_data(
-        paid_on, _today(), status_agendado=STATUS_SCHEDULED, status_pago=STATUS_PAID
+        paid_on, _today(db), status_agendado=STATUS_SCHEDULED, status_pago=STATUS_PAID
     )
     _sincroniza_movimento(
         db, p, tenant_id=tenant_id, actor=actor, bank_account_id=acc.id, posted_at=paid_on
@@ -989,7 +1003,7 @@ def promote_scheduled(
     máquina não é testável. Isolamento por RLS, sem filtro manual de `tenant_id` (Regra de Ouro
     nº 1) — `tenant_id` fica na assinatura para a auditoria e para o teste `rls_e2e`.
     """
-    today = today or _today()
+    today = today or _today(db)
     # Limite de TIMESTAMP em vez de `::date` (dialeto-agnóstico — o SQLite dos testes não tem
     # `::date`), mesmo padrão de `paid_before`/`probe_pagamento_duplicado`. "A data já chegou" é
     # `paid_at::date <= today`, ou seja, `paid_at < meia-noite UTC de today+1`.
@@ -1021,7 +1035,7 @@ def promote_scheduled(
 
 
 def summary(db: Session) -> dict:
-    today = datetime.now(UTC).date()
+    today = _today(db)
     week_end = today + timedelta(days=7)
     month_start = today.replace(day=1)
     next_month = (month_start + timedelta(days=32)).replace(day=1)
@@ -1072,7 +1086,7 @@ def summary(db: Session) -> dict:
 
 def monthly_costs(db: Session) -> int:
     """Custo do mês para o Cockpit: total de contas (não canceladas) com vencimento no mês."""
-    today = datetime.now(UTC).date()
+    today = _today(db)
     month_start = today.replace(day=1)
     next_month = (month_start + timedelta(days=32)).replace(day=1)
     return db.scalar(
@@ -1118,7 +1132,7 @@ def payment_queue(
 
     Isolamento por RLS (sem filtro manual de tenant_id — Regra de Ouro nº 1); `tenant_id` fica na
     assinatura por consistência com os demais serviços do módulo e para o teste rls_e2e."""
-    today = today or datetime.now(UTC).date()
+    today = today or _today(db)
     d7 = today + timedelta(days=7)
     d30 = today + timedelta(days=30)
     rows = list(

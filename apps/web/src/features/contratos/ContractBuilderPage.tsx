@@ -3,11 +3,15 @@ import { ArrowLeft, Eye, GripVertical, Plus, Save, Send, Trash2 } from "lucide-r
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
 import { api, apiErrorMessage } from "../../lib/api";
+import { formatDay, formatTime, today } from "../../lib/datetime";
+import { useFuso } from "../../store/auth";
 
 const AUTO_VARS = new Set(["CLIENTE", "DATA", "EMPRESA"]);
-const today = () => new Date().toLocaleDateString("pt-BR");
+/** `[DATA]` do contrato — o MESMO dia que o backend grava em `{{DATA}}` (fuso do tenant). */
+const hojeBr = (tz: string) => formatDay(today(tz));
 
 export default function ContractBuilderPage() {
+  const fuso = useFuso();
   const { id } = useParams();
   const navigate = useNavigate();
   const isNew = !id || id === "novo";
@@ -60,7 +64,7 @@ export default function ContractBuilderPage() {
   function substitute(text: string): string {
     let out = text
       .replaceAll("[CLIENTE]", clientName)
-      .replaceAll("[DATA]", today())
+      .replaceAll("[DATA]", hojeBr(fuso))
       .replaceAll("[EMPRESA]", "sua empresa");
     for (const [k, v] of Object.entries(variables)) {
       if (v) out = out.replaceAll(`[${k}]`, v);
@@ -113,7 +117,7 @@ export default function ContractBuilderPage() {
         window.history.replaceState(null, "", `/contratos/${c.id}`);
       }
       hydrate(c);
-      setSavedAt(new Date().toLocaleTimeString("pt-BR", { hour: "2-digit", minute: "2-digit" }));
+      setSavedAt(formatTime(new Date().toISOString(), fuso));
       return c.id;
     } catch (err) {
       setError(apiErrorMessage(err));

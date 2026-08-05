@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import re
 import secrets
-from datetime import UTC, datetime, timedelta
+from datetime import timedelta
 
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
@@ -25,6 +25,7 @@ from app.modules.quotes.schemas import QuoteCreate, QuoteItem, QuoteUpdate
 from app.modules.receivables import service as receivables_service
 from app.modules.receivables.schemas import ChargeCreate
 from app.modules.settings import service as settings_service
+from app.modules.settings.service import hoje_do_tenant
 from app.modules.whatsapp_templates.models import (
     PURPOSE_QUOTE_SEND,
     WhatsappTemplate,
@@ -261,7 +262,7 @@ def approve_quote(db: Session, *, quote_id: str, tenant_id: str, actor: str) -> 
             kind="service",
             method="pix",
             amount_cents=q.total_cents,
-            due_date=(datetime.now(UTC).date() + timedelta(days=APPROVAL_DUE_DAYS)),
+            due_date=(hoje_do_tenant(db) + timedelta(days=APPROVAL_DUE_DAYS)),
         ),
     )
     q.status = STATUS_APPROVED

@@ -7,6 +7,7 @@ from typing import Literal
 
 from pydantic import BaseModel, EmailStr, Field, field_validator
 
+from app.core.tz import DEFAULT_TENANT_TIMEZONE
 from app.core.validators import validate_document
 
 SLUG_RE = re.compile(r"^[a-z0-9](?:[a-z0-9-]{1,61}[a-z0-9])?$")
@@ -79,6 +80,11 @@ class TenantOut(BaseModel):
     legal_name: str
     document: str
     created_at: datetime
+    # Fuso IANA do tenant, entregue JUNTO COM A SESSÃO de propósito: é o frontend inteiro que
+    # depende dele para formatar horário, e `/settings/profile` — o outro lugar onde ele vive —
+    # exige o módulo "settings", que nem todo usuário tem. Default explícito para que rotas
+    # administrativas que só listam tenants continuem montando o schema sem consultar perfil.
+    timezone: str = DEFAULT_TENANT_TIMEZONE
 
     model_config = {"from_attributes": True}
 

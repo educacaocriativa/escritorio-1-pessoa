@@ -2,6 +2,7 @@ import type { Carousel, Slide } from "@e1p/shared-types";
 import html2canvas from "html2canvas";
 import { ChevronLeft, ChevronRight, Download } from "lucide-react";
 import { forwardRef, useRef, useState } from "react";
+import { useFuso } from "../../store/auth";
 
 const W = 1080;
 const H = 1350; // 4:5
@@ -17,10 +18,11 @@ export type SlideStyle = Pick<
   "handle" | "primary_color" | "bg_color" | "text_color" | "accent_color" | "font"
 >;
 
-const monthTag = () => {
+const monthTag = (tz: string) => {
   const d = new Date();
-  const m = d.toLocaleDateString("pt-BR", { month: "long" });
-  return `${m.charAt(0).toUpperCase()}${m.slice(1)} ${d.getFullYear()} ®`;
+  const m = d.toLocaleDateString("pt-BR", { month: "long", timeZone: tz });
+  const ano = d.toLocaleDateString("pt-BR", { year: "numeric", timeZone: tz });
+  return `${m.charAt(0).toUpperCase()}${m.slice(1)} ${ano} ®`;
 };
 
 /** Destaca a `word` dentro de `text` na cor de acento (1ª ocorrência, case-insensitive). */
@@ -40,6 +42,7 @@ function highlighted(text: string, word: string, color: string) {
 }
 
 function Header({ s }: { s: SlideStyle }) {
+  const fuso = useFuso();
   const c = "rgba(255,255,255,0.55)";
   return (
     <div
@@ -51,7 +54,7 @@ function Header({ s }: { s: SlideStyle }) {
     >
       <span style={{ fontSize: 16, color: c, textTransform: "uppercase", letterSpacing: 0.8 }}>Powered by e1p</span>
       <span style={{ fontSize: 16, color: c, textTransform: "uppercase", letterSpacing: 0.8 }}>{s.handle || ""}</span>
-      <span style={{ fontSize: 16, color: c, textTransform: "uppercase", letterSpacing: 0.8 }}>{monthTag()}</span>
+      <span style={{ fontSize: 16, color: c, textTransform: "uppercase", letterSpacing: 0.8 }}>{monthTag(fuso)}</span>
     </div>
   );
 }

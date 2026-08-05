@@ -40,6 +40,7 @@ import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy.orm import Session
 
+from app.core.tz import DEFAULT_TENANT_TIMEZONE, tenant_today
 from app.modules.bank import reconciliation, service
 from app.modules.bank.models import (
     KIND_CHECKING,
@@ -65,12 +66,12 @@ OPENING_CENTS = 1_000_00
 
 
 def _hoje() -> date:
-    """A MESMA âncora do service (`service._today()`), nunca `date.today()` solto.
+    """A MESMA âncora do service (`service._today`), nunca `date.today()` solto.
 
-    Um segundo relógio no teste seria um teste que passa ou falha conforme o fuso da máquina — e a
-    lição do `CLAUDE.md` §6.0 (comparar data de calendário, nunca horário local) é exatamente essa.
+    O service passou a ancorar "hoje" no FUSO DO TENANT; o teste segue. Como o tenant de teste
+    fica com o fuso padrão, basta a primitiva pura — sem `db`, sem um segundo relógio.
     """
-    return service._today()
+    return tenant_today(DEFAULT_TENANT_TIMEZONE)
 
 
 @pytest.fixture()
@@ -271,9 +272,9 @@ def test_movimento_futuro_IGNORADO_continua_fora_pelos_dois_motivos(
 
 def test_resolve_until_e_a_unica_normalizacao():
     """`None` → hoje; qualquer data → ela mesma, intacta (inclusive `SEM_CORTE`)."""
-    assert service.resolve_until(None) == _hoje()
-    assert service.resolve_until(date(2026, 1, 15)) == date(2026, 1, 15)
-    assert service.resolve_until(service.SEM_CORTE) == date.max
+    assert service.resolve_until(None, _hoje()) == _hoje()
+    assert service.resolve_until(date(2026, 1, 15), _hoje()) == date(2026, 1, 15)
+    assert service.resolve_until(service.SEM_CORTE, _hoje()) == date.max
 
 
 # ── AC4 — os caminhos de `bank/router.py` ────────────────────────────────────────────────────

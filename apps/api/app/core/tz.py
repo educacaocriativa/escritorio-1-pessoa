@@ -33,6 +33,51 @@ def tenant_zone(tz_name: str | None) -> ZoneInfo:
     return ZoneInfo(DEFAULT_TENANT_TIMEZONE)
 
 
+def _aware(instant: datetime) -> datetime:
+    """Garante um datetime *aware*, assumindo UTC quando vier naive.
+
+    Não é paranoia: o SQLite dos testes devolve naive mesmo para uma coluna `timezone=True`
+    (a mesma coerção já existia solta em `notifications/service.py`). Um `astimezone()` sobre
+    naive usaria o fuso do SISTEMA — em um servidor UTC passaria despercebido e em uma máquina
+    de dev no Brasil daria 3h de diferença. Aqui a convenção é explícita: naive == UTC.
+    """
+    return instant if instant.tzinfo is not None else instant.replace(tzinfo=UTC)
+
+
+def local_date(instant: datetime, tz_name: str | None) -> date:
+    """A data de calendário de `instant` NO FUSO do tenant.
+
+    É a primitiva de que "hoje" depende. Para `America/Sao_Paulo` (UTC−3), `2026-08-06T01:30Z`
+    é `05/08` — a noite do dia 5, não o dia 6.
+    """
+    return _aware(instant).astimezone(tenant_zone(tz_name)).date()
+
+
+def tenant_today(tz_name: str | None, *, now: datetime | None = None) -> date:
+    """"Hoje" no fuso do tenant — a âncora que substitui `datetime.now(UTC).date()`.
+
+    `now` é injetável **de propósito**, pelo mesmo motivo de `core/scheduling.status_por_data`:
+    uma regra presa ao relógio da máquina não é testável. O default lê o relógio uma vez só.
+    """
+    return local_date(now if now is not None else datetime.now(UTC), tz_name)
+
+
+def format_datetime_br(instant: datetime, tz_name: str | None) -> str:
+    """`dd/mm/aaaa hh:mm` no fuso do tenant — para TEXTO QUE UM HUMANO LÊ.
+
+    Existe porque `isoformat()` em mensagem de usuário é bug, não estilo: foi assim que a linha
+    do tempo do Funil passou a exibir `Aguardando até 2026-08-05T11:11:32.812731+00:00`.
+    Para persistir/trafegar (campo `at`, JSON de API) continue usando `isoformat()` em UTC —
+    a conversão para o fuso é da BORDA de apresentação, nunca do armazenamento.
+    """
+    return _aware(instant).astimezone(tenant_zone(tz_name)).strftime("%d/%m/%Y %H:%M")
+
+
+def format_date_br(day: date) -> str:
+    """`dd/mm/aaaa` — data de calendário já é local por definição, não tem fuso a converter."""
+    return day.strftime("%d/%m/%Y")
+
+
 def day_window_utc(day: date, tz_name: str | None) -> tuple[datetime, datetime]:
     """Janela `[início, fim)` em UTC do dia-calendário `day` NO FUSO do tenant.
 

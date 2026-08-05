@@ -52,7 +52,7 @@ from app.modules.bank.origin import sync_origin_movement
 from app.modules.bank.schemas import BankTransferCreate
 from app.modules.bank.service import (
     BankError,
-    _today,  # a MESMA âncora de "hoje" do resto do módulo (UTC) — nunca um segundo relógio
+    _today,  # a MESMA âncora de "hoje" do módulo (fuso do tenant) — nunca um segundo relógio
     get_account,
     validate_posted_at_floor,
 )
@@ -161,7 +161,7 @@ def _validate_piso(posted_at: date, acc: BankAccount, *, papel: str) -> None:
         raise BankError(f"Conta de {papel} ({acc.name}): {e}", e.status_code) from e
 
 
-def _validate_nao_futura(posted_at: date) -> date:
+def _validate_nao_futura(posted_at: date, hoje: date) -> date:
     """**422 para data futura — e esta guarda vive AQUI, NUNCA em `_validate_posted_at`.**
 
     ⚠️ **LEIA ANTES DE "MOVER PARA O LUGAR COMUM"** (achado **A-3** da ratificação §C-3.4, bloqueio
@@ -185,7 +185,7 @@ def _validate_nao_futura(posted_at: date) -> date:
     ⚠️ **Onda 2b, ao ligar o rendimento (`source='yield'`): NÃO copie esta forma sem decidir.** Se o
     rendimento puder ser lançado com data futura, ele precisa do estado que a transferência não tem.
     """
-    if posted_at > _today():
+    if posted_at > hoje:
         raise BankError(
             "A data da transferência não pode ser futura. O e1p registra a transferência que já "
             "aconteceu — se você agendou a transferência no app do banco, lance-a aqui no dia em "
@@ -300,7 +300,7 @@ def create_transfer(
     origem = _conta_ativa(db, data.from_account_id, papel="origem")
     destino = _conta_ativa(db, data.to_account_id, papel="destino")
 
-    posted_at = _validate_nao_futura(data.posted_at)
+    posted_at = _validate_nao_futura(data.posted_at, _today(db))
     _validate_piso(posted_at, origem, papel="origem")
     _validate_piso(posted_at, destino, papel="destino")
 

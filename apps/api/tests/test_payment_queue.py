@@ -1,8 +1,8 @@
 """Testes da Fila de Pagamentos (Story 5.9).
 
 Foco nas datas de BORDA dos baldes (hoje / +7 / +30) — o erro mais fácil aqui é off-by-one. As
-datas são calculadas relativas a `hoje` (a fila usa `datetime.now(UTC).date()` por padrão), então os
-testes não dependem de uma data fixa no calendário.
+datas são calculadas relativas a `hoje` (a fila usa o dia no FUSO DO TENANT por padrão — ver
+`core/tz.tenant_today`), então os testes não dependem de uma data fixa no calendário.
 
 Regras dos baldes:
   - atrasados:        due_date <  hoje
@@ -11,10 +11,12 @@ Regras dos baldes:
   - proximos_30_dias: hoje+7  <  due_date <= hoje+30
   - > hoje+30 → FORA da fila (não é "próximo")
 """
-from datetime import UTC, datetime, timedelta
+from datetime import timedelta
 
 import pytest
 from fastapi.testclient import TestClient
+
+from app.core.tz import DEFAULT_TENANT_TIMEZONE, tenant_today
 
 REGISTER = {
     "legal_name": "Fila Co",
@@ -33,7 +35,8 @@ def headers(client: TestClient) -> dict[str, str]:
 
 
 def _today():
-    return datetime.now(UTC).date()
+    """A MESMA âncora do service — fuso do tenant, nunca UTC (ver `core/tz.tenant_today`)."""
+    return tenant_today(DEFAULT_TENANT_TIMEZONE)
 
 
 def _ymd(days: int) -> str:

@@ -3,6 +3,9 @@ import { CheckCircle2, PenLine } from "lucide-react";
 import { useCallback, useEffect, useState } from "react";
 import { useParams } from "react-router-dom";
 import { apiErrorMessage, publicApi } from "../../lib/api";
+// Rota PÚBLICA: quem abre não tem sessão, então não há `tenant.timezone` para ler. O contrato é
+// brasileiro e a data que vale é a de Brasília — o padrão é a resposta certa, não um fallback.
+import { FUSO_PADRAO, formatDateTime } from "../../lib/datetime";
 
 /** Página pública de assinatura (cliente abre o link, sem login). */
 export default function PublicContractPage() {
@@ -87,7 +90,7 @@ export default function PublicContractPage() {
                 {(contract.signer_name || name) && (
                   <p className="text-sm text-neutral-500">
                     por {contract.signer_name || name}
-                    {signedAt && ` · ${new Date(signedAt).toLocaleString("pt-BR")}`}
+                    {signedAt && ` · ${formatDateTime(signedAt, FUSO_PADRAO)}`}
                   </p>
                 )}
               </div>

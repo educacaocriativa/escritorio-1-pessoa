@@ -695,7 +695,7 @@ def test_agendada_nao_e_atrasada(client: TestClient, headers, conta):
     assert out["status"] == STATUS_SCHEDULED
     assert out["is_overdue"] is False
     assert payables_service.is_overdue(
-        Payable(status=STATUS_SCHEDULED, due_date=_hoje() - timedelta(days=99))
+        Payable(status=STATUS_SCHEDULED, due_date=_hoje() - timedelta(days=99)), _hoje()
     ) is False
 
 

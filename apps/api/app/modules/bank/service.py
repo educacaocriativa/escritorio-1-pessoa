@@ -223,15 +223,18 @@ def _probe_duplicata(
     return _duplicata_probe(db, amount_cents=amount_cents, posted_at=posted_at)
 
 
-def _today() -> date:
-    """Hoje em UTC — mesma âncora do Cockpit e da Projeção (`datetime.now(UTC).date()`).
+def _today(db: Session, *, now: datetime | None = None) -> date:
+    """Hoje NO FUSO DO TENANT — mesma âncora do Cockpit e da Projeção.
 
-    Para o Brasil (UTC−3) a data UTC nunca fica ATRÁS da local, então a guarda de "data futura"
-    é, no pior caso, mais permissiva por algumas horas — nunca bloqueia o usuário de informar o
-    dia de hoje, que é o erro que doeria. A dívida geral de fuso por tenant está registrada no
-    `CLAUDE.md` §6.1 e não é resolvida aqui.
+    Era `datetime.now(UTC).date()`. O comentário antigo argumentava que, para UTC−3, a data UTC
+    nunca fica ATRÁS da local e portanto a guarda de "data futura" só erraria para o lado
+    permissivo. Verdade — e insuficiente: `resolve_until` e `agendado_sums` usam a MESMA âncora
+    para decidir o que já é passado, e ali um dia a mais **antecipa saldo e agendamento**. A
+    dívida do `CLAUDE.md` §6.1 morre aqui.
     """
-    return datetime.now(UTC).date()
+    from app.modules.settings.service import hoje_do_tenant
+
+    return hoje_do_tenant(db, now=now)
 
 
 # ── O corte de data das superfícies de saldo corrente (Story 8.10) ───────────────────────────
@@ -254,7 +257,7 @@ corrente quer o futuro. Se você está prestes a ser o primeiro, escreva na stor
 """
 
 
-def resolve_until(until: date | None) -> date:
+def resolve_until(until: date | None, hoje: date) -> date:
     """O corte efetivo de um saldo corrente: `None` → **hoje**. Nunca devolve `None`.
 
     **A única implementação da normalização**, consumida por `derived_balance`,
@@ -267,7 +270,7 @@ def resolve_until(until: date | None) -> date:
     alcançaria também `active_balance_total` (ver a assimetria declarada na docstring dela) e a
     conferência, extrapolando o item 2.5 do epic.
     """
-    return _today() if until is None else until
+    return hoje if until is None else until
 
 
 def _validate_kind(kind: str) -> str:
@@ -285,8 +288,8 @@ def _validate_kind(kind: str) -> str:
     return kind
 
 
-def _validate_opening_date(opening_date: date) -> date:
-    if opening_date > _today():
+def _validate_opening_date(opening_date: date, hoje: date) -> date:
+    if opening_date > hoje:
         raise BankError(
             "A data de abertura não pode ser futura — ela é o dia em que você conferiu o saldo "
             "no app do banco.",
@@ -612,7 +615,7 @@ def derived_balance(db: Session, *, bank_account_id: str, until: date | None = N
     """
     acc = get_account(db, bank_account_id)
     return acc.opening_balance_cents + _movements_sum(
-        db, account=acc, until=resolve_until(until)
+        db, account=acc, until=resolve_until(until, _today(db))
     )
 
 
@@ -646,7 +649,7 @@ def derived_balances_as_of(
     plausível** — o relatório não quebraria, mentiria um número.
     """
     accounts = list_accounts(db, include_archived=include_archived)
-    return _balances_for(db, accounts, until=resolve_until(as_of))
+    return _balances_for(db, accounts, until=resolve_until(as_of, _today(db)))
 
 
 def active_balance_total(
@@ -738,7 +741,7 @@ def agendado_sums(
     Conta sem movimento futuro vem com `(0, 0)` — nunca ausente do dicionário; o laço é sobre
     `accounts`, não sobre o resultado da query (o mesmo erro clássico que `_balances_for` evita).
     """
-    corte = _today() if today is None else today
+    corte = _today(db) if today is None else today
     saidas = _movements_sums(db, accounts=accounts, since=corte, sign=-1)
     entradas = _movements_sums(db, accounts=accounts, since=corte, sign=1)
     return {
@@ -788,7 +791,7 @@ def create_account(
     de sinal aqui de propósito.
     """
     kind = _validate_kind(data.kind)
-    opening_date = _validate_opening_date(data.opening_date)
+    opening_date = _validate_opening_date(data.opening_date, _today(db))
 
     acc = BankAccount(
         tenant_id=tenant_id,
@@ -848,7 +851,7 @@ def update_account(
     # um dos dois antes faria a guarda seguinte se comparar com o valor novo e passar sempre.
     nova_abertura: date | None = None
     if data.opening_date is not None:
-        nova_abertura = _validate_opening_date(data.opening_date)
+        nova_abertura = _validate_opening_date(data.opening_date, _today(db))
         _validate_opening_date_move(db, account=acc, nova=nova_abertura)
         _validate_opening_date_recuo(
             account=acc, nova=nova_abertura, novo_saldo=data.opening_balance_cents
@@ -1008,7 +1011,7 @@ def validate_posted_at_floor(posted_at: date, account: BankAccount) -> date:
 
 
 def _validate_posted_at(
-    posted_at: date, account: BankAccount, *, source: str = SOURCE_MANUAL
+    posted_at: date, account: BankAccount, hoje: date, *, source: str = SOURCE_MANUAL
 ) -> date:
     """As duas guardas de data do movimento — e **o teto é cortado por `source`** (Story 8.14 AC4).
 
@@ -1052,7 +1055,7 @@ def _validate_posted_at(
             f"{', '.join(SOURCES_EXTERNA + SOURCES_SISTEMA)}.",
             422,
         )
-    if posted_at > _today():
+    if posted_at > hoje:
         raise BankError(
             "A data do movimento não pode ser futura: o extrato registra o que já aconteceu.",
             422,
@@ -1200,7 +1203,7 @@ def create_transaction(
     # `SOURCE_MANUAL` explícito, e não o default: é a mesma constante que a linha vai gravar em
     # `source` logo abaixo, e escrevê-la aqui deixa visível no diff que esta porta é a EXTERNA —
     # a que continua recusando data futura depois da Story 8.14.
-    posted_at = _validate_posted_at(data.posted_at, acc, source=SOURCE_MANUAL)
+    posted_at = _validate_posted_at(data.posted_at, acc, _today(db), source=SOURCE_MANUAL)
 
     # ── A guarda de contagem dupla (AC5) ──────────────────────────────────────────────────────
     #
@@ -1292,7 +1295,7 @@ def update_transaction(
         # duas guardas coerentes se essa porta um dia se abrir, em vez de deixar um `manual`
         # hard-coded decidindo sobre uma linha que não é manual.
         tx.posted_at = _validate_posted_at(
-            data.posted_at, get_account(db, tx.bank_account_id), source=tx.source
+            data.posted_at, get_account(db, tx.bank_account_id), _today(db), source=tx.source
         )
     if data.amount_cents is not None:
         tx.amount_cents = _validate_amount(data.amount_cents)
@@ -1409,7 +1412,7 @@ def _validate_origin(origin: str) -> str:
     )
 
 
-def _validate_reference_date(reference_date: date, account: BankAccount) -> date:
+def _validate_reference_date(reference_date: date, account: BankAccount, hoje: date) -> date:
     """As duas guardas de data do saldo declarado. Ambas 422, ambas protegendo a comparação da 8.5.
 
     1. **Não futura** — não se declara o saldo de amanhã: o número que o usuário está olhando no app
@@ -1449,7 +1452,7 @@ def _validate_reference_date(reference_date: date, account: BankAccount) -> date
     responde *"posso gravar?"*; quem responde *"isto serve para conferir?"* é o
     `reconciliation.py`.
     """
-    if reference_date > _today():
+    if reference_date > hoje:
         raise BankError(
             "A data do saldo não pode ser futura: informe o saldo de um dia que já terminou, "
             "olhando o app do banco.",
@@ -1642,7 +1645,7 @@ def declare_balance(
             422,
         )
     origin = _validate_origin(data.origin)
-    reference_date = _validate_reference_date(data.reference_date, acc)
+    reference_date = _validate_reference_date(data.reference_date, acc, _today(db))
 
     existente = db.scalars(
         select(BankBalanceCheckpoint).where(

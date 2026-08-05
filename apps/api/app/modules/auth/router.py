@@ -33,7 +33,21 @@ from app.modules.auth.service import (
 router = APIRouter(prefix="/auth", tags=["auth"])
 
 
-def _build_token(tenant: Tenant, user: User) -> AuthToken:
+def _tenant_out(db: Session, tenant: Tenant) -> TenantOut:
+    """`TenantOut` com o fuso do tenant preenchido — a sessão carrega o fuso.
+
+    Import tardio de `settings` pelo mesmo motivo do Cockpit e da Agenda (evita ciclo). Usa
+    `timezone_of`, e não `tenant_timezone`, porque as rotas de auth rodam em sessão **crua**
+    (`get_db`), ainda sem tenant no contexto de RLS.
+    """
+    from app.modules.settings.service import timezone_of
+
+    out = TenantOut.model_validate(tenant)
+    out.timezone = timezone_of(db, tenant.id)
+    return out
+
+
+def _build_token(db: Session, tenant: Tenant, user: User) -> AuthToken:
     access = create_access_token(
         {
             "sub": user.id,
@@ -46,7 +60,7 @@ def _build_token(tenant: Tenant, user: User) -> AuthToken:
     return AuthToken(
         access_token=access,
         user=UserOut.model_validate(user),
-        tenant=TenantOut.model_validate(tenant),
+        tenant=_tenant_out(db, tenant),
     )
 
 
@@ -56,7 +70,7 @@ def register(data: RegisterRequest, db: Session = Depends(get_db)) -> AuthToken:
         tenant, owner = register_tenant(db, data)
     except AuthError as e:
         raise HTTPException(status_code=e.status_code, detail=str(e)) from e
-    return _build_token(tenant, owner)
+    return _build_token(db, tenant, owner)
 
 
 @router.post("/login", response_model=AuthToken)
@@ -65,7 +79,7 @@ def login(data: LoginRequest, db: Session = Depends(get_db)) -> AuthToken:
         tenant, user = authenticate(db, str(data.email), data.password)
     except AuthError as e:
         raise HTTPException(status_code=e.status_code, detail=str(e)) from e
-    return _build_token(tenant, user)
+    return _build_token(db, tenant, user)
 
 
 @router.post("/refresh", response_model=RefreshedToken)
@@ -135,7 +149,7 @@ def change_password(
     except AuthError as e:
         raise HTTPException(status_code=e.status_code, detail=str(e)) from e
     tenant = db.get(Tenant, user.tenant_id)
-    return SessionInfo(user=UserOut.model_validate(user), tenant=TenantOut.model_validate(tenant))
+    return SessionInfo(user=UserOut.model_validate(user), tenant=_tenant_out(db, tenant))
 
 
 @router.get("/me", response_model=SessionInfo)
@@ -150,4 +164,4 @@ def me(
     tenant = db.get(Tenant, user.tenant_id)
     if tenant is None:
         raise HTTPException(status_code=404, detail="Tenant não encontrado")
-    return SessionInfo(user=UserOut.model_validate(user), tenant=TenantOut.model_validate(tenant))
+    return SessionInfo(user=UserOut.model_validate(user), tenant=_tenant_out(db, tenant))

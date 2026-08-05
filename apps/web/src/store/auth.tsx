@@ -1,6 +1,7 @@
 import type { Tenant, User } from "@e1p/shared-types";
 import { createContext, type ReactNode, useCallback, useContext, useEffect, useState } from "react";
 import { api } from "../lib/api";
+import { fusoValido } from "../lib/datetime";
 
 interface AuthContextValue {
   token: string | null;
@@ -96,4 +97,22 @@ export function useAuth(): AuthContextValue {
   const ctx = useContext(AuthContext);
   if (!ctx) throw new Error("useAuth deve ser usado dentro de AuthProvider");
   return ctx;
+}
+
+/**
+ * O fuso do tenant — a única fonte de fuso da UI (ver `lib/datetime.ts`).
+ *
+ * Mora aqui, e não em `lib/datetime.ts`, para que aquele módulo continue sendo funções puras
+ * testáveis sem React.
+ *
+ * ⚠️ **Não lança fora do `AuthProvider`, ao contrário de `useAuth`** — e a diferença é
+ * deliberada. `useAuth` protege uma *credencial*: sem provider, seguir em frente esconderia um
+ * bug de montagem. Aqui o que falta é o *formato de exibição de um horário*; derrubar a tela
+ * inteira por causa disso seria uma troca péssima. Vale para os três casos em que não há
+ * sessão: página pública, componente renderizado isolado em teste, e sessão gravada no
+ * localStorage antes deste campo existir (o valor certo chega no próximo `/auth/me`).
+ */
+export function useFuso(): string {
+  const ctx = useContext(AuthContext);
+  return fusoValido(ctx?.tenant?.timezone);
 }

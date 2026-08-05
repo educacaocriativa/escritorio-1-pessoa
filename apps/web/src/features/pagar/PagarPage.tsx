@@ -11,6 +11,7 @@ import type { CostCenter } from "../financeiro/costCenters";
 import CostCenterSelect from "../financeiro/CostCenterSelect";
 import { type ChartAccount, GRUPOS_DRE } from "../financeiro/planoContas";
 import { DialogDeBaixa } from "./EscolhaDaBaixa";
+import { formatDay } from "../../lib/datetime";
 
 /** Grupos DRE cabíveis numa DESPESA (Contas a Pagar nunca lança em Receita). */
 const EXPENSE_GROUPS = GRUPOS_DRE.filter((g) => g !== "RECEITA");
@@ -228,7 +229,7 @@ export default function PagarPage() {
                       {(p.cost_center_id && costCenterLabel[p.cost_center_id]) || "—"}
                     </td>
                     <td className="px-4 py-3 tabular-nums text-neutral-600">
-                      {new Date(p.due_date + "T00:00").toLocaleDateString("pt-BR")}
+                      {formatDay(p.due_date)}
                     </td>
                     <td className="px-4 py-3 font-medium tabular-nums">{brl(p.amount_cents)}</td>
                     <td className="px-4 py-3">
@@ -298,7 +299,7 @@ export default function PagarPage() {
         <DialogDeBaixa
           titulo="Dar baixa nesta conta"
           descricao={pagando.description || pagando.supplier || "Conta"}
-          valor={`${brl(pagando.amount_cents)} · vence ${new Date(pagando.due_date + "T00:00").toLocaleDateString("pt-BR")}`}
+          valor={`${brl(pagando.amount_cents)} · vence ${formatDay(pagando.due_date)}`}
           dataPadrao={pagando.due_date}
           onClose={() => setPagando(null)}
           onPago={async (corpo) => {
