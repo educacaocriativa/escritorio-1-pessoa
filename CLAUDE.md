@@ -411,6 +411,40 @@ silencia os testes seguintes. Corrigido com `disable_existing_loggers=False`. É
 do bug já registrado abaixo ("logs que somem" por falta de `basicConfig`) — **quando um log
 sumir, verifique também quem chamou `fileConfig`/`dictConfig` antes**, não só handler ausente.
 
+14. **A mensagem saiu, chegou no celular e mesmo assim não apareceu em Conversas.** Achado
+    testando a #79 em campo. Duas causas independentes, e a segunda é estrutural:
+    - **O webhook só assinava `MESSAGES_UPSERT`**, que é o que CHEGA (mensagem do contato e a
+      que o dono digita no próprio celular, espelhada pelo Baileys). O que sai pela API da
+      Evolution vem em **`SEND_MESSAGE`** — evento diferente. Sem ele, tudo que o produto dispara
+      sozinho (funil, cobrança, contrato) era entregue de verdade e **não ficava registrado na
+      conversa**: o fio mostrava só um lado. Nomes conferidos por `grep` no dist da imagem que
+      roda em produção, não na documentação. Duplicar não é risco: `ingest_webhook_payload` é
+      idempotente por `wa_message_id`.
+    - **O contato do funil não era o contato da conversa.** Seis cards "Flavio Kato" com o mesmo
+      `phone_key`: o funil inscreveu `8a75cf66` (`source=api`, zero conversas) e a conversa real
+      estava em `4804f5c5` (`source=whatsapp`). `get_timeline` ancora os avisos automáticos em
+      `chat.client_id` — cards diferentes, metade da história em cada.
+    - **`crm/merge.py`** (+ `app.scripts.merge_duplicate_clients`, dry-run por padrão) fecha a
+      dívida que a PR #76 deixou aberta. Descobre as tabelas com `client_id` pelo REGISTRY, não
+      por lista escrita à mão (mesmo motivo da purga dinâmica de tenant: lista esquece o módulo
+      seguinte, e esquecer aqui deixa cobrança apontando para card apagado). Sobrevivente = o
+      mais antigo, **o mesmo critério de `_find_existing`** — se divergisse, `absorb_lead`
+      escolheria um card e a mescla outro, e o próximo lead recriaria a divisão.
+    - ⚠️ **O guarda que impede a mescla errada:** agrupa por telefone **E nome**. `phone_key` não
+      é único de propósito (marido e mulher compartilham telefone) — agrupar só por telefone
+      juntaria duas PESSOAS num card, que é pior que o duplicado.
+    - **O 9º dígito era a segunda forma de o histórico se partir:** o JID real do contato pode
+      não ter o 9 (`554384074017@s.whatsapp.net`, conta pré-2016) enquanto tudo que enviamos
+      passa por `normalize_br`, que o acrescenta. `_get_or_create_chat` ganhou busca secundária
+      por telefone normalizado, só no caminho de miss — mesma classe que o `chat_jid` canônico já
+      resolvera para `@lid` × `@s.whatsapp.net`.
+    - **UX:** "Descrição" do nó virou "Anotação (só no desenho)". Duas caixas multilinha
+      conviviam na mesma tela e só uma era enviada; o fundador escreveu na errada um texto que
+      parecia mensagem e esperou que fosse entregue. Nada na tela dizia o contrário.
+    - **Operacional:** mudar a config do webhook numa instância JÁ conectada exige reaplicar o
+      `/webhook/set` **e reiniciar o container `evolution`** (armadilha já registrada abaixo) —
+      o processo em memória mantém a config carregada na conexão.
+
 **Duas armadilhas operacionais da VPS** (não são bug de código, são do processo de deploy):
 - Depois de mudar a config do webhook via `/webhook/set` numa instância **já conectada**, a mudança pode não valer pro processo em memória (cache do canal Baileys carregado na conexão) — precisou **reiniciar o container `evolution`** (não só recriar) pra pegar a config nova. Sessões reconectam sozinhas (credenciais persistidas no Postgres/Redis), sem precisar de novo QR.
 - `docker compose up -d --build <serviço>` só reconstrói o serviço **nomeado**. Rebuildar só `api` depois de um PR que também mudou frontend deixa o `web` com o build antigo, **em silêncio** (sem erro, só o comportamento antigo persistindo). Depois de qualquer merge, checar QUAIS serviços mudaram no diff antes de escolher o que rebuildar — ou rebuildar todos (`up -d --build` sem nome, como o `reference_e1p_prod_deploy` já recomendava).

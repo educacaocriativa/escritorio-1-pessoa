@@ -103,7 +103,19 @@ def connect(db: Session, *, tenant_id: str) -> dict:
                         f"/internal/whatsapp/evolution/webhook/{webhook_secret}"
                     ),
                     "byEvents": False,
-                    "events": ["MESSAGES_UPSERT"],
+                    # `MESSAGES_UPSERT` é o que CHEGA — mensagem do contato e também a que o
+                    # dono digita no celular dele (o Baileys espelha as duas no mesmo evento;
+                    # ver `from_me` em `parse_inbound`). O que sai pela API da PRÓPRIA Evolution
+                    # (`/message/sendText`, usado pelo worker de notificações) vem em
+                    # `SEND_MESSAGE` — evento diferente. Sem ele, tudo que o produto dispara
+                    # sozinho (funil, cobrança, contrato) saía de verdade e NÃO ficava registrado
+                    # na conversa: o fio mostrava só um lado. Nomes conferidos na imagem que roda
+                    # em produção (`grep` no dist da v2.3.7), não na documentação.
+                    #
+                    # Duplicar não é risco: `ingest_webhook_payload` é idempotente por
+                    # `wa_message_id`, então a mesma mensagem chegando pelos dois eventos vira
+                    # uma linha só.
+                    "events": ["MESSAGES_UPSERT", "SEND_MESSAGE"],
                     # A Evolution baixa e decifra a mídia (tem a mediaKey) e injeta o resultado
                     # em `message.base64` — sem isto, mídia recebida (foto/áudio/documento)
                     # chega só com metadado (legenda/mimetype), sem os bytes (ver

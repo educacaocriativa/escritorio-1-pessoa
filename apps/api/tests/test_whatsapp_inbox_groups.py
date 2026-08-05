@@ -299,3 +299,53 @@ def test_group_rejects_template_reply(db) -> None:
         assert "Grupo não usa template" in str(exc)
     else:  # pragma: no cover
         raise AssertionError("deveria ter recusado")
+
+
+# ── O 9º dígito não pode partir a conversa em duas ───────────────────────────
+# Caso real do tenant do fundador: o JID que o WhatsApp usa para o celular dele é
+# `554384074017@s.whatsapp.net` (SEM o 9, conta pré-2016), mas tudo que o produto ENVIA passa
+# por `normalize_br`, que acrescenta o 9. Se a conversa fosse resolvida só por igualdade de
+# string, a mensagem que o funil dispara abriria um segundo fio para a mesma pessoa.
+
+
+def test_jid_com_e_sem_o_nono_digito_caem_na_mesma_conversa(db) -> None:
+    from app.core.whatsapp.inbound import InboundMessage
+    from app.modules.whatsapp_inbox import service as inbox_service
+    from app.modules.whatsapp_inbox.models import WhatsappChat
+
+    def _ingesta(jid: str, texto: str, from_me: bool) -> None:
+        inbox_service.ingest_webhook_payload(
+            db, tenant_id=TENANT_ID,
+            messages=[InboundMessage(
+                wa_message_id=f"wa-{texto}", from_phone=jid.split("@", 1)[0],
+                push_name="Flavio Kato", kind="text", text_body=texto, media_ref=None,
+                from_me=from_me, chat_jid=jid, chat_kind="direct",
+            )],
+        )
+
+    _ingesta("554384074017@s.whatsapp.net", "oi, chegou?", from_me=False)   # o contato escreveu
+    _ingesta("5543984074017@s.whatsapp.net", "aqui e a Doro", from_me=True)  # o funil respondeu
+
+    conversas = db.scalars(select(WhatsappChat).where(WhatsappChat.kind == "direct")).all()
+    assert len(conversas) == 1, [c.chat_jid for c in conversas]
+    fio = inbox_service.get_timeline(db, chat_id=conversas[0].id)
+    assert [e["direction"] for e in fio] == ["in", "out"]
+
+
+def test_grupo_nao_entra_na_reconciliacao_por_telefone(db) -> None:
+    """JID de grupo não é telefone. Dois grupos distintos jamais podem colapsar num só."""
+    from app.core.whatsapp.inbound import InboundMessage
+    from app.modules.whatsapp_inbox import service as inbox_service
+    from app.modules.whatsapp_inbox.models import WhatsappChat
+
+    for jid in ("554384074017-1503532407@g.us", "554384074017-9999999999@g.us"):
+        inbox_service.ingest_webhook_payload(
+            db, tenant_id=TENANT_ID,
+            messages=[InboundMessage(
+                wa_message_id=f"wa-{jid}", from_phone=None, push_name="Alguem",
+                kind="text", text_body="oi", media_ref=None, from_me=False,
+                chat_jid=jid, chat_kind="group",
+            )],
+        )
+    grupos = db.scalars(select(WhatsappChat).where(WhatsappChat.kind == "group")).all()
+    assert len(grupos) == 2
