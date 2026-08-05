@@ -197,3 +197,82 @@ describe("PlatformUsers/OfficeCard — suspender/excluir usuário: tratamento de
     expect(vi.mocked(api.delete)).toHaveBeenCalledWith("/admin/users/user-staff");
   });
 });
+
+// ── A tela de confirmação não pode mentir sobre o envio (fix de 2026-08-05) ──────────────────
+//
+// Bug real de produção: o Master cadastrou um funcionário por WhatsApp e a tela disse
+// "modo de teste (não saiu de verdade) — repasse a senha abaixo", com a caixa de senha VAZIA.
+// Duas causas somadas: (a) `queued` (o status normal do WhatsApp desde a Onda 3) era tratado
+// como falha, porque o código só aceitava `sent`; (b) em produção a API não devolve a senha
+// (Story 2.1 AC3), e o JSX renderizava `{invite.temp_password}` cru — rótulo órfão sobre o nada.
+
+async function cadastrarConta(user: ReturnType<typeof userEvent.setup>) {
+  await user.click(await screen.findByRole("button", { name: "Nova conta" }));
+  await user.type(screen.getByLabelText("Nome da empresa"), "Empresa Teste Ltda");
+  await user.type(screen.getByLabelText("Subdomínio"), "empresa-teste");
+  await user.type(screen.getByLabelText("Nome completo"), "Fulano de Tal");
+  await user.type(screen.getByLabelText("CPF/CNPJ"), "12345678901");
+  await user.type(screen.getByLabelText("WhatsApp"), "27999990000");
+  await user.type(screen.getByLabelText("E-mail"), "fulano-teste@example.com");
+  await user.type(screen.getByLabelText("Endereço"), "Rua Teste, 100");
+  await user.click(screen.getByRole("button", { name: "Cadastrar e enviar senha" }));
+  await waitFor(() => expect(vi.mocked(api.post)).toHaveBeenCalled());
+}
+
+describe("PlatformUsers — a confirmação do convite diz a verdade sobre a entrega", () => {
+  it("'queued' é sucesso, não modo de teste", async () => {
+    const user = userEvent.setup();
+    vi.mocked(api.post).mockResolvedValue({
+      data: {
+        temp_password: "senha-fake-123",
+        delivery_status: "queued",
+        delivery: "whatsapp",
+        owner: { name: "Fulano de Tal" },
+        tenant: { legal_name: "Empresa Teste Ltda" },
+      },
+    } as never);
+    renderPage();
+    await cadastrarConta(user);
+
+    expect(await screen.findByRole("heading", { name: "Conta criada" })).toBeInTheDocument();
+    expect(screen.queryByText(/modo de teste/i)).not.toBeInTheDocument();
+    expect(screen.getByText(/enviada por WhatsApp/i)).toBeInTheDocument();
+  });
+
+  it("sem transporte: avisa que NÃO foi enviada", async () => {
+    const user = userEvent.setup();
+    vi.mocked(api.post).mockResolvedValue({
+      data: {
+        temp_password: "senha-fake-123",
+        delivery_status: "unconfigured",
+        delivery: "whatsapp",
+        owner: { name: "Fulano de Tal" },
+        tenant: { legal_name: "Empresa Teste Ltda" },
+      },
+    } as never);
+    renderPage();
+    await cadastrarConta(user);
+
+    expect(await screen.findByText(/não foi enviada/i)).toBeInTheDocument();
+    // A senha veio no corpo (dev): continua à mão para o Master repassar.
+    expect(screen.getByText("senha-fake-123")).toBeInTheDocument();
+  });
+
+  it("sem senha no corpo (produção): nenhuma caixa de senha vazia", async () => {
+    const user = userEvent.setup();
+    vi.mocked(api.post).mockResolvedValue({
+      data: {
+        temp_password: null,
+        delivery_status: "queued",
+        delivery: "whatsapp",
+        owner: { name: "Fulano de Tal" },
+        tenant: { legal_name: "Empresa Teste Ltda" },
+      },
+    } as never);
+    renderPage();
+    await cadastrarConta(user);
+
+    expect(await screen.findByRole("heading", { name: "Conta criada" })).toBeInTheDocument();
+    expect(screen.queryByText("Senha temporária")).not.toBeInTheDocument();
+  });
+});

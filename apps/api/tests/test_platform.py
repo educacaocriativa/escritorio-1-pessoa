@@ -205,16 +205,71 @@ def test_create_edit_delete_staff(client: TestClient, admin_headers):
     assert node["staff_count"] == 0
 
 
-def test_staff_whatsapp_delivery(client: TestClient, admin_headers, _tenant_session_to_test_db):
+def test_staff_whatsapp_delivery(
+    client: TestClient, admin_headers, db: Session, _tenant_session_to_test_db
+):
+    """Tenant COM transporte utilizável: o request enfileira e a entrega real fica pro worker
+    (Onda 3 — fila com validade/freio)."""
     tid = _tenant_id(client, admin_headers, slug="escw", email="escw@example.com")
+    db.add(TenantProfile(tenant_id=tid, whatsapp_token="tok-w", whatsapp_phone_id="phone-w"))
+    db.commit()
+
     invite = client.post(
         f"/admin/accounts/{tid}/users",
         json=_staff_body(email="zap@escw.com", delivery="whatsapp"),
         headers=admin_headers,
     ).json()
-    # entrega real fica pro worker desde a Onda 3 (fila com validade/freio) — o request só
-    # enfileira.
     assert invite["delivery"] == "whatsapp" and invite["delivery_status"] == "queued"
+
+
+# ── O convite não finge que enviou (fix do transporte silencioso, 2026-08-05) ────────────────
+#
+# Bug real de produção: o Master cadastrou um funcionário por WhatsApp num tenant cuja sessão
+# Evolution tinha sido desconectada 46min antes. `_send_invite` devolveu "queued" assim mesmo, a
+# notificação foi entregue ao stub da Meta (sem credencial) e morreu como `logged` — status
+# TERMINAL, que o worker não reprocessa. A senha nunca chegou, e a tela não tinha como saber.
+
+def test_convite_por_whatsapp_sem_transporte_nao_finge_que_enfileirou(
+    client: TestClient, admin_headers, db: Session, _tenant_session_to_test_db
+):
+    """Sem Evolution conectada e sem credencial da Meta, não há por onde entregar: o status diz
+    isso, e nada vai pra fila — enfileirar o que já se sabe que morrerá é a própria mentira."""
+    tid = _tenant_id(client, admin_headers, slug="escsem", email="escsem@example.com")
+
+    invite = client.post(
+        f"/admin/accounts/{tid}/users",
+        json=_staff_body(email="semzap@escsem.com", delivery="whatsapp"),
+        headers=admin_headers,
+    ).json()
+
+    assert invite["delivery_status"] == "unconfigured"
+    assert db.scalar(
+        select(Notification).where(
+            Notification.tenant_id == tid, Notification.channel == "whatsapp"
+        )
+    ) is None
+
+
+def test_convite_por_whatsapp_com_evolution_conectada_enfileira(
+    client: TestClient, admin_headers, db: Session, monkeypatch: pytest.MonkeyPatch,
+    _tenant_session_to_test_db,
+):
+    """Evolution confirmada (`whatsapp_provider='evolution'`) dispensa credencial da Meta — a
+    credencial dela é global."""
+    from app.config import settings as app_settings
+
+    monkeypatch.setattr(app_settings, "evolution_api_key", "global-key")
+    tid = _tenant_id(client, admin_headers, slug="escevo", email="escevo@example.com")
+    db.add(TenantProfile(tenant_id=tid, whatsapp_provider="evolution"))
+    db.commit()
+
+    invite = client.post(
+        f"/admin/accounts/{tid}/users",
+        json=_staff_body(email="evozap@escevo.com", delivery="whatsapp"),
+        headers=admin_headers,
+    ).json()
+
+    assert invite["delivery_status"] == "queued"
 
 
 # ── WhatsApp por template (staff_invite) — Story convite via template ───────────────────────

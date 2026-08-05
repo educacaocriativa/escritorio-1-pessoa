@@ -88,6 +88,10 @@ def run_sweep(
         # que é o lugar onde a granularidade tem consumidor real.
         "scheduled_promoted": 0,
         "whatsapp_connections_dropped": 0,
+        # Contador PRÓPRIO, e não uma partição de `dropped`: são eventos OPOSTOS do ciclo de
+        # vida da sessão (uma subiu × uma caiu), não dois recortes de um mesmo número. Somá-los
+        # produziria um total sem significado. Ver `test_o_sweep_NAO_ganhou_contador_novo`.
+        "whatsapp_connections_promoted": 0,
         "errors": [],
     }
 
@@ -165,8 +169,18 @@ def run_sweep(
                 {"tenant_id": tenant_id, "stage": "scheduled_promote", "error": str(exc)}
             )
 
-        # Etapa 5 — monitora quedas de sessão Evolution (sessão SEPARADA das outras quatro).
+        # Etapa 5 — reconcilia a sessão Evolution nas DUAS direções (sessão SEPARADA das outras
+        # quatro). Promover vem antes de checar queda: é a ordem do ciclo de vida, e um tenant
+        # promovido agora já entra saudável na checagem seguinte.
+        #
+        # As duas chamadas dividem o MESMO try porque dependem da mesma API externa — se a
+        # Evolution está fora do ar, separá-las só produziria dois registros do mesmo erro.
         try:
+            with tenant_session_factory(tenant_id) as db:
+                promoted = whatsapp_session_service.promote_pending_connections(
+                    db, tenant_id=tenant_id
+                )
+            result["whatsapp_connections_promoted"] += promoted
             with tenant_session_factory(tenant_id) as db:
                 dropped = whatsapp_session_service.check_connections(db, tenant_id=tenant_id)
             result["whatsapp_connections_dropped"] += dropped
@@ -178,12 +192,14 @@ def run_sweep(
 
     logger.info(
         "[worker] sweep: tenants=%s funil_resumido=%s notificacoes=%s midia_whatsapp=%s "
-        "agendadas_promovidas=%s conexoes_whatsapp_caidas=%s erros=%s",
+        "agendadas_promovidas=%s conexoes_whatsapp_promovidas=%s conexoes_whatsapp_caidas=%s "
+        "erros=%s",
         result["tenants_checked"],
         result["funnel_resumed"],
         result["notifications_processed"],
         result["whatsapp_media_processed"],
         result["scheduled_promoted"],
+        result["whatsapp_connections_promoted"],
         result["whatsapp_connections_dropped"],
         len(result["errors"]),
     )

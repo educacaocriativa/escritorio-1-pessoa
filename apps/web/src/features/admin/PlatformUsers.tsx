@@ -13,6 +13,89 @@ import { usePrimaryAction } from "../../store/pageActions";
 // ROOT_DOMAIN configurado no Traefik/backend. Fallback "e1p.com" só pra dev local sem o build arg.
 const ROOT_DOMAIN = import.meta.env.VITE_ROOT_DOMAIN ?? "e1p.com";
 
+// ── Resultado do convite: a única voz sobre o que aconteceu com a senha ──────────────────────
+//
+// Os dois modais (funcionário e conta nova) tinham cópias divergentes desta tela, e ambas
+// erravam do mesmo jeito. Bug real de produção (2026-08-05): o Master leu
+// "modo de teste (não saiu de verdade) — repasse a senha abaixo" sobre uma caixa de senha
+// VAZIA. Eram dois defeitos somados:
+//   (a) só `sent` contava como sucesso, mas o WhatsApp devolve `queued` desde a Onda 3 (a
+//       entrega real é do worker) — o caminho normal era relatado como falha;
+//   (b) em produção a API não devolve a senha (Story 2.1 AC3) e o JSX renderizava
+//       `{invite.temp_password}` cru, deixando o rótulo órfão sobre o nada.
+// Daí a caixa da senha só existir quando há senha, e a frase derivar do status inteiro.
+
+const CANAL: Record<string, string> = { whatsapp: "WhatsApp", email: "e-mail" };
+
+/** Frase + se a entrega aconteceu. `entregue: false` é o que autoriza o tom de alerta. */
+function mensagemDeEntrega(status: string, canal: string): { texto: string; entregue: boolean } {
+  switch (status) {
+    case "sent":
+      return { texto: `A senha foi enviada por ${canal}.`, entregue: true };
+    case "queued":
+      // A fila é o caminho normal, não uma degradação: o worker entrega fora do request.
+      return { texto: `A senha foi enviada por ${canal} e chega em instantes.`, entregue: true };
+    case "unconfigured":
+      return {
+        texto: `A senha NÃO foi enviada: o ${canal} desta conta não está conectado.`,
+        entregue: false,
+      };
+    case "failed":
+      return { texto: `A senha NÃO foi enviada: o envio por ${canal} falhou.`, entregue: false };
+    default:
+      // "logged" — provedor sem credencial devolve isso; é o modo de teste de verdade.
+      return {
+        texto: `O envio por ${canal} está em modo de teste (não saiu de verdade).`,
+        entregue: false,
+      };
+  }
+}
+
+function InviteResult({
+  quem, delivery, deliveryStatus, tempPassword, rodape, onConcluir,
+}: {
+  quem: string;
+  delivery: string;
+  deliveryStatus: string;
+  tempPassword?: string | null;
+  rodape: string;
+  onConcluir: () => void;
+}) {
+  const canal = CANAL[delivery] ?? delivery;
+  const { texto, entregue } = mensagemDeEntrega(deliveryStatus, canal);
+  return (
+    <div className="space-y-3 text-sm">
+      <p className="text-neutral-600">
+        <strong>{quem}</strong> foi cadastrado. {texto}
+        {!entregue && tempPassword ? " Repasse a senha abaixo." : ""}
+      </p>
+      {tempPassword ? (
+        <div className="rounded-xl bg-neutral-50 p-3">
+          <p className="text-xs text-neutral-400">Senha temporária</p>
+          <p className="select-all font-mono text-base font-semibold text-neutral-800">
+            {tempPassword}
+          </p>
+        </div>
+      ) : null}
+      {!entregue && !tempPassword ? (
+        // Sem entrega E sem senha à mão, dizer "repasse abaixo" seria mandar o Master fazer o
+        // impossível. O caminho honesto é conectar o transporte e cadastrar de novo.
+        <p className="rounded-xl bg-amber-50 p-3 text-xs text-amber-800">
+          A senha não aparece aqui por segurança e o envio não aconteceu, então este usuário
+          ainda não tem como entrar. Conecte o {canal} em Configurações e cadastre novamente.
+        </p>
+      ) : null}
+      <p className="text-xs text-neutral-500">{rodape}</p>
+      <button
+        onClick={onConcluir}
+        className="w-full rounded-pill bg-accent-400 py-2.5 font-semibold text-white hover:bg-accent-500"
+      >
+        Concluir
+      </button>
+    </div>
+  );
+}
+
 // Módulos que um funcionário pode receber (vazio = acesso a tudo).
 const MODULES: { key: string; label: string }[] = [
   { key: "crm", label: "CRM" },
@@ -317,30 +400,16 @@ function AddStaffModal({ tenantId, onClose, onCreated }: { tenantId: string; onC
 
   // Tela de confirmação: usuário criado, senha temporária enviada.
   if (invite) {
-    const sent = invite.delivery_status === "sent";
-    const channel = invite.delivery === "whatsapp" ? "WhatsApp" : "e-mail";
     return (
       <Modal title="Usuário cadastrado" open onClose={() => { onClose(); onCreated(); }}>
-        <div className="space-y-3 text-sm">
-          <p className="text-neutral-600">
-            <strong>{invite.user.name}</strong> foi cadastrado. {sent
-              ? `A senha foi enviada por ${channel}.`
-              : `O envio por ${channel} está em modo de teste (não saiu de verdade) — repasse a senha abaixo.`}
-          </p>
-          <div className="rounded-xl bg-neutral-50 p-3">
-            <p className="text-xs text-neutral-400">Senha temporária</p>
-            <p className="select-all font-mono text-base font-semibold text-neutral-800">{invite.temp_password}</p>
-          </div>
-          <p className="text-xs text-neutral-500">
-            No primeiro acesso o usuário entra com essa senha e define uma nova.
-          </p>
-          <button
-            onClick={() => { onClose(); onCreated(); }}
-            className="w-full rounded-pill bg-accent-400 py-2.5 font-semibold text-white hover:bg-accent-500"
-          >
-            Concluir
-          </button>
-        </div>
+        <InviteResult
+          quem={invite.user.name}
+          delivery={invite.delivery}
+          deliveryStatus={invite.delivery_status}
+          tempPassword={invite.temp_password}
+          rodape="No primeiro acesso o usuário entra com essa senha e define uma nova."
+          onConcluir={() => { onClose(); onCreated(); }}
+        />
       </Modal>
     );
   }
@@ -448,24 +517,16 @@ function NewAccountModal({ open, onClose, onCreated }: { open: boolean; onClose:
   if (!open) return null;
 
   if (invite) {
-    const sent = invite.delivery_status === "sent";
-    const channel = invite.delivery === "whatsapp" ? "WhatsApp" : "e-mail";
     return (
       <Modal title="Conta criada" open onClose={finish}>
-        <div className="space-y-3 text-sm">
-          <p className="text-neutral-600">
-            <strong>{invite.owner.name}</strong> ({invite.tenant.legal_name}) foi cadastrado.{" "}
-            {sent ? `A senha foi enviada por ${channel}.` : `Envio por ${channel} em modo de teste — repasse a senha abaixo.`}
-          </p>
-          <div className="rounded-xl bg-neutral-50 p-3">
-            <p className="text-xs text-neutral-400">Senha temporária</p>
-            <p className="select-all font-mono text-base font-semibold text-neutral-800">{invite.temp_password}</p>
-          </div>
-          <p className="text-xs text-neutral-500">No primeiro acesso o dono define uma nova senha.</p>
-          <button onClick={finish} className="w-full rounded-pill bg-accent-400 py-2.5 font-semibold text-white hover:bg-accent-500">
-            Concluir
-          </button>
-        </div>
+        <InviteResult
+          quem={`${invite.owner.name} (${invite.tenant.legal_name})`}
+          delivery={invite.delivery}
+          deliveryStatus={invite.delivery_status}
+          tempPassword={invite.temp_password}
+          rodape="No primeiro acesso o dono define uma nova senha."
+          onConcluir={finish}
+        />
       </Modal>
     );
   }

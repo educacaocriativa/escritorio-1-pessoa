@@ -7,6 +7,7 @@ com credencial GLOBAL igual, mas endpoints e ciclo de vida próprios.
 """
 from __future__ import annotations
 
+import logging
 import secrets
 
 import httpx
@@ -21,6 +22,8 @@ from app.modules.whatsapp_session.models import (
     STATUS_DISCONNECTED,
     PublicWhatsappInstance,
 )
+
+logger = logging.getLogger("e1p.whatsapp")
 
 
 class WhatsappSessionError(Exception):
@@ -197,8 +200,8 @@ def get_status(db: Session, *, tenant_id: str) -> str:
 def confirm(db: Session, *, tenant_id: str) -> str:
     """Reverifica com a Evolution (nunca confia no client) e, se realmente 'open', É QUEM
     seta `whatsapp_provider='evolution'` — a única escrita de transição-pra-conectado deste
-    módulo. Chamado pelo frontend ao ver 'connected' pela primeira vez; o worker (Onda 2,
-    4ª etapa) é a rede de segurança caso a aba feche antes disso."""
+    módulo. Chamado pelo frontend ao ver 'connected' pela primeira vez; se a aba fechar antes
+    disso, `promote_pending_connections` (worker) faz a mesma transição."""
     instance = _instance_name(tenant_id)
     row = db.get(PublicWhatsappInstance, instance)
     if row is None:
@@ -211,6 +214,41 @@ def confirm(db: Session, *, tenant_id: str) -> str:
     row.last_status = STATUS_CONNECTED
     db.commit()
     return STATUS_CONNECTED
+
+
+def promote_pending_connections(db: Session, *, tenant_id: str) -> int:
+    """A rede de segurança que `confirm()` sempre prometeu e nunca teve. Devolve 1 se promoveu.
+
+    Quem escreve `whatsapp_provider='evolution'` é `confirm()`, disparado PELO FRONTEND ao ver
+    'connected'. Se a aba fechar antes, a Evolution segue conectada e o campo segue nulo — e o
+    despachante, que DERIVA o transporte desse campo (`core/whatsapp._resolve`), manda todo
+    envio pela Meta, que sem credencial devolve "logged". Nada protesta em lugar nenhum: o
+    recebimento continua funcionando (o webhook não consulta o provider), então o tenant parece
+    saudável enquanto nenhuma mensagem sai. Bug real de produção (2026-08-05, Doro Eventos): um
+    convite de funcionário ficou `logged` e a senha nunca chegou ao destinatário.
+
+    `check_connections` NÃO cobria isso: ele retorna cedo justamente quando o provider ainda não
+    é "evolution", que é a condição do defeito.
+
+    Só promove quem está em `connecting`. Uma instância em `disconnected` pode continuar "open"
+    do lado da Evolution — `disconnect()` engole falha de rede do logout —, e promovê-la
+    desfaria em silêncio um pedido explícito do dono.
+    """
+    row = db.get(PublicWhatsappInstance, _instance_name(tenant_id))
+    if row is None or row.last_status != STATUS_CONNECTING:
+        return 0
+    profile = settings_service.get_profile(db, tenant_id)
+    if profile.whatsapp_provider == "evolution":
+        return 0
+    if _fetch_evolution_status(row.instance_name) != "open":
+        return 0
+    profile.whatsapp_provider = "evolution"
+    row.last_status = STATUS_CONNECTED
+    db.commit()
+    logger.info(
+        "[whatsapp.session] conexão confirmada pelo worker (aba fechou antes) tenant=%s", tenant_id
+    )
+    return 1
 
 
 def refresh_qr(db: Session, *, tenant_id: str) -> str:
