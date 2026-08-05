@@ -382,9 +382,18 @@ e uma tentativa real de conexão avançou mais um passo):
       celular estrangeiro de 10-11 dígitos É reescrito como brasileiro e a mensagem iria para
       outra pessoa — pior que falhar. Por isso **toda reescrita é logada em INFO**: o caso
       estrangeiro precisa aparecer. Se um dia houver contato internacional, este é o ponto.
-    - **Dívida (não corrigida):** `crm.update_client` faz `setattr` genérico e **não recalcula
-      `phone_key`** — editar o telefone de um contato deixa a chave velha. Não afeta mais o
-      envio (a fronteira normaliza), mas afeta a deduplicação de lead.
+    - **[CORRIGIDO]** `crm.update_client` fazia `setattr` genérico e **não recalculava
+      `phone_key`** — editar o telefone de um contato deixava a chave velha. Não afetava o envio
+      (a fronteira normaliza), mas quebrava a deduplicação: o efeito não aparece na tela de
+      edição e sim no PRÓXIMO lead, como card duplicado. `phone_key` é derivado e não está no
+      `ClientUpdate` (nem deve: derivado não é campo de entrada), então o laço genérico nunca o
+      alcançava. Apagar o telefone agora apaga a chave junto — chave órfã casaria um lead futuro
+      com um contato que já não tem aquele número. **Verificado em produção antes de corrigir:
+      55 contatos, 0 com chave divergente** — nenhum backfill necessário. ⚠️ A primeira sondagem
+      devolveu `contatos=0` e quase virou um "está tudo limpo" falso: `clients` tem RLS e
+      `SessionLocal` sem tenant é fail-closed. **Auditoria de dados em tabela com RLS precisa do
+      papel que faz bypass (`e1p_root`), senão a consulta não vê linha nenhuma e o silêncio
+      parece aprovação.**
     - **Lacuna de diagnóstico fechada junto:** `providers/evolution.py` chamava
       `raise_for_status()` e logava só o código — o CORPO da resposta da Evolution, que já
       explicava o erro, era descartado. Investigar exigiu sondar a API à mão em produção. Agora
