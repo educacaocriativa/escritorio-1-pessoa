@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import {
   FUSO_PADRAO,
   formatDate,
+  formatDateShort,
   formatDateTime,
   formatDay,
   formatTime,
@@ -33,6 +34,13 @@ describe("formatação de instante", () => {
     expect(formatDateTime(null, FUSO_PADRAO)).toBe("");
     expect(formatDateTime(undefined, FUSO_PADRAO)).toBe("");
     expect(formatDateTime("nem data é", FUSO_PADRAO)).toBe("");
+  });
+
+  it("formata dia/mês sem o ano, para caber no card do Kanban", () => {
+    expect(formatDateShort(NOITE_DO_DIA_5, "America/Sao_Paulo")).toBe("05/08");
+    // O fuso continua sendo parâmetro de verdade nesta variante também.
+    expect(formatDateShort(NOITE_DO_DIA_5, "UTC")).toBe("06/08");
+    expect(formatDateShort(null, FUSO_PADRAO)).toBe("");
   });
 });
 
