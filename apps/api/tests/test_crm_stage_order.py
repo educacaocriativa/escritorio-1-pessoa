@@ -209,3 +209,19 @@ def test_ordem_e_estavel_com_carimbos_iguais(client: TestClient, headers, db):
     primeira = _entrada(client.get("/crm/board", headers=headers).json())
     segunda = _entrada(client.get("/crm/board", headers=headers).json())
     assert primeira == segunda
+
+
+def test_api_expoe_stage_entered_at(client: TestClient, headers):
+    """Vai em `ClientOut`, não em `BoardClient`: é coluna, sempre conhecida.
+
+    `last_interaction_at` mora em `BoardClient` porque só o board o calcula, e num
+    endpoint que não calcula o `null` significaria "não sei" em vez de "não houve". Este
+    campo não tem essa ambiguidade — todo card está em algum lugar desde algum instante.
+    """
+    criado = client.post("/crm/clients", json={"name": "João"}, headers=headers).json()
+    assert criado["stage_entered_at"]  # já no POST, que devolve ClientOut
+
+    board = client.get("/crm/board", headers=headers).json()
+    card = board["columns"][0]["clients"][0]
+    assert card["stage_entered_at"]
+    assert card["stage_entered_at"] == criado["stage_entered_at"]
