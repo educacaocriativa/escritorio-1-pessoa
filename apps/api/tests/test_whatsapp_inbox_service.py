@@ -504,6 +504,40 @@ def test_is_within_session_window_false_when_never_messaged(db):
     assert inbox_service.is_within_session_window(db, chat_id=chat.id) is False
 
 
+def test_janela_de_24h_nao_se_aplica_ao_transporte_evolution(db):
+    """A janela de 24h é regra da Cloud API da Meta — a Evolution (Baileys) não a tem.
+
+    Aplicá-la ali é um beco sem saída, não um inconveniente: fora da janela a única saída
+    oferecida é template aprovado, e a Evolution não tem nenhum e nem consegue criar. A conversa
+    ficaria muda para sempre 24h depois da última mensagem do contato."""
+    profile = _configure_credentials(db)
+    profile.whatsapp_provider = "evolution"
+    client = Client(tenant_id=TENANT_ID, name="Cliente", phone="5511900007777", source="manual")
+    db.add(client)
+    db.flush()
+    chat = _chat_for(db, client)
+    db.commit()  # nenhuma mensagem recebida — na Meta isso seria "fora da janela"
+
+    assert inbox_service.is_within_session_window(db, chat_id=chat.id) is True
+
+
+def test_resposta_livre_passa_no_transporte_evolution(db, monkeypatch: pytest.MonkeyPatch):
+    profile = _configure_credentials(db)
+    profile.whatsapp_provider = "evolution"
+    client = Client(tenant_id=TENANT_ID, name="Cliente", phone="5511900008888", source="manual")
+    db.add(client)
+    db.flush()
+    chat = _chat_for(db, client)
+    db.commit()
+
+    monkeypatch.setattr(whatsapp, "send_text", lambda **kw: "sent")
+    msg = inbox_service.send_reply_text(
+        db, tenant_id=TENANT_ID, actor="user-1", chat_id=chat.id, text="Oi, tudo certo?",
+    )
+    assert msg.direction == DIRECTION_OUT
+    assert msg.status == "sent"
+
+
 def test_get_timeline_merges_conversation_and_automated(db):
     _configure_credentials(db)
     client = Client(tenant_id=TENANT_ID, name="Cliente", phone="5511900003333", source="manual")

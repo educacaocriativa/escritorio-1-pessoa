@@ -14,6 +14,7 @@ from sqlalchemy.orm import Session
 
 from app.core import audit, whatsapp
 from app.core.phone import normalize_br
+from app.core.whatsapp import capabilities as whatsapp_capabilities
 from app.core.whatsapp.inbound import InboundMessage
 from app.modules.attachments import service as attachments_service
 from app.modules.attachments.models import ALLOWED_TYPES, MAX_BYTES
@@ -530,10 +531,20 @@ def is_within_session_window(db: Session, *, chat_id: str) -> bool:
     """A janela de 24h é uma regra da Meta (Cloud API): fora dela só template aprovado passa.
 
     **Não se aplica a grupo** — a API oficial da Meta nem tem grupos, então a regra não existe
-    para eles; exigi-la ali só tornaria o grupo mudo por engano. Grupo responde sempre."""
+    para eles; exigi-la ali só tornaria o grupo mudo por engano. Grupo responde sempre.
+
+    **Nem ao transporte Evolution** (Baileys), que não tem janela nenhuma. Aqui não é só rigor
+    desnecessário: fora da janela a ÚNICA saída que o produto oferece é template aprovado, e um
+    tenant conectado por QR code não tem nenhum e não consegue criar (a Evolution recusa
+    templates por design). A conversa ficaria muda para sempre 24h depois da última mensagem do
+    contato. Ver app/core/whatsapp/capabilities.py."""
     chat = db.get(WhatsappChat, chat_id)
     if chat is not None and chat.kind == CHAT_KIND_GROUP:
         return True
+    if chat is not None:
+        profile = settings_service.get_profile(db, chat.tenant_id)
+        if not whatsapp_capabilities.for_profile(profile).session_window:
+            return True
     last_inbound = db.scalar(
         select(WhatsappMessage)
         .where(WhatsappMessage.chat_id == chat_id, WhatsappMessage.direction == DIRECTION_IN)

@@ -212,6 +212,93 @@ def test_run_send_message_missing_template_is_422(client: TestClient, headers):
     assert resp.status_code == 422
 
 
+# ── Transporte Evolution: template aprovado não existe lá ────────────────────
+# Template aprovado e janela de 24h são regras da Cloud API da Meta. A Evolution (Baileys) não
+# conhece nenhuma das duas, então exigir template do nó de WhatsApp deixava o funil INTEIRO
+# mudo para quem conectou por QR code. Ver app/core/whatsapp/capabilities.py.
+
+
+def _evolution(db: Session, tenant_id: str) -> None:
+    from app.modules.settings import service as settings_service
+
+    settings_service.get_profile(db, tenant_id).whatsapp_provider = "evolution"
+    db.commit()
+
+
+def test_run_send_message_evolution_usa_texto_livre(
+    client: TestClient, headers, db: Session, tenant_id: str
+):
+    from sqlalchemy import select
+
+    from app.modules.notifications.models import Notification
+
+    _evolution(db, tenant_id)
+    cl = client.post(
+        "/crm/clients", json={"name": "Maria Cliente", "phone": "5511988887777"}, headers=headers
+    ).json()
+    resp = client.post(
+        "/funnels/run-node",
+        json={"action": "send_message", "client_id": cl["id"],
+              "params": {"message": "Oi {{cliente.nome}}, tudo bem?"}},
+        headers=headers,
+    )
+    assert resp.status_code == 200, resp.text
+
+    notif = db.scalar(select(Notification).where(Notification.channel == "whatsapp"))
+    assert notif is not None
+    assert notif.purpose == "funnel_node"
+    assert notif.message == "Oi Maria Cliente, tudo bem?"  # {{cliente.*}} resolvido
+    # Sem template: o worker precisa cair em send_text, não em send_template.
+    assert notif.whatsapp_template_name is None
+    assert notif.whatsapp_template_language is None
+    assert notif.whatsapp_template_variables is None
+
+
+def test_run_send_message_evolution_sem_texto_is_422(
+    client: TestClient, headers, db: Session, tenant_id: str
+):
+    """Continua havendo uma exigência — só deixou de ser a errada. Mensagem vazia é entrada
+    inválida em QUALQUER transporte."""
+    _evolution(db, tenant_id)
+    cl = client.post("/crm/clients", json={"name": "Contato"}, headers=headers).json()
+    resp = client.post(
+        "/funnels/run-node",
+        json={"action": "send_message", "client_id": cl["id"], "params": {"message": "   "}},
+        headers=headers,
+    )
+    assert resp.status_code == 422
+    assert "template" not in resp.json()["detail"].lower()  # nunca pede template na Evolution
+
+
+def test_run_send_message_evolution_ignora_template_configurado(
+    client: TestClient, headers, db: Session, tenant_id: str
+):
+    """Nó configurado quando o tenant ainda era Meta, migrado depois para Evolution: o
+    `template_id` guardado no nó não pode ressuscitar o caminho de template — a Evolution
+    recusaria o envio lá no worker (`providers/evolution.send_template` levanta)."""
+    from sqlalchemy import select
+
+    from app.modules.notifications.models import Notification
+
+    tpl = _template(db, tenant_id)
+    _evolution(db, tenant_id)
+    cl = client.post(
+        "/crm/clients", json={"name": "Contato", "phone": "5511988887777"}, headers=headers
+    ).json()
+    resp = client.post(
+        "/funnels/run-node",
+        json={"action": "send_message", "client_id": cl["id"],
+              "params": {"template_id": tpl.id, "variables": ["Maria", "#123"],
+                         "message": "Oi, tudo bem?"}},
+        headers=headers,
+    )
+    assert resp.status_code == 200, resp.text
+    notif = db.scalar(select(Notification).where(Notification.channel == "whatsapp"))
+    assert notif is not None
+    assert notif.whatsapp_template_name is None
+    assert notif.message == "Oi, tudo bem?"
+
+
 def test_run_send_message_template_not_approved_is_422(
     client: TestClient, headers, db: Session, tenant_id: str
 ):

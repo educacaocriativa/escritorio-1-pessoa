@@ -1,4 +1,9 @@
-import type { Client, FunnelComponentCategory, WhatsappTemplate } from "@e1p/shared-types";
+import type {
+  Client,
+  FunnelComponentCategory,
+  TenantProfile,
+  WhatsappTemplate,
+} from "@e1p/shared-types";
 import html2canvas from "html2canvas";
 import {
   ArrowLeft, Download, GitBranch, type LucideIcon, Maximize2, MessageCircle, MousePointerClick,
@@ -24,6 +29,7 @@ import ReactFlow, {
 } from "reactflow";
 import "reactflow/dist/style.css";
 import { api, apiErrorMessage } from "../../lib/api";
+import { capabilitiesFor } from "../../lib/whatsappCapabilities";
 
 type NodeConfig = {
   subject?: string; body?: string; model?: string;
@@ -64,6 +70,18 @@ const KIND_VERB: Record<string, string> = {
   email: "Criar e-mail", whatsapp: "Escrever mensagem", sms: "Escrever SMS",
   generic: "Configurar conteúdo",
 };
+
+/** O nó já tem conteúdo (ponto verde no canvas / "✓" no painel)?
+ *
+ * Para WhatsApp vale template aprovado (Meta) **ou** texto escrito (Evolution). Checar só o
+ * template marcaria como vazio todo nó de quem conectou por QR code — que é justamente quem
+ * nunca vai ter um. */
+function hasNodeContent(data: NodeData): boolean {
+  if (contentKind(data.key) === "whatsapp") {
+    return !!(data.config?.template_id || data.config?.body?.trim());
+  }
+  return !!(data.config?.body || data.config?.model);
+}
 
 /** Mockup de página que muda conforme o "Modelo de página" escolhido. */
 function PageMockup({ model, color }: { model?: string; color: string }) {
@@ -111,9 +129,7 @@ function PageMockup({ model, color }: { model?: string; color: string }) {
 }
 
 function FunnelNode({ data, selected }: NodeProps<NodeData>) {
-  const configured = contentKind(data.key) === "whatsapp"
-    ? !!data.config?.template_id
-    : !!(data.config?.body || data.config?.model);
+  const configured = hasNodeContent(data);
   const handleStyle = { background: "#fff", border: `2px solid ${data.color}`, width: 10, height: 10 };
 
   // PÁGINA → card quadrado com mockup colorido.
@@ -180,6 +196,10 @@ function Builder() {
   const [running, setRunning] = useState<string | null>(null);
   const [showRuns, setShowRuns] = useState(false);
   const [toast, setToast] = useState<{ msg: string; type: "ok" | "err" } | null>(null);
+  // Transporte de WhatsApp do tenant — decide se o nó de mensagem pede template aprovado (Meta)
+  // ou texto livre (Evolution/QR code). `null` até carregar, e `null` já significa Meta.
+  const [whatsappProvider, setWhatsappProvider] =
+    useState<TenantProfile["whatsapp_provider"]>(null);
 
   const [nodes, setNodes, onNodesChange] = useNodesState([]);
   const [edges, setEdges, onEdgesChange] = useEdgesState([]);
@@ -194,6 +214,10 @@ function Builder() {
 
   useEffect(() => {
     api.get<FunnelComponentCategory[]>("/funnels/components").then(({ data }) => setCatalog(data));
+    api
+      .get<TenantProfile>("/settings/profile")
+      .then(({ data }) => setWhatsappProvider(data.whatsapp_provider))
+      .catch(() => setWhatsappProvider(null)); // falha ao ler o perfil não derruba o builder
   }, []);
 
   useEffect(() => {
@@ -448,9 +472,7 @@ function Builder() {
                 {selectedNode.data.shape === "page"
                   ? "Editar página"
                   : KIND_VERB[contentKind(selectedNode.data.key)]}
-                {contentKind(selectedNode.data.key) === "whatsapp"
-                  ? (selectedNode.data.config?.template_id ? " ✓" : "")
-                  : (selectedNode.data.config?.body || selectedNode.data.config?.model ? " ✓" : "")}
+                {hasNodeContent(selectedNode.data) ? " ✓" : ""}
               </button>
               {selectedNode.data.action && (
                 <button
@@ -476,6 +498,7 @@ function Builder() {
             return (
               <NodeContentEditor
                 node={node}
+                whatsappProvider={whatsappProvider}
                 onClose={() => setEditing(null)}
                 onSave={(config) => {
                   setNodes((nds) =>
@@ -495,6 +518,7 @@ function Builder() {
             return (
               <RunNodeModal
                 node={node}
+                whatsappProvider={whatsappProvider}
                 onClose={() => setRunning(null)}
                 onDone={(msg) => { setRunning(null); notify(msg); }}
                 onError={(msg) => notify(msg, "err")}
@@ -536,11 +560,13 @@ const ACTION_TITLE: Record<string, string> = {
 
 function RunNodeModal({
   node,
+  whatsappProvider,
   onClose,
   onDone,
   onError,
 }: {
   node: Node<NodeData>;
+  whatsappProvider: TenantProfile["whatsapp_provider"];
   onClose: () => void;
   onDone: (msg: string) => void;
   onError: (msg: string) => void;
@@ -583,8 +609,10 @@ function RunNodeModal({
       params.recipient = node.data.config?.recipient ?? "client";
     }
     if (action === "send_message") {
+      // Manda os dois: quem decide qual vale é o backend, pelas capabilities do transporte.
       params.template_id = node.data.config?.template_id;
       params.variables = node.data.config?.variables ?? [];
+      params.message = node.data.config?.body ?? "";
       params.recipient = node.data.config?.recipient ?? "client";
     }
     try {
@@ -600,7 +628,12 @@ function RunNodeModal({
   }
 
   const money = action === "create_quote" || action === "create_charge";
-  const hasTemplate = !!node.data.config?.template_id;
+  // O que o nó precisa ter configurado para poder rodar depende do transporte: template
+  // aprovado (Meta) ou texto escrito (Evolution/QR code).
+  const usaTemplate = capabilitiesFor(whatsappProvider).templates;
+  const msgPronta = usaTemplate
+    ? !!node.data.config?.template_id
+    : !!node.data.config?.body?.trim();
 
   return (
     <div className="absolute inset-0 z-30 flex items-center justify-center bg-black/30 p-4" onClick={onClose}>
@@ -653,10 +686,14 @@ function RunNodeModal({
             </label>
           )}
           {action === "send_message" && (
-            <p className={`rounded-lg p-2 text-xs ${hasTemplate ? "bg-neutral-50 text-neutral-500" : "bg-amber-50 text-amber-700"}`}>
-              {hasTemplate
-                ? "Usa o template de WhatsApp configurado no nó (botão “Escrever mensagem”)."
-                : "Configure um template de WhatsApp aprovado no nó (botão “Escrever mensagem”) antes de executar."}
+            <p className={`rounded-lg p-2 text-xs ${msgPronta ? "bg-neutral-50 text-neutral-500" : "bg-amber-50 text-amber-700"}`}>
+              {msgPronta
+                ? usaTemplate
+                  ? "Usa o template de WhatsApp configurado no nó (botão “Escrever mensagem”)."
+                  : "Usa a mensagem escrita no nó (botão “Escrever mensagem”)."
+                : usaTemplate
+                  ? "Configure um template de WhatsApp aprovado no nó (botão “Escrever mensagem”) antes de executar."
+                  : "Escreva a mensagem no nó (botão “Escrever mensagem”) antes de executar."}
             </p>
           )}
         </div>
@@ -665,7 +702,7 @@ function RunNodeModal({
           <button onClick={onClose} className="flex-1 rounded-pill bg-neutral-100 py-2.5 font-semibold text-neutral-600 hover:bg-neutral-200">Cancelar</button>
           <button
             onClick={run}
-            disabled={busy || (action === "send_message" && !hasTemplate)}
+            disabled={busy || (action === "send_message" && !msgPronta)}
             className="flex flex-1 items-center justify-center gap-1.5 rounded-pill bg-accent-500 py-2.5 font-semibold text-white hover:bg-accent-600 disabled:opacity-60"
           >
             <Play size={14} /> {busy ? "Executando..." : "Executar agora"}
@@ -694,10 +731,12 @@ const EMAIL_KEYWORDS = [...TEMPLATE_KEYWORDS, "cliente.notas"] as const;
 
 function NodeContentEditor({
   node,
+  whatsappProvider,
   onClose,
   onSave,
 }: {
   node: Node<NodeData>;
+  whatsappProvider: TenantProfile["whatsapp_provider"];
   onClose: () => void;
   onSave: (config: NodeConfig) => void;
 }) {
@@ -716,13 +755,18 @@ function NodeContentEditor({
   const [templateId, setTemplateId] = useState(node.data.config?.template_id ?? "");
   const [variables, setVariables] = useState<string[]>(node.data.config?.variables ?? []);
   const [recipient, setRecipient] = useState<"client" | "team">(node.data.config?.recipient ?? "client");
+  // Só o transporte da Meta tem template aprovado. Quem conectou por QR (Evolution) escreve
+  // texto livre, como no e-mail — pedir template ali travava o nó sem saída.
+  const usaTemplate = capabilitiesFor(whatsappProvider).templates;
+  const isWhatsappTemplate = isWhatsapp && usaTemplate;
+  const isWhatsappLivre = isWhatsapp && !usaTemplate;
 
   useEffect(() => {
-    if (!isWhatsapp) return;
+    if (!isWhatsappTemplate) return;
     api
       .get<WhatsappTemplate[]>("/whatsapp-templates", { params: { status: "APPROVED" } })
       .then(({ data }) => setTemplates(data));
-  }, [isWhatsapp]);
+  }, [isWhatsappTemplate]);
 
   const selectedTemplate = templates.find((t) => t.id === templateId);
 
@@ -798,7 +842,7 @@ function NodeContentEditor({
           </label>
         )}
 
-        {isWhatsapp ? (
+        {isWhatsappTemplate ? (
           <>
             <label className="mb-3 block">
               <span className="mb-1 block text-xs font-medium text-neutral-600">Template aprovado (Meta)</span>
@@ -852,6 +896,12 @@ function NodeContentEditor({
           </>
         ) : (
           <>
+            {isWhatsappLivre && (
+              <p className="mb-3 rounded-lg bg-neutral-50 p-2 text-[11px] text-neutral-500">
+                Seu WhatsApp está conectado por QR code, que envia mensagem livre — não precisa de
+                template aprovado pela Meta.
+              </p>
+            )}
             <div className="mb-3 rounded-lg bg-primary-50 p-2">
               <span className="mb-1 block text-xs font-medium text-primary-700">Gerar com IA</span>
               <div className="flex gap-2">
@@ -871,7 +921,7 @@ function NodeContentEditor({
             <label className="mb-4 block">
               <span className="mb-1 block text-xs font-medium text-neutral-600">{bodyLabel}</span>
               <textarea value={body} onChange={(e) => setBody(e.target.value)} rows={isEmail ? 8 : 5} placeholder={`Escreva ${bodyLabel.toLowerCase()}...`} className="w-full rounded-lg border border-neutral-200 px-3 py-2 text-sm outline-none focus:border-primary-400" />
-              {isEmail && (
+              {(isEmail || isWhatsappLivre) && (
                 <div className="mt-1.5 flex flex-wrap gap-1.5">
                   <span className="text-[11px] text-neutral-400">Inserir dado do lead:</span>
                   {EMAIL_KEYWORDS.map((kw) => (
@@ -896,15 +946,15 @@ function NodeContentEditor({
           <button
             onClick={() =>
               onSave(
-                isWhatsapp
+                isWhatsappTemplate
                   ? { template_id: templateId, variables, recipient }
                   : {
                       subject: isEmail ? subject : "", body, model: isPage ? model : undefined,
-                      recipient: isEmail ? recipient : undefined,
+                      recipient: isEmail || isWhatsappLivre ? recipient : undefined,
                     },
               )
             }
-            disabled={isWhatsapp && !templateId}
+            disabled={isWhatsappTemplate ? !templateId : isWhatsappLivre && !body.trim()}
             className="flex-1 rounded-pill bg-accent-400 py-2.5 font-semibold text-white hover:bg-accent-500 disabled:opacity-50"
           >
             Salvar no nó

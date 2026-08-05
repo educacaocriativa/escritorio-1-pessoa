@@ -16,6 +16,7 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.core import email, events, whatsapp
+from app.core.whatsapp import capabilities as whatsapp_capabilities
 from app.db.session import tenant_session
 from app.modules.auth.models import User
 from app.modules.crm.models import Client, PipelineStage
@@ -230,6 +231,15 @@ def process_pending(db: Session, *, tenant_id: str, limit: int = 50) -> int:
     )
     # `profile` já foi carregado acima (mesmo lote, mesmo tenant) — reaproveitado aqui pro
     # send_text/send_template de cada notificação.
+    #
+    # Guarda de transporte: 5 lugares do domínio (quotes, contracts, receivables, platform,
+    # on_client_moved) resolvem o vínculo propósito→template no ENFILEIRAMENTO, e nenhum deles
+    # sabe por qual transporte a mensagem vai sair. Um tenant que usou a Meta e depois migrou
+    # pro QR code mantém os vínculos salvos — sem esta guarda, cada notificação dessas chamaria
+    # `send_template`, que a Evolution recusa por design, e o retry com backoff repetiria a
+    # falha até expirar. Cair em `send_text` não perde nada: `notification.message` JÁ é o
+    # template renderizado (quem enfileirou substituiu os `{{n}}` antes de gravar).
+    _usa_template = whatsapp_capabilities.for_profile(profile).templates
     processed = 0
     for notification in pending:
         if notification.expires_at is not None and notification.expires_at < now:
@@ -244,7 +254,7 @@ def process_pending(db: Session, *, tenant_id: str, limit: int = 50) -> int:
                     subject="Notificação e1p",
                     body=notification.message,
                 )
-            elif notification.whatsapp_template_name:
+            elif notification.whatsapp_template_name and _usa_template:
                 status = whatsapp.send_template(
                     to=notification.recipient,
                     profile=profile,

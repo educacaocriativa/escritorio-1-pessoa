@@ -93,6 +93,34 @@ def test_enroll_runs_until_wait_then_tick_resumes(
     assert any(n["channel"] == "whatsapp" for n in notifs)
 
 
+def test_jornada_completa_no_transporte_evolution(
+    client: TestClient, headers, db: Session, tenant_id: str
+):
+    """O motor tem que levar o texto livre do nó (`config.body`) até a ação.
+
+    Antes o `_params` de `send_message` só repassava `template_id`/`variables`, então mesmo
+    depois de o service aceitar texto livre a jornada automática continuaria falhando — o texto
+    nunca sairia do nó. É o caminho que o usuário realmente usa (a jornada roda sozinha; o botão
+    "Executar agora" é só o teste manual)."""
+    from app.modules.settings import service as settings_service
+
+    settings_service.get_profile(db, tenant_id).whatsapp_provider = "evolution"
+    db.commit()
+
+    cid = _client_id(client, headers, "Ana Evolution")
+    nodes = [_node("n1", "whatsapp", "send_message",
+                   config={"body": "Oi {{cliente.nome}}, vamos conversar?"})]
+    fid = _funnel(client, headers, nodes, [])
+
+    run = client.post(f"/funnels/{fid}/enroll", json={"client_id": cid}, headers=headers).json()
+    assert run["status"] == "done", run["steps"]
+    assert any(s["action"] == "send_message" and s["status"] == "ok" for s in run["steps"])
+
+    notifs = client.get("/notifications", headers=headers).json()
+    msg = next(n for n in notifs if n["channel"] == "whatsapp")
+    assert msg["message"] == "Oi Ana Evolution, vamos conversar?"
+
+
 def test_conditional_branches_by_tag(client: TestClient, headers):
     cid = _client_id(client, headers, "VIP")
     r = client.patch(f"/crm/clients/{cid}", json={"tags": ["vip"]}, headers=headers)
