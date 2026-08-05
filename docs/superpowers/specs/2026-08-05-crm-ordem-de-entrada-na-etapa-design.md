@@ -85,15 +85,33 @@ Três passos, nesta ordem — a coluna é `NOT NULL` no destino, mas não pode n
 1. `add_column` **nullable**, sem `server_default`. Nascer com `server_default=now()` carimbaria
    todo card existente com o instante do deploy, e o `UPDATE` seguinte teria de desfazer isso —
    um estado intermediário em que a base inteira mente, ainda que por milissegundos.
-2. Backfill, por linha, o melhor sinal disponível:
+2. Backfill, por linha, o melhor sinal disponível — **dentro de uma janela com a RLS
+   desabilitada**:
 
-```sql
-UPDATE clients SET stage_entered_at = COALESCE(
-    (SELECT MAX(e.created_at) FROM client_events e
-      WHERE e.client_id = clients.id AND e.kind IN ('stage_move', 'reopened')),
-    clients.created_at
-)
+```python
+# ⚠️ ARMADILHA: sem esta janela, todo o UPDATE abaixo é no-op SILENCIOSO.
+op.execute("ALTER TABLE clients DISABLE ROW LEVEL SECURITY")
+
+op.execute("""
+    UPDATE clients SET stage_entered_at = COALESCE(
+        (SELECT MAX(e.created_at) FROM client_events e
+          WHERE e.client_id = clients.id AND e.kind IN ('stage_move', 'reopened')),
+        clients.created_at
+    )
+""")
+
+op.execute("ALTER TABLE clients ENABLE ROW LEVEL SECURITY")
+op.execute("ALTER TABLE clients FORCE ROW LEVEL SECURITY")
 ```
+
+**Por que a janela.** `clients` tem `FORCE ROW LEVEL SECURITY`, e a migration roda como o papel
+dono **não-superusuário** `e1p_app`, sem a GUC `app.current_tenant_id`. O `UPDATE` seria filtrado
+para **zero linhas, sem erro nenhum** — e o sintoma em produção não seria uma falha de deploy, seria
+"a fila continua fora de ordem", com a coluna inteira parada no default. É a mesma armadilha
+documentada na `0046`, `0066` e `0067`, e a suíte SQLite é **estruturalmente incapaz** de pegá-la
+(os testes unitários montam o schema por `Base.metadata.create_all`, sem passar por alembic).
+
+DDL é transacional no Postgres e a migration roda offline, então não há janela de exposição.
 
 3. `alter_column` para `nullable=False` **e** aplicar o `server_default=func.now()` — que a partir
    daí serve só para INSERT fora do ORM, como descrito na seção 1.
@@ -188,6 +206,7 @@ dívida conhecida e registrada; não é escopo desta mudança consertá-la).
 | Editar cliente (nome, tags, e-mail) | **não** reordena |
 | Backfill da `0068` | card com `stage_move` usa o evento; card sem evento usa `created_at` |
 | Gate AST | função nova que escreve `stage_id` sem carimbar **reprova** |
+| Backfill sob RLS real (`rls_e2e`) | semear `clients` na `0067`, aplicar a `0068`, conferir que o backfill **não foi no-op** |
 
 Suíte existente de `test_crm.py` deve continuar verde — o único ponto de atrito esperado são
 asserções que dependam da ordem alfabética do board.
