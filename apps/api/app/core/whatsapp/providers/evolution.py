@@ -20,6 +20,24 @@ from app.core.whatsapp.inbound import InboundMessage
 logger = logging.getLogger("e1p.whatsapp.evolution")
 
 
+def _response_body(exc: Exception) -> str:
+    """O CORPO da resposta que a Evolution devolveu junto com o erro.
+
+    `raise_for_status()` só carrega o código no texto da exceção. Um `400 Bad Request` sozinho
+    não diz nada — foi exatamente isso que aconteceu na investigação de 2026-08-05: o traceback
+    dizia "400" e o motivo real (número sem código do país, inexistente no WhatsApp) só apareceu
+    sondando `/chat/whatsappNumbers` à mão, em produção. O corpo da própria resposta já dizia.
+
+    Truncado: mensagem de erro de log não é lugar para payload inteiro."""
+    resp = getattr(exc, "response", None)
+    if resp is None:
+        return "(sem resposta HTTP)"
+    try:
+        return resp.text[:400]
+    except Exception:  # noqa: BLE001 — diagnóstico nunca pode virar a causa de outra falha
+        return "(corpo ilegível)"
+
+
 class EvolutionUnsupportedError(Exception):
     """Levantado por operações que a Evolution API não suporta (ver `capabilities.EVOLUTION`:
     templates=False). Um consumidor real só chega aqui se ignorou `capabilities.py` — é bug de
@@ -41,8 +59,11 @@ def send_text(*, to: str, text: str, instance: str) -> str:
         )
         resp.raise_for_status()
         return "sent"
-    except Exception:
-        logger.exception("[whatsapp.evolution:failed] instancia=%s para=%s", instance, to)
+    except Exception as exc:
+        logger.exception(
+            "[whatsapp.evolution:failed] instancia=%s para=%s resposta=%s",
+            instance, to, _response_body(exc),
+        )
         return "failed"
 
 
@@ -79,8 +100,11 @@ def send_media(
         )
         resp.raise_for_status()
         return "sent"
-    except Exception:
-        logger.exception("[whatsapp.evolution:failed] mídia instancia=%s para=%s", instance, to)
+    except Exception as exc:
+        logger.exception(
+            "[whatsapp.evolution:failed] mídia instancia=%s para=%s resposta=%s",
+            instance, to, _response_body(exc),
+        )
         return "failed"
 
 
