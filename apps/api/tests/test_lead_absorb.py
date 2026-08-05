@@ -214,3 +214,75 @@ def test_retorno_emite_evento_no_barramento(db, tenant_id):
 
     assert len(recebidos) == 1
     assert recebidos[0]["source"] == "landing"
+
+
+# ── Editar o telefone na ficha do CRM ────────────────────────────────────────
+# `phone_key` é derivado de `phone`, e derivado que não é recalculado vira mentira. `create_client`
+# e `absorb_lead` sempre recalcularam; `update_client` não — ele faz `setattr` genérico sobre o
+# payload, e `phone_key` não está no `ClientUpdate` (nem deve estar: é derivado, não é campo de
+# entrada). O efeito não aparece na tela de edição: aparece no PRÓXIMO lead, como um card
+# duplicado — exatamente o que a jornada única do contato existe para impedir.
+
+
+def _edita(db, tenant_id: str, client_id: str, **campos):
+    from app.modules.crm.schemas import ClientUpdate
+
+    return service.update_client(
+        db, client_id=client_id, tenant_id=tenant_id, actor="dono",
+        data=ClientUpdate(**campos),
+    )
+
+
+def test_editar_telefone_recalcula_a_chave(db, tenant_id):
+    contato, _ = _absorve(
+        db, tenant_id, name="Flavio Kato", phone="(11) 99999-8888", source="landing"
+    )
+    editado = _edita(db, tenant_id, contato.id, phone="(43) 98407-4017")
+    assert editado.phone_key == "5543984074017"
+
+
+def test_lead_com_o_telefone_corrigido_cai_no_mesmo_card(db, tenant_id):
+    """A consequência que importa: sem recálculo, o lead seguinte não encontra o contato pela
+    chave velha e abre um card novo."""
+    contato, _ = _absorve(
+        db, tenant_id, name="Flavio Kato", phone="(11) 99999-8888", source="landing"
+    )
+    _edita(db, tenant_id, contato.id, phone="(43) 98407-4017")
+
+    de_volta, novo = _absorve(
+        db, tenant_id, name="Flavio Kato", phone="5543984074017", source="landing"
+    )
+    assert novo is False
+    assert de_volta.id == contato.id
+    assert db.scalar(select(Client).where(Client.id != contato.id)) is None
+
+
+def test_editar_outro_campo_nao_mexe_na_chave(db, tenant_id):
+    """`exclude_unset=True`: quem não mandou telefone não teve telefone alterado, e a chave
+    derivada dele não pode se mover sozinha."""
+    contato, _ = _absorve(
+        db, tenant_id, name="Flavio Kato", phone="(11) 99999-8888", source="landing"
+    )
+    antes = contato.phone_key
+    editado = _edita(db, tenant_id, contato.id, name="Flávio Kato")
+    assert editado.phone_key == antes == "5511999998888"
+
+
+def test_apagar_o_telefone_apaga_a_chave(db, tenant_id):
+    """Chave órfã seria pior que chave ausente: casaria um lead futuro com um contato que já não
+    tem aquele telefone."""
+    contato, _ = _absorve(
+        db, tenant_id, name="Flavio Kato", phone="(11) 99999-8888", source="landing"
+    )
+    editado = _edita(db, tenant_id, contato.id, phone=None)
+    assert editado.phone_key is None
+
+
+def test_telefone_invalido_nao_deixa_chave_velha_para_tras(db, tenant_id):
+    """`normalize_br` devolve `None` para o que não é telefone BR. O contato fica sem chave — e
+    sem chave é honesto; com a chave ANTIGA seria um casamento errado."""
+    contato, _ = _absorve(
+        db, tenant_id, name="Flavio Kato", phone="(11) 99999-8888", source="landing"
+    )
+    editado = _edita(db, tenant_id, contato.id, phone="não é telefone")
+    assert editado.phone_key is None

@@ -400,6 +400,19 @@ def update_client(
         if key == "email" and value is not None:
             value = str(value)
         setattr(client, key, value)
+    if "phone" in fields:
+        # `phone_key` é DERIVADO de `phone`, e derivado que não é recalculado vira mentira.
+        # `create_client` e `absorb_lead` sempre recalcularam; aqui não, porque o laço acima é
+        # genérico sobre o payload e `phone_key` não está no `ClientUpdate` — nem deve estar: é
+        # derivado, não campo de entrada.
+        #
+        # O estrago não aparece na tela de edição, e sim no PRÓXIMO lead: `absorb_lead` procura
+        # pela chave, não acha o contato editado e abre um card novo — a duplicata que a jornada
+        # única existe para impedir. `in fields` (e não `if client.phone`) porque `exclude_unset`
+        # já distingue "mandou telefone" de "não mexeu nele"; apagar o telefone precisa apagar a
+        # chave junto, senão sobra uma chave órfã que casaria um lead futuro com um contato que
+        # já não tem aquele número.
+        client.phone_key = normalize_br(client.phone)
     audit.record(
         db, tenant_id=tenant_id, actor=actor, action="crm.client.update", target=client.id
     )
