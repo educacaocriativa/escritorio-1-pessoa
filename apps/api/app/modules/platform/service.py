@@ -6,11 +6,13 @@ as linhas globais.
 """
 from __future__ import annotations
 
+import logging
+
 from sqlalchemy import select, text
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
-from app.core import audit
+from app.core import audit, whatsapp
 from app.core.security import hash_password
 from app.core.tenancy import CurrentUser
 from app.db.base import TenantMixin
@@ -24,6 +26,8 @@ from app.modules.platform.schemas import (
     UpdateAccountRequest,
     UpdateUserRequest,
 )
+
+logger = logging.getLogger("e1p.platform")
 
 
 def _business_table_names() -> set[str]:
@@ -263,7 +267,15 @@ def _send_invite(
     *, name: str, email: str, phone: str, temp: str, delivery: str, company: str, tenant_id: str
 ) -> str:
     """Entrega a senha temporária por e-mail ou WhatsApp. Devolve o status do envio ("queued"
-    para WhatsApp desde a Onda 3 — a entrega real é do worker).
+    para WhatsApp desde a Onda 3 — a entrega real é do worker; "unconfigured" quando não há
+    transporte por onde entregar).
+
+    ⚠️ **"queued" só é dito quando existe transporte utilizável** (`whatsapp.is_deliverable`).
+    Sem essa guarda, um tenant com a sessão Evolution caída recebia "queued", a notificação ia
+    para o stub da Meta e morria como `logged` — status TERMINAL, que o worker não reprocessa.
+    Bug real de produção (2026-08-05): a senha de um funcionário nunca chegou e a tela do Master
+    afirmou que o envio tinha sido feito. Não enfileiramos o que já se sabe que vai morrer:
+    a `Notification` órfã só serviria para dar aparência de trabalho feito.
 
     O convite é enviado em nome do TENANT sendo criado/atendido (`tenant_id`), nunca da
     plataforma: por WhatsApp, usamos o vínculo de template daquele escritório (Configurações).
@@ -296,6 +308,12 @@ def _send_invite(
 
         with tenant_session(tenant_id) as tdb:
             profile = settings_service.get_profile(tdb, tenant_id)
+            if not whatsapp.is_deliverable(profile):
+                logger.warning(
+                    "[platform] convite por whatsapp sem transporte tenant=%s — não enfileirado",
+                    tenant_id,
+                )
+                return "unconfigured"
             template_id = (profile.whatsapp_template_bindings or {}).get(PURPOSE_STAFF_INVITE)
             template = tdb.get(WhatsappTemplate, template_id) if template_id else None
             if template is not None and template.status == STATUS_APPROVED:
