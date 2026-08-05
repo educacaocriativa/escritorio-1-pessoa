@@ -159,6 +159,30 @@ def _resolve_group_title(profile, chat: WhatsappChat) -> None:
         chat.title = subject
 
 
+def _find_direct_chat_by_phone(db: Session, *, chat_jid: str) -> WhatsappChat | None:
+    """A conversa direta cujo telefone NORMALIZA para o mesmo valor deste JID.
+
+    A comparação é feita em Python, e não em SQL, porque a forma comparável do telefone não é
+    coluna em `whatsapp_chats` (é em `clients.phone_key`) — e criar a coluna aqui exigiria
+    migration num momento de frentes paralelas. O custo é aceitável porque só roda no MISS: o
+    caminho normal (JID idêntico) resolve na primeira consulta, e este só varre as conversas
+    diretas do tenant quando uma grafia nova aparece, que é raro por definição.
+
+    Devolve `None` quando o JID não carrega telefone (`@lid`, sintéticos do backfill): sem
+    telefone não há o que comparar, e adivinhar seria pior que abrir conversa nova."""
+    alvo = normalize_br(chat_jid.split("@", 1)[0]) if "@" in chat_jid else None
+    if alvo is None:
+        return None
+    for candidata in db.scalars(
+        select(WhatsappChat).where(WhatsappChat.kind != CHAT_KIND_GROUP)
+    ).all():
+        if "@" not in candidata.chat_jid:
+            continue  # `legacy:`/`client:` do backfill da 0066 — não são endereço de ninguém
+        if normalize_br(candidata.chat_jid.split("@", 1)[0]) == alvo:
+            return candidata
+    return None
+
+
 def _get_or_create_chat(
     db: Session, *, tenant_id: str, chat_jid: str, kind: str, client: Client | None, profile,
 ) -> WhatsappChat:
@@ -166,8 +190,21 @@ def _get_or_create_chat(
 
     `client` é ENRIQUECIMENTO, não chave: uma conversa direta cujo contato só foi identificado
     depois (`@lid` que passou a vir com `remoteJidAlt`) ganha o vínculo aqui, sem trocar de
-    identidade nem partir o histórico."""
+    identidade nem partir o histórico.
+
+    **O 9º dígito é a segunda forma de o histórico se partir.** O JID que o WhatsApp usa para um
+    celular pré-2016 pode não ter o 9 (`554384074017@s.whatsapp.net` — caso real do tenant do
+    fundador), enquanto tudo que o produto envia passa por `normalize_br`, que o ACRESCENTA
+    (`5543984074017`). Duas grafias do mesmo telefone, e a busca por igualdade de string cria
+    duas conversas para a mesma pessoa — a mesma classe de bug que `chat_jid` canônico resolveu
+    para `@lid` × `@s.whatsapp.net`.
+
+    Por isso a conversa direta tem um segundo critério de busca: telefone NORMALIZADO. Só entra
+    no caminho de miss (quando não há JID idêntico), então não custa nada no fluxo normal, e
+    nunca se aplica a grupo (JID de grupo não é telefone)."""
     chat = db.scalar(select(WhatsappChat).where(WhatsappChat.chat_jid == chat_jid))
+    if chat is None and kind != CHAT_KIND_GROUP:
+        chat = _find_direct_chat_by_phone(db, chat_jid=chat_jid)
     if chat is None:
         chat = WhatsappChat(
             tenant_id=tenant_id, chat_jid=chat_jid, kind=kind,

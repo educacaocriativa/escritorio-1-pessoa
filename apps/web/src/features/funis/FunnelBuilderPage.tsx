@@ -457,9 +457,21 @@ function Builder() {
                 <span className="mb-1 block text-xs font-medium text-neutral-600">Rótulo / Título</span>
                 <input value={selectedNode.data.label} onChange={(e) => updateSelected({ label: e.target.value })} className="w-full rounded-lg border border-neutral-200 px-2 py-1.5 text-sm outline-none focus:border-primary-400" />
               </label>
+              {/* Duas caixas de texto multilinha convivem nesta tela e SÓ UMA é enviada. Esta
+                  é anotação do desenho; a que sai é a de "Escrever mensagem". Um usuário real
+                  escreveu aqui um texto que parecia mensagem ("Olá, aqui é a Doro...") e
+                  esperou que fosse entregue — nada na tela dizia o contrário. */}
               <label className="mb-2 block">
-                <span className="mb-1 block text-xs font-medium text-neutral-600">Descrição</span>
-                <textarea value={selectedNode.data.description} onChange={(e) => updateSelected({ description: e.target.value })} rows={3} className="w-full rounded-lg border border-neutral-200 px-2 py-1.5 text-sm outline-none focus:border-primary-400" />
+                <span className="mb-1 block text-xs font-medium text-neutral-600">
+                  Anotação <span className="font-normal text-neutral-400">(só no desenho)</span>
+                </span>
+                <textarea value={selectedNode.data.description} onChange={(e) => updateSelected({ description: e.target.value })} rows={3} placeholder="Lembrete para você — não é enviado a ninguém" className="w-full rounded-lg border border-neutral-200 px-2 py-1.5 text-sm outline-none focus:border-primary-400" />
+                {contentKind(selectedNode.data.key) === "whatsapp" && (
+                  <span className="mt-1 block text-[11px] text-neutral-400">
+                    A mensagem que o contato recebe é a de <strong>“Escrever mensagem”</strong>,
+                    abaixo.
+                  </span>
+                )}
               </label>
 
               <AutomationFields data={selectedNode.data} onChange={updateSelectedConfig} />
