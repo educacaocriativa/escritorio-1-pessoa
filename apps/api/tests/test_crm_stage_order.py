@@ -154,3 +154,58 @@ def test_editar_cliente_nao_reordena(client: TestClient, headers, db):
     assert resp.status_code == 200
 
     assert _carimbo(db, criado["id"]) == PASSADO
+
+
+# ── A fila na tela: como o board devolve cada coluna ───────────────────────────
+
+
+def _entrada(board: dict) -> list[str]:
+    """Nomes dos cards da primeira coluna, na ordem em que o board os devolveu."""
+    return [c["name"] for c in board["columns"][0]["clients"]]
+
+
+def test_board_ordena_por_entrada_e_nao_por_nome(client: TestClient, headers):
+    """O que entra depois fica no fim — mesmo que o nome venha antes no alfabeto."""
+    for nome in ("Zulmira", "Amanda", "Mauricio"):
+        assert client.post("/crm/clients", json={"name": nome}, headers=headers).status_code == 201
+
+    board = client.get("/crm/board", headers=headers).json()
+    assert _entrada(board) == ["Zulmira", "Amanda", "Mauricio"]
+
+
+def test_card_movido_vai_para_o_fim_da_coluna_destino(client: TestClient, headers):
+    stages = _stage_ids(client, headers)
+    primeiro = client.post("/crm/clients", json={"name": "Primeiro"}, headers=headers).json()
+    client.post("/crm/clients", json={"name": "Segundo"}, headers=headers)
+
+    # "Primeiro" sai para a coluna 2 e volta: tem que reaparecer no FIM da Entrada.
+    client.post(
+        f"/crm/clients/{primeiro['id']}/move", json={"stage_id": stages[1]}, headers=headers
+    )
+    client.post(
+        f"/crm/clients/{primeiro['id']}/move", json={"stage_id": stages[0]}, headers=headers
+    )
+
+    board = client.get("/crm/board", headers=headers).json()
+    assert _entrada(board) == ["Segundo", "Primeiro"]
+
+
+def test_ordem_e_estavel_com_carimbos_iguais(client: TestClient, headers, db):
+    """Empate de instante não pode fazer a fila dançar entre dois carregamentos.
+
+    Acontece de verdade: no Postgres, cards criados na mesma transação compartilham o
+    instante. Sem desempate determinístico o board devolveria ordens diferentes para o
+    mesmo estado.
+    """
+    from app.modules.crm.models import Client
+
+    for nome in ("Um", "Dois", "Tres"):
+        client.post("/crm/clients", json={"name": nome}, headers=headers)
+
+    for row in db.query(Client).all():
+        row.stage_entered_at = PASSADO
+    db.commit()
+
+    primeira = _entrada(client.get("/crm/board", headers=headers).json())
+    segunda = _entrada(client.get("/crm/board", headers=headers).json())
+    assert primeira == segunda

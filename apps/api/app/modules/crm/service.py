@@ -497,7 +497,13 @@ def last_interaction_map(db: Session) -> dict[str, datetime]:
 
 def build_board(db: Session, tenant_id: str) -> list[tuple[PipelineStage, list[Client]]]:
     stages = ensure_stages(db, tenant_id)
-    clients = list(db.scalars(select(Client).order_by(Client.name)).all())
+    # A fila de cada coluna: quem entrou primeiro no topo, quem entra vai para o fim, para o
+    # dono atender por ordem de chegada. Desempate por `id` porque no Postgres cards criados
+    # na mesma transação compartilham o instante — sem ele a ordem dançaria entre chamadas
+    # (mesmo padrão de `_ordered_stages` e `find_duplicate_groups`).
+    clients = list(
+        db.scalars(select(Client).order_by(Client.stage_entered_at, Client.id)).all()
+    )
     by_stage: dict[str | None, list[Client]] = {}
     for c in clients:
         by_stage.setdefault(c.stage_id, []).append(c)
