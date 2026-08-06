@@ -96,6 +96,7 @@ function boardComCard(lastInteractionAt: string | null) {
             document: null, gender: "unspecified", birthdate: null, notes: "",
             tags: [], source: "landing", stage_id: "s1",
             created_at: "2026-07-01T10:00:00Z",
+            stage_entered_at: "2026-07-28T12:00:00Z",
             last_interaction_at: lastInteractionAt,
           },
         ],
@@ -125,5 +126,25 @@ describe("CrmPage — última interação no card", () => {
     renderPage();
     await screen.findByText("Flavio Kato");
     expect(screen.queryByText(/última interação/i)).not.toBeInTheDocument();
+  });
+});
+
+describe("CrmPage — a data que explica a posição na fila", () => {
+  it("mostra as duas datas: posição na fila e temperatura da conversa", async () => {
+    mockarBoard("2026-08-05T13:00:00Z");
+    renderPage();
+
+    // A coluna é ordenada por "na etapa desde"; sem ela na tela, a ordem seria um critério
+    // invisível — dois cards com a mesma "última interação" em posições distantes.
+    expect(await screen.findByText("na etapa desde: 28/07")).toBeInTheDocument();
+    expect(await screen.findByText("última interação: 05/08")).toBeInTheDocument();
+  });
+
+  it("mostra a etapa mesmo quando o contato nunca interagiu", async () => {
+    mockarBoard(null);
+    renderPage();
+
+    // `stage_entered_at` é coluna não-nula: todo card sempre sabe desde quando está ali.
+    expect(await screen.findByText("na etapa desde: 28/07")).toBeInTheDocument();
   });
 });

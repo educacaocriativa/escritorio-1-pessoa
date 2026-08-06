@@ -76,6 +76,25 @@ class Client(Base, TenantMixin, TimestampMixin):
         String(36), ForeignKey("pipeline_stages.id", ondelete="RESTRICT"), nullable=True, index=True
     )
 
+    # Desde quando este card está NESTA etapa. É a ordem da fila do Kanban: o mais antigo no
+    # topo, quem entra vai para o fim, para que o dono atenda por ordem de chegada.
+    #
+    # Coluna, e não derivação de `client_events`, porque os três caminhos que escrevem
+    # `stage_id` registram coisas diferentes — `move_client` grava `stage_move`, a reabertura
+    # do `absorb_lead` grava `reopened`, e `archive_stage` remaneja em massa sem evento
+    # nenhum. Não é valor derivado materializado (o caso que `last_interaction_map` recusa);
+    # é fato primário que não tinha onde morar.
+    #
+    # Default do lado do PYTHON, sobrescrevendo o `server_default`: no Postgres `now()` é o
+    # instante da TRANSAÇÃO, então dois carimbos no mesmo commit sairiam idênticos e o
+    # desempate cairia no uuid. Mesma razão de `ClientEvent.created_at`.
+    stage_entered_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        default=lambda: datetime.now(UTC),
+        server_default=func.now(),
+        nullable=False,
+    )
+
 
 # ── Linha do tempo do contato ──────────────────────────
 

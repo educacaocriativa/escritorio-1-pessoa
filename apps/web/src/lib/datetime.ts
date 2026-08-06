@@ -61,6 +61,17 @@ export function formatDate(iso: string | null | undefined, tz: string): string {
   return iso ? fmt(iso, tz, { day: "2-digit", month: "2-digit", year: "numeric" }) : "";
 }
 
+/**
+ * Instante → `05/08`. Sem o ano, para caber no card do Kanban.
+ *
+ * Existe para que o card não precise chamar `toLocaleDateString` na mão: `lib/datetime.ts` é a
+ * única porta de formatação, e a compactação é uma escolha de exibição, não um motivo para
+ * sair por fora.
+ */
+export function formatDateShort(iso: string | null | undefined, tz: string): string {
+  return iso ? fmt(iso, tz, { day: "2-digit", month: "2-digit" }) : "";
+}
+
 /** Instante → `22:30`. */
 export function formatTime(iso: string | null | undefined, tz: string): string {
   return iso ? fmt(iso, tz, { hour: "2-digit", minute: "2-digit" }) : "";
