@@ -1172,7 +1172,10 @@ def _money(cents: int) -> str:
     return f"R$ {cents / 100:.2f}".replace(".", ",")
 
 
-def _compose_dunning(name: str, amount_cents: int, due: date, description: str) -> str:
+def _compose_dunning(
+    db: Session, *, tenant_id: str,
+    name: str, amount_cents: int, due: date, description: str,
+) -> str:
     """Mensagem de cobrança amigável. Usa a IA (Claude) se houver chave; senão, template.
 
     PII: enviamos o placeholder [NOME] ao Claude e reinserimos o nome real localmente.
@@ -1193,7 +1196,10 @@ def _compose_dunning(name: str, amount_cents: int, due: date, description: str) 
     )
     user = f"Valor: {valor}\nVencimento: {venc}\nDescrição: {desc}\nNome do cliente: [NOME]"
     try:
-        result = ai.complete(system=system, user_message=user, max_tokens=300)
+        result = ai.complete(
+            db=db, tenant_id=tenant_id, task="receivables.cobranca",
+            system=system, user_message=user, max_tokens=300,
+        )
         return result.text.strip().replace("[NOME]", name)
     except Exception:
         return (
@@ -1202,7 +1208,10 @@ def _compose_dunning(name: str, amount_cents: int, due: date, description: str) 
         )
 
 
-def _compose_dunning_phrase(name: str, amount_cents: int, due: date, description: str) -> str:
+def _compose_dunning_phrase(
+    db: Session, *, tenant_id: str,
+    name: str, amount_cents: int, due: date, description: str,
+) -> str:
     """Só a FRASE de cobrança (variável 2 do template `charge_reminder`) — não a mensagem inteira.
 
     Usa a IA (Claude) se houver chave; senão, frase padrão. Mesma técnica de anonimização de PII
@@ -1223,7 +1232,10 @@ def _compose_dunning_phrase(name: str, amount_cents: int, due: date, description
     )
     user = f"Valor: {valor}\nVencimento: {venc}\nDescrição: {desc}\nNome do cliente: [NOME]"
     try:
-        result = ai.complete(system=system, user_message=user, max_tokens=100)
+        result = ai.complete(
+            db=db, tenant_id=tenant_id, task="receivables.cobranca",
+            system=system, user_message=user, max_tokens=100,
+        )
         return result.text.strip().replace("[NOME]", name)
     except Exception:
         return "Notamos que sua cobrança está em aberto."
@@ -1269,7 +1281,9 @@ def collect_with_ai(db: Session, *, charge_id: str, tenant_id: str, actor: str) 
         valor = _money(charge.amount_cents)
         venc = charge.due_date.strftime("%d/%m/%Y")
         phrase = _compose_dunning_phrase(
-            name, charge.amount_cents, charge.due_date, charge.description
+            db, tenant_id=tenant_id,
+            name=name, amount_cents=charge.amount_cents, due=charge.due_date,
+            description=charge.description,
         )
         variables = [name, phrase, valor, venc]
         message = _render_template_preview(template.body_text, variables)
@@ -1280,7 +1294,11 @@ def collect_with_ai(db: Session, *, charge_id: str, tenant_id: str, actor: str) 
             whatsapp_template_variables=variables,
         )
     else:
-        message = _compose_dunning(name, charge.amount_cents, charge.due_date, charge.description)
+        message = _compose_dunning(
+            db, tenant_id=tenant_id,
+            name=name, amount_cents=charge.amount_cents, due=charge.due_date,
+            description=charge.description,
+        )
         notifications_service.enqueue(
             db, tenant_id=tenant_id, channel="whatsapp", recipient=recipient,
             client_id=charge.client_id, message=message, purpose=PURPOSE_CHARGE_REMINDER,

@@ -105,13 +105,20 @@ def _parse(text: str, topic: str, n: int) -> dict:
     }
 
 
-def generate_content(topic: str, n: int, tone: str) -> dict:
-    """IA escreve slides + legenda + hashtags; cai para um esqueleto editorial em caso de erro."""
+def generate_content(db: Session, *, tenant_id: str, topic: str, n: int, tone: str) -> dict:
+    """IA escreve slides + legenda + hashtags; cai para um esqueleto editorial em caso de erro.
+
+    `db`/`tenant_id` existem só para a contabilidade de IA (`core/ai_usage`) — esta função
+    não lê nem escreve nada de negócio.
+    """
     if not settings.anthropic_api_key:
         return _fallback(topic, n)
     user = f"Tema: {topic}\nNúmero de slides: {n}\nTom: {tone}"
     try:
-        text = ai.complete(system=_EDITORIAL_SYSTEM, user_message=user, max_tokens=2000).text
+        text = ai.complete(
+            db=db, tenant_id=tenant_id, task="marketing.carrossel",
+            system=_EDITORIAL_SYSTEM, user_message=user, max_tokens=2000,
+        ).text
         return _parse(text, topic, n)
     except Exception:
         return _fallback(topic, n)

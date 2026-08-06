@@ -15,7 +15,9 @@ class Settings(BaseSettings):
 
     # IA
     anthropic_api_key: str = ""
-    anthropic_model: str = "claude-opus-4-8"
+    # O MODELO não mora mais aqui: ele é escolhido por tarefa em `core/ai.MODELO_POR_TAREFA`.
+    # Um valor global fazia narrar um briefing já calculado custar o mesmo que redigir peça
+    # jurídica — dívida registrada na spec da Vima e fechada aqui.
 
     # Auth
     jwt_secret: str = _DEV_SECRET

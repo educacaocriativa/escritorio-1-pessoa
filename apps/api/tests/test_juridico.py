@@ -30,7 +30,10 @@ def fake_ai(monkeypatch):
     """Captura o que vai para a IA e devolve um documento com a seção de METADADOS."""
     seen = {}
 
-    def _fake(*, system, user_message, max_tokens=8192, model=None):
+    def _fake(
+        *, system, user_message, max_tokens=8192, model=None,
+        **_contabilidade,  # db/tenant_id/task — cobertos em tests/test_ai.py
+    ):
         seen["system"] = system
         seen["user"] = user_message
         body = (

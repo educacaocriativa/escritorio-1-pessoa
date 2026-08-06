@@ -252,13 +252,20 @@ def _compose_fallback(kind: str, prompt: str) -> dict:
     return {"subject": "", "body": f"Sobre {prompt}."}
 
 
-def ai_compose(kind: str, prompt: str) -> dict:
-    """Gera o conteúdo do nó com IA; cai para um rascunho simples sem chave/parsing."""
+def ai_compose(db: Session, *, tenant_id: str, kind: str, prompt: str) -> dict:
+    """Gera o conteúdo do nó com IA; cai para um rascunho simples sem chave/parsing.
+
+    `db`/`tenant_id` existem só para a contabilidade de IA (`core/ai_usage`) — esta função
+    não lê nem escreve nada de negócio.
+    """
     system = _COMPOSE_SYSTEM.get(kind, _COMPOSE_SYSTEM["generic"])
     if not settings.anthropic_api_key:
         return _compose_fallback(kind, prompt)
     try:
-        text = ai.complete(system=system, user_message=prompt, max_tokens=800).text
+        text = ai.complete(
+            db=db, tenant_id=tenant_id, task="funnels.compose",
+            system=system, user_message=prompt, max_tokens=800,
+        ).text
         cleaned = re.sub(r"^```(?:json)?|```$", "", text.strip(), flags=re.MULTILINE).strip()
         data = json.loads(cleaned)
         return {

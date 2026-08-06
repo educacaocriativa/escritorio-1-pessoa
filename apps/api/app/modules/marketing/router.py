@@ -54,10 +54,14 @@ def list_templates(_u: CurrentUser = Depends(_guard)) -> list[TemplatePreset]:
 @router.post("/generate", response_model=GenerateResult)
 def generate(
     data: GenerateRequest,
-    _u: CurrentUser = Depends(_guard),
-    _db: Session = Depends(get_tenant_db),
+    user: CurrentUser = Depends(_guard),
+    db: Session = Depends(get_tenant_db),
 ) -> GenerateResult:
-    return GenerateResult(**service.generate_content(data.topic, data.slides, data.tone))
+    return GenerateResult(
+        **service.generate_content(
+            db, tenant_id=user.tenant_id, topic=data.topic, n=data.slides, tone=data.tone
+        )
+    )
 
 
 @router.get("", response_model=list[CarouselOut])

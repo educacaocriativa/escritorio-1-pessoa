@@ -48,10 +48,12 @@ def components(_u: CurrentUser = Depends(_guard)) -> list[ComponentCategory]:
 @router.post("/ai-compose", response_model=ComposeResult)
 def ai_compose(
     data: ComposeRequest,
-    _u: CurrentUser = Depends(_guard),
-    _db: Session = Depends(get_tenant_db),
+    user: CurrentUser = Depends(_guard),
+    db: Session = Depends(get_tenant_db),
 ) -> ComposeResult:
-    return ComposeResult(**service.ai_compose(data.kind, data.prompt))
+    return ComposeResult(
+        **service.ai_compose(db, tenant_id=user.tenant_id, kind=data.kind, prompt=data.prompt)
+    )
 
 
 @router.post("/run-node", response_model=RunNodeResult)

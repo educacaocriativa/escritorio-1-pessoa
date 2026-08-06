@@ -73,10 +73,12 @@ def summary(
 @router.post("/scope", response_model=ScopeResult)
 def scope(
     data: ScopeRequest,
-    _u: CurrentUser = Depends(_guard),
-    _db: Session = Depends(get_tenant_db),
+    user: CurrentUser = Depends(_guard),
+    db: Session = Depends(get_tenant_db),
 ) -> ScopeResult:
-    return ScopeResult(description=service.generate_scope(data.brief))
+    return ScopeResult(
+        description=service.generate_scope(db, tenant_id=user.tenant_id, brief=data.brief)
+    )
 
 
 @router.get("", response_model=list[QuoteOut])

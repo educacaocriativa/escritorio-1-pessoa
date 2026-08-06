@@ -74,7 +74,10 @@ def test_payload_sent_to_ai_is_anonymized_and_unmasked_on_return(db: Session, mo
     monkeypatch.setattr(ai_narrator.settings, "anthropic_api_key", "sk-ant-x", raising=False)
     captured: dict[str, str] = {}
 
-    def _fake_complete(*, system: str, user_message: str, max_tokens: int = 800, model=None):
+    def _fake_complete(
+        *, system: str, user_message: str, max_tokens: int = 800, model=None,
+        **_contabilidade,  # db/tenant_id/task — cobertos em tests/test_ai.py
+    ):
         captured["system"] = system
         captured["user_message"] = user_message
         # A IA "responde" ecoando o texto seguro (com placeholders) — força o teste de unmask.
