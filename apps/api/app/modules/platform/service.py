@@ -12,6 +12,7 @@ from sqlalchemy import select, text
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
+from app.config import settings
 from app.core import audit, whatsapp
 from app.core.security import hash_password
 from app.core.tenancy import CurrentUser
@@ -261,6 +262,28 @@ def _temp_password() -> str:
     import secrets
 
     return secrets.token_urlsafe(9)
+
+
+# Status em que a senha chegou (ou vai chegar) ao destinatário por um canal de verdade.
+# `queued` entra aqui porque a entrega é do worker, não porque já aconteceu.
+_ENTREGUE = frozenset({"sent", "queued"})
+
+
+def reveals_temp_password(delivery_status: str) -> bool:
+    """Se a senha temporária pode voltar no corpo da resposta ao Master.
+
+    O AC3 da Story 2.1 esconde a senha em produção porque ela vai pelo canal de entrega — o
+    Master não precisa vê-la. **Quando não há entrega, essa premissa cai:** não existe sigilo a
+    preservar (a senha não saiu por lugar nenhum) e o usuário recém-criado fica inacessível para
+    sempre, já que não existe reenvio de convite. Aconteceu em produção (2026-08-05).
+
+    A exceção é ESTREITA de propósito: só vale para os status que dizem que NÃO foi entregue
+    (`unconfigured`, `failed`, `logged`). `sent` e `queued` seguem escondendo — decisão do
+    fundador ao autorizar esta abertura.
+    """
+    if not settings.is_production:
+        return True
+    return delivery_status not in _ENTREGUE
 
 
 def _send_invite(

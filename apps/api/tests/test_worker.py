@@ -605,3 +605,44 @@ def test_falha_ao_promover_nao_derruba_o_sweep(db, monkeypatch):
 
     assert [e["stage"] for e in result["errors"]] == ["whatsapp_connections"]
     assert result["tenants_checked"] == 1
+
+
+# --- Etapa 6: a senha do convite não fica em texto puro para sempre -------------------------
+
+def test_sweep_expurga_a_senha_de_convite_ja_entregue(db):
+    from app.modules.notifications.models import Notification
+    from app.modules.notifications.service import INVITE_BODY_REDACTED
+    from app.modules.whatsapp_templates.models import PURPOSE_STAFF_INVITE
+
+    tenant = _make_tenant(db, slug="wa-purga")
+    n = Notification(
+        tenant_id=tenant.id, channel="whatsapp", recipient="5511999999999",
+        message="Senha temporária: segredo-123", status="sent", purpose=PURPOSE_STAFF_INVITE,
+        whatsapp_template_variables=["a", "b", "c", "segredo-123"],
+    )
+    db.add(n)
+    db.commit()
+
+    cm = _cm_factory(db)
+    result = run_sweep(session_factory=cm, tenant_session_factory=cm)
+
+    db.refresh(n)
+    assert n.message == INVITE_BODY_REDACTED
+    assert n.whatsapp_template_variables is None
+    assert result["errors"] == []
+
+
+def test_falha_no_expurgo_nao_derruba_o_sweep(db, monkeypatch):
+    _make_tenant(db, slug="wa-purga-falha")
+    db.commit()
+
+    def _boom(db, *, tenant_id, now):
+        raise RuntimeError("expurgo explodiu")
+
+    monkeypatch.setattr(worker.notifications_service, "purge_invite_secrets", _boom)
+
+    cm = _cm_factory(db)
+    result = run_sweep(session_factory=cm, tenant_session_factory=cm)
+
+    assert [e["stage"] for e in result["errors"]] == ["invite_secrets"]
+    assert result["tenants_checked"] == 1
