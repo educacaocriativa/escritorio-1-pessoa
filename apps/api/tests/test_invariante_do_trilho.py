@@ -26,13 +26,14 @@ cópias divergem, e o parecer da ratificação é a prova de que já divergiram 
 """
 from __future__ import annotations
 
-from datetime import UTC, date, datetime, timedelta
+from datetime import date, timedelta
 
 import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from app.core.tz import DEFAULT_TENANT_TIMEZONE, tenant_today
 from app.modules.bank.models import BankTransaction
 from app.modules.receivables.models import (
     STATUS_CANCELED,
@@ -60,8 +61,9 @@ LIQUIDADAS = (STATUS_PAID, STATUS_SCHEDULED)
 
 
 def _hoje() -> date:
-    """A MESMA âncora do service (UTC), nunca `date.today()` local — `CLAUDE.md` §6.0."""
-    return datetime.now(UTC).date()
+    """A MESMA âncora do service, que desde o PR #78 é o FUSO DO TENANT — nunca UTC cru
+    nem `date.today()` local. O tenant de teste fica com o fuso padrão."""
+    return tenant_today(DEFAULT_TENANT_TIMEZONE)
 
 
 ABERTURA = _hoje() - timedelta(days=60)

@@ -30,7 +30,7 @@ from __future__ import annotations
 
 import re
 from dataclasses import asdict
-from datetime import UTC, datetime, timedelta
+from datetime import timedelta
 
 import pytest
 from fastapi.testclient import TestClient
@@ -38,6 +38,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.core.money_planes import ORIGEM_MISTO, ORIGEM_PLATAFORMA, ORIGENS
+from app.core.tz import DEFAULT_TENANT_TIMEZONE, tenant_today
 from app.modules.bank import service as bank_service
 from app.modules.bank.models import (
     KIND_CHECKING,
@@ -65,7 +66,7 @@ REGISTER = {
     "password": "uma-senha-bem-grande",
 }
 
-TODAY = datetime.now(UTC).date()
+TODAY = tenant_today(DEFAULT_TENANT_TIMEZONE)
 # Abertura bem no passado: dá espaço para lançar movimento em qualquer data recente sem esbarrar na
 # guarda `posted_at > opening_date` do service (Story 8.3).
 OPENING = (TODAY - timedelta(days=60)).isoformat()

@@ -30,13 +30,14 @@ from __future__ import annotations
 
 import ast
 import pathlib
-from datetime import UTC, date, datetime, timedelta
+from datetime import date, timedelta
 
 import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
+from app.core.tz import DEFAULT_TENANT_TIMEZONE, tenant_today
 from app.modules.bank.models import BankTransaction
 from app.modules.payables import service as payables_service
 from app.modules.receivables import service as receivables_service
@@ -69,8 +70,9 @@ OUTRO_TENANT = {
 
 
 def _hoje() -> date:
-    """A MESMA âncora do service (UTC), nunca `date.today()` local — `CLAUDE.md` §6.0."""
-    return datetime.now(UTC).date()
+    """A MESMA âncora do service, que desde o PR #78 é o FUSO DO TENANT — nunca UTC cru
+    nem `date.today()` local. O tenant de teste fica com o fuso padrão."""
+    return tenant_today(DEFAULT_TENANT_TIMEZONE)
 
 
 # Ancorada em "hoje", nunca num dia fixo: data fixa envelheceria junto com o repositório sem nunca
