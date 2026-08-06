@@ -26,7 +26,7 @@ RLS não é exercida (ver conftest).
 """
 from __future__ import annotations
 
-from datetime import UTC, datetime, timedelta
+from datetime import timedelta
 
 import pytest
 from fastapi.testclient import TestClient
@@ -34,6 +34,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.core.money_planes import ORIGEM_PLATAFORMA, ORIGENS
+from app.core.tz import DEFAULT_TENANT_TIMEZONE, tenant_today
 from app.modules.financial_intelligence import diagnostics as diagnostics_service
 from app.modules.financial_intelligence import projection as projection_service
 from app.modules.payables.models import Payable
@@ -49,7 +50,7 @@ REGISTER = {
     "password": "uma-senha-bem-grande",
 }
 
-TODAY = datetime.now(UTC).date()
+TODAY = tenant_today(DEFAULT_TENANT_TIMEZONE)
 
 
 def _d(days: int) -> str:

@@ -6,10 +6,12 @@ hoje. Os testes que davam baixa ganharam a fixture `conta` e o helper `_pay`; **
 comportamento antigo foi enfraquecida ou apagada**. O que a 8.12 acrescenta de novo vive em
 `test_payables_bank_origin.py`.
 """
-from datetime import UTC, date, datetime
+from datetime import date
 
 import pytest
 from fastapi.testclient import TestClient
+
+from app.core.tz import DEFAULT_TENANT_TIMEZONE, tenant_today
 
 REGISTER = {
     "legal_name": "Pag Co",
@@ -49,7 +51,7 @@ def conta(client: TestClient, headers) -> str:
 
 
 def _hoje() -> str:
-    return datetime.now(UTC).date().isoformat()
+    return tenant_today(DEFAULT_TENANT_TIMEZONE).isoformat()
 
 
 def _pay(client: TestClient, headers, bill_id: str, conta: str, paid_on: str | None = None):

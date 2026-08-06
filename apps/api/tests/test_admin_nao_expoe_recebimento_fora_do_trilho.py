@@ -32,7 +32,7 @@ from __future__ import annotations
 
 import ast
 import pathlib
-from datetime import UTC, date, datetime
+from datetime import date
 
 import pytest
 from fastapi.testclient import TestClient
@@ -40,6 +40,7 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.core.security import hash_password
+from app.core.tz import DEFAULT_TENANT_TIMEZONE, tenant_today
 from app.modules.auth.models import Tenant, User
 from app.modules.bank.models import KIND_CHECKING, BankAccount
 from app.modules.crm.models import Client
@@ -311,6 +312,6 @@ def test_a_data_de_hoje_do_cenario_nao_e_futura() -> None:
     snapshots ficariam iguais **por não haver nada**. Um teste que passa por vacuidade é pior do que
     nenhum teste.
     """
-    assert HOJE <= datetime.now(UTC).date(), (
+    assert HOJE <= tenant_today(DEFAULT_TENANT_TIMEZONE), (
         "atualize `HOJE` neste arquivo: a data do cenário precisa estar no passado"
     )

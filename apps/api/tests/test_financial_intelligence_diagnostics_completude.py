@@ -23,6 +23,7 @@ import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy.orm import Session
 
+from app.core.tz import DEFAULT_TENANT_TIMEZONE, tenant_today
 from app.modules.financial_intelligence import ai_narrator, diagnostics, engine
 from app.modules.payables import service as payables_service
 from app.modules.payables.models import Payable
@@ -40,7 +41,7 @@ REGISTER = {
 # Datas ancoradas em HOJE (e não em constantes fixas) porque o endpoint não injeta `today`: as
 # guardas de "data futura" de conta/checkpoint/movimento ancoram no relógio real, e um período fixo
 # no passado deixaria de conter os dados conforme o tempo passa.
-TODAY = datetime.now(UTC).date()
+TODAY = tenant_today(DEFAULT_TENANT_TIMEZONE)
 START = TODAY - timedelta(days=20)
 END = TODAY
 REF = TODAY - timedelta(days=2)

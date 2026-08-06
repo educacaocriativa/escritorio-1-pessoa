@@ -15,6 +15,8 @@ import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy.orm import Session
 
+from app.core.tz import DEFAULT_TENANT_TIMEZONE, tenant_today
+
 REGISTER = {
     "legal_name": "Recibo Co",
     "document": "12345678000195",
@@ -65,13 +67,14 @@ def conta_primaria(client: TestClient, headers) -> str:
 
 
 def _hoje() -> str:
-    """Hoje em UTC — a mesma âncora do teto de `payables.service._valida_data_de_baixa`."""
-    return datetime.now(UTC).date().isoformat()
+    """Hoje NO FUSO DO TENANT — a mesma âncora do teto de
+    `payables.service._valida_data_de_baixa` desde o PR #78."""
+    return tenant_today(DEFAULT_TENANT_TIMEZONE).isoformat()
 
 
 def _pay(client: TestClient, headers, bill_id: str, conta: str, paid_on: str | None = None):
     """`POST /bills/{id}/pay` com o corpo obrigatório da Story 8.12 (AC11)."""
-    body = {"bank_account_id": conta, "paid_on": paid_on or datetime.now(UTC).date().isoformat()}
+    body = {"bank_account_id": conta, "paid_on": paid_on or _hoje()}
     return client.post(f"/payables/bills/{bill_id}/pay", json=body, headers=headers)
 
 
@@ -415,7 +418,7 @@ def test_link_grava_a_data_que_veio_no_payload(client: TestClient, headers, cont
     Este é o teste que reprova o retorno do `TODO(8.13)`: se o backend voltar a cravar `hoje`
     (como fazia na 8.12), `paid_at` deixa de ser a data enviada.
     """
-    ontem = (datetime.now(UTC).date() - timedelta(days=1)).isoformat()
+    ontem = (tenant_today(DEFAULT_TENANT_TIMEZONE) - timedelta(days=1)).isoformat()
     # Vencimento HOJE e pagamento ONTEM: as duas datas plausíveis são diferentes, então a que for
     # gravada identifica sem ambiguidade quem mandou nela.
     b = _bill(client, headers, due_date=_hoje())
@@ -434,7 +437,7 @@ def test_link_sem_data_cai_no_default_due_date_do_apply_paid(
     """`paid_on` ausente ⇒ `due_date` (fundador F10) — o default vive em `apply_paid`, e a bandeja
     apenas **repassa** o `None`. Antes da 8.13 a bandeja cravava `hoje` aqui e este teste falharia.
     """
-    ontem = (datetime.now(UTC).date() - timedelta(days=1)).isoformat()
+    ontem = (tenant_today(DEFAULT_TENANT_TIMEZONE) - timedelta(days=1)).isoformat()
     b = _bill(client, headers, due_date=ontem)
     rid = _upload(client, headers).json()["id"]
 

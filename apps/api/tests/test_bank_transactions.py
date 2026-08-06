@@ -23,7 +23,7 @@ from __future__ import annotations
 
 import pathlib
 from dataclasses import asdict
-from datetime import UTC, date, datetime, timedelta
+from datetime import date, datetime, timedelta
 
 import pytest
 from fastapi.testclient import TestClient
@@ -59,7 +59,7 @@ REGISTER = {
 }
 
 # Toda data usada nos testes é do passado em relação ao "hoje" real: a guarda de data futura
-# (`_validate_posted_at`) ancora em `datetime.now(UTC).date()`, como o resto do projeto.
+# (`_validate_posted_at`) ancora em `_hoje()`, como o resto do projeto.
 OPENING = date(2026, 7, 1)
 OPENING_CENTS = 1_500_00
 
@@ -207,7 +207,7 @@ def test_valor_zero_e_recusado(client: TestClient, headers):
 def test_data_futura_e_recusada(client: TestClient, headers):
     """Extrato é fato passado. Data futura é erro de digitação (ano errado é o caso comum)."""
     acc = _account(client, headers)
-    amanha = datetime.now(UTC).date() + timedelta(days=1)
+    amanha = _hoje() + timedelta(days=1)
     erro = _lancar(client, headers, acc["id"], amount_cents=10_00, posted_at=amanha, expect=422)
     assert "futura" in erro["detail"]
 
@@ -373,7 +373,7 @@ def test_edicao_de_data_e_valor_revalida_as_guardas(client: TestClient, headers)
         ).status_code
         == 422
     )
-    amanha = (datetime.now(UTC).date() + timedelta(days=1)).isoformat()
+    amanha = (_hoje() + timedelta(days=1)).isoformat()
     assert (
         client.patch(
             f"/bank/transactions/{tx['id']}", json={"posted_at": amanha}, headers=headers
@@ -808,7 +808,7 @@ def test_AC4_manual_continua_recusando_data_futura(client: TestClient, headers):
 
     assert SOURCE_MANUAL in SOURCES_EXTERNA
     acc = _account(client, headers)
-    amanha = datetime.now(UTC).date() + timedelta(days=1)
+    amanha = _hoje() + timedelta(days=1)
     erro = _lancar(client, headers, acc["id"], amount_cents=10_00, posted_at=amanha, expect=422)
     assert "futura" in erro["detail"]
 
@@ -826,7 +826,7 @@ def test_AC4_toda_origem_de_SISTEMA_aceita_data_futura(client: TestClient, heade
     por outro motivo (a A-3 de lá). São guardas diferentes, em camadas diferentes.
     """
     acc = _account(client, headers)
-    amanha = datetime.now(UTC).date() + timedelta(days=1)
+    amanha = _hoje() + timedelta(days=1)
     assert (
         service._validate_posted_at(
             amanha, service.get_account(db, acc["id"]), _hoje(), source=source
@@ -841,7 +841,7 @@ def test_AC4_toda_origem_EXTERNA_recusa_data_futura(client: TestClient, headers,
     caminho de escrita (Onda 4), e é justamente por isso que a regra é fixada agora: quando o
     parser chegar, ele herda a recusa em vez de a redescobrir."""
     acc = _account(client, headers)
-    amanha = datetime.now(UTC).date() + timedelta(days=1)
+    amanha = _hoje() + timedelta(days=1)
     with pytest.raises(service.BankError) as exc:
         service._validate_posted_at(
             amanha, service.get_account(db, acc["id"]), _hoje(), source=source
@@ -859,7 +859,7 @@ def test_AC4_source_desconhecido_e_422_e_nao_ganha_a_isencao(client: TestClient,
     caro, porque cria movimento futuro que só aparece semanas depois.
     """
     acc = _account(client, headers)
-    amanha = datetime.now(UTC).date() + timedelta(days=1)
+    amanha = _hoje() + timedelta(days=1)
     with pytest.raises(service.BankError) as exc:
         service._validate_posted_at(
             amanha, service.get_account(db, acc["id"]), _hoje(), source="origem_inventada"
