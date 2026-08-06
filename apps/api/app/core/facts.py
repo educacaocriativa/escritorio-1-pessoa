@@ -40,6 +40,10 @@ CRM_LEAD_REABERTO = "crm.lead.reaberto"
 CRM_NOTA_CRIADA = "crm.nota.criada"
 CRM_FUNIL_INSCRITO = "crm.funil.inscrito"
 
+FIN_PAGAMENTO_RECEBIDO = "financeiro.pagamento.recebido"
+FIN_COBRANCA_PROTESTADA = "financeiro.cobranca.protestada"
+FIN_CONTA_PAGA = "financeiro.conta.paga"
+
 
 class FactError(ValueError):
     """Violação de invariante do registro. Estoura a transação de propósito."""

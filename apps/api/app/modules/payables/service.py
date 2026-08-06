@@ -6,7 +6,8 @@ from datetime import UTC, date, datetime, time, timedelta
 from sqlalchemy import and_, func, or_, select
 from sqlalchemy.orm import Session
 
-from app.core import audit
+from app.core import audit, facts
+from app.core.facts import FIN_CONTA_PAGA
 from app.core.recurrence import advance, occurrences
 
 # O estado é DERIVADO da data, nunca escolhido (Story 8.14 AC2). O helper é **público e neutro**
@@ -576,6 +577,15 @@ def apply_paid(
     _sincroniza_movimento(
         db, p, tenant_id=tenant_id, actor=actor, bank_account_id=acc.id, posted_at=paid_on
     )
+    # Só vira fato quando o dinheiro saiu de verdade: com data futura o status é
+    # `scheduled`, e quem promove é `promote_scheduled`, no dia. Mesma disciplina do
+    # `_registra_recebimento` de receivables.
+    if p.status == STATUS_PAID:
+        facts.record(
+            db, tenant_id=tenant_id, module="financeiro", kind=FIN_CONTA_PAGA,
+            title=f"Conta paga: {p.description[:100]}",
+            actor=actor, subject_type="payable", subject_id=p.id,
+        )
     audit.record(db, tenant_id=tenant_id, actor=actor, action="payable.paid", target=p.id)
     return p
 
