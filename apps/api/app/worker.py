@@ -23,7 +23,7 @@ from __future__ import annotations
 import argparse
 import logging
 import time
-from datetime import datetime
+from datetime import UTC, datetime
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -121,6 +121,20 @@ def run_sweep(
             logger.exception("[worker] fila falhou tenant=%s", tenant_id)
             result["errors"].append(
                 {"tenant_id": tenant_id, "stage": "notifications", "error": str(exc)}
+            )
+
+        # Etapa 2b — expurga a senha temporária do registro dos convites já resolvidos. Sem
+        # contador próprio: é faxina, não trabalho de negócio, e o volume tende a zero. Roda
+        # DEPOIS da fila (etapa 2) para nunca disputar o corpo de uma notificação ainda pendente.
+        try:
+            with tenant_session_factory(tenant_id) as db:
+                notifications_service.purge_invite_secrets(
+                    db, tenant_id=tenant_id, now=now or datetime.now(UTC)
+                )
+        except Exception as exc:  # noqa: BLE001 — idem: isola a falha por tenant (IV2)
+            logger.exception("[worker] expurgo de senha de convite falhou tenant=%s", tenant_id)
+            result["errors"].append(
+                {"tenant_id": tenant_id, "stage": "invite_secrets", "error": str(exc)}
             )
 
         # Etapa 3 — mídia pendente do inbox de WhatsApp (sessão SEPARADA das outras duas).

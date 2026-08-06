@@ -26,6 +26,7 @@ from app.modules.settings import service as settings_service
 from app.modules.whatsapp_session.models import PublicWhatsappInstance
 from app.modules.whatsapp_templates.models import (
     PURPOSE_CLIENT_MOVED,
+    PURPOSE_STAFF_INVITE,
     STATUS_APPROVED,
     WhatsappTemplate,
 )
@@ -347,6 +348,63 @@ def on_client_moved(*, tenant_id: str, client_id: str, to_stage: str, **_: objec
                 "notificação NÃO enfileirada",
                 tenant_id,
             )
+
+
+# Quanto tempo a senha de um convite NÃO entregue continua recuperável do registro. É a janela
+# em que ela ainda serve ao Master (o funcionário não conseguiu entrar, e alguém vai reclamar);
+# depois dela, recriar o usuário é a resposta, e o texto puro vira só passivo.
+INVITE_SECRET_GRACE = timedelta(days=7)
+# `message` é NOT NULL — a marca substitui o corpo em vez de esvaziá-lo, e diz o que houve.
+INVITE_BODY_REDACTED = "[convite entregue — senha removida do registro]"
+
+
+def purge_invite_secrets(db: Session, *, tenant_id: str, now: datetime) -> int:
+    """Apaga a senha temporária do registro dos convites, mantendo o metadado. Devolve quantos.
+
+    `notifications.message` guarda o corpo INTEIRO do convite, com a linha `Senha temporária:`,
+    e `whatsapp_template_variables` guarda a mesma senha como último elemento. Sem expurgo, toda
+    senha temporária já emitida fica legível em texto puro para sempre — enquanto a mesma senha,
+    em `users`, está protegida por bcrypt. Achado ao investigar o incidente de 2026-08-05.
+
+    Três estados, três tratamentos (decisão do fundador):
+      - **entregue** (`sent`): a senha já está com o destinatário; o registro não tem mais o que
+        acrescentar. Expurga na primeira passada.
+      - **terminal sem entrega** (`logged`/`failed`/`expired`): a senha ainda pode ser a única
+        cópia útil ao Master. Expurga só depois de `INVITE_SECRET_GRACE`.
+      - **`pending`**: NUNCA — o worker ainda precisa do corpo para enviar.
+
+    `tenant_id` é parâmetro por simetria com as demais funções do módulo (o isolamento real vem
+    da RLS da sessão), e `now` é injetável pelo mesmo motivo de `process_pending`: uma janela de
+    carência presa ao relógio da máquina não é testável.
+    """
+    alvos = list(
+        db.scalars(
+            select(Notification).where(
+                Notification.purpose == PURPOSE_STAFF_INVITE,
+                Notification.status != "pending",
+                Notification.message != INVITE_BODY_REDACTED,  # idempotência
+            )
+        ).all()
+    )
+    purgados = 0
+    for n in alvos:
+        if n.status != "sent":
+            criada = n.created_at
+            if criada is not None:
+                if criada.tzinfo is None:  # SQLite devolve naive; Postgres, aware
+                    criada = criada.replace(tzinfo=UTC)
+                if now - criada < INVITE_SECRET_GRACE:
+                    continue
+        n.message = INVITE_BODY_REDACTED
+        n.whatsapp_template_variables = None
+        purgados += 1
+    if purgados:
+        db.commit()
+        logger.info(
+            "[notifications:purge_invite_secrets] senhas removidas do registro tenant=%s n=%s",
+            tenant_id, purgados,
+        )
+    return purgados
 
 
 def list_notifications(db: Session, limit: int = 50) -> list[Notification]:
