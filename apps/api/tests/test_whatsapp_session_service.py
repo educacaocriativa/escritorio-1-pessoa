@@ -336,3 +336,91 @@ def test_check_connections_noop_when_still_connected(db, monkeypatch: pytest.Mon
 def test_check_connections_ignores_tenants_not_on_evolution(db) -> None:
     # profile.whatsapp_provider != "evolution" (nunca conectou) — nada a checar.
     assert session_service.check_connections(db, tenant_id=TENANT_ID) == 0
+
+
+# ── Rede de segurança: promover connecting->connected sem depender da aba aberta ──────────
+#
+# Bug real de produção (2026-08-05, tenant Doro Eventos): quem escreve
+# `whatsapp_provider='evolution'` é `confirm()`, disparado PELO FRONTEND ao ver "connected". O
+# docstring de `check_connections` afirmava que o worker era a rede de segurança caso a aba
+# fechasse antes — mas ele retorna cedo justamente quando o provider ainda não é "evolution".
+# A rede não existia. Consequência: a Evolution fica conectada, mensagens RECEBIDAS funcionam
+# (o webhook não consulta o provider) e todo ENVIO cai no stub da Meta virando `logged`, sem
+# erro em lugar nenhum.
+
+
+def _evolution_respondendo(status: str, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Faz `/instance/fetchInstances` devolver `status` para qualquer instância consultada."""
+
+    def _fake_get(url: str, **kwargs: object) -> object:
+        params = kwargs.get("params") or {}
+
+        class _R:
+            status_code = 200
+
+            def raise_for_status(self) -> None:
+                return None
+
+            def json(self) -> list:
+                return [{"name": params.get("instanceName"), "connectionStatus": status}]
+
+        return _R()
+
+    monkeypatch.setattr(httpx, "get", _fake_get)
+
+
+def test_promove_conexao_que_a_aba_fechada_deixou_pela_metade(
+    db, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    db.add(PublicWhatsappInstance(
+        instance_name="e1p-" + TENANT_ID, tenant_id=TENANT_ID, webhook_secret="s",
+        last_status=session_service.STATUS_CONNECTING,
+    ))
+    db.commit()
+    _evolution_respondendo("open", monkeypatch)
+
+    assert session_service.promote_pending_connections(db, tenant_id=TENANT_ID) == 1
+
+    db.expire_all()
+    assert settings_service.get_profile(db, TENANT_ID).whatsapp_provider == "evolution"
+    row = db.get(PublicWhatsappInstance, "e1p-" + TENANT_ID)
+    assert row.last_status == session_service.STATUS_CONNECTED
+
+
+def test_nao_promove_enquanto_a_evolution_nao_confirma(
+    db, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    db.add(PublicWhatsappInstance(
+        instance_name="e1p-" + TENANT_ID, tenant_id=TENANT_ID, webhook_secret="s",
+        last_status=session_service.STATUS_CONNECTING,
+    ))
+    db.commit()
+    _evolution_respondendo("connecting", monkeypatch)
+
+    assert session_service.promote_pending_connections(db, tenant_id=TENANT_ID) == 0
+
+    db.expire_all()
+    assert settings_service.get_profile(db, TENANT_ID).whatsapp_provider is None
+
+
+def test_nao_ressuscita_sessao_que_o_dono_desconectou(
+    db, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`disconnect()` engole falha de rede do logout — a instância pode seguir "open" na
+    Evolution enquanto o dono já pediu para desconectar. Promover aqui desfaria, em silêncio,
+    uma decisão explícita dele. Só `connecting` é promovível; `disconnected` nunca."""
+    db.add(PublicWhatsappInstance(
+        instance_name="e1p-" + TENANT_ID, tenant_id=TENANT_ID, webhook_secret="s",
+        last_status=session_service.STATUS_DISCONNECTED,
+    ))
+    db.commit()
+    _evolution_respondendo("open", monkeypatch)
+
+    assert session_service.promote_pending_connections(db, tenant_id=TENANT_ID) == 0
+
+    db.expire_all()
+    assert settings_service.get_profile(db, TENANT_ID).whatsapp_provider is None
+
+
+def test_nao_promove_tenant_sem_instancia(db) -> None:
+    assert session_service.promote_pending_connections(db, tenant_id=TENANT_ID) == 0

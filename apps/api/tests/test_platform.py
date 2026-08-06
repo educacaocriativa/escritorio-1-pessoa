@@ -205,16 +205,71 @@ def test_create_edit_delete_staff(client: TestClient, admin_headers):
     assert node["staff_count"] == 0
 
 
-def test_staff_whatsapp_delivery(client: TestClient, admin_headers, _tenant_session_to_test_db):
+def test_staff_whatsapp_delivery(
+    client: TestClient, admin_headers, db: Session, _tenant_session_to_test_db
+):
+    """Tenant COM transporte utilizável: o request enfileira e a entrega real fica pro worker
+    (Onda 3 — fila com validade/freio)."""
     tid = _tenant_id(client, admin_headers, slug="escw", email="escw@example.com")
+    db.add(TenantProfile(tenant_id=tid, whatsapp_token="tok-w", whatsapp_phone_id="phone-w"))
+    db.commit()
+
     invite = client.post(
         f"/admin/accounts/{tid}/users",
         json=_staff_body(email="zap@escw.com", delivery="whatsapp"),
         headers=admin_headers,
     ).json()
-    # entrega real fica pro worker desde a Onda 3 (fila com validade/freio) — o request só
-    # enfileira.
     assert invite["delivery"] == "whatsapp" and invite["delivery_status"] == "queued"
+
+
+# ── O convite não finge que enviou (fix do transporte silencioso, 2026-08-05) ────────────────
+#
+# Bug real de produção: o Master cadastrou um funcionário por WhatsApp num tenant cuja sessão
+# Evolution tinha sido desconectada 46min antes. `_send_invite` devolveu "queued" assim mesmo, a
+# notificação foi entregue ao stub da Meta (sem credencial) e morreu como `logged` — status
+# TERMINAL, que o worker não reprocessa. A senha nunca chegou, e a tela não tinha como saber.
+
+def test_convite_por_whatsapp_sem_transporte_nao_finge_que_enfileirou(
+    client: TestClient, admin_headers, db: Session, _tenant_session_to_test_db
+):
+    """Sem Evolution conectada e sem credencial da Meta, não há por onde entregar: o status diz
+    isso, e nada vai pra fila — enfileirar o que já se sabe que morrerá é a própria mentira."""
+    tid = _tenant_id(client, admin_headers, slug="escsem", email="escsem@example.com")
+
+    invite = client.post(
+        f"/admin/accounts/{tid}/users",
+        json=_staff_body(email="semzap@escsem.com", delivery="whatsapp"),
+        headers=admin_headers,
+    ).json()
+
+    assert invite["delivery_status"] == "unconfigured"
+    assert db.scalar(
+        select(Notification).where(
+            Notification.tenant_id == tid, Notification.channel == "whatsapp"
+        )
+    ) is None
+
+
+def test_convite_por_whatsapp_com_evolution_conectada_enfileira(
+    client: TestClient, admin_headers, db: Session, monkeypatch: pytest.MonkeyPatch,
+    _tenant_session_to_test_db,
+):
+    """Evolution confirmada (`whatsapp_provider='evolution'`) dispensa credencial da Meta — a
+    credencial dela é global."""
+    from app.config import settings as app_settings
+
+    monkeypatch.setattr(app_settings, "evolution_api_key", "global-key")
+    tid = _tenant_id(client, admin_headers, slug="escevo", email="escevo@example.com")
+    db.add(TenantProfile(tenant_id=tid, whatsapp_provider="evolution"))
+    db.commit()
+
+    invite = client.post(
+        f"/admin/accounts/{tid}/users",
+        json=_staff_body(email="evozap@escevo.com", delivery="whatsapp"),
+        headers=admin_headers,
+    ).json()
+
+    assert invite["delivery_status"] == "queued"
 
 
 # ── WhatsApp por template (staff_invite) — Story convite via template ───────────────────────
@@ -436,9 +491,20 @@ def test_users_requires_admin(client: TestClient):
 
 # ── Gating de temp_password em produção (Story 2.1 AC3) ──────────────────────
 def test_temp_password_hidden_in_production_account(client: TestClient, admin_headers, monkeypatch):
-    """Em produção, POST /admin/accounts NÃO retorna a senha no corpo (vai por e-mail)."""
-    from app.config import settings
+    """Em produção, POST /admin/accounts NÃO retorna a senha no corpo quando o e-mail SAIU.
 
+    ⚠️ **Este teste mudou em 2026-08-05.** Antes ele exercia entrega `logged` (sem SMTP no
+    ambiente de teste) e ainda assim exigia senha oculta — travando a regra AMPLA "produção
+    esconde sempre". Essa regra deixava o usuário inacessível quando a entrega não acontecia,
+    e foi ESTREITADA por decisão do fundador: esconde-se quando a senha chegou (ou vai chegar)
+    ao destinatário, não sempre. Por isso o envio agora é forçado a "sent" — é essa a condição
+    que o AC3 realmente protege. O outro lado tem cobertura própria em
+    `test_producao_devolve_a_senha_quando_nao_houve_como_entregar`.
+    """
+    from app.config import settings
+    from app.core import email as email_module
+
+    monkeypatch.setattr(email_module, "send_email", lambda **kw: "sent")
     monkeypatch.setattr(settings, "environment", "production")
     resp = client.post(
         "/admin/accounts",
@@ -447,17 +513,21 @@ def test_temp_password_hidden_in_production_account(client: TestClient, admin_he
     )
     assert resp.status_code == 201, resp.text
     body = resp.json()
-    assert body["temp_password"] is None  # AC3: não vaza no corpo em produção
-    # o envio continua acontecendo (delivery_status) e a conta é criada normalmente
-    assert body["delivery_status"] in ("sent", "logged", "failed")
+    assert body["temp_password"] is None  # AC3: não vaza no corpo quando a entrega aconteceu
+    assert body["delivery_status"] == "sent"
     assert body["owner"]["must_reset_password"] is True
 
 
 def test_temp_password_hidden_in_production_staff(client: TestClient, admin_headers, monkeypatch):
-    """Em produção, POST /admin/accounts/{tid}/users NÃO retorna a senha temporária no corpo."""
+    """Em produção, POST /admin/accounts/{tid}/users NÃO retorna a senha quando o e-mail SAIU.
+
+    Mesma mudança de 2026-08-05 explicada no teste irmão acima (regra estreitada de "produção
+    esconde sempre" para "produção esconde quando a senha chegou ao destinatário")."""
     from app.config import settings
+    from app.core import email as email_module
 
     tid = _tenant_id(client, admin_headers, slug="prodstaff", email="prodstaff@example.com")
+    monkeypatch.setattr(email_module, "send_email", lambda **kw: "sent")
     monkeypatch.setattr(settings, "environment", "production")
     resp = client.post(
         f"/admin/accounts/{tid}/users",
@@ -466,8 +536,8 @@ def test_temp_password_hidden_in_production_staff(client: TestClient, admin_head
     )
     assert resp.status_code == 201, resp.text
     body = resp.json()
-    assert body["temp_password"] is None  # AC3: não vaza no corpo em produção
-    assert body["delivery_status"] in ("sent", "logged", "failed")
+    assert body["temp_password"] is None  # AC3: não vaza no corpo quando a entrega aconteceu
+    assert body["delivery_status"] == "sent"
 
 
 # ── Exclusão de conta: purga atômica + log de plataforma sobrevivente (Story 1.2) ────
@@ -628,3 +698,66 @@ def test_delete_account_404_for_unknown_tenant(
     resp = client.delete("/admin/accounts/tenant-inexistente-1234", headers=admin_headers)
     assert resp.status_code == 404
     assert db.query(PlatformAuditEntry).count() == 0
+
+
+# ── A senha volta ao Master QUANDO a entrega não aconteceu (decisão do fundador, 2026-08-05) ──
+#
+# O AC3 da Story 2.1 esconde `temp_password` em produção porque a senha vai pelo canal de
+# entrega. Quando NÃO há entrega, essa premissa cai: não existe sigilo a preservar (a senha não
+# saiu por lugar nenhum) e o usuário recém-criado fica inacessível para sempre. A exceção é
+# ESTREITA — só quando o status diz que não foi entregue; `sent` e `queued` seguem escondendo.
+
+@pytest.fixture()
+def _producao(monkeypatch: pytest.MonkeyPatch):
+    from app.config import settings as app_settings
+
+    monkeypatch.setattr(app_settings, "environment", "production")
+
+
+def test_producao_devolve_a_senha_quando_nao_houve_como_entregar(
+    client: TestClient, admin_headers, _producao, _tenant_session_to_test_db
+):
+    tid = _tenant_id(client, admin_headers, slug="escprod", email="escprod@example.com")
+    invite = client.post(
+        f"/admin/accounts/{tid}/users",
+        json=_staff_body(email="prodzap@escprod.com", delivery="whatsapp"),
+        headers=admin_headers,
+    ).json()
+
+    assert invite["delivery_status"] == "unconfigured"
+    assert invite["temp_password"], "sem entrega e sem senha, o usuário nasce inacessível"
+
+
+def test_producao_continua_escondendo_a_senha_quando_a_entrega_esta_a_caminho(
+    client: TestClient, admin_headers, db: Session, _producao, _tenant_session_to_test_db
+):
+    tid = _tenant_id(client, admin_headers, slug="escprodok", email="escprodok@example.com")
+    db.add(TenantProfile(tenant_id=tid, whatsapp_token="tok-p", whatsapp_phone_id="phone-p"))
+    db.commit()
+
+    invite = client.post(
+        f"/admin/accounts/{tid}/users",
+        json=_staff_body(email="prodok@escprodok.com", delivery="whatsapp"),
+        headers=admin_headers,
+    ).json()
+
+    assert invite["delivery_status"] == "queued"
+    assert invite["temp_password"] is None
+
+
+def test_producao_devolve_a_senha_da_CONTA_nova_quando_a_entrega_falha(
+    client: TestClient, admin_headers, _producao, _tenant_session_to_test_db
+):
+    """Mesma regra nos dois convites — dono de conta e funcionário."""
+    body = client.post(
+        "/admin/accounts",
+        json={
+            "legal_name": "Conta Sem Zap", "slug": "semzapconta", "document": "12345678909",
+            "name": "Dona Sem Zap", "email": "dona@semzapconta.com",
+            "address": "Rua X, 1", "phone": "27988887777", "delivery": "whatsapp",
+        },
+        headers=admin_headers,
+    ).json()
+
+    assert body["delivery_status"] == "unconfigured"
+    assert body["temp_password"]

@@ -494,6 +494,12 @@ def test_o_sweep_NAO_ganhou_contador_novo(client: TestClient, db):
     ⚠️ **[Merge com `main`]** `whatsapp_connections_dropped` entrou na lista — é a 5ª etapa (monitor
     de sessão Evolution), independente da promoção de agendadas e trazida por outra frente de
     trabalho (PRs #62–#69). As duas etapas coexistem: nenhuma substitui a outra.
+
+    ⚠️ **`whatsapp_connections_promoted` entrou depois (fix do transporte silencioso, 2026-08-05)
+    e NÃO viola a regra acima.** A regra proíbe dar três números para uma informação — o caso da
+    promoção de agendadas, onde os dois lados somam. Aqui os dois contadores são eventos
+    OPOSTOS do ciclo de vida da sessão (uma conexão subiu × uma caiu); a soma deles não
+    responde pergunta nenhuma, e cada um sozinho responde a sua.
     """
     client.post("/auth/register", json=REGISTER)
     cm = _cm_factory(db)
@@ -505,6 +511,7 @@ def test_o_sweep_NAO_ganhou_contador_novo(client: TestClient, db):
         "whatsapp_media_processed",
         "scheduled_promoted",
         "whatsapp_connections_dropped",
+        "whatsapp_connections_promoted",
         "errors",
     }
 
@@ -552,3 +559,90 @@ def test_run_sweep_isolates_whatsapp_stage_failure(db, monkeypatch):
     assert len(result["errors"]) == 1
     assert result["errors"][0]["stage"] == "whatsapp_connections"
     assert result["errors"][0]["tenant_id"] == tenant.id
+
+
+# --- Etapa 5 (cont.): promover a conexão que a aba fechada deixou pela metade ----------------
+#
+# Bug real de produção (2026-08-05): `confirm()` só roda se o FRONTEND vir "connected". Aba
+# fechada antes = Evolution conectada, `whatsapp_provider` nulo, todo envio caindo no stub da
+# Meta como `logged`, sem erro nenhum. `check_connections` não cobre: ele retorna cedo quando o
+# provider ainda não é "evolution", que é exatamente a condição do defeito.
+
+def test_run_sweep_promove_conexao_que_ficou_pela_metade(db, monkeypatch):
+    tenant = _make_tenant(db, slug="wa-promove")
+    db.commit()
+
+    promovidos: list[str] = []
+    monkeypatch.setattr(
+        worker.whatsapp_session_service, "promote_pending_connections",
+        lambda db, *, tenant_id: promovidos.append(tenant_id) or 1,
+    )
+    monkeypatch.setattr(
+        worker.whatsapp_session_service, "check_connections",
+        lambda db, *, tenant_id: 0,
+    )
+
+    cm = _cm_factory(db)
+    result = run_sweep(session_factory=cm, tenant_session_factory=cm)
+
+    assert promovidos == [tenant.id]
+    assert result["whatsapp_connections_promoted"] == 1
+    assert result["errors"] == []
+
+
+def test_falha_ao_promover_nao_derruba_o_sweep(db, monkeypatch):
+    """Mesmo isolamento por etapa (IV2) das outras: o erro é acumulado, o sweep segue."""
+    _make_tenant(db, slug="wa-promove-falha")
+    db.commit()
+
+    def _boom(db, *, tenant_id):
+        raise RuntimeError("evolution fora do ar")
+
+    monkeypatch.setattr(worker.whatsapp_session_service, "promote_pending_connections", _boom)
+
+    cm = _cm_factory(db)
+    result = run_sweep(session_factory=cm, tenant_session_factory=cm)
+
+    assert [e["stage"] for e in result["errors"]] == ["whatsapp_connections"]
+    assert result["tenants_checked"] == 1
+
+
+# --- Etapa 6: a senha do convite não fica em texto puro para sempre -------------------------
+
+def test_sweep_expurga_a_senha_de_convite_ja_entregue(db):
+    from app.modules.notifications.models import Notification
+    from app.modules.notifications.service import INVITE_BODY_REDACTED
+    from app.modules.whatsapp_templates.models import PURPOSE_STAFF_INVITE
+
+    tenant = _make_tenant(db, slug="wa-purga")
+    n = Notification(
+        tenant_id=tenant.id, channel="whatsapp", recipient="5511999999999",
+        message="Senha temporária: segredo-123", status="sent", purpose=PURPOSE_STAFF_INVITE,
+        whatsapp_template_variables=["a", "b", "c", "segredo-123"],
+    )
+    db.add(n)
+    db.commit()
+
+    cm = _cm_factory(db)
+    result = run_sweep(session_factory=cm, tenant_session_factory=cm)
+
+    db.refresh(n)
+    assert n.message == INVITE_BODY_REDACTED
+    assert n.whatsapp_template_variables is None
+    assert result["errors"] == []
+
+
+def test_falha_no_expurgo_nao_derruba_o_sweep(db, monkeypatch):
+    _make_tenant(db, slug="wa-purga-falha")
+    db.commit()
+
+    def _boom(db, *, tenant_id, now):
+        raise RuntimeError("expurgo explodiu")
+
+    monkeypatch.setattr(worker.notifications_service, "purge_invite_secrets", _boom)
+
+    cm = _cm_factory(db)
+    result = run_sweep(session_factory=cm, tenant_session_factory=cm)
+
+    assert [e["stage"] for e in result["errors"]] == ["invite_secrets"]
+    assert result["tenants_checked"] == 1

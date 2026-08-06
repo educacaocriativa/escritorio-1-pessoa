@@ -25,6 +25,7 @@ from __future__ import annotations
 import logging
 from typing import TYPE_CHECKING
 
+from app.config import settings
 from app.core.phone import normalize_br
 from app.core.whatsapp import capabilities
 from app.core.whatsapp.providers import evolution, meta
@@ -37,6 +38,7 @@ logger = logging.getLogger("e1p.whatsapp")
 
 __all__ = [
     "WhatsappApiError",
+    "is_deliverable",
     "fetch_group_subject",
     "send_text",
     "send_template",
@@ -59,6 +61,29 @@ def _resolve(profile: TenantProfile | None):
     (por qual API o texto sai) não conseguem divergir. Gate em
     `tests/test_whatsapp_capabilities.py::test_capabilities_e_despachante_nunca_divergem`."""
     return evolution if capabilities.for_profile(profile) is capabilities.EVOLUTION else meta
+
+
+def is_deliverable(profile: TenantProfile | None) -> bool:
+    """Existe, AGORA, transporte capaz de entregar para este tenant?
+
+    Sem isso, quem enfileira não distingue "vai sair" de "vai morrer": os providers devolvem
+    `"logged"` quando não têm credencial — um status de sucesso aparente, TERMINAL (o worker não
+    reprocessa `logged`). Foi assim que um convite de funcionário sumiu em produção
+    (2026-08-05): a sessão Evolution tinha caído, o envio caiu no stub da Meta e a tela do Master
+    disse que estava tudo certo.
+
+    Mora no despachante, e não em cada call site, pela mesma razão de `_addressable` e
+    `capabilities`: é a fronteira por onde TODO envio passa, e são seis os caminhos que enfileiram
+    WhatsApp. Responde sobre a POSSIBILIDADE de entregar — não promete que o WhatsApp do
+    destinatário existe, nem que a sessão não vai cair no minuto seguinte.
+    """
+    if _resolve(profile) is evolution:
+        # Credencial da Evolution é GLOBAL; o vínculo com o tenant é o `whatsapp_provider`, que
+        # `_resolve` já conferiu e que só `confirm()`/`promote_pending_connections` escrevem.
+        return bool(settings.evolution_api_key)
+    if profile is not None:
+        return bool(profile.whatsapp_token and profile.whatsapp_phone_id)
+    return bool(settings.whatsapp_token and settings.whatsapp_phone_id)
 
 
 def _addressable(to: str) -> str:

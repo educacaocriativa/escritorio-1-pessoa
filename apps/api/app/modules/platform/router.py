@@ -4,7 +4,6 @@ from __future__ import annotations
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 
-from app.config import settings
 from app.core.tenancy import CurrentUser, require_platform_admin
 from app.db.session import get_db
 from app.modules.auth.schemas import TenantOut, UserOut
@@ -54,8 +53,9 @@ def create_account(
         raise HTTPException(status_code=e.status_code, detail=str(e)) from e
     return AccountInviteOut(
         tenant=TenantOut.model_validate(tenant), owner=UserOut.model_validate(owner),
-        # Em produção a senha temporária NÃO volta no corpo (vai por e-mail/WhatsApp — AC3).
-        temp_password=None if settings.is_production else temp,
+        # Em produção a senha só volta quando NÃO houve entrega — sem isso o dono da conta nova
+        # nasce inacessível (não existe reenvio de convite). Ver `reveals_temp_password`.
+        temp_password=temp if service.reveals_temp_password(status) else None,
         delivery=data.delivery, delivery_status=status,
     )
 
@@ -118,8 +118,8 @@ def create_staff(
         raise HTTPException(status_code=e.status_code, detail=str(e)) from e
     return StaffInviteOut(
         user=UserOut.model_validate(user),
-        # Em produção a senha temporária NÃO volta no corpo (vai por e-mail/WhatsApp — AC3).
-        temp_password=None if settings.is_production else temp,
+        # Em produção a senha só volta quando NÃO houve entrega — ver `reveals_temp_password`.
+        temp_password=temp if service.reveals_temp_password(status) else None,
         delivery=data.delivery, delivery_status=status,
     )
 

@@ -56,7 +56,7 @@ export interface StaffInvite {
   user: User;
   temp_password: string;
   delivery: "email" | "whatsapp";
-  delivery_status: "sent" | "logged" | "failed";
+  delivery_status: "sent" | "queued" | "logged" | "failed" | "unconfigured";
 }
 
 /** Conta gerenciada pelo Super Admin: tenant + seu owner. */
@@ -84,7 +84,7 @@ export interface AccountInvite {
   owner: User;
   temp_password: string;
   delivery: "email" | "whatsapp";
-  delivery_status: "sent" | "logged" | "failed";
+  delivery_status: "sent" | "queued" | "logged" | "failed" | "unconfigured";
 }
 
 /** Nó da hierarquia que o Super Admin vê: escritório → Admin → funcionários + clientes. */
