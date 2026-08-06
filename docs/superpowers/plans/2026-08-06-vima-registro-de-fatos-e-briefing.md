@@ -1376,7 +1376,7 @@ git commit -m "feat: pages e funnels emitem fato — incluindo a jornada que fal
 **Interfaces:**
 - Produces: `modulos_permitidos(user: CurrentUser) -> set[str] | None` (`None` = todos), `pode_ver(user, module) -> bool`
 
-- [ ] **Step 1: Escrever o teste que falha**
+- [x] **Step 1: Escrever o teste que falha**
 
 ```python
 # apps/api/tests/test_vima_permissions.py
@@ -1410,12 +1410,12 @@ def test_sub_usuario_so_de_crm_nao_ve_financeiro():
     assert pode_ver(u, "crm") is True
 ```
 
-- [ ] **Step 2: Rodar para confirmar que falha**
+- [x] **Step 2: Rodar para confirmar que falha**
 
 Run: `cd apps/api && pytest tests/test_vima_permissions.py -v`
 Expected: FAIL com `ModuleNotFoundError`
 
-- [ ] **Step 3: Escrever `permissions.py`**
+- [x] **Step 3: Escrever `permissions.py`**
 
 ```python
 # apps/api/app/modules/vima/permissions.py
@@ -1451,12 +1451,12 @@ def pode_ver(user: CurrentUser, module: str) -> bool:
     return permitidos is None or module in permitidos
 ```
 
-- [ ] **Step 4: Rodar para confirmar que passa**
+- [x] **Step 4: Rodar para confirmar que passa**
 
 Run: `cd apps/api && pytest tests/test_vima_permissions.py -v`
 Expected: PASS — 3 testes
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add apps/api/app/modules/vima/ apps/api/tests/test_vima_permissions.py
@@ -1475,7 +1475,7 @@ git commit -m "feat: vima/permissions — filtro de módulo no nível do dado"
 - Consumes: `modulos_permitidos` (Task 9), `hoje_do_tenant` de `app.modules.settings.service`
 - Produces: `@dataclass Ausencia(module, kind, title, subject_type, subject_id, dias, client_id)`, `coletar(db, *, user, hoje, limiares=None) -> list[Ausencia]`, `LIMIARES_PADRAO: dict[str, int]`
 
-- [ ] **Step 1: Escrever os testes que falham**
+- [x] **Step 1: Escrever os testes que falham**
 
 ```python
 # apps/api/tests/test_vima_absences.py
@@ -1563,12 +1563,12 @@ def test_ausencia_reincide_quando_escala(db, usuario_owner, card_parado_ha_12_di
 
 `coletar` recebe `ja_reportadas: dict[str, int] | None` — chave `f"{kind}:{subject_id}"`, valor `dias` na última vez que foi reportada. Uma ausência é suprimida quando já está na chave **e** `dias` não dobrou desde então.
 
-- [ ] **Step 2: Rodar para confirmar que falha**
+- [x] **Step 2: Rodar para confirmar que falha**
 
 Run: `cd apps/api && pytest tests/test_vima_absences.py -v`
 Expected: FAIL com `ModuleNotFoundError`
 
-- [ ] **Step 3: Escrever `absences.py`**
+- [x] **Step 3: Escrever `absences.py`**
 
 ```python
 # apps/api/app/modules/vima/absences.py
@@ -1649,12 +1649,12 @@ def coletar(
 
 As seis funções privadas (`_prazos_estourados`, `_dinheiro_com_data`, `_silencio_nosso`, `_contato_sumido`, `_cards_parados`, `_topo_seco`) são consultas diretas às tabelas já existentes. `_silencio_nosso` e `_contato_sumido` filtram `WhatsappMessage.created_at >= CORTE_AUTORIA`. `_cards_parados` lê `Client.stage_entered_at` e exclui etapas com `is_won` ou `is_lost`. `_topo_seco` conta `Fact` com `kind == COM_FORMULARIO_RECEBIDO` na janela.
 
-- [ ] **Step 4: Rodar para confirmar que passa**
+- [x] **Step 4: Rodar para confirmar que passa**
 
 Run: `cd apps/api && pytest tests/test_vima_absences.py -v`
 Expected: PASS — 7 testes
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add apps/api/app/modules/vima/absences.py apps/api/tests/test_vima_absences.py
@@ -1673,7 +1673,7 @@ git commit -m "feat: vima/absences — as cinco famílias, com limiares injetáv
 - Consumes: `financial_intelligence.engine` (puro), `pode_ver` (Task 9)
 - Produces: `@dataclass Tendencia(module, nivel, title)`, `coletar(db, *, user, hoje) -> list[Tendencia]`
 
-- [ ] **Step 1: Escrever o teste que falha**
+- [x] **Step 1: Escrever o teste que falha**
 
 ```python
 # apps/api/tests/test_vima_trends.py
@@ -1694,12 +1694,12 @@ def test_sub_usuario_de_crm_nao_recebe_nenhuma(db, usuario_so_crm, movimento_fin
     assert coletar(db, user=usuario_so_crm, hoje=date(2026, 8, 6)) == []
 ```
 
-- [ ] **Step 2: Rodar para confirmar que falha**
+- [x] **Step 2: Rodar para confirmar que falha**
 
 Run: `cd apps/api && pytest tests/test_vima_trends.py -v`
 Expected: FAIL com `ModuleNotFoundError`
 
-- [ ] **Step 3: Escrever `trends.py`**
+- [x] **Step 3: Escrever `trends.py`**
 
 ```python
 # apps/api/app/modules/vima/trends.py
@@ -1745,12 +1745,12 @@ def coletar(db: Session, *, user: CurrentUser, hoje: date) -> list[Tendencia]:
     ]
 ```
 
-- [ ] **Step 4: Rodar para confirmar que passa**
+- [x] **Step 4: Rodar para confirmar que passa**
 
 Run: `cd apps/api && pytest tests/test_vima_trends.py -v`
 Expected: PASS — 2 testes
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add apps/api/app/modules/vima/trends.py apps/api/tests/test_vima_trends.py
@@ -1769,7 +1769,7 @@ git commit -m "feat: vima/trends — adaptador dos sinais do motor financeiro"
 - Consumes: `Fact` (Task 1), `Ausencia` (Task 10), `Tendencia` (Task 11)
 - Produces: `@dataclass Linha(secao, module, texto)`, `@dataclass Payload(referencia, desde, linhas, excedente)`, `compor(*, fatos, ausencias, tendencias, valores, teto=12) -> Payload`
 
-- [ ] **Step 1: Escrever os testes que falham**
+- [x] **Step 1: Escrever os testes que falham**
 
 ```python
 # apps/api/tests/test_vima_composer.py
@@ -1845,12 +1845,12 @@ def test_ausencia_vem_antes_de_fato_na_ordem_de_prioridade():
     assert p.linhas[0].secao == "PENDENTE"
 ```
 
-- [ ] **Step 2: Rodar para confirmar que falha**
+- [x] **Step 2: Rodar para confirmar que falha**
 
 Run: `cd apps/api && pytest tests/test_vima_composer.py -v`
 Expected: FAIL com `ModuleNotFoundError`
 
-- [ ] **Step 3: Escrever `composer.py`**
+- [x] **Step 3: Escrever `composer.py`**
 
 ```python
 # apps/api/app/modules/vima/composer.py
@@ -1915,12 +1915,12 @@ class Payload:
 
 `compor()` executa, nesta ordem: (1) colapso pelos pares de `_COLAPSOS` casando `client_id` e janela de 60 segundos; (2) agregação acima de `_LIMITE_AGREGACAO` fatos do mesmo `kind`; (3) injeção de `valores` por `(subject_type, subject_id)`; (4) ordenação por seção (`PENDENTE` → `ACONTECEU` → `NÚMEROS`) e, dentro dela, por `_PESOS` e `occurred_at` decrescente; (5) corte no `teto`, com o resto contado em `excedente`.
 
-- [ ] **Step 4: Rodar para confirmar que passa**
+- [x] **Step 4: Rodar para confirmar que passa**
 
 Run: `cd apps/api && pytest tests/test_vima_composer.py -v`
 Expected: PASS — 5 testes
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add apps/api/app/modules/vima/composer.py apps/api/tests/test_vima_composer.py
@@ -1939,7 +1939,7 @@ git commit -m "feat: vima/composer — colapso, agregação, priorização e cor
 - Consumes: `Payload` (Task 12), `app.core.ai.complete`, `app.core.anonymizer.anonymizer`, `app.core.audit.record`
 - Produces: `@dataclass Narracao(texto, por_ia)`, `narrar(db, *, tenant_id, payload, nome_do_usuario) -> Narracao`, `render_template(payload, nome_do_usuario) -> str`
 
-- [ ] **Step 1: Escrever os testes que falham**
+- [x] **Step 1: Escrever os testes que falham**
 
 ```python
 # apps/api/tests/test_vima_narrator.py
@@ -2011,12 +2011,12 @@ def test_o_telefone_vai_mascarado_e_volta_real(db, monkeypatch):
     assert "(11) 99999-8888" in n.texto
 ```
 
-- [ ] **Step 2: Rodar para confirmar que falha**
+- [x] **Step 2: Rodar para confirmar que falha**
 
 Run: `cd apps/api && pytest tests/test_vima_narrator.py -v`
 Expected: FAIL com `ModuleNotFoundError`
 
-- [ ] **Step 3: Escrever `narrator.py`**
+- [x] **Step 3: Escrever `narrator.py`**
 
 ```python
 # apps/api/app/modules/vima/narrator.py
@@ -2100,12 +2100,12 @@ def narrar(
     return Narracao(texto=texto, por_ia=True)
 ```
 
-- [ ] **Step 4: Rodar para confirmar que passa**
+- [x] **Step 4: Rodar para confirmar que passa**
 
 Run: `cd apps/api && pytest tests/test_vima_narrator.py -v`
 Expected: PASS — 4 testes
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add apps/api/app/modules/vima/narrator.py apps/api/tests/test_vima_narrator.py
@@ -2126,7 +2126,7 @@ git commit -m "feat: vima/narrator — mask, narração e fallback por template"
 - Consumes: tudo das Tasks 9–13
 - Produces: `Briefing` (modelo), `gerar_ou_ler(db, *, user, hoje) -> Briefing`, `marcar_lido(db, *, briefing_id, user) -> Briefing`, rotas `GET /vima/briefing` e `POST /vima/briefing/{id}/read`
 
-- [ ] **Step 1: Escrever os testes que falham**
+- [x] **Step 1: Escrever os testes que falham**
 
 ```python
 # apps/api/tests/test_vima_briefing.py
@@ -2176,12 +2176,12 @@ def test_dia_sem_nada_devolve_briefing_vazio_e_nao_falha(client: TestClient, hea
     assert corpo["texto"]
 ```
 
-- [ ] **Step 2: Rodar para confirmar que falha**
+- [x] **Step 2: Rodar para confirmar que falha**
 
 Run: `cd apps/api && pytest tests/test_vima_briefing.py -v`
 Expected: FAIL com 404 na rota
 
-- [ ] **Step 3: Escrever o modelo**
+- [x] **Step 3: Escrever o modelo**
 
 ```python
 # apps/api/app/modules/vima/models.py
@@ -2214,7 +2214,7 @@ class Briefing(Base, TenantMixin, TimestampMixin):
     read_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 ```
 
-- [ ] **Step 4: Escrever a migration 0070**
+- [x] **Step 4: Escrever a migration 0070**
 
 ```python
 # apps/api/migrations/versions/0070_briefings.py
@@ -2275,7 +2275,7 @@ def downgrade() -> None:
     op.drop_table("briefings")
 ```
 
-- [ ] **Step 5: Escrever o serviço e a rota**
+- [x] **Step 5: Escrever o serviço e a rota**
 
 `vima/service.py::gerar_ou_ler(db, *, user, hoje)`:
 1. `SELECT` por `(tenant_id, user_id, reference_date=hoje)` — se existir, devolve (idempotência).
@@ -2290,24 +2290,24 @@ def downgrade() -> None:
 
 ⚠️ `hoje` vem de `hoje_do_tenant(db)`, nunca de `datetime.now(UTC).date()`.
 
-- [ ] **Step 6: Rodar os testes**
+- [x] **Step 6: Rodar os testes**
 
 Run: `cd apps/api && pytest tests/test_vima_briefing.py -v`
 Expected: PASS — 4 testes
 
-- [ ] **Step 7: Estender o gate de fuso para cobrir a Vima**
+- [x] **Step 7: Estender o gate de fuso para cobrir a Vima**
 
 Em `apps/api/tests/test_fuso_do_tenant.py`, incluir `app/modules/vima/` na varredura que reprova `datetime.now(UTC).date()` em lógica de negócio. O módulo inteiro precisa ancorar "hoje" em `hoje_do_tenant(db)`; `absences.py` e `composer.py` são puros e recebem `hoje` por parâmetro, então a varredura também prova que nenhum deles leu o relógio por conta própria.
 
 Run: `cd apps/api && pytest tests/test_fuso_do_tenant.py -v`
 Expected: PASS
 
-- [ ] **Step 8: Rodar a suíte inteira**
+- [x] **Step 8: Rodar a suíte inteira**
 
 Run: `cd apps/api && pytest`
 Expected: PASS
 
-- [ ] **Step 9: Commit**
+- [x] **Step 9: Commit**
 
 ```bash
 git add apps/api/app/modules/vima/ apps/api/migrations/versions/0070_briefings.py apps/api/app/db/registry.py apps/api/app/main.py apps/api/tests/test_vima_briefing.py apps/api/tests/test_fuso_do_tenant.py
