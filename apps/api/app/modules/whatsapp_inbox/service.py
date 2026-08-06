@@ -12,13 +12,15 @@ from datetime import UTC, datetime, timedelta
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.core import audit, whatsapp
+from app.core import audit, facts, whatsapp
+from app.core.facts import COM_MENSAGEM_RECEBIDA
 from app.core.phone import normalize_br
 from app.core.whatsapp import capabilities as whatsapp_capabilities
 from app.core.whatsapp.inbound import InboundMessage
 from app.modules.attachments import service as attachments_service
 from app.modules.attachments.models import ALLOWED_TYPES, MAX_BYTES
 from app.modules.attachments.service import AttachmentError
+from app.modules.auth.models import User
 from app.modules.crm import service as crm_service
 from app.modules.crm.models import Client
 from app.modules.crm.schemas import ClientCreate
@@ -223,6 +225,30 @@ def _get_or_create_chat(
     return chat
 
 
+
+def _e_telefone_da_equipe(db: Session, tenant_id: str, phone: str | None) -> bool:
+    """O telefone é de um usuário ATIVO deste tenant (dono ou funcionário)?
+
+    Mensagem vinda do próprio time não é lead: pelo caminho normal ela criaria um contato no
+    CRM, e o dono apareceria no próprio funil de vendas e no painel de inadimplência. Hoje isso
+    só acontece se alguém escrever para o próprio número; com o opt-in do briefing por botão na
+    Meta (Onda 4) passa a acontecer todo dia.
+
+    ⚠️ `users` é tabela GLOBAL, SEM RLS (o login por e-mail é global) — o filtro por
+    `tenant_id` aqui é explícito e obrigatório. É a exceção documentada da Regra de Ouro nº 1.
+    """
+    chave = normalize_br(phone) if phone else None
+    if chave is None:
+        return False
+    fones = db.scalars(
+        select(User.phone)
+        .where(User.tenant_id == tenant_id)
+        .where(User.is_active.is_(True))
+        .where(User.phone.is_not(None))
+    ).all()
+    return any(normalize_br(f) == chave for f in fones)
+
+
 def ingest_webhook_payload(
     db: Session, *, tenant_id: str, messages: list[InboundMessage]
 ) -> None:
@@ -267,7 +293,10 @@ def ingest_webhook_payload(
             ):
                 continue  # duplicata — ignora
 
-            if msg.from_phone is None:
+            da_equipe = _e_telefone_da_equipe(db, tenant_id, msg.from_phone)
+            if msg.from_phone is None or da_equipe:
+                # Sem telefone (`@lid`) OU telefone do próprio time: a mensagem é
+                # gravada, mas NÃO vira contato do CRM.
                 client_id = None
                 client = None
             else:
@@ -310,6 +339,30 @@ def ingest_webhook_payload(
             # `default=_uuid` da coluna só materializa `msg_row.id` no FLUSH (não ao construir o
             # objeto Python) — precisa disso ANTES de usar como owner_id do Attachment.
             db.flush()
+
+            # Só mensagem RECEBIDA DE FORA vira fato. As duas exclusões são coisas que o
+            # próprio time fez, e reportá-las de volta no briefing seria eco, não notícia:
+            # a espelhada do aparelho do dono (`from_me`, que o Baileys manda no mesmo evento)
+            # e a vinda do telefone de um usuário do tenant (`da_equipe` — ex.: o toque no
+            # botão do briefing na Meta, Onda 4).
+            #
+            # ⚠️ DÍVIDA: `occurred_at` cai no default (agora), não no instante real da
+            # mensagem — `InboundMessage` não carrega o `messageTimestamp` do payload, e
+            # propagá-lo é mudança na camada de provider (os dois parsers). O efeito é uma
+            # janela de segundos: uma mensagem recebida 23h59 e processada 00h01 entra no
+            # briefing do dia seguinte em vez do dia dela. Fecha adicionando o campo ao
+            # `InboundMessage` e preenchendo em `evolution.parse_inbound`/`meta`.
+            if direction == DIRECTION_IN and not da_equipe:
+                quem = (msg.sender_name or msg.push_name or msg.from_phone
+                        or "contato não identificado")
+                facts.record(
+                    db, tenant_id=tenant_id, module="comercial",
+                    kind=COM_MENSAGEM_RECEBIDA,
+                    title=f"{quem} escreveu no WhatsApp", actor="client",
+                    client_id=client_id,
+                    subject_type="whatsapp_chat",
+                    subject_id=chat.id if chat is not None else None,
+                )
 
             if msg.media_bytes:
                 # Evolution: bytes já vieram decodificados no payload (webhookBase64) — cria o

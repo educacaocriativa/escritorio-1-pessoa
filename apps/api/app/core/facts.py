@@ -50,6 +50,7 @@ AGENDA_EVENTO_REMARCADO = "agenda.evento.remarcado"
 COM_ORCAMENTO_ENVIADO = "comercial.orcamento.enviado"
 COM_ORCAMENTO_ACEITO = "comercial.orcamento.aceito"
 COM_ORCAMENTO_RECUSADO = "comercial.orcamento.recusado"
+COM_MENSAGEM_RECEBIDA = "comercial.mensagem.recebida"
 
 
 class FactError(ValueError):
