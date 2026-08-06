@@ -51,6 +51,10 @@ COM_ORCAMENTO_ENVIADO = "comercial.orcamento.enviado"
 COM_ORCAMENTO_ACEITO = "comercial.orcamento.aceito"
 COM_ORCAMENTO_RECUSADO = "comercial.orcamento.recusado"
 COM_MENSAGEM_RECEBIDA = "comercial.mensagem.recebida"
+COM_FORMULARIO_RECEBIDO = "comercial.formulario.recebido"
+COM_PAGINA_PUBLICADA = "comercial.pagina.publicada"
+
+OP_JORNADA_FALHOU = "operacao.jornada.falhou"
 
 
 class FactError(ValueError):

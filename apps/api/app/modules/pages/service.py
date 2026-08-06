@@ -7,7 +7,8 @@ import secrets
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.core import audit
+from app.core import audit, facts
+from app.core.facts import COM_FORMULARIO_RECEBIDO
 from app.modules.pages.models import STATUS_DRAFT, STATUS_PUBLISHED, Page, PublishedPage
 from app.modules.pages.schemas import PageCreate, PageUpdate
 
@@ -218,10 +219,24 @@ def public_submit(
     with session_factory(snap.tenant_id) as tdb:
         # `absorb_lead` (não `create_client`): quem já existe é complementado com a data e o
         # texto deste envio, em vez de ganhar um card paralelo no Kanban.
-        crm_service.absorb_lead(
+        # `absorb_lead` devolve `(contato, é_novo)` — a porta única de entrada de lead.
+        cliente, _novo = crm_service.absorb_lead(
             tdb, tenant_id=snap.tenant_id, actor="pagina:lead",
             data=ClientCreate(
                 name=name, email=email, phone=phone or None, source="landing",
                 notes=_format_fields(fields),
             ),
+        )
+        # DOIS fatos para UM acontecimento, de propósito: `absorb_lead` já gravou
+        # `crm.lead.criado` (o contato nasceu) e este diz QUAL PÁGINA converteu — a
+        # atribuição de marketing, que é informação diferente e que o V3 vai querer.
+        # Quem funde os dois numa frase só é o compositor do briefing, não o log.
+        facts.record(
+            tdb, tenant_id=snap.tenant_id, module="comercial",
+            kind=COM_FORMULARIO_RECEBIDO,
+            title=("Formulário recebido da página "
+                   f"“{str((snap.data or {}).get('title') or 'sem título')[:70]}”"),
+            actor="client",
+            client_id=cliente.id,
+            subject_type="page", subject_id=snap.page_id,
         )
