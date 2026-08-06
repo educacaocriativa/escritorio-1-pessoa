@@ -9,7 +9,12 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.config import settings
-from app.core import ai, audit
+from app.core import ai, audit, facts
+from app.core.facts import (
+    COM_ORCAMENTO_ACEITO,
+    COM_ORCAMENTO_ENVIADO,
+    COM_ORCAMENTO_RECUSADO,
+)
 from app.core.security import hash_password, verify_password
 from app.modules.crm.models import Client
 from app.modules.notifications import service as notifications_service
@@ -229,6 +234,11 @@ def send_quote(db: Session, *, quote_id: str, tenant_id: str, actor: str) -> Quo
             client_id=q.client_id, message=msg, purpose=PURPOSE_QUOTE_SEND,
         )
     q.status = STATUS_SENT
+    facts.record(
+        db, tenant_id=tenant_id, module="comercial", kind=COM_ORCAMENTO_ENVIADO,
+        title=f"Orçamento “{q.title[:80]}” enviado", actor=actor,
+        client_id=q.client_id, subject_type="quote", subject_id=q.id,
+    )
     _publish(db, q)
     audit.record(db, tenant_id=tenant_id, actor=actor, action="quote.send", target=q.id)
     db.commit()
@@ -266,6 +276,11 @@ def approve_quote(db: Session, *, quote_id: str, tenant_id: str, actor: str) -> 
         ),
     )
     q.status = STATUS_APPROVED
+    facts.record(
+        db, tenant_id=tenant_id, module="comercial", kind=COM_ORCAMENTO_ACEITO,
+        title=f"Orçamento “{q.title[:80]}” aceito", actor=actor,
+        client_id=q.client_id, subject_type="quote", subject_id=q.id,
+    )
     q.charge_id = charge.id
     # Efeito dominó completo: se o orçamento tem a aba "Contrato" ativada, gera o contrato
     # no MESMO commit (sem commitar lá dentro), atômico com a cobrança.
@@ -287,6 +302,11 @@ def reject_quote(db: Session, *, quote_id: str, tenant_id: str, actor: str) -> Q
     if q.status == STATUS_APPROVED:
         raise QuoteError("Orçamento aprovado não pode ser recusado", 409)
     q.status = STATUS_REJECTED
+    facts.record(
+        db, tenant_id=tenant_id, module="comercial", kind=COM_ORCAMENTO_RECUSADO,
+        title=f"Orçamento “{q.title[:80]}” recusado", actor=actor,
+        client_id=q.client_id, subject_type="quote", subject_id=q.id,
+    )
     _publish(db, q)
     audit.record(db, tenant_id=tenant_id, actor=actor, action="quote.reject", target=q.id)
     db.commit()

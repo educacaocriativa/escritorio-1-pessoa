@@ -44,6 +44,13 @@ FIN_PAGAMENTO_RECEBIDO = "financeiro.pagamento.recebido"
 FIN_COBRANCA_PROTESTADA = "financeiro.cobranca.protestada"
 FIN_CONTA_PAGA = "financeiro.conta.paga"
 
+AGENDA_EVENTO_CANCELADO = "agenda.evento.cancelado"
+AGENDA_EVENTO_REMARCADO = "agenda.evento.remarcado"
+
+COM_ORCAMENTO_ENVIADO = "comercial.orcamento.enviado"
+COM_ORCAMENTO_ACEITO = "comercial.orcamento.aceito"
+COM_ORCAMENTO_RECUSADO = "comercial.orcamento.recusado"
+
 
 class FactError(ValueError):
     """Violação de invariante do registro. Estoura a transação de propósito."""

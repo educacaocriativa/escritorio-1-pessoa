@@ -10,7 +10,8 @@ from datetime import datetime
 from sqlalchemy import and_, func, select
 from sqlalchemy.orm import Session
 
-from app.core import audit
+from app.core import audit, facts
+from app.core.facts import AGENDA_EVENTO_CANCELADO, AGENDA_EVENTO_REMARCADO
 from app.modules.agenda.models import (
     KIND_ATENDIMENTO,
     KIND_AUDIENCIA,
@@ -212,6 +213,11 @@ def cancel_event(
         from app.modules.google_calendar import service as gcal
 
         gcal.delete_meet_event(db, tenant_id=tenant_id, event=event)
+    facts.record(
+        db, tenant_id=tenant_id, module="agenda", kind=AGENDA_EVENTO_CANCELADO,
+        title=f"Cancelado: {event.title[:100]}", actor=actor, is_ai=by_ai,
+        subject_type="agenda_event", subject_id=event.id,
+    )
     audit.record(
         db, tenant_id=tenant_id, actor=actor, action="agenda.event.cancel", target=event.id,
         is_ai=by_ai,
@@ -246,6 +252,11 @@ def reschedule_event(
         from app.modules.google_calendar import service as gcal
 
         gcal.patch_meet_event(db, tenant_id=tenant_id, event=event)
+    facts.record(
+        db, tenant_id=tenant_id, module="agenda", kind=AGENDA_EVENTO_REMARCADO,
+        title=f"Remarcado: {event.title[:100]}", actor=actor, is_ai=by_ai,
+        subject_type="agenda_event", subject_id=event.id,
+    )
     audit.record(
         db, tenant_id=tenant_id, actor=actor, action="agenda.event.reschedule", target=event.id,
         is_ai=by_ai,
