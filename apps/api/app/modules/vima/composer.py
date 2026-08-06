@@ -13,7 +13,7 @@ a Invariante 2 se sustenta: o fato nunca guardou o dinheiro; o valor é lido da 
 """
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from typing import Any
 
@@ -63,9 +63,20 @@ class Payload:
     desde: datetime | None
     linhas: list[Linha]
     excedente: int
+    # `{kind}:{subject_id}` → `dias`, só das ausências que SOBREVIVERAM ao corte. Uma ausência
+    # cortada pelo teto não foi dita a ninguém; registrá-la aqui a calaria amanhã por algo que
+    # o dono nunca leu. É o insumo da regra do silêncio no briefing seguinte.
+    ausencias_ditas: dict[str, int] = field(default_factory=dict)
 
-    def vazio(self) -> bool:
-        return not self.linhas
+    def sem_acontecimentos(self) -> bool:
+        """"Nada aconteceu" — que NÃO é o mesmo que "não há linhas".
+
+        Ausência e tendência descrevem estado permanente: um tenant recém-criado já nasce com
+        pelo menos uma de cada (o topo sem lead, o 🟡 de completude do Epic 8). Se o flag de
+        vazio olhasse `linhas`, ele nunca seria verdadeiro e a tela perderia o único caso que
+        precisa de tratamento próprio — o dia em que de fato não houve notícia.
+        """
+        return not any(linha.secao == SECAO_ACONTECEU for linha in self.linhas)
 
 
 @dataclass(frozen=True)
@@ -77,6 +88,9 @@ class _Candidata:
     texto: str
     peso: int
     quando: datetime | None
+    # Só ausência preenche: a chave e a intensidade que alimentam a regra do silêncio.
+    chave: str | None = None
+    dias: int = 0
 
 
 def compor(
@@ -105,6 +119,7 @@ def compor(
         desde=desde,
         linhas=[Linha(secao=c.secao, module=c.module, texto=c.texto) for c in mantidas],
         excedente=max(0, len(ordenadas) - len(mantidas)),
+        ausencias_ditas={c.chave: c.dias for c in mantidas if c.chave},
     )
 
 
@@ -123,6 +138,7 @@ def _da_ausencia(a: Any) -> _Candidata:
     return _Candidata(
         secao=SECAO_PENDENTE, module=a.module, texto=a.title,
         peso=_peso(a.kind), quando=None,
+        chave=f"{a.kind}:{a.subject_id}", dias=a.dias,
     )
 
 

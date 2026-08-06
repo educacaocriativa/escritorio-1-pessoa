@@ -5,9 +5,9 @@ Os quatro caminhos que marcam uma cobrança como paga NÃO são equivalentes:
 | caminho | o que é | emite? |
 |---|---|---|
 | `mark_paid` | webhook do gateway confirmou | sim |
-| `settle_off_rail` | o dono registrou que caiu na conta dele | só se virar `paid`; `scheduled` é dinheiro que ainda não entrou |
-| `promote_scheduled` | o worker promoveu a agendada no dia | sim — é aqui que ela vira real |
-| `update_payment` | correção de data/conta de uma baixa já feita | não — corrigir não é receber de novo |
+| `settle_off_rail` | o dono registrou que caiu na conta | só virando `paid` |
+| `promote_scheduled` | o worker promoveu a agendada | sim — é aqui que ela vira real |
+| `update_payment` | correção de uma baixa já feita | não — corrigir não é receber de novo |
 
 Emitir nos quatro produziria fato duplicado e, no caso da agendada, um briefing que anuncia
 dinheiro que não chegou.

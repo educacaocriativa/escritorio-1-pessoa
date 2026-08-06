@@ -38,6 +38,7 @@ from app.modules.quotes.models import PublishedProposal, Quote  # noqa: F401
 from app.modules.receivables.models import Charge  # noqa: F401
 from app.modules.settings.models import TenantProfile  # noqa: F401
 from app.modules.stock.models import StockItem, StockMovement  # noqa: F401
+from app.modules.vima.models import Briefing  # noqa: F401
 from app.modules.wallet.models import (  # noqa: F401
     PlatformEarning,
     PlatformSetting,

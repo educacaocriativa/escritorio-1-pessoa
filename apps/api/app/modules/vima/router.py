@@ -1,0 +1,39 @@
+"""Rotas da Vima.
+
+⚠️ **Sem `require_module`, de propósito.** O briefing não é um módulo entre os outros: é a
+leitura do dia de QUALQUER usuário, e o recorte de permissão já acontece um nível abaixo, no
+dado (`vima/permissions.py`). Exigir um módulo aqui bloquearia o funcionário inteiro em vez de
+lhe entregar o briefing do que ele pode ver.
+"""
+from __future__ import annotations
+
+from fastapi import APIRouter, Depends, HTTPException
+from sqlalchemy.orm import Session
+
+from app.core.tenancy import CurrentUser, get_current_user, get_tenant_db
+from app.modules.vima import service
+from app.modules.vima.schemas import BriefingOut, to_out
+
+router = APIRouter(prefix="/vima", tags=["vima"])
+
+
+@router.get("/briefing", response_model=BriefingOut)
+def briefing(
+    user: CurrentUser = Depends(get_current_user),
+    db: Session = Depends(get_tenant_db),
+) -> BriefingOut:
+    """O briefing de hoje. Gera na primeira leitura do dia; nas seguintes, relê o gravado."""
+    return to_out(service.gerar_ou_ler(db, user=user))
+
+
+@router.post("/briefing/{briefing_id}/read", response_model=BriefingOut)
+def marcar_lido(
+    briefing_id: str,
+    user: CurrentUser = Depends(get_current_user),
+    db: Session = Depends(get_tenant_db),
+) -> BriefingOut:
+    """Marca como lido. É o que fecha a janela do briefing seguinte — ver `_inicio_da_janela`."""
+    try:
+        return to_out(service.marcar_lido(db, briefing_id=briefing_id, user=user))
+    except service.VimaError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=exc.message) from exc
