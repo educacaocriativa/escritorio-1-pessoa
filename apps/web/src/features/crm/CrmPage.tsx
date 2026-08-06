@@ -4,6 +4,7 @@ import { useCallback, useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import Modal, { Field } from "../../components/Modal";
 import { api, apiErrorMessage } from "../../lib/api";
+import { formatDateShort } from "../../lib/datetime";
 import { usePrimaryAction } from "../../store/pageActions";
 import { useFuso } from "../../store/auth";
 
@@ -204,14 +205,14 @@ function Card({ client, stageId }: { client: BoardClient; stageId: string }) {
             ))}
           </div>
         )}
+        {/* As duas datas dizem coisas diferentes: a primeira explica a POSIÇÃO do card na
+            fila (a coluna é ordenada por ela), a segunda, o quão fria está a conversa. */}
+        <p className="mt-1 text-[10px] text-neutral-400">
+          na etapa desde: {formatDateShort(client.stage_entered_at, fuso)}
+        </p>
         {client.last_interaction_at && (
-          <p className="mt-1 text-[10px] text-neutral-400">
-            última interação:{" "}
-            {new Date(client.last_interaction_at).toLocaleDateString("pt-BR", {
-              timeZone: fuso,
-              day: "2-digit",
-              month: "2-digit",
-            })}
+          <p className="text-[10px] text-neutral-400">
+            última interação: {formatDateShort(client.last_interaction_at, fuso)}
           </p>
         )}
       </div>

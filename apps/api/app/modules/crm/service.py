@@ -9,7 +9,7 @@ ciclo; `whatsapp_inbox/models.py` não importa nada de `crm`. Usado por
 """
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import UTC, datetime
 
 from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError
@@ -138,6 +138,11 @@ def archive_stage(db: Session, *, stage_id: str, tenant_id: str, actor: str) -> 
     if has_clients:
         if not others:
             raise CrmError("Crie outra etapa antes de arquivar esta (há clientes nela)", 409)
+        # `stage_entered_at` NÃO é recarimbado aqui, de propósito (allowlist do gate em
+        # tests/test_crm_stage_order_gate.py). Arquivar uma etapa é ato administrativo do
+        # dono, não mudança na situação do cliente: recarimbar jogaria todo card desta
+        # coluna, em bloco, para o fim da fila de destino — e a fila existe justamente para
+        # atender por antiguidade. O card muda de coluna; a antiguidade dele é dele.
         db.query(Client).filter(Client.stage_id == stage_id).update(
             {Client.stage_id: others[0].id}, synchronize_session=False
         )
@@ -334,6 +339,8 @@ def absorb_lead(
         ativas = _ordered_stages(db)
         if ativas:
             existente.stage_id = ativas[0].id
+            # Reabrir é entrar numa etapa nova: a negociação anterior fechou e esta é outra.
+            existente.stage_entered_at = datetime.now(UTC)
             record_event(
                 db, tenant_id=tenant_id, client_id=existente.id, kind=KIND_REOPENED,
                 title=f"Reaberto em {ativas[0].name} (estava em {etapa.name})", actor=actor,
@@ -432,6 +439,8 @@ def move_client(
     origem = db.get(PipelineStage, from_stage) if from_stage else None
     nome_origem = origem.name if origem is not None else "sem etapa"
     client.stage_id = target.id
+    # Entrou numa etapa nova agora: vai para o FIM da fila da coluna de destino.
+    client.stage_entered_at = datetime.now(UTC)
     # Guarda os NOMES, não os ids: renomear ou arquivar a coluna depois não pode reescrever
     # o que aconteceu naquele dia (princípio do `raw_description` de bank_transactions).
     record_event(
@@ -488,7 +497,13 @@ def last_interaction_map(db: Session) -> dict[str, datetime]:
 
 def build_board(db: Session, tenant_id: str) -> list[tuple[PipelineStage, list[Client]]]:
     stages = ensure_stages(db, tenant_id)
-    clients = list(db.scalars(select(Client).order_by(Client.name)).all())
+    # A fila de cada coluna: quem entrou primeiro no topo, quem entra vai para o fim, para o
+    # dono atender por ordem de chegada. Desempate por `id` porque no Postgres cards criados
+    # na mesma transação compartilham o instante — sem ele a ordem dançaria entre chamadas
+    # (mesmo padrão de `_ordered_stages` e `find_duplicate_groups`).
+    clients = list(
+        db.scalars(select(Client).order_by(Client.stage_entered_at, Client.id)).all()
+    )
     by_stage: dict[str | None, list[Client]] = {}
     for c in clients:
         by_stage.setdefault(c.stage_id, []).append(c)

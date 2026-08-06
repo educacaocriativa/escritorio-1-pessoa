@@ -230,6 +230,8 @@ export interface Client {
   tags: string[];
   source: string;
   stage_id: UUID | null;
+  /** Desde quando o card está nesta etapa — a ordem da fila no Kanban. ISO 8601, nunca nulo. */
+  stage_entered_at: string;
   created_at: string;
 }
 

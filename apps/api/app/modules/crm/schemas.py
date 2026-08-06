@@ -154,6 +154,10 @@ class ClientOut(BaseModel):
     tags: list[str]
     source: str
     stage_id: str | None
+    # Desde quando o card está nesta etapa — a ordem da fila do Kanban. Fica em `ClientOut`
+    # (e não em `BoardClient`, como `last_interaction_at`) porque é coluna: sempre conhecida,
+    # nunca "não calculei". Não há o `null` ambíguo que justificou separar o outro campo.
+    stage_entered_at: datetime
     created_at: datetime
 
     model_config = {"from_attributes": True}

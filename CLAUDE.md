@@ -503,6 +503,28 @@ comportamento era incoerente por porta de entrada.
   direito de Conversas (**gaveta sobreposta abaixo de `lg`**, pela lição do PR #56). Card do
   Kanban mostra "última interação", calculada por **duas consultas agrupadas** no endpoint do
   board — nunca uma coluna `last_interaction_at`, que seria valor derivado guardado.
+- [x] **A coluna do Kanban é uma FILA por ordem de entrada na etapa** (`clients.stage_entered_at`,
+  migration 0068). Antes ordenava por `Client.name`, e como a maioria dos leads entra pelo
+  WhatsApp sem nome resolvido o "nome" é o telefone — a Entrada aparecia em ordem numérica de
+  DDI. Agora o mais antigo fica no topo e quem entra vai para o fim, para o dono atender por
+  ordem de chegada. **É coluna e não derivação de `client_events`** (ao contrário de
+  `last_interaction_at`, logo acima) porque o log não registra troca de etapa de forma
+  completa: `move_client` grava `stage_move`, a reabertura do `absorb_lead` grava `reopened`,
+  e **`archive_stage` remaneja em massa sem evento nenhum** — não é derivado materializado, é
+  fato primário que não tinha onde morar. O preço da coluna é o gate AST
+  (`tests/test_crm_stage_order_gate.py`): um quarto caminho de escrita que esquecesse o
+  carimbo não quebraria teste nenhum, a fila só passaria a mentir. **`archive_stage` preserva
+  a antiguidade de propósito** (allowlist do gate): arquivar é ato administrativo do dono, e
+  recarimbar jogaria a coluna inteira, em bloco, para o fim da fila de destino.
+  - ⚠️ **Backfill precisa abrir a RLS de toda tabela que a consulta toca, não só do alvo.** A
+    primeira versão da 0068 desabilitava a RLS só de `clients` (alvo do `UPDATE`) e deixava
+    `client_events` (fonte da subconsulta) protegida. A RLS filtra **SELECT** também: a
+    subconsulta devolvia `NULL` para todos, o `COALESCE` caía no `created_at` e o backfill
+    **completava com sucesso aparente**, tendo perdido justamente a informação de
+    movimentação que existe para recuperar. É pior que a armadilha conhecida do "zero linhas
+    afetadas" (`0046`/`0066`/`0067`), porque a contagem de linhas fica **certa** e só o valor
+    é que está errado — nada na saída do deploy denuncia. Achado por
+    `tests/test_migration_0068_stage_order_rls.py` no primeiro uso, e provado por mutação.
 - **Grupo de WhatsApp não tem histórico de CRM** — `client_id` é nulo e o painel diz isso em
   texto, mantendo a decisão de 2026-08-04 de que grupo não vira contato.
 
