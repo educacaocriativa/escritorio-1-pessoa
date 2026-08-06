@@ -23,7 +23,7 @@ from app.modules.contracts.models import (  # noqa: F401
     PublishedContract,
 )
 from app.modules.cost_centers.models import CostCenter  # noqa: F401
-from app.modules.crm.models import Client, ClientEvent, PipelineStage  # noqa: F401
+from app.modules.crm.models import Client, PipelineStage  # noqa: F401
 from app.modules.device_tokens.models import DeviceToken  # noqa: F401
 from app.modules.funnels.models import Funnel, FunnelRun  # noqa: F401
 from app.modules.google_calendar.models import GoogleCredential  # noqa: F401

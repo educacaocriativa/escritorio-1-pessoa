@@ -2,10 +2,10 @@
 
 Mescla DUAS fontes com contratos diferentes:
 
-- **Persistida** — `client_events`: os fatos narrativos (chegou, voltou, moveu, decidiu).
+- **Persistida** — `facts`: os fatos narrativos (chegou, voltou, moveu, decidiu).
 - **Derivada** — `quotes` e `charges`: os fatos financeiros, lidos na ORIGEM.
 
-O financeiro não é copiado para `client_events` de propósito. Guardar `amount_cents` em
+O financeiro não é copiado para `facts` de propósito. Guardar `amount_cents` em
 segundo lugar criaria uma segunda versão da verdade sobre dinheiro — a forma exata do bug que
 a Onda 0 do Epic 8 gastou uma onda inteira desfazendo. Ler da origem também traz de graça o
 histórico RETROATIVO: contatos que já existiam mostram as cobranças de meses atrás sem
@@ -21,7 +21,7 @@ from datetime import UTC, datetime, time
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.modules.crm.models import ClientEvent
+from app.core.facts import Fact
 from app.modules.quotes.models import Quote
 from app.modules.receivables.models import Charge
 
@@ -53,9 +53,9 @@ def build(db: Session, *, client_id: str, limit: int = LIMITE_POR_FONTE) -> tupl
 
     eventos = list(
         db.scalars(
-            select(ClientEvent)
-            .where(ClientEvent.client_id == client_id)
-            .order_by(ClientEvent.created_at.desc(), ClientEvent.id.desc())
+            select(Fact)
+            .where(Fact.client_id == client_id)
+            .order_by(Fact.occurred_at.desc(), Fact.id.desc())
             .limit(limit + 1)
         ).all()
     )
@@ -65,7 +65,7 @@ def build(db: Session, *, client_id: str, limit: int = LIMITE_POR_FONTE) -> tupl
     for e in eventos:
         entradas.append({
             "id": e.id, "kind": e.kind, "title": e.title, "body": e.body,
-            "actor": e.actor, "is_ai": e.is_ai, "at": _instante(e.created_at),
+            "actor": e.actor, "is_ai": e.is_ai, "at": _instante(e.occurred_at),
         })
 
     cobrancas = list(

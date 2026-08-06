@@ -16,8 +16,8 @@ import logging
 from sqlalchemy import select
 
 from app.core import events
+from app.core.facts import CRM_FUNIL_INSCRITO
 from app.db.session import tenant_session
-from app.modules.crm.models import KIND_FUNNEL
 from app.modules.crm.service import EVENT_CLIENT_CREATED, EVENT_CLIENT_RETURNED, record_event
 from app.modules.funnels import engine, service
 from app.modules.funnels.models import RUN_RUNNING, RUN_WAITING, FunnelRun
@@ -91,7 +91,7 @@ def on_client_returned(*, tenant_id: str, client_id: str, source: str, **_: obje
             )
             return
         record_event(
-            db, tenant_id=tenant_id, client_id=client_id, kind=KIND_FUNNEL,
+            db, tenant_id=tenant_id, client_id=client_id, kind=CRM_FUNIL_INSCRITO,
             title="Reinscrito no funil de entrada", actor="sistema:auto-enroll",
         )
         db.commit()

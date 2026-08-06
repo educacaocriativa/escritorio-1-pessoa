@@ -10,12 +10,15 @@ import { api, apiErrorMessage } from "../../lib/api";
 /** Ícone e cor por tipo de fato. Um `kind` novo vindo de um backend mais recente cai no
  *  neutro em vez de sumir da tela. */
 const APARENCIA: Record<string, { icon: JSX.Element; cor: string }> = {
-  lead_created: { icon: <UserPlus size={14} />, cor: "bg-primary-50 text-primary-700" },
-  lead_return: { icon: <RotateCcw size={14} />, cor: "bg-primary-50 text-primary-700" },
-  stage_move: { icon: <ArrowRightLeft size={14} />, cor: "bg-neutral-100 text-neutral-600" },
-  reopened: { icon: <RotateCcw size={14} />, cor: "bg-amber-50 text-amber-700" },
-  note: { icon: <MessageSquarePlus size={14} />, cor: "bg-emerald-50 text-emerald-700" },
-  funnel: { icon: <Workflow size={14} />, cor: "bg-neutral-100 text-neutral-600" },
+  // Taxonomia `<módulo>.<entidade>.<verbo>` desde a migration 0069 (`client_events` → `facts`).
+  "crm.lead.criado": { icon: <UserPlus size={14} />, cor: "bg-primary-50 text-primary-700" },
+  "crm.lead.retornou": { icon: <RotateCcw size={14} />, cor: "bg-primary-50 text-primary-700" },
+  "crm.etapa.movida": { icon: <ArrowRightLeft size={14} />, cor: "bg-neutral-100 text-neutral-600" },
+  "crm.lead.reaberto": { icon: <RotateCcw size={14} />, cor: "bg-amber-50 text-amber-700" },
+  "crm.nota.criada": { icon: <MessageSquarePlus size={14} />, cor: "bg-emerald-50 text-emerald-700" },
+  "crm.funil.inscrito": { icon: <Workflow size={14} />, cor: "bg-neutral-100 text-neutral-600" },
+  // Estes três NÃO mudam: são gerados por `crm/timeline.py` a partir de `quotes`/`charges`,
+  // lidos na origem, e nunca passaram pela tabela persistida.
   quote: { icon: <FileText size={14} />, cor: "bg-sky-50 text-sky-700" },
   charge: { icon: <Receipt size={14} />, cor: "bg-sky-50 text-sky-700" },
   payment: { icon: <Receipt size={14} />, cor: "bg-emerald-50 text-emerald-700" },

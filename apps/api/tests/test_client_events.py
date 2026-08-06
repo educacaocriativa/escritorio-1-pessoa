@@ -3,7 +3,7 @@ import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy import select
 
-from app.modules.crm.models import ClientEvent
+from app.core.facts import Fact
 
 REGISTER = {
     "legal_name": "Estúdio Ana",
@@ -21,12 +21,12 @@ def headers(client: TestClient) -> dict[str, str]:
     return {"Authorization": f"Bearer {token}"}
 
 
-def _eventos(db, client_id: str) -> list[ClientEvent]:
+def _eventos(db, client_id: str) -> list[Fact]:
     return list(
         db.scalars(
-            select(ClientEvent)
-            .where(ClientEvent.client_id == client_id)
-            .order_by(ClientEvent.created_at, ClientEvent.id)
+            select(Fact)
+            .where(Fact.client_id == client_id)
+            .order_by(Fact.occurred_at, Fact.id)
         ).all()
     )
 
@@ -38,7 +38,7 @@ def test_criar_cliente_grava_lead_created(client: TestClient, headers, db):
     )
     assert resp.status_code == 201
     eventos = _eventos(db, resp.json()["id"])
-    assert [e.kind for e in eventos] == ["lead_created"]
+    assert [e.kind for e in eventos] == ["crm.lead.criado"]
     assert eventos[0].title  # tem frase, não fica em branco
 
 
@@ -64,7 +64,7 @@ def test_mover_card_grava_stage_move_com_nomes_congelados(client: TestClient, he
     )
 
     eventos = _eventos(db, criado["id"])
-    assert [e.kind for e in eventos] == ["lead_created", "stage_move"]
+    assert [e.kind for e in eventos] == ["crm.lead.criado", "crm.etapa.movida"]
     # o texto guarda os NOMES, não os ids — renomear a coluna depois não reescreve a história
     assert "Entrada" in eventos[1].title
     assert "Proposta" in eventos[1].title

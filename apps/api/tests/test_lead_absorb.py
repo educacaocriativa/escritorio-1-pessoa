@@ -5,8 +5,9 @@ import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy import select
 
+from app.core.facts import Fact
 from app.modules.crm import service
-from app.modules.crm.models import Client, ClientEvent, PipelineStage
+from app.modules.crm.models import Client, PipelineStage
 from app.modules.crm.schemas import ClientCreate
 
 REGISTER = {
@@ -35,9 +36,9 @@ def _kinds(db, client_id: str) -> list[str]:
     return [
         e.kind
         for e in db.scalars(
-            select(ClientEvent)
-            .where(ClientEvent.client_id == client_id)
-            .order_by(ClientEvent.created_at, ClientEvent.id)
+            select(Fact)
+            .where(Fact.client_id == client_id)
+            .order_by(Fact.occurred_at, Fact.id)
         ).all()
     ]
 
@@ -51,7 +52,7 @@ def test_lead_desconhecido_cria_contato(db, tenant_id):
         db, tenant_id, name="Flavio Kato", phone="(11) 99999-8888", source="landing"
     )
     assert novo is True
-    assert _kinds(db, contato.id) == ["lead_created"]
+    assert _kinds(db, contato.id) == ["crm.lead.criado"]
 
 
 def test_mesmo_telefone_em_formato_diferente_nao_cria_segundo_card(db, tenant_id):
@@ -87,8 +88,8 @@ def test_retorno_grava_lead_return_com_o_texto_desta_vez(db, tenant_id):
     )
     eventos = list(
         db.scalars(
-            select(ClientEvent)
-            .where(ClientEvent.client_id == contato.id, ClientEvent.kind == "lead_return")
+            select(Fact)
+            .where(Fact.client_id == contato.id, Fact.kind == "crm.lead.retornou")
         ).all()
     )
     assert len(eventos) == 1
@@ -134,7 +135,7 @@ def test_retorno_nao_move_card_de_coluna_do_meio(db, tenant_id):
     _absorve(db, tenant_id, name="Flavio Kato", phone="(11) 99999-8888", source="landing")
     db.refresh(contato)
     assert contato.stage_id == proposta.id
-    assert "reopened" not in _kinds(db, contato.id)
+    assert "crm.lead.reaberto" not in _kinds(db, contato.id)
 
 
 @pytest.mark.parametrize("coluna", ["Ganho", "Perda"])
@@ -150,7 +151,7 @@ def test_retorno_reabre_card_em_coluna_terminal(db, tenant_id, coluna):
     db.refresh(contato)
     entrada = _stage(db, "Entrada")
     assert contato.stage_id == entrada.id
-    assert "reopened" in _kinds(db, contato.id)
+    assert "crm.lead.reaberto" in _kinds(db, contato.id)
 
 
 def test_multiplos_candidatos_escolhe_o_mais_antigo(db, tenant_id):
