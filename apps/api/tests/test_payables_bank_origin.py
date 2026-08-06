@@ -32,13 +32,14 @@ do AC13 vive em `test_bank_rls.py` (`rls_e2e`, Postgres real com o papel `e1p_ap
 from __future__ import annotations
 
 from dataclasses import asdict
-from datetime import UTC, date, datetime, timedelta
+from datetime import date, timedelta
 
 import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from app.core.tz import DEFAULT_TENANT_TIMEZONE, tenant_today
 from app.modules.bank.models import (
     SOURCE_OFX,
     SOURCE_PAYABLE,
@@ -81,7 +82,7 @@ def tenant_id(client: TestClient, headers) -> str:
 
 
 def _hoje() -> date:
-    return datetime.now(UTC).date()
+    return tenant_today(DEFAULT_TENANT_TIMEZONE)
 
 
 def _conta(client: TestClient, headers, *, name: str = "Itaú PJ", **over) -> dict:

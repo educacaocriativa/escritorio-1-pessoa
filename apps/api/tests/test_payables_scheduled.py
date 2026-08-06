@@ -27,7 +27,7 @@ from __future__ import annotations
 
 import ast
 import pathlib
-from datetime import UTC, date, datetime, timedelta
+from datetime import date, timedelta
 
 import pytest
 from fastapi.testclient import TestClient
@@ -35,6 +35,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.core.scheduling import status_por_data
+from app.core.tz import DEFAULT_TENANT_TIMEZONE, tenant_today
 from app.modules.bank import service as bank_service
 from app.modules.bank.models import BankTransaction
 from app.modules.payables import receipts as receipts_service
@@ -66,8 +67,9 @@ PNG = b"\x89PNG\r\n\x1a\n" + b"0" * 64
 
 
 def _hoje() -> date:
-    """A MESMA âncora do service (UTC), nunca `date.today()` local — `CLAUDE.md` §6.0."""
-    return datetime.now(UTC).date()
+    """A MESMA âncora do service, que desde o PR #78 é o FUSO DO TENANT — nunca UTC cru
+    nem `date.today()` local. O tenant de teste fica com o fuso padrão."""
+    return tenant_today(DEFAULT_TENANT_TIMEZONE)
 
 
 # Abertura dois meses atrás: o piso fica longe o bastante para não interferir nos testes de data

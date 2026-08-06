@@ -31,12 +31,13 @@ investimento, e não é).
 from __future__ import annotations
 
 from dataclasses import asdict
-from datetime import UTC, date, datetime, timedelta
+from datetime import date, timedelta
 
 import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy.orm import Session
 
+from app.core.tz import DEFAULT_TENANT_TIMEZONE, tenant_today
 from app.modules.bank.models import (
     KIND_CHECKING,
     KIND_INVESTMENT,
@@ -58,7 +59,7 @@ REGISTER = {
 
 
 def _hoje() -> date:
-    return datetime.now(UTC).date()
+    return tenant_today(DEFAULT_TENANT_TIMEZONE)
 
 
 ABERTURA = _hoje() - timedelta(days=90)

@@ -12,7 +12,7 @@ com Docker (`pytest -m rls_e2e`).
 """
 from __future__ import annotations
 
-from datetime import date, timedelta
+from datetime import timedelta
 from pathlib import Path
 from uuid import uuid4
 
@@ -25,6 +25,8 @@ from sqlalchemy.orm import Session  # noqa: E402
 from sqlalchemy.pool import NullPool  # noqa: E402
 from testcontainers.postgres import PostgresContainer  # noqa: E402
 
+from app.core.tz import DEFAULT_TENANT_TIMEZONE, tenant_today  # noqa: E402
+
 pytestmark = pytest.mark.rls_e2e
 
 _ROOT_USER = "e1p_root"
@@ -34,7 +36,7 @@ _DB_NAME = "e1pdb"
 
 _API_DIR = Path(__file__).resolve().parents[1]
 
-TODAY = date.today()
+TODAY = tenant_today(DEFAULT_TENANT_TIMEZONE)
 
 
 def _bootstrap_rls_role(super_url: str) -> None:
