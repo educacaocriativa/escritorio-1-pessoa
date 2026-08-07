@@ -281,6 +281,7 @@ Custo de aplicar, medido nos quatro casos reais que teria pego: 2 a 5 segundos c
 - **Dívida:** `packages/shared-types/src/generated.ts` defasado desde o PR #45, com **zero** menções a `bank` e sem check de drift no CI.
 - **Dívida:** `scripts/check.sh` resolve `ruff`/`python` do PATH (que pode não ser o do venv) e **mascara falha de frontend** com `|| true` no vitest — rode as etapas individualmente até isso ser corrigido.
 - **Dívida:** o **Epic 5 (Inteligência Financeira) nunca foi documentado aqui.** DRE, DRE em matriz, Lucratividade por contrato, Projeção de Caixa, Diagnóstico, Plano de Contas, Centros de Custo e Investimentos **existem e estão em produção**, mas quem lê só este arquivo conclui que não. Ver `docs/prd/epic-5-inteligencia-financeira.md`.
+
 ### Onda 2 — "tenho a conta e NÃO sei o saldo" (Story 8.21, PR #94, 2026-08-07)
 
 ⚠️ **Esta seção cobre SÓ a Story 8.21.** As demais stories da Onda 2 (8.9–8.20) estão em produção e
