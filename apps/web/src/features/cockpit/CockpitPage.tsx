@@ -1,5 +1,5 @@
 import type { CockpitSummary } from "@e1p/shared-types";
-import { AlertTriangle, CalendarDays, FileSignature, ListChecks, Sparkles, TrendingUp, Wallet } from "lucide-react";
+import { AlertTriangle, CalendarDays, FileSignature, ListChecks, Sparkles, Sun, TrendingUp, Wallet } from "lucide-react";
 import { type ReactNode, useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 import Modal from "../../components/Modal";
@@ -61,13 +61,28 @@ export default function CockpitPage() {
             Bom dia, {user?.name?.split(" ")[0] ?? ""} 👋
           </h1>
         </div>
-        <Link
-          to="/financeiro/fila-pagamentos"
-          className="flex items-center gap-1.5 rounded-pill bg-white px-3 py-1.5 text-xs font-semibold text-primary-600 shadow-sm transition hover:bg-primary-50"
-        >
-          <ListChecks size={14} />
-          Fila de pagamentos
-        </Link>
+        <div className="flex flex-wrap items-center gap-2">
+          {/*
+            O caminho de volta ao briefing do dia. DISCRETO de propósito: a porta de entrada
+            aparece sozinha uma vez por dia (ver `features/vima/EntradaDoDia.tsx`), e depois de
+            lida vira consulta — quem quiser reler tem por onde, sem que o resumo volte a
+            interromper quem já o viu.
+          */}
+          <Link
+            to="/vima"
+            className="flex items-center gap-1.5 rounded-pill px-3 py-1.5 text-xs font-medium text-neutral-500 transition hover:bg-white hover:text-primary-600"
+          >
+            <Sun size={14} />
+            Rever o resumo de hoje
+          </Link>
+          <Link
+            to="/financeiro/fila-pagamentos"
+            className="flex items-center gap-1.5 rounded-pill bg-white px-3 py-1.5 text-xs font-semibold text-primary-600 shadow-sm transition hover:bg-primary-50"
+          >
+            <ListChecks size={14} />
+            Fila de pagamentos
+          </Link>
+        </div>
       </div>
 
       <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
