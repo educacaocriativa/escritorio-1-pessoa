@@ -288,8 +288,12 @@ describe("FONTE_LABEL — eixo B, mapa SEPARADO do eixo A (D-3)", () => {
   it("traduz a porta de entrada do saldo externo", () => {
     expect(fonteLabel("manual")).toBe("informado por você");
     expect(fonteLabel("ofx")).toBe("lido do extrato");
-    expect(fonteLabel(null)).toBe("sem saldo informado");
     expect(fonteLabel("csv")).toBe("csv");
+    // ⚠️ **O caso `null` deixou de existir, e a ausência dele é a correção.** Ele devolvia
+    // "sem saldo informado" — falso nos DOIS estados não avaliáveis (ver o JSDoc de `fonteLabel`).
+    // Quem chama agora guarda por `saldo_banco_fonte !== null` e não renderiza a linha. A guarda de
+    // regressão não é uma asserção aqui: é o **tipo** (`string`, não `string | null`), que faz o
+    // `tsc` reprovar quem tentar reintroduzir a chamada com `null`.
   });
 
   it("os dois vocabulários NÃO se misturam — nenhuma chave em comum", () => {
