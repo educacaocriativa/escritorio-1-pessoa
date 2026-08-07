@@ -43,6 +43,8 @@ import ProdutosPage from "../features/produtos/ProdutosPage";
 import PageBuilderPage from "../features/sites/PageBuilderPage";
 import PublicPage from "../features/sites/PublicPage";
 import SitesPage from "../features/sites/SitesPage";
+import BriefingPage from "../features/vima/BriefingPage";
+import EntradaDoDia from "../features/vima/EntradaDoDia";
 import IdleWarningModal from "../components/IdleWarningModal";
 import { AuthProvider, useAuth } from "../store/auth";
 import { useIdleTimeout } from "../store/useIdleTimeout";
@@ -58,7 +60,19 @@ export default function App() {
         <Route path="/contrato/:slug" element={<PublicContractPage />} />
         <Route path="/p/:slug" element={<PublicPage />} />
         <Route element={<ProtectedLayout />}>
-          <Route path="/" element={<CockpitPage />} />
+          {/*
+            A raiz autenticada não é mais o Cockpit direto: `EntradaDoDia` decide a porta do dia
+            (briefing de hoje ainda não lido → `/vima`; já lido → o Cockpit). Ver a decisão em
+            `features/vima/EntradaDoDia.tsx` — uma vez por dia, não a cada login.
+          */}
+          <Route
+            path="/"
+            element={
+              <EntradaDoDia>
+                <CockpitPage />
+              </EntradaDoDia>
+            }
+          />
           <Route path="/agenda" element={<AgendaPage />} />
           <Route path="/crm" element={<CrmPage />} />
           <Route path="/crm/clients/:id" element={<ClientDetailPage />} />
@@ -105,6 +119,12 @@ export default function App() {
         </Route>
         {/* Telas de tarefa única vindas do share sheet do celular: mesma proteção, sem shell. */}
         <Route element={<ProtectedBareLayout />}>
+          {/*
+            Sem sidebar e sem topbar, pelo mesmo motivo de `/comprovante/:id`: o briefing é uma
+            tela de leitura única, lida no celular de manhã, e o menu ali é ruído disputando uma
+            largura que o polegar já disputa. A saída fica na própria tela.
+          */}
+          <Route path="/vima" element={<BriefingPage />} />
           <Route path="/compartilhar" element={<CompartilharPage />} />
           <Route path="/comprovante/:id" element={<ComprovantePage />} />
         </Route>

@@ -25,6 +25,7 @@ Consumidores REAIS hoje (verificáveis por grep de `capabilities.for_profile` /
 - `app/modules/notifications/service.py::process_pending` — guarda de ENTREGA: os 5 pontos do
   domínio que resolvem vínculo propósito→template no enfileiramento não sabem por qual
   transporte a mensagem sai; a decisão final é tomada aqui, onde o transporte é conhecido.
+- `app/modules/vima/scheduler.py::_entregar_no_whatsapp` — briefing em um passo × dois passos.
 """
 from __future__ import annotations
 
@@ -41,11 +42,30 @@ class Capabilities:
     session_window: bool
     media: bool
     provisioning: str  # "credentials" (Meta: cola token/phone_id) | "qrcode" (Evolution)
+    # O briefing diário precisa de um "pode mandar?" do dono ANTES do texto?
+    #
+    # Meta: sim. Parâmetro de template da Cloud API não aceita quebra de linha (e o briefing tem
+    # várias), e às 7h o dono está sempre fora da janela de 24h — então o que sai primeiro é um
+    # template curto com botão de resposta rápida; o toque abre a janela e o texto inteiro sai
+    # depois, livre. Evolution: não. Não tem janela nem template — sai direto, em um passo.
+    #
+    # NÃO é uma reescrita de `templates`/`session_window`: aquelas dizem o que o transporte
+    # SUPORTA; esta diz o que ESTE fluxo precisa fazer por causa disso. Um transporte futuro com
+    # template e sem janela (ou com janela de 7 dias) as combinaria de outro jeito.
+    #
+    # Consumidor (verificável por grep — este módulo já passou meses com zero call sites enquanto
+    # a docstring afirmava ter três):
+    #   - app/modules/vima/scheduler.py::_entregar_no_whatsapp
+    briefing_needs_optin: bool
 
 
-META = Capabilities(templates=True, session_window=True, media=True, provisioning="credentials")
+META = Capabilities(
+    templates=True, session_window=True, media=True, provisioning="credentials",
+    briefing_needs_optin=True,
+)
 EVOLUTION = Capabilities(
-    templates=False, session_window=False, media=True, provisioning="qrcode"
+    templates=False, session_window=False, media=True, provisioning="qrcode",
+    briefing_needs_optin=False,
 )
 
 

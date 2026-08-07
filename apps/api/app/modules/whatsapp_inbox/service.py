@@ -26,6 +26,7 @@ from app.modules.crm.models import Client
 from app.modules.crm.schemas import ClientCreate
 from app.modules.notifications.models import Notification
 from app.modules.settings import service as settings_service
+from app.modules.vima import scheduler as vima_scheduler
 from app.modules.whatsapp_inbox.models import (
     CHAT_KIND_GROUP,
     DIRECTION_IN,
@@ -40,7 +41,11 @@ from app.modules.whatsapp_inbox.models import (
     WhatsappChat,
     WhatsappMessage,
 )
-from app.modules.whatsapp_templates.models import STATUS_APPROVED, WhatsappTemplate
+from app.modules.whatsapp_templates.models import (
+    PAYLOAD_BOTAO_BRIEFING,
+    STATUS_APPROVED,
+    WhatsappTemplate,
+)
 
 logger = logging.getLogger("e1p.whatsapp_inbox")
 
@@ -363,6 +368,17 @@ def ingest_webhook_payload(
                     subject_type="whatsapp_chat",
                     subject_id=chat.id if chat is not None else None,
                 )
+
+            # O toque no botão do aviso do briefing (Vima, Onda 4). Fica DEPOIS do registro da
+            # mensagem (a conversa mostra o toque como qualquer outra) e DENTRO do mesmo `try` —
+            # a mesma transação-por-mensagem commita as duas coisas juntas.
+            #
+            # ⚠️ **Precisa vir aqui, e não junto do bloco de `facts` acima**: aquele bloco é
+            # pulado quando `da_equipe` é verdadeiro, e o toque no botão do briefing vem
+            # SEMPRE do telefone de um usuário do tenant. Colocado lá dentro, o opt-in seria
+            # descartado junto com as demais mensagens do time e o briefing nunca sairia.
+            if msg.button_payload == PAYLOAD_BOTAO_BRIEFING and da_equipe:
+                vima_scheduler.responder_optin(db, tenant_id=tenant_id, phone=msg.from_phone)
 
             if msg.media_bytes:
                 # Evolution: bytes já vieram decodificados no payload (webhookBase64) — cria o

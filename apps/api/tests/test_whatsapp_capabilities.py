@@ -23,12 +23,14 @@ class _Profile:
 def test_meta_capabilities() -> None:
     assert META == Capabilities(
         templates=True, session_window=True, media=True, provisioning="credentials",
+        briefing_needs_optin=True,
     )
 
 
 def test_evolution_capabilities() -> None:
     assert EVOLUTION == Capabilities(
         templates=False, session_window=False, media=True, provisioning="qrcode",
+        briefing_needs_optin=False,
     )
 
 

@@ -1092,3 +1092,44 @@ export interface LegalDocument {
   status: string;
   created_at: string;
 }
+
+// ── Vima: briefing do dia (Onda 4) ───────────────────────────────────────────
+
+/**
+ * Uma linha do payload determinístico. `texto` é a mesma informação que a narração reescreveu —
+ * está aqui para que um cliente possa AGIR sobre um item sem fazer parsing de prosa.
+ */
+export interface BriefingLinha {
+  secao: "PENDENTE" | "ACONTECEU" | "NÚMEROS";
+  module: string;
+  texto: string;
+}
+
+export interface Briefing {
+  id: UUID;
+  /** Data de CALENDÁRIO (YYYY-MM-DD) no fuso do tenant — não é instante, não converta fuso. */
+  reference_date: string;
+  texto: string;
+  /** Se a narração veio da IA ou do template. Rotular como IA um texto de template seria falso. */
+  por_ia: boolean;
+  /** `true` = nada ACONTECEU na janela. Pendência e tendência podem existir mesmo assim. */
+  vazio: boolean;
+  excedente: number;
+  linhas: BriefingLinha[];
+  read_at: string | null;
+  created_at: string;
+}
+
+/**
+ * Preferência de briefing DO USUÁRIO (mora em `users`, não no perfil da empresa) — por isso
+ * editável sem o módulo `settings`.
+ */
+export interface BriefingPreferences {
+  briefing_whatsapp_enabled: boolean;
+  /** "HH:MM" no relógio de parede do dono. */
+  briefing_hour: string;
+  /** O tenant consegue entregar por WhatsApp hoje? Meta sem template aprovado → false. */
+  briefing_whatsapp_disponivel: boolean;
+  /** Texto pronto para a tela quando indisponível; `null` quando disponível. */
+  briefing_whatsapp_indisponivel_motivo: string | null;
+}

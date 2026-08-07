@@ -170,6 +170,7 @@ def send_template(
     profile: TenantProfile | None = None,
     token: str | None = None,
     phone_id: str | None = None,
+    quick_reply_payload: str | None = None,
 ) -> str:
     provider = _resolve(profile)
     to = _addressable(to)
@@ -183,6 +184,9 @@ def send_template(
         template_name=template_name,
         language=language,
         variables=variables,
+        # Só o aviso do briefing usa (ver `providers/meta.send_template`). A Evolution recusa
+        # template inteiro, então o parâmetro extra nunca a alcança de forma significativa.
+        quick_reply_payload=quick_reply_payload,
     )
 
 

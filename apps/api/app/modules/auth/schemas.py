@@ -111,6 +111,32 @@ class ChangePasswordRequest(BaseModel):
     new_password: str = Field(min_length=8, max_length=128)
 
 
+HOUR_RE = r"^([01]\d|2[0-3]):[0-5]\d$"
+
+
+class PreferencesOut(BaseModel):
+    """As preferências de briefing DESTE usuário, mais o que o tenant consegue entregar.
+
+    Os dois campos de disponibilidade existem para a tela **dizer o motivo** em vez de oferecer
+    um botão que não entrega nada: num tenant Meta o template com botão depende de aprovação da
+    Meta, que é externa ao repositório e demora. Sem eles a UI só poderia mostrar um switch que
+    liga e nada acontece — a forma mais rápida de perder a confiança num canal.
+    """
+
+    briefing_whatsapp_enabled: bool
+    briefing_hour: str
+    briefing_whatsapp_disponivel: bool
+    # `None` quando disponível. Texto pronto para a tela: quem lê é o dono, não um switch.
+    briefing_whatsapp_indisponivel_motivo: str | None = None
+
+
+class PreferencesUpdate(BaseModel):
+    """Ambos opcionais: a tela salva um campo de cada vez, sem reenviar o outro."""
+
+    briefing_whatsapp_enabled: bool | None = None
+    briefing_hour: str | None = Field(default=None, pattern=HOUR_RE)
+
+
 class SessionInfo(BaseModel):
     """Retorno de /auth/me — apenas identidade, SEM reemitir credencial."""
 
