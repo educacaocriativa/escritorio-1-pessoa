@@ -966,8 +966,20 @@ do cenário**. Read-only, **sem migration**.
 *Não inclui:* 422 na criação do checkpoint (rejeitado); "aceitar e apenas anotar" (rejeitado — mantém o
 🟢 possível). → **não consome item da §5**; especificação preservada no AC3 da 8.19
 
-**Total da Onda 2: 12 stories (8.9–8.20)** — 10 que constroem a onda (8.9–8.18, cobrindo os 25 itens da
-§5) + 2 que corrigem comportamento das Ondas 0/1 achado durante a expansão (8.19, 8.20).
+**Story 8.21 — "Tenho a conta e NÃO sei o saldo": o modelo registra o ATO, não só o VALOR**
+`opening_balance_cents` é `NOT NULL DEFAULT 0` e o formulário pré-preenchia `"0,00"` — então
+*"informei zero"* e *"não informei nada"* eram **a mesma linha**, e a Projeção afirmava runway sobre um
+saldo que ninguém informou. Coluna irmã `opening_balance_is_known` (migration `0074`, **sem backfill**:
+`ADD COLUMN` é DDL e a RLS não o alcança). **`ORIGEM_INDISPONIVEL` existia desde a Onda 0 sem gatilho —
+esta story é o gatilho.** Basta **uma** conta elegível desconhecida para calar runway e alerta, porque
+`opening_balance_cents` pode ser **negativo** (cheque especial) e somar só as conhecidas erraria nas
+duas direções sem nada dizer em qual. O número continua visível e a nota **nomeia quais contas faltam**.
+*Não inclui:* materializar o saldo de abertura como checkpoint (rejeitado pela 8.19); tornar
+`opening_balance_cents` anulável (rejeitado pela @architect — quebraria a guarda da 8.11, cujo
+mecanismo é *"`None` = campo ausente"*). → **não consome item da §5**; fecha o §Escalado 2 da 8.19
+
+**Total da Onda 2: 13 stories (8.9–8.21)** — 10 que constroem a onda (8.9–8.18, cobrindo os 25 itens da
+§5) + 3 que corrigem comportamento das Ondas 0/1 achado durante a expansão (8.19, 8.20, 8.21).
 
 #### 6.1 Ordem de merge da Onda 2
 
@@ -977,6 +989,7 @@ do cenário**. Read-only, **sem migration**.
 8.10 ─────────────────────┘        8.17 (independente, após 8.9)
 8.11 (independente — merge cedo)   8.18 (independente, após 8.9)
 8.19 (independente de tudo — não entra na frente de ninguém)
+8.21 (independente — depende só da 8.19 ter fechado o escalado dela)
 ```
 
 | Ordem | Story | Por quê nesta posição |

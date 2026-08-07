@@ -276,6 +276,73 @@ Custo de aplicar, medido nos quatro casos reais que teria pego: 2 a 5 segundos c
 - **Dívida:** `test_tenancy_guard.py` só varre `*/router.py` — um `service.py` que abrisse sessão global passaria batido. Auditado nesta onda: **nenhuma violação hoje**.
 - **Dívida:** o gate global `test_todo_saldo_declara_origem` (varredura de contrato exigindo par de proveniência para todo campo de saldo) foi **adiado com registro formal** — hoje a cobertura é por instância. Inventário no artefato de QA: 14 campos `saldo_*_cents`, 6 sem irmão, mais 8 campos de saldo que o regex nem alcança.
 - **Dívida:** `days_since_last_declared_balance` implementada e **sem consumidor**.
+- **Dívida:** **a Onda 2 inteira (Stories 8.9–8.20) não está documentada aqui.** A origem do movimento, a baixa com conta bancária, os agendados, as transferências e as correções das 8.19/8.20 **existem e estão em produção** — quem ler só este arquivo conclui que a Onda 2 não começou. É a mesma dívida que o Epic 5 carrega logo abaixo, e ela cresceu: o `CLAUDE.md` para na Onda 1. Ver `docs/prd/epic-8-controle-bancario.md` §6 e as stories.
+
+### Onda 2 — "tenho a conta e NÃO sei o saldo" (Story 8.21, PR #94, 2026-08-07)
+
+⚠️ **Esta seção cobre SÓ a Story 8.21.** As demais stories da Onda 2 (8.9–8.20) estão em produção e
+**não estão documentadas aqui** — ver a dívida logo abaixo.
+
+**O defeito.** `bank_accounts.opening_balance_cents` é `NOT NULL DEFAULT 0` e o formulário
+pré-preenchia `"0,00"` — então *"informei zero"* e *"não informei nada"* eram **a mesma linha**. Uma
+conta cadastrada por quem não sabia o saldo virava elegível e a Projeção de Caixa afirmava runway e
+alerta sobre um saldo que **ninguém informou**. `ORIGEM_INDISPONIVEL` existia em `core/money_planes.py`
+desde a Onda 0 **sem gatilho nenhum**; esta story é o gatilho.
+
+- [x] **`bank_accounts.opening_balance_is_known`** (migration `0074`) — o **ATO** de declarar, ao lado
+  do **VALOR**. `false` ⇒ `opening_balance_cents` é **placeholder, não afirmação**.
+  - **`opening_balance_cents` anulável foi REJEITADA** pela @architect: quebraria
+    `_validate_opening_date_recuo` (Story 8.11), cujo mecanismo inteiro é *"presença é a única coisa
+    que a API consegue distinguir de 'não mudou'"* — com a coluna anulável o `None` do `Update`
+    passaria a significar duas coisas e a guarda morreria em silêncio. Ela também é a âncora da
+    fórmula do §3.1, e `None` ali se propagaria por toda a leitura de saldo.
+  - ⚠️ **Migration SEM backfill, e é por isso que é segura.** As armadilhas das `0046`/`0066`/`0067`/
+    `0068`/`0069`/`0073` são todas a mesma: `UPDATE` de backfill filtrado em silêncio pela RLS, com
+    **sucesso aparente**. `ADD COLUMN` é **DDL, não DML** — a RLS não o alcança. O `server_default=true`
+    cobre o legado e **cai no mesmo `upgrade`**: mantido, todo `INSERT` que omitisse a coluna gravaria
+    *"eu sei o saldo"* em silêncio. Mesma disciplina de `ai.complete` exigir `db`/`tenant_id`/`task`.
+  - ⚠️ **O nome trip um gate estrutural, e isso foi resolvido pelo lado certo.**
+    `opening_balance_is_known` contém a substring `"balance"` e faz
+    `test_saldo_derivado_nao_e_coluna_no_modelo` falhar — gate que existe para impedir saldo
+    MATERIALIZADO. **A exceção lá é nominal e justificada** (um booleano não pode divergir dos
+    movimentos); **renomear a coluna para fugir da substring foi rejeitado**: seria deixar o teste
+    ditar o vocabulário do domínio.
+- [x] **BASTA UMA conta elegível desconhecida para calar a Projeção inteira** (veredito da @architect).
+  Somar só as conhecidas erraria nas **duas** direções, e nada na tela diria em qual: como
+  `opening_balance_cents` **pode ser negativo** (cheque especial), a parcela que falta tanto subestima
+  (alerta grita sem motivo — Regra 7) quanto **superestima** (alerta CALADO quando deveria soar — a
+  máquina de falso negativo que a Onda 0 desmontou, atingindo quem tem cheque especial).
+  - **As duas obrigações que vêm junto**, sem as quais a escolha seria pior que a rejeitada: **(a)** o
+    número continua visível e a composição continua fechando (*suprimir a afirmação, nunca o número*);
+    **(b)** a supressão **NOMEIA a saída** via `CashProjection.notes`, dizendo **quais** contas faltam.
+    Sem (b) o dono vê o runway sumir e não descobre o que fazer — o beco sem saída do WhatsApp item
+    12(b). `notes` já existia e já era renderizado: **zero campo novo**.
+  - `_ORIGENS_SEM_LASTRO` (`projection.py`) — **um conjunto, três consumidores.** As duas supressões
+    comparavam `== ORIGEM_PLATAFORMA` em três pontos; acrescentar `indisponivel` repetindo a comparação
+    deixaria um deles para trás algum dia, e o sintoma seria o defeito desta story sobrevivendo à
+    própria correção.
+- [x] **A procedência é decidida em UM lugar** — `service.origem_do_saldo_derivado(account)`. Ela
+  estava escrita duas vezes no `router.py`, uma por rota que expõe saldo derivado: a **mesma conta**
+  por duas portas, e divergindo uma diria `banco` e a outra `indisponivel`. **É a classe que
+  `whatsapp.__init__._resolve` já pagou** (item 12 abaixo) — achado pelo `dedup-checker` no gate.
+  Gate por varredura AST do router, com controle positivo.
+- [x] **O formulário força a escolha nos DOIS modos** (`AccountModal`). Só o cadastro deixaria o
+  caminho *"descobri o saldo depois"* sem UI — capacidade de backend sem consumidor. E o backend
+  recusa (422) o PATCH que informa saldo numa conta *"não sei"* sem declarar o ato: sem isso o dono
+  digita o saldo real, salva, e a Projeção continua calada **sem explicação**. Pior que não ter saída:
+  é uma saída que **parece funcionar**.
+- **Lição de processo que custou 4 rodadas de validação:** a story levou **três NO-GOs do @po**, todos
+  da mesma família — *o artefato descrevia o backend corretamente e não verificava quem o alcança*
+  (o router sobrescrevendo o default do schema; o flag sem caminho de tela; o nome da coluna vs. o
+  gate). **Nenhum apareceu lendo a story; os três lendo o código ao lado dela.** O que quebrou o ciclo
+  foi um **spike de 20 minutos** do @dev, que confirmou os três e ainda revelou que o bloqueio de
+  numeração de migration havia caído sozinho. **Regra: quando duas validações de documento seguidas
+  falham pelo mesmo motivo, a terceira não deve ser de documento.**
+- **Dívida:** **aceite visual em ~360px NÃO foi feito** (a escolha é elemento novo) — mesma dívida do
+  AC9 da 8.13. E: conta `is_known=false` + recuo de data pede um saldo cujo campo está escondido no
+  formulário; tem saída (marcar *"sei o saldo"* revela o campo), mas a mensagem de erro pede algo que
+  não está visível.
+
 - **Dívida:** `packages/shared-types/src/generated.ts` defasado desde o PR #45, com **zero** menções a `bank` e sem check de drift no CI.
 - **Dívida:** `scripts/check.sh` resolve `ruff`/`python` do PATH (que pode não ser o do venv) e **mascara falha de frontend** com `|| true` no vitest — rode as etapas individualmente até isso ser corrigido.
 - **Dívida:** o **Epic 5 (Inteligência Financeira) nunca foi documentado aqui.** DRE, DRE em matriz, Lucratividade por contrato, Projeção de Caixa, Diagnóstico, Plano de Contas, Centros de Custo e Investimentos **existem e estão em produção**, mas quem lê só este arquivo conclui que não. Ver `docs/prd/epic-5-inteligencia-financeira.md`.
