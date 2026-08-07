@@ -239,7 +239,15 @@ function Bucket({
             // defeito que os PRs #56/#58 pagaram duas vezes, aqui pela ponta da linha.
             className="flex flex-wrap items-center gap-3 px-4 py-3"
           >
-            <div className="min-w-0 flex-1">
+            {/* `basis-full sm:basis-0` (aceite físico do AC9, 2026-08-06): o `flex-wrap` acima
+                sozinho NÃO quebrava a linha. Com base 0 e `min-w-0`, a descrição encolhia até
+                caber no que sobrasse de valor + botão — 29px num aparelho de 360px — e o nome da
+                conta empilhava uma palavra por linha, 300px de altura, com o valor colidindo no
+                meio. Base 100% obriga a descrição a tomar a primeira linha e joga valor + botão
+                para a segunda; do `sm` para cima volta a dividir a linha, como no desktop.
+                `grow` no lugar de `flex-1` de propósito: o shorthand `flex` reintroduziria
+                `flex-basis: 0%` e desfaria isto conforme a ordem das regras do Tailwind. */}
+            <div className="min-w-0 grow basis-full sm:basis-0">
               <span className="text-neutral-800">{p.description || p.supplier || "Conta"}</span>
               <span className="block text-xs text-neutral-400">
                 {p.supplier ? `${p.supplier} · ` : ""}

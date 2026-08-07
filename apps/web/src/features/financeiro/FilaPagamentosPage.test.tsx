@@ -207,6 +207,19 @@ describe("FilaPagamentosPage — a baixa (Story 8.13, AC6)", () => {
     // `flex-wrap`: descrição + valor + copiar + baixa não cabem em 360px numa linha só. Sem ele,
     // o botão que comete a ação sai da área visível — o defeito dos PRs #56/#58, aqui pela ponta.
     expect(linha.className).toContain("flex-wrap");
+
+    // ⚠️ `flex-wrap` SOZINHO NÃO QUEBRA A LINHA — e esta asserção sozinha passava com a tela
+    // quebrada (aceite físico do AC9, 2026-08-06). Com `flex-1` (base 0%) + `min-w-0`, a descrição
+    // encolhe até caber no que sobra em vez de forçar a quebra: 29px de largura num aparelho de
+    // 360px, o nome da conta empilhando uma palavra por linha ao longo de ~300px de altura, com o
+    // valor colidindo no meio. Quem quebra a linha é a BASE 100% da descrição. jsdom não calcula
+    // layout, então o contrato verificável aqui é a classe — a medição real está no Dev Agent
+    // Record da story.
+    const descricao = linha.firstElementChild as HTMLElement;
+    expect(descricao.className).toContain("basis-full");
+    // `grow`, não `flex-1`: o shorthand `flex` reintroduz `flex-basis: 0%` e desfaz o `basis-full`
+    // dependendo da ordem das regras do Tailwind. Trocar de volta reabre o defeito em silêncio.
+    expect(descricao.className).not.toContain("flex-1");
   });
 });
 
