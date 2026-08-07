@@ -35,12 +35,15 @@ def summary(
     # A janela do dia é ancorada na meia-noite do FUSO do tenant (convertida p/ UTC), corrigindo a
     # antiga dívida de "meia-noite UTC crua" (CLAUDE.md §Cockpit). Import lazy de settings para não
     # acoplar o Cockpit ao módulo settings (mesmo padrão da Agenda).
-    from app.modules.settings.service import get_profile
+    from app.modules.settings.service import tenant_timezone
 
-    profile = get_profile(db, _user.tenant_id)
+    # `tenant_timezone(db)`, e não `get_profile(...).timezone`: o fuso mora em `tenants` desde a
+    # 0073, e a coluna do perfil ficou congelada. Um GET também não deveria criar perfil — era
+    # exatamente a "escrita num GET" que a revisão de QA do Cockpit já tinha removido uma vez.
+    fuso = tenant_timezone(db)
     # 'Hoje' é o dia do DONO, não o do servidor: sem isto o Cockpit virava a página às 21h.
-    base = day if day else tenant_today(profile.timezone)
-    day_start, day_end = day_window_utc(base, profile.timezone)
+    base = day if day else tenant_today(fuso)
+    day_start, day_end = day_window_utc(base, fuso)
 
     today_count, today_events, upcoming = service.agenda_summary(
         db, day_start=day_start, day_end=day_end

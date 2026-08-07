@@ -98,9 +98,11 @@ def _compute_expires_at(db: Session, *, tenant_id: str, purpose: str | None) -> 
     if purpose in _ONE_HOUR_PURPOSES:
         return now + timedelta(hours=1)
     if purpose in _END_OF_DAY_PURPOSES:
-        profile = settings_service.get_profile(db, tenant_id)
+        # `timezone_of(db, tenant_id)`, e não `get_profile(...).timezone`: o fuso mora em
+        # `tenants` desde a 0073 e a coluna do perfil ficou congelada. Usa a variante POR ID
+        # porque `process_pending`/`enqueue` já recebem o `tenant_id` explicitamente.
         try:
-            tz = ZoneInfo(profile.timezone)
+            tz = ZoneInfo(settings_service.timezone_of(db, tenant_id))
         except (ZoneInfoNotFoundError, ValueError):
             tz = ZoneInfo("America/Sao_Paulo")
         local_now = now.astimezone(tz)
