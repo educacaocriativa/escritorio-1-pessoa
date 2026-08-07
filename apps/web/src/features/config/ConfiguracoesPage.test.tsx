@@ -116,6 +116,9 @@ describe("ConfiguracoesPage — Funil de entrada padrão", () => {
     } as never);
     render(<ConfiguracoesPage />);
 
+    // O funil vive na aba "Vendas" desde que /config foi separada em áreas.
+    await user.click(await screen.findByRole("button", { name: /Vendas/ }));
+
     const select = await screen.findByText("Funil Principal");
     expect(select).toBeInTheDocument();
 
@@ -128,6 +131,33 @@ describe("ConfiguracoesPage — Funil de entrada padrão", () => {
         expect.objectContaining({ default_entry_funnel_id: "f-1" }),
       ),
     );
+  });
+});
+
+describe("ConfiguracoesPage — áreas", () => {
+  it("separa os assuntos em abas em vez de empilhar tudo numa coluna", async () => {
+    render(<ConfiguracoesPage />);
+
+    await screen.findByText("Cor primária"); // espera o profile carregar
+    for (const nome of [/Empresa/, /Canais/, /Integrações/, /Vendas/]) {
+      expect(screen.getByRole("button", { name: nome })).toBeInTheDocument();
+    }
+
+    // A aba Empresa começa ativa; o WhatsApp (aba Canais) não está montado — é o que evita
+    // que abrir /config dispare a rede das quatro áreas de uma vez.
+    expect(screen.queryByText(/WhatsApp por QR Code/i)).not.toBeInTheDocument();
+  });
+
+  it("cada aba mostra só o seu assunto", async () => {
+    const user = userEvent.setup();
+    render(<ConfiguracoesPage />);
+
+    await screen.findByText("Cor primária");
+    expect(screen.queryByText("Funil de entrada padrão")).not.toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: /Vendas/ }));
+    expect(await screen.findByText("Funil de entrada padrão")).toBeInTheDocument();
+    expect(screen.queryByText("Cor primária")).not.toBeInTheDocument();
   });
 });
 
