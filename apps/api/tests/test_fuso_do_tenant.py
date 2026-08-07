@@ -96,12 +96,18 @@ def test_tenant_timezone_le_o_perfil_e_tem_default(db: Session, client: TestClie
 def test_tenant_timezone_respeita_o_fuso_configurado(
     db: Session, client: TestClient, headers: dict[str, str], tenant_id: str
 ):
-    from app.modules.settings import service as settings_service
+    """Configura pelo CAMINHO DE PRODUÇÃO (`PATCH /settings/profile`), não escrevendo no model.
+
+    A versão anterior fazia `profile.timezone = ...` — o que fixava o LOCAL DE ARMAZENAMENTO junto
+    com o comportamento. Quando o fuso saiu de `tenant_profiles` para `tenants` (migration 0072,
+    porque a RLS escondia a coluna das rotas de auth), este teste passou a falhar por gravar numa
+    coluna congelada, e não porque `tenant_timezone` tivesse quebrado. Passar pela rota testa a
+    mesma coisa sem amarrar o teste à tabela.
+    """
     from app.modules.settings.service import tenant_timezone
 
-    profile = settings_service.get_profile(db, tenant_id)
-    profile.timezone = "America/Manaus"
-    db.commit()
+    r = client.patch("/settings/profile", json={"timezone": "America/Manaus"}, headers=headers)
+    assert r.status_code == 200
 
     assert tenant_timezone(db) == "America/Manaus"
 
