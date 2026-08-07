@@ -55,6 +55,17 @@ class User(Base, TimestampMixin):
     # True quando a senha foi gerada pela plataforma e o usuário deve trocá-la no 1º acesso.
     must_reset_password: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
 
+    # Briefing da Vima (Onda 4) — preferência DO USUÁRIO, não da empresa. Mora aqui, e não em
+    # `TenantProfile`, porque dois usuários do mesmo tenant têm horários e telefones diferentes;
+    # no perfil da empresa um sobrescreveria o outro. Também é o que permite editá-la sem o
+    # módulo `settings` (ver `auth/router.py::preferences`).
+    briefing_whatsapp_enabled: Mapped[bool] = mapped_column(
+        Boolean, default=False, nullable=False
+    )
+    # "HH:MM" no relógio de parede do dono — comparada com a hora LOCAL do tenant pelo scheduler,
+    # nunca com UTC. Ver a migration 0072 para o porquê de ser texto e não `Time`.
+    briefing_hour: Mapped[str] = mapped_column(String(5), default="07:00", nullable=False)
+
     # Recuperação de senha: guardamos o HASH (sha256) do token, nunca o token cru.
     reset_token_hash: Mapped[str | None] = mapped_column(String(64), index=True, nullable=True)
     reset_token_expires: Mapped[datetime | None] = mapped_column(

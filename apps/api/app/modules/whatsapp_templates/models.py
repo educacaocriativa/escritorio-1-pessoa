@@ -39,6 +39,14 @@ PURPOSE_CONTRACT_SEND = "contract_send"
 PURPOSE_QUOTE_SEND = "quote_send"
 PURPOSE_STAFF_INVITE = "staff_invite"
 PURPOSE_CLIENT_MOVED = "client_moved"
+# Vima (Onda 4) — o AVISO do briefing, não o briefing. É o único propósito cujo template PRECISA
+# de um botão de resposta rápida: às 7h o dono está sempre fora da janela de 24h, e parâmetro de
+# template da Cloud API não aceita quebra de linha (o briefing tem várias). O toque no botão abre
+# a janela e o texto inteiro sai depois, livre — ver `vima/scheduler.py`.
+PURPOSE_VIMA_BRIEFING = "vima_briefing_aviso"
+# O briefing inteiro, já dentro da janela aberta pelo toque. Texto livre: NÃO tem template e por
+# isso não entra em `PURPOSE_VARIABLE_SPECS` (que é a tabela de vínculo propósito→template).
+PURPOSE_VIMA_BRIEFING_TEXTO = "vima_briefing_texto"
 
 PURPOSE_VARIABLE_SPECS: dict[str, list[str]] = {
     PURPOSE_CHARGE_REMINDER: [
@@ -49,6 +57,10 @@ PURPOSE_VARIABLE_SPECS: dict[str, list[str]] = {
     PURPOSE_QUOTE_SEND: ["Nome do cliente", "Título do orçamento", "Valor", "Link da proposta"],
     PURPOSE_STAFF_INVITE: ["Nome", "Empresa", "E-mail de login", "Senha temporária"],
     PURPOSE_CLIENT_MOVED: ["Nome do cliente", "Nome da nova etapa"],
+    # Uma só, e curta: o corpo do aviso não carrega o briefing (não caberia — parâmetro de
+    # template não aceita quebra de linha). O que destrava o briefing é o BOTÃO, que não é
+    # variável e por isso não conta aqui.
+    PURPOSE_VIMA_BRIEFING: ["Primeiro nome de quem recebe"],
 }
 
 PURPOSE_LABELS: dict[str, str] = {
@@ -57,6 +69,9 @@ PURPOSE_LABELS: dict[str, str] = {
     PURPOSE_QUOTE_SEND: "Envio de orçamento/proposta",
     PURPOSE_STAFF_INVITE: "Convite de funcionário (senha temporária)",
     PURPOSE_CLIENT_MOVED: "Aviso interno: cliente mudou de etapa no CRM",
+    PURPOSE_VIMA_BRIEFING: (
+        "Briefing da Vima (precisa de um botão de resposta rápida no template)"
+    ),
 }
 
 

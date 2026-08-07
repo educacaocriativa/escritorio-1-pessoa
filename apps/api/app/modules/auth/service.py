@@ -16,7 +16,7 @@ from app.core.security import (
     verify_password,
 )
 from app.modules.auth.models import Tenant, User
-from app.modules.auth.schemas import RegisterRequest
+from app.modules.auth.schemas import PreferencesOut, PreferencesUpdate, RegisterRequest
 
 logger = logging.getLogger("e1p.auth")
 
@@ -140,3 +140,47 @@ def authenticate(db: Session, email: str, password: str) -> tuple[Tenant, User]:
     if tenant is None:
         raise AuthError("Tenant não encontrado", 404)
     return tenant, user
+
+
+# ── Preferências de briefing (Vima, Onda 4) ─────────────────────────────────────────────
+
+
+def preferences_of(db: Session, user: User) -> PreferencesOut:
+    """Monta o retorno, resolvendo a disponibilidade da entrega no tenant do usuário.
+
+    Import tardio de `vima.delivery` pelo mesmo motivo de `_tenant_out` importar `settings` de
+    dentro da função: `auth` é a base que os módulos de negócio importam, e importá-los de volta
+    no topo fecha o ciclo.
+    """
+    from app.modules.vima import delivery
+
+    entrega = delivery.avaliar(db, phone=user.phone)
+    return PreferencesOut(
+        briefing_whatsapp_enabled=user.briefing_whatsapp_enabled,
+        briefing_hour=user.briefing_hour,
+        briefing_whatsapp_disponivel=entrega.disponivel,
+        briefing_whatsapp_indisponivel_motivo=entrega.motivo,
+    )
+
+
+def update_preferences(db: Session, user: User, data: PreferencesUpdate) -> PreferencesOut:
+    """Grava o que veio. Campo ausente (`None`) não é "apague" — é "não mexi nisso".
+
+    LIGAR o WhatsApp exige que a entrega seja possível AGORA; DESLIGAR nunca é bloqueado. A
+    guarda existe para impedir promessa vazia (um switch ligado que não entrega nada), não para
+    prender ninguém numa preferência que ele já não quer.
+    """
+    from app.modules.vima import delivery
+
+    if data.briefing_hour is not None:
+        user.briefing_hour = data.briefing_hour
+    if data.briefing_whatsapp_enabled is True:
+        entrega = delivery.avaliar(db, phone=user.phone)
+        if not entrega.disponivel:
+            raise AuthError(entrega.motivo or "Entrega por WhatsApp indisponível", 422)
+        user.briefing_whatsapp_enabled = True
+    elif data.briefing_whatsapp_enabled is False:
+        user.briefing_whatsapp_enabled = False
+    db.commit()
+    db.refresh(user)
+    return preferences_of(db, user)

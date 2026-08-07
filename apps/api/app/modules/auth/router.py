@@ -6,7 +6,7 @@ from sqlalchemy.orm import Session
 
 from app.config import settings
 from app.core.security import create_access_token, decode_access_token, refresh_access_token
-from app.core.tenancy import CurrentUser, get_current_user
+from app.core.tenancy import CurrentUser, get_current_user, get_tenant_db
 from app.db.session import get_db
 from app.modules.auth.models import Tenant, User
 from app.modules.auth.schemas import (
@@ -14,6 +14,8 @@ from app.modules.auth.schemas import (
     ChangePasswordRequest,
     ForgotPasswordRequest,
     LoginRequest,
+    PreferencesOut,
+    PreferencesUpdate,
     RefreshedToken,
     RegisterRequest,
     ResetPasswordRequest,
@@ -24,10 +26,12 @@ from app.modules.auth.schemas import (
 from app.modules.auth.service import (
     AuthError,
     authenticate,
+    preferences_of,
     register_tenant,
     request_password_reset,
     reset_password,
     set_own_password,
+    update_preferences,
 )
 
 router = APIRouter(prefix="/auth", tags=["auth"])
@@ -150,6 +154,44 @@ def change_password(
         raise HTTPException(status_code=e.status_code, detail=str(e)) from e
     tenant = db.get(Tenant, user.tenant_id)
     return SessionInfo(user=UserOut.model_validate(user), tenant=_tenant_out(db, tenant))
+
+
+@router.get("/me/preferences", response_model=PreferencesOut)
+def get_preferences(
+    current: CurrentUser = Depends(get_current_user),
+    db: Session = Depends(get_tenant_db),
+) -> PreferencesOut:
+    """As preferências de briefing DESTE usuário.
+
+    ⚠️ **Sem `require_module`, de propósito** — mesma razão do router da Vima. `/settings/profile`
+    (que a tela `/config` usa) exige o módulo `settings`; um sub-usuário sem ele ficaria sem
+    conseguir escolher o próprio horário nem ligar o próprio WhatsApp. Configurar a PRÓPRIA
+    entrega não é configuração de empresa.
+
+    Usa `get_tenant_db` (e não o `get_db` das demais rotas deste router) porque a disponibilidade
+    da entrega depende do perfil e dos templates do tenant — tabelas de negócio, sob RLS. Numa
+    sessão crua elas voltariam vazias (fail-closed) e todo tenant pareceria "sem template".
+    `users` é global e não tem RLS, então ler/gravar o `User` daqui funciona igual.
+    """
+    user = db.get(User, current.user_id)
+    if user is None or not user.is_active:
+        raise HTTPException(status_code=401, detail="Sessão inválida")
+    return preferences_of(db, user)
+
+
+@router.patch("/me/preferences", response_model=PreferencesOut)
+def patch_preferences(
+    data: PreferencesUpdate,
+    current: CurrentUser = Depends(get_current_user),
+    db: Session = Depends(get_tenant_db),
+) -> PreferencesOut:
+    user = db.get(User, current.user_id)
+    if user is None or not user.is_active:
+        raise HTTPException(status_code=401, detail="Sessão inválida")
+    try:
+        return update_preferences(db, user, data)
+    except AuthError as e:
+        raise HTTPException(status_code=e.status_code, detail=str(e)) from e
 
 
 @router.get("/me", response_model=SessionInfo)
