@@ -97,6 +97,7 @@ def _conta(client: TestClient, headers, **over) -> dict:
         "name": "Itaú PJ",
         "kind": KIND_CHECKING,
         "opening_balance_cents": OPENING_CENTS,
+        "opening_balance_is_known": True,
         "opening_date": (_hoje() - timedelta(days=1)).isoformat(),
     }
     payload.update(over)
@@ -639,6 +640,7 @@ def test_IV8_os_dois_totais_da_tela_nao_incluem_o_agendado(
     cdb = _conta(
         client, headers, name="CDB", number="2", kind=KIND_INVESTMENT,
         opening_balance_cents=900_00,
+        opening_balance_is_known=True,
     )
     futuro = _hoje() + timedelta(days=6)
     _plantar(

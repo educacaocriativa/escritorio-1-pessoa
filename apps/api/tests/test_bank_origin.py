@@ -90,6 +90,7 @@ def _account(client: TestClient, headers, *, name: str = "Itaú PJ", **over) -> 
         "name": name,
         "kind": "checking",
         "opening_balance_cents": OPENING_CENTS,
+        "opening_balance_is_known": True,
         "opening_date": OPENING.isoformat(),
     }
     payload.update(over)

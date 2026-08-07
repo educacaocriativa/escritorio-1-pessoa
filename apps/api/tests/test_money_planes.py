@@ -458,6 +458,7 @@ def _bank_account(client: TestClient, headers: dict[str, str], *, opening: int) 
             "name": "Itaú PJ",
             "kind": "checking",
             "opening_balance_cents": opening,
+            "opening_balance_is_known": True,
             "opening_date": "2026-07-01",
         },
         headers=headers,

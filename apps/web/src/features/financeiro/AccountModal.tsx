@@ -71,7 +71,10 @@ export default function AccountModal({
   const [institution, setInstitution] = useState("");
   const [branch, setBranch] = useState("");
   const [number, setNumber] = useState("");
-  const [opening, setOpening] = useState("0,00");
+  const [opening, setOpening] = useState("");
+  // Story 8.21 — o ATO. `null` significa **ainda não escolheu** e só existe no CADASTRO:
+  // é ele que mantém o salvar desabilitado até o dono dizer se sabe o saldo ou não.
+  const [saldoConhecido, setSaldoConhecido] = useState<boolean | null>(null);
   const [openingDate, setOpeningDate] = useState(hojeISO);
   const [isPrimary, setIsPrimary] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -85,7 +88,12 @@ export default function AccountModal({
     setInstitution(editing?.institution ?? "");
     setBranch(editing?.branch ?? "");
     setNumber(editing?.number ?? "");
-    setOpening(centsToInput(editing?.opening_balance_cents ?? 0));
+    // ⚠️ **Story 8.21 — no cadastro o campo nasce VAZIO, não "0,00".** Pré-preenchido, o
+    // dono que não sabe o saldo aceitava o zero oferecido e o produto gravava "informei
+    // zero" — é o defeito que a coluna do ato existe para matar, e ele nasce AQUI.
+    setOpening(editing ? centsToInput(editing.opening_balance_cents) : "");
+    // Edição carrega o estado atual (vem do AC5b); cadastro exige escolha explícita.
+    setSaldoConhecido(editing ? editing.opening_balance_is_known : null);
     setOpeningDate(editing?.opening_date ?? hojeISO());
     setIsPrimary(editing?.is_primary ?? false);
     setError(null);
@@ -107,6 +115,25 @@ export default function AccountModal({
   }, [recuou, editing]);
 
   const saldoRedeclarado = opening.trim() !== "";
+
+  // ── Story 8.21 — o que vai no corpo, e por quê ────────────────────────────────────────
+  //
+  // O VALOR só viaja quando o dono diz que o sabe (e, no recuo, quando ele o redeclara).
+  const mandaSaldo = saldoConhecido === true && !(recuou && !saldoRedeclarado);
+  // O ATO viaja quando MUDA — e também quando o valor está indo numa conta hoje marcada
+  // como "não sei": ali os dois são inseparáveis (ver o comentário no corpo abaixo).
+  // No caso banal (editar só o nome de uma conta que já tem saldo declarado) ele NÃO vai:
+  // um PATCH que reescreve estado que ninguém pediu para mudar é como se perde um dado.
+  const mandaAto =
+    saldoConhecido !== null &&
+    (editing === null ||
+      saldoConhecido !== editing.opening_balance_is_known ||
+      (mandaSaldo && !editing.opening_balance_is_known));
+
+  // Salvar fica travado até a escolha existir, e até haver valor quando ela é "sei o saldo"
+  // — o mesmo mecanismo que a 8.11 já usa no recuo de data (`AccountModal` §28-35).
+  const faltaDecidirSaldo =
+    saldoConhecido === null || (saldoConhecido === true && !saldoRedeclarado);
 
   // Aviso pró-ativo: quantas contas PAGAS ficariam fora do extrato com esta data de abertura.
   //
@@ -159,9 +186,15 @@ export default function AccountModal({
         opening_date: openingDate,
         // Ao recuar sem redeclarar, o campo é OMITIDO em vez de mandar um `0` fabricado: quem
         // responde é o 422 do backend, com a mensagem que nomeia as duas datas.
-        ...(recuou && !saldoRedeclarado
-          ? {}
-          : { opening_balance_cents: parseCentsBRL(opening) }),
+        // Story 8.21: quem diz "não sei" também não manda valor — mandar seria gravar duas
+        // afirmações contraditórias, e o backend descarta o número de qualquer forma.
+        ...(mandaSaldo ? { opening_balance_cents: parseCentsBRL(opening) } : {}),
+        // ⚠️ **O ato viaja JUNTO com o valor, nunca separado.** Sem isto, o dono que marcou
+        // "não sei", abre a conta, digita o saldo real e salva gravaria o número com a conta
+        // ainda "não sei" — e a Projeção continuaria calada, sem explicação. É pior que não ter
+        // saída: é uma saída que parece funcionar. O backend recusa (422) esse PATCH, mas quem
+        // usa o produto nunca deve chegar lá.
+        ...(mandaAto ? { opening_balance_is_known: saldoConhecido } : {}),
       };
       let gravada: BankAccount | undefined;
       if (editing) {
@@ -217,17 +250,61 @@ export default function AccountModal({
           <Field label="Agência" value={branch} onChange={setBranch} />
           <Field label="Conta" value={number} onChange={setNumber} />
         </div>
+        {/* Story 8.21 — a ESCOLHA vem antes do campo: ela é a pergunta, o campo é a resposta.
+            Nos DOIS modos. No cadastro nasce sem opção marcada (o salvar fica travado até haver
+            uma); na edição carrega o estado atual da conta e é editável — é por aqui que o dono
+            que marcou "não sei" volta e informa o saldo, e sem esta metade aquele caminho não
+            existiria na tela. */}
+        <fieldset className="rounded-lg border border-neutral-200 p-3">
+          <legend className="px-1 text-xs font-medium text-neutral-500">
+            Você sabe o saldo desta conta na data de abertura?
+          </legend>
+          <div className="flex flex-col gap-2 sm:flex-row sm:gap-4">
+            <label className="flex items-center gap-2 text-sm text-neutral-700">
+              <input
+                type="radio"
+                name="saldo-conhecido"
+                checked={saldoConhecido === true}
+                onChange={() => setSaldoConhecido(true)}
+              />
+              Sei o saldo
+            </label>
+            <label className="flex items-center gap-2 text-sm text-neutral-700">
+              <input
+                type="radio"
+                name="saldo-conhecido"
+                checked={saldoConhecido === false}
+                onChange={() => setSaldoConhecido(false)}
+              />
+              Não sei o saldo agora
+            </label>
+          </div>
+          {saldoConhecido === false && (
+            <p className="mt-2 text-xs text-neutral-500">
+              Tudo bem — a conta é cadastrada do mesmo jeito. Enquanto o saldo não for informado, a
+              Projeção de Caixa não afirma runway nem alerta, porque não saberia de quanto partir.
+              Você pode voltar aqui e informar quando tiver o extrato em mãos.
+            </p>
+          )}
+        </fieldset>
         <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-          <Field
-            label={
-              recuou
-                ? `Saldo em ${formatDateBR(openingDate)} (R$) — obrigatório`
-                : "Saldo de abertura (R$)"
-            }
-            value={opening}
-            onChange={setOpening}
-            placeholder={recuou ? "Informe o saldo daquele dia" : undefined}
-          />
+          {/* ⚠️ O campo SOME quando o dono diz que não sabe, em vez de ficar desabilitado: um
+              campo cinza ainda convida a digitar, e o valor digitado ali seria descartado pelo
+              backend sem que nada na tela explicasse por quê. `Field` é componente compartilhado
+              (`components/Modal.tsx`) e não aceita `disabled`; acrescentar a prop ampliaria o
+              escopo desta story para um arquivo que ela declara não tocar. */}
+          {saldoConhecido !== false && (
+            <Field
+              label={
+                recuou
+                  ? `Saldo em ${formatDateBR(openingDate)} (R$) — obrigatório`
+                  : "Saldo de abertura (R$)"
+              }
+              value={opening}
+              onChange={setOpening}
+              placeholder={recuou ? "Informe o saldo daquele dia" : undefined}
+            />
+          )}
           <Field label="Data de abertura" value={openingDate} onChange={setOpeningDate} type="date" />
         </div>
 
@@ -280,7 +357,7 @@ export default function AccountModal({
         <button
           type="button"
           onClick={save}
-          disabled={saving || !name.trim() || (recuou && !saldoRedeclarado)}
+          disabled={saving || !name.trim() || (recuou && !saldoRedeclarado) || faltaDecidirSaldo}
           className="w-full rounded-pill bg-accent-400 py-2.5 font-semibold text-white transition hover:bg-accent-500 disabled:opacity-60"
         >
           {saving ? "Salvando…" : editing ? "Salvar" : "Cadastrar conta"}

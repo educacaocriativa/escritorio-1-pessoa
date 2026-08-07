@@ -49,6 +49,7 @@ function conta(over: Partial<BankAccount> = {}): BankAccount {
     holder_document: "",
     pix_key: "",
     opening_balance_cents: 0,
+    opening_balance_is_known: true,
     opening_date: "2026-01-01",
     is_primary: true,
     archived_at: null,
@@ -592,6 +593,8 @@ describe("Story 8.11 — o aviso pró-ativo: o e1p diz QUAL número buscar, e n�
     expect(screen.queryByText(/contas pagas/)).toBeNull();
 
     await user.type(screen.getByLabelText("Nome da conta"), "Itaú PJ");
+    // Story 8.21 — a escolha do saldo é OBRIGATÓRIA e trava o salvar até existir.
+    await user.click(screen.getByLabelText("Não sei o saldo agora"));
     await user.click(screen.getByRole("button", { name: "Cadastrar conta" }));
 
     await waitFor(() => expect(api.post).toHaveBeenCalledWith("/bank/accounts", expect.anything()));

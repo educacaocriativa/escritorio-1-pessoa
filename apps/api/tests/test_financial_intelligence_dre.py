@@ -288,6 +288,7 @@ def _conta_bancaria_814(client: TestClient, headers) -> dict:
             "name": "Itau PJ",
             "kind": "checking",
             "opening_balance_cents": 100_000_00,
+            "opening_balance_is_known": True,
             "opening_date": (datetime.now(UTC).date() - timedelta(days=400)).isoformat(),
         },
         headers=headers,

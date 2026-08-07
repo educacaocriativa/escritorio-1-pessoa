@@ -74,6 +74,7 @@ def account(client: TestClient, headers) -> dict:
             "name": "Itaú PJ",
             "kind": KIND_CHECKING,
             "opening_balance_cents": OPENING_CENTS,
+            "opening_balance_is_known": True,
             "opening_date": OPENING.isoformat(),
         },
         headers=headers,

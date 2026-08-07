@@ -157,6 +157,7 @@ def _seed_account(
             branch="0001",
             number=number,
             opening_balance_cents=opening,
+            opening_balance_is_known=True,
             opening_date=opening_date,
             is_primary=True,
         )
@@ -252,6 +253,7 @@ def test_bank_account_isolamento_cross_tenant(app_url: str) -> None:
                 name="Plantada por A",
                 kind="checking",
                 opening_balance_cents=1,
+                opening_balance_is_known=True,
                 opening_date=date(2026, 7, 1),
             )
         )

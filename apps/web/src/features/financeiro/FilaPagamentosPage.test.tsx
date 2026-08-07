@@ -168,6 +168,8 @@ describe("FilaPagamentosPage — a baixa (Story 8.13, AC6)", () => {
 
     await userEvent.click(screen.getByRole("button", { name: /cadastrar conta bancária/i }));
     await userEvent.type(screen.getByLabelText("Nome da conta"), "Nubank PJ");
+    // Story 8.21 — a escolha do saldo é OBRIGATÓRIA e trava o salvar.
+    await userEvent.click(screen.getByLabelText("Não sei o saldo agora"));
     await userEvent.click(screen.getByRole("button", { name: "Cadastrar conta" }));
 
     const retomar = await screen.findByRole("button", { name: /sai do Nubank PJ/i });

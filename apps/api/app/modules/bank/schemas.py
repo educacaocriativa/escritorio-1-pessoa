@@ -70,6 +70,10 @@ class BankAccountCreate(BaseModel):
     pix_key: str = Field(default="", max_length=140)
     # PODE ser negativo: conta no limite / cheque especial é saldo de partida legítimo.
     opening_balance_cents: int = 0
+    # Story 8.21 — **SEM default, de propósito.** `opening_balance_cents` tem `= 0` logo acima, e é
+    # exatamente isso que faz o zero nascer sozinho até pela API. Aqui não se repete: omitir o
+    # campo é **422**, e quem cria uma conta é obrigado a dizer se sabe o saldo ou não.
+    opening_balance_is_known: bool
     opening_date: date
 
     @field_validator("name")
@@ -107,6 +111,9 @@ class BankAccountUpdate(BaseModel):
     holder_document: str | None = Field(default=None, max_length=20)
     pix_key: str | None = Field(default=None, max_length=140)
     opening_balance_cents: int | None = None
+    # Story 8.21 — `None` aqui é **campo ausente** ("não mexi nisso"), a mesma convenção de todo o
+    # resto deste schema e a que `_validate_opening_date_recuo` usa como mecanismo.
+    opening_balance_is_known: bool | None = None
     opening_date: date | None = None
     is_primary: bool | None = None
 
@@ -142,6 +149,13 @@ class BankAccountOut(BaseModel):
     holder_document: str
     pix_key: str
     opening_balance_cents: int
+    # Story 8.21 (AC5b) — o ATO, EXPOSTO na leitura. Sem ele o formulário não tem como mostrar o
+    # estado atual em modo edição, e o caminho "descobri o saldo depois" ficaria sem UI: capacidade
+    # de backend sem consumidor, que é o defeito que `core/whatsapp/capabilities.py` já custou.
+    # ⚠️ Isto é campo novo de API, e a instrução de "zero campo novo" desta story NÃO o alcança:
+    # ela protege o contrato de SALDO (nada de `saldo_*` novo, nada de irmão `*_origem` novo,
+    # Regra dos Planos §1.3c intacta). Este campo não é saldo nem procedência.
+    opening_balance_is_known: bool
     opening_date: date
     is_primary: bool
     archived_at: datetime | None

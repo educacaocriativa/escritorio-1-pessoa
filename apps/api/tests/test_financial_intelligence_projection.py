@@ -472,6 +472,7 @@ def _conta_bancaria(client, headers, **over) -> dict:
         "name": "Itaú PJ",
         "kind": "checking",
         "opening_balance_cents": SALDO_ABERTURA,
+        "opening_balance_is_known": True,
         "opening_date": ABERTURA_BANCO.isoformat(),
     }
     payload.update(over)

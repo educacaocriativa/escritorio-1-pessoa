@@ -76,13 +76,20 @@ def _out(
         holder_document=a.holder_document,
         pix_key=a.pix_key,
         opening_balance_cents=a.opening_balance_cents,
+        opening_balance_is_known=a.opening_balance_is_known,
         opening_date=a.opening_date,
         is_primary=a.is_primary,
         archived_at=a.archived_at,
         saldo_derivado_cents=saldo_derivado_cents,
         # Constante do vocabulário do eixo A (`app.core.money_planes`) — nunca a string "banco"
         # escrita à mão. Todo saldo declara o plano de onde vem (Regra dos Planos §1.3c).
-        saldo_derivado_origem=ORIGEM_BANCO,
+        # ⚠️ **Story 8.21 — a procedência é o que diz "não sei", nunca o número.** Conta cujo saldo
+        # de abertura o dono NÃO declarou tem um derivado que parte de um `0` placeholder: o número
+        # existe e continua visível (princípio da Onda 0 — suprimir a afirmação, nunca o número),
+        # mas afirmá-lo como vindo do plano `banco` seria a mesma mentira da Projeção, uma camada
+        # acima. Anular `saldo_derivado_cents` está fora de questão: seria propagar `None` pela
+        # âncora da fórmula do §3.1, que é justamente o desenho que a @architect rejeitou.
+        saldo_derivado_origem=service.origem_do_saldo_derivado(a),
         # Story 8.14 — o que já tem dia marcado e ainda não aconteceu. Os dois em MÓDULO, com o
         # irmão de procedência: nenhum saldo trafega sem plano declarado (Regra dos Planos §1.3c).
         agendado_saida_cents=agendado.saida_cents,
@@ -320,11 +327,17 @@ def account_balance(
     """
     corte = service.resolve_until(until, hoje_do_tenant(db))
     try:
+        # Story 8.21 — a conta é carregada aqui (e não só o número) porque a PROCEDÊNCIA depende
+        # dela: as duas rotas que expõem saldo derivado precisam dizer "não sei" pelo mesmo
+        # critério, senão a mesma conta sairia `banco` numa e `indisponivel` na outra.
+        acc = service.get_account(db, account_id)
         saldo = service.derived_balance(db, bank_account_id=account_id, until=corte)
     except service.BankError as e:
         raise _err(e) from e
     return BankBalanceOut(
-        saldo_derivado_cents=saldo, saldo_derivado_origem=ORIGEM_BANCO, until=corte
+        saldo_derivado_cents=saldo,
+        saldo_derivado_origem=service.origem_do_saldo_derivado(acc),
+        until=corte,
     )
 
 

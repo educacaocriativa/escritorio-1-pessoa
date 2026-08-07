@@ -298,6 +298,8 @@ describe("CobrancasPage — recebimento fora do trilho (Story 8.15)", () => {
     expect(screen.getByRole("heading", { name: "Nova conta" })).toBeInTheDocument();
     // (3) Cadastra pelo formulário embutido (o MESMO de Contas & Saldos).
     await user.type(screen.getByLabelText("Nome da conta"), "Nubank PJ");
+    // Story 8.21 — a escolha do saldo é OBRIGATÓRIA e trava o salvar até existir.
+    await user.click(screen.getByLabelText("Não sei o saldo agora"));
     await user.click(screen.getByRole("button", { name: "Cadastrar conta" }));
     // (4) O registro é RETOMADO com a conta recém-criada já selecionada.
     await user.click(await screen.findByRole("button", { name: /caiu no Nubank PJ/i }));

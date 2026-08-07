@@ -37,7 +37,12 @@ from fastapi.testclient import TestClient
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.core.money_planes import ORIGEM_MISTO, ORIGEM_PLATAFORMA, ORIGENS
+from app.core.money_planes import (
+    ORIGEM_INDISPONIVEL,
+    ORIGEM_MISTO,
+    ORIGEM_PLATAFORMA,
+    ORIGENS,
+)
 from app.core.tz import DEFAULT_TENANT_TIMEZONE, tenant_today
 from app.modules.bank import service as bank_service
 from app.modules.bank.models import (
@@ -102,6 +107,7 @@ def _conta(
             "kind": kind,
             "number": number,
             "opening_balance_cents": opening,
+            "opening_balance_is_known": True,
             "opening_date": OPENING,
         },
         headers=headers,
@@ -827,3 +833,98 @@ def test_projection_com_banco_continua_read_only(client: TestClient, headers, db
     after = _snapshot(db)
 
     assert after == before, "a projeção escreveu/alterou dados — viola IV5 (read-only)"
+
+
+# ── Story 8.21 — "tenho a conta e NÃO sei o saldo" ────────────────────────────────────────────
+#
+# O gate desta story: a coluna `opening_balance_is_known` não pode existir sem o consumidor
+# provado. `core/whatsapp/capabilities.py` existiu desde a Onda 0 com ZERO call sites em produção
+# e uma docstring que AFIRMAVA três consumidores inexistentes — foi essa afirmação que impediu
+# alguém de notar a lacuna. Regra derivada: capacidade nova nasce com o consumidor no mesmo passo.
+
+
+def _conta_sem_saldo(client, headers, *, nome: str, number: str = "") -> dict:
+    """Conta cadastrada por quem NÃO sabe o saldo — o cenário inteiro da Story 8.21."""
+    r = client.post(
+        "/bank/accounts",
+        json={
+            "name": nome,
+            "kind": KIND_CHECKING,
+            "number": number,
+            "opening_balance_is_known": False,
+            "opening_date": OPENING,
+        },
+        headers=headers,
+    )
+    assert r.status_code == 201, r.text
+    return r.json()
+
+
+def test_conta_sem_saldo_declarado_cala_a_projecao(client: TestClient, headers):
+    """AC4 + AC9 — o gate do consumidor, e o teste de MAIOR VALOR da story.
+
+    Sem ele a coluna vira documentação em vez de comportamento: o dado existe, ninguém o lê, e o
+    produto continua afirmando runway sobre um saldo que ninguém informou.
+    """
+    _conta_sem_saldo(client, headers, nome="C6 PJ")
+    # Queima real, senão `days_suprimido` seria trivialmente falso (ele exige `burn_rate > 0`) e o
+    # teste passaria sem provar nada.
+    _payable(client, headers, amount=600_00, due=_d(10))
+
+    body = _projection(client, headers)
+    assert body["saldo_inicial_origem"] == ORIGEM_INDISPONIVEL
+    assert body["saldo_inicial_origem"] in ORIGENS
+    assert body["runway"]["days"] is None
+    assert body["runway"]["days_suprimido"] is True
+    for w in body["windows"]:
+        assert w["alert"] is False
+        assert w["alert_suprimido"] is True
+
+
+def test_uma_conhecida_e_uma_NAO_conhecida_calam_a_projecao_inteira(client: TestClient, headers):
+    """AC4, o caso MISTO — decidido pela @architect e o mais provável na prática.
+
+    ⚠️ **É este teste que prova que a regra é "QUALQUER desconhecida", e não "todas".** Sem ele,
+    a implementação `if not conhecidas:` passa no teste anterior e mente em produção.
+
+    Por que suprimir tudo em vez de somar só as conhecidas: `opening_balance_cents` **pode ser
+    negativo** (cheque especial), então a parcela que falta tanto subestima quanto superestima o
+    caixa — e nada na tela diria em qual direção. Subestimar dispara alerta sem motivo;
+    superestimar CALA o alerta que deveria soar, para quem tem cheque especial.
+    """
+    _conta(client, headers, nome="Itaú PJ", opening=10_000_00, number="1")
+    _conta_sem_saldo(client, headers, nome="C6 PJ", number="2")
+    _payable(client, headers, amount=600_00, due=_d(10))
+
+    body = _projection(client, headers)
+    assert body["saldo_inicial_origem"] == ORIGEM_INDISPONIVEL
+    assert body["runway"]["days"] is None
+    assert all(w["alert_suprimido"] for w in body["windows"])
+
+
+def test_todas_conhecidas_seguem_misto(client: TestClient, headers):
+    """O NÃO-MEMBRO do AC4. Sem ele, "sempre indisponível" passaria no teste acima."""
+    _conta(client, headers, nome="Itaú PJ", opening=10_000_00, number="1")
+    _conta(client, headers, nome="Nubank PJ", opening=5_000_00, number="2")
+    assert _projection(client, headers)["saldo_inicial_origem"] == ORIGEM_MISTO
+
+
+def test_o_numero_sobrevive_a_supressao_e_a_nota_NOMEIA_a_saida(client: TestClient, headers):
+    """AC4 (a) e (b) — as duas obrigações que a @architect anexou à supressão.
+
+    Sem (a) a story violaria o princípio da Onda 0 (*suprimir a afirmação, nunca o número*); sem
+    (b) o dono vê o runway sumir e não descobre o que fazer — o beco sem saída do WhatsApp
+    item 12(b), em que a única saída oferecida era um template que não existia.
+    """
+    _conta(client, headers, nome="Itaú PJ", opening=10_000_00, number="1")
+    _conta_sem_saldo(client, headers, nome="C6 PJ", number="2")
+
+    body = _projection(client, headers)
+    # (a) o número continua lá, e a composição continua fechando.
+    assert body["saldo_inicial_cents"] == (
+        body["saldo_inicial_banco_cents"] + body["saldo_inicial_plataforma_cents"]
+    )
+    assert body["saldo_inicial_banco_cents"] == 10_000_00
+    # (b) a nota diz QUAL conta falta — asserção sobre a presença e sobre o NOME, nunca sobre a
+    # frase inteira (a redação muda; o nome da conta é o que torna a nota acionável).
+    assert _tem_nota(body, "C6 PJ")
