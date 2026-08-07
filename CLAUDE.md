@@ -278,6 +278,9 @@ Custo de aplicar, medido nos quatro casos reais que teria pego: 2 a 5 segundos c
 - **Dívida:** `days_since_last_declared_balance` implementada e **sem consumidor**.
 - **Dívida:** **a Onda 2 inteira (Stories 8.9–8.20) não está documentada aqui.** A origem do movimento, a baixa com conta bancária, os agendados, as transferências e as correções das 8.19/8.20 **existem e estão em produção** — quem ler só este arquivo conclui que a Onda 2 não começou. É a mesma dívida que o Epic 5 carrega logo abaixo, e ela cresceu: o `CLAUDE.md` para na Onda 1. Ver `docs/prd/epic-8-controle-bancario.md` §6 e as stories.
 
+- **Dívida:** `packages/shared-types/src/generated.ts` defasado desde o PR #45, com **zero** menções a `bank` e sem check de drift no CI.
+- **Dívida:** `scripts/check.sh` resolve `ruff`/`python` do PATH (que pode não ser o do venv) e **mascara falha de frontend** com `|| true` no vitest — rode as etapas individualmente até isso ser corrigido.
+- **Dívida:** o **Epic 5 (Inteligência Financeira) nunca foi documentado aqui.** DRE, DRE em matriz, Lucratividade por contrato, Projeção de Caixa, Diagnóstico, Plano de Contas, Centros de Custo e Investimentos **existem e estão em produção**, mas quem lê só este arquivo conclui que não. Ver `docs/prd/epic-5-inteligencia-financeira.md`.
 ### Onda 2 — "tenho a conta e NÃO sei o saldo" (Story 8.21, PR #94, 2026-08-07)
 
 ⚠️ **Esta seção cobre SÓ a Story 8.21.** As demais stories da Onda 2 (8.9–8.20) estão em produção e
@@ -343,9 +346,6 @@ desde a Onda 0 **sem gatilho nenhum**; esta story é o gatilho.
   formulário; tem saída (marcar *"sei o saldo"* revela o campo), mas a mensagem de erro pede algo que
   não está visível.
 
-- **Dívida:** `packages/shared-types/src/generated.ts` defasado desde o PR #45, com **zero** menções a `bank` e sem check de drift no CI.
-- **Dívida:** `scripts/check.sh` resolve `ruff`/`python` do PATH (que pode não ser o do venv) e **mascara falha de frontend** com `|| true` no vitest — rode as etapas individualmente até isso ser corrigido.
-- **Dívida:** o **Epic 5 (Inteligência Financeira) nunca foi documentado aqui.** DRE, DRE em matriz, Lucratividade por contrato, Projeção de Caixa, Diagnóstico, Plano de Contas, Centros de Custo e Investimentos **existem e estão em produção**, mas quem lê só este arquivo conclui que não. Ver `docs/prd/epic-5-inteligencia-financeira.md`.
 
 ## WhatsApp Evolution: em produção de verdade (deploy 2026-08-04)
 
