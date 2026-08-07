@@ -546,7 +546,7 @@ Não há ferramenta de mescla na tela. Também não há "ligar conversa não ide
 contato" nem marcação de histórico como lido. **Validação manual em ~360px do painel de
 Conversas ainda não foi feita** — bloqueia release, não bloqueia merge.
 
-## Vima: o Registro de Fatos e o briefing (PR #85, 2026-08-06)
+## Vima: o Registro de Fatos e o briefing (PRs #85 e #90, 2026-08-06/07)
 
 > Spec: `docs/superpowers/specs/2026-08-06-vima-registro-de-fatos-e-briefing-design.md` ·
 > Plano: `docs/superpowers/plans/2026-08-06-vima-registro-de-fatos-e-briefing.md`
@@ -612,8 +612,55 @@ cabeça. **`facts` é a memória narrativa do negócio inteiro**, e o briefing �
   expurgo dos sujeitos polimórficos (LGPD) não tem rotina, só `client_id` cascateia;
   `comercial.topo.sem_lead` é a única Ausência que lê o log, então enquanto o registro for novo
   ela dispara por falta de histórico e não por falta de lead; o anonimizador não mascara nomes
-  apesar da docstring dizer que sim (pré-existente, o briefing herda). **A tela é a Onda 4** —
-  hoje o briefing só existe como API.
+  apesar da docstring dizer que sim (pré-existente, o briefing herda).
+
+### Onda 4 — as superfícies (PR #90, 2026-08-07)
+
+O dono passou a **ver o briefing na tela** e a **recebê-lo no WhatsApp**, nos dois transportes.
+
+- [x] **Preferência por USUÁRIO** (migration 0072: `users.briefing_whatsapp_enabled`,
+  `users.briefing_hour`; rotas `GET/PATCH /auth/me/preferences`). Mora em `users`, e **não** em
+  `TenantProfile`, porque dois usuários do mesmo tenant têm telefones e horários diferentes — no
+  perfil da empresa um sobrescreveria o outro. É também o que permite editá-la **sem o módulo
+  `settings`**: um sub-usuário sem ele precisa poder ligar o próprio WhatsApp.
+- [x] **A tela é porta de entrada UMA VEZ POR DIA, não a cada login.** Mecanismo: `read_at`.
+  `EntradaDoDia` guarda o dia decidido em `localStorage` **no fuso do tenant** — poupa uma ida ao
+  servidor por visita e, principalmente, **quebra o laço** de quem toca "Ir para o painel" antes
+  de a marcação de leitura chegar. A autoridade continua sendo o `read_at` do servidor. Roda em
+  `ProtectedBareLayout` (sem shell), desenhada para 360px.
+- [x] **Job no horário de cada usuário** (`vima/scheduler.tick`, etapa 6 do sweep). O relógio é
+  INJETADO e a comparação é com a hora LOCAL do tenant: às 07:05 UTC ainda são 04:05 em São
+  Paulo, e comparar em UTC entregaria o briefing das 7h às 4 da manhã, todo dia. Assinatura **por
+  tenant** (e não `tick(db_factory)`): o worker já itera tenants com isolamento de falha por
+  etapa. A entrega só sai quando o tick GEROU o briefing — é o que impede a mesma mensagem a cada
+  passada do sweep até a meia-noite, sem coluna nova.
+- [x] **Dia sem novidade: a tela diz que está tranquilo, o WhatsApp NÃO sai.** Um "bom dia, nada
+  aconteceu" diário é a forma mais rápida de ser silenciado — e canal silenciado não entrega o
+  dia em que importa.
+- [x] **Evolution em um passo, Meta em dois.** `capabilities.briefing_needs_optin` — e **o
+  consumidor nasceu no mesmo passo** (`scheduler._entregar_no_whatsapp`), pela lição do item 12
+  acima. Meta: parâmetro de template da Cloud API **não aceita quebra de linha** e às 7h o dono
+  está sempre fora da janela de 24h, então sai um template curto **com botão**, o toque abre a
+  janela e o texto inteiro vai depois, livre.
+- ⚠️ **`send_template` passou a enviar o COMPONENTE de botão.** Sem ele, a Meta devolve no toque o
+  **rótulo que o tenant escreveu no console dela** (texto livre: "Ver resumo", "Bora", "Sim") — e
+  não haveria constante para casar do lado de cá. O payload é derivado do `purpose` em
+  `process_pending`, sem coluna nova. Formato do webhook **conferido contra a documentação da
+  Meta**, não suposto (`type:"button"` + `button:{payload,text}`; e `interactive.button_reply`).
+- ⚠️ **O reconhecimento do toque fica DEPOIS do registro da mensagem e FORA do bloco de `facts`.**
+  Aquele bloco é pulado quando a mensagem vem do telefone do time (`_e_telefone_da_equipe`), e o
+  toque vem SEMPRE de lá — dentro dele, o opt-in seria descartado junto e o briefing nunca sairia.
+  A guarda vale nos dois sentidos: o dono não vira lead do próprio funil, e um estranho que repita
+  o payload não destrava briefing nenhum.
+- **Dependência EXTERNA, fora do repositório:** o template com botão precisa de **aprovação da
+  Meta**. Enquanto não houver, o tenant Meta fica sem briefing por WhatsApp — e a UI de
+  preferências **diz por quê** em vez de oferecer um switch que liga e não entrega nada
+  (`vima/delivery.avaliar`, o mesmo veredito que o scheduler usa; divergirem faria a tela dizer
+  "ligado" e o job não mandar nada).
+- **Dívida:** **validação manual em ~360px da tela do briefing ainda não foi feita** — bloqueia
+  release, não bloqueia merge; quem gera o briefing abrindo o app antes do próprio horário não
+  recebe o WhatsApp daquele dia (a tela já marcou como lido — troca deliberada, ver a docstring
+  de `scheduler.tick`).
 
 ## Contabilidade de IA e roteamento de modelo por tarefa (PR #87, 2026-08-06)
 
@@ -665,12 +712,19 @@ O produto já gastava IA em produção e **não sabia quanto, nem por quem**: se
 
   **Como ficou (reverberar):**
   - `core/tz.py` ganhou `local_date`, `tenant_today(tz, *, now=)`, `format_datetime_br` e `format_date_br` — **puras, com relógio injetável**, mesma disciplina de `core/scheduling.py`.
-  - `settings/service.py` ganhou os resolvedores: `tenant_timezone(db)` (sessão RLS), `timezone_of(db, tenant_id)` (rotas de auth, que rodam em sessão crua) e **`hoje_do_tenant(db)` — a única âncora de "hoje" do sistema**. Cada `_today()` de módulo delega para ela.
+  - `settings/service.py` ganhou os resolvedores: `tenant_timezone(db)` (sessão RLS), `timezone_of(db, tenant_id)` (rotas de auth, que rodam em sessão crua) e **`hoje_do_tenant(db)` — a única âncora de "hoje" do sistema**. Cada `_today()` de módulo delega para ela. ⚠️ **`timezone_of` não funcionava de verdade até o PR #91** — ver a correção logo abaixo.
   - `is_overdue` (payables **e** receivables) passou a exigir `today` como parâmetro **obrigatório**. Um default que lê o relógio é exatamente por onde o fuso errado volta.
   - `TenantOut` carrega `timezone`: a sessão entrega o fuso ao frontend. **Não** use `GET /settings/profile` para isso — aquela rota exige o módulo `settings`, que nem todo usuário tem.
   - Frontend: `lib/datetime.ts` é a ÚNICA porta de formatação, e separa as duas espécies de data — **instante** (`formatDateTime`/`formatDate`/`formatTime`, convertem de fuso) e **data de calendário** (`formatDay`, puramente textual, nunca constrói `Date`). `useFuso()` (em `store/auth.tsx`) dá o fuso e, ao contrário de `useAuth`, **não lança** fora do provider: fuso é exibição, e derrubar a tela por causa dele seria uma troca ruim.
   - **Lição (reverberar): `isoformat()` em texto que um humano lê é bug, não estilo.** Para persistir/trafegar, ISO em UTC; para exibir, a borda converte. E "hoje" **nunca** é `datetime.now(UTC).date()` — é `hoje_do_tenant(db)`.
   - Gates: `tests/test_fuso_do_tenant.py` (backend), `src/lib/datetime.test.ts` + o teste do `?day=` em `CockpitPage.test.tsx` (frontend).
+- **[CORRIGIDO 2026-08-07, PR #91] O fuso da sessão era SEMPRE o padrão — a correção acima estava pela metade.** `/auth/login`, `/auth/register`, `/auth/me` e `/auth/change-password` rodam em sessão **crua** (`get_db`, sem a GUC de tenant) e `timezone_of` lia `tenant_profiles`, que tem `FORCE ROW LEVEL SECURITY` desde a 0022. **A policy filtra o SELECT inteiro:** o `WHERE tenant_id = ...` explícito não ajudava, porque o problema nunca foi *qual* linha trazer e sim *conseguir enxergar alguma*. Todo tenant recebia `America/Sao_Paulo`, e o `useFuso()` do frontend inteiro sai desse valor. É a mesma armadilha do backfill da `0068` ("a RLS filtra SELECT também"), do outro lado do produto.
+  - **O fuso mudou de casa (migration 0073): mora em `tenants.timezone`**, tabela GLOBAL sem RLS que as rotas de auth já leem naturalmente. Fuso é **identidade do tenant**, não brand kit. Elimina a classe do problema em vez de contorná-la com uma sessão extra por login ou um bypass de RLS (as duas alternativas consideradas — a segunda foge da decisão de que a RLS é a garantia única).
+  - ⚠️ **`tenant_profiles.timezone` NÃO foi dropada e está CONGELADA** (um ciclo de conferência, como a 0066 fez). Quem a ler recebe o valor do dia da migration, não o que o dono configurou depois. Use `tenant_timezone(db)` (sessão de tenant) ou `timezone_of(db, tenant_id)` (sessão crua) — **nunca** `get_profile(...).timezone`. Gate: `tests/test_settings_timezone.py::test_ninguem_le_mais_o_fuso_do_perfil` (varredura AST, validado por mutação). Dropar a coluna numa migration posterior.
+  - ⚠️ **`tenants` não tem RLS**, então toda leitura precisa de filtro explícito por id — mesma exceção documentada de `users`. Gate: `test_auth_timezone_rls.py::test_o_fuso_NAO_atravessa_tenants`. Trocar um bug de fuso por um vazamento entre tenants seria infinitamente pior.
+  - **O achado que valeu mais que o bug: TRÊS consumidores liam a coluna do perfil** e não apareceram na investigação inicial — Agenda (evento de dia inteiro), Cockpit (janela do dia) e validade das notificações. Corrigir só o `timezone_of` teria consertado o login e **quebrado os três em silêncio**: a coluna existe, tem valor, a leitura funciona, e nenhum teste protestaria. **Regra (reverberar): ao mover um dado de casa, faça o grep dos leitores ANTES de assumir que a mudança é local — e deixe um gate mecânico no lugar.**
+  - **Por que ninguém tinha notado:** a tela `/config` **não tem seletor de fuso**. O campo existe na API e valida, mas nenhum componente o escreve — então todo tenant estava no default, que é justamente o valor que o código quebrado devolvia. Era armadilha armada para quem fosse adicionar o seletor: o `PATCH` responderia com o valor novo e o login continuaria entregando São Paulo.
+  - **Só o Postgres reproduz** (o SQLite dos testes não exercita RLS): o gate de regressão é `tests/test_auth_timezone_rls.py`, `rls_e2e`, com controle positivo em cada asserção.
 - **[CORRIGIDO] Agenda não mostrava cobranças/contas a pagar (bug de fuso).** Eventos de dia inteiro (cobranca_receber/cobranca_pagar/prazo) são gravados à **meia-noite UTC** da data de vencimento. A Agenda casava o evento ao dia com `new Date(starts_at)` (horário LOCAL) → em fuso negativo (Brasil UTC-3) o evento "voltava" um dia e, nas bordas do mês, caía fora do range → sumia. Fix (frontend, `AgendaPage.tsx`): eventos all-day casam por **data de calendário** (`starts_at.slice(0,10)` = data UTC) e o range da busca usa fronteiras **UTC-date** (`${ymd}T00:00:00Z`), não local→UTC. Idem para a cor "atrasado". Backend sempre injetou o evento corretamente (validado). **Lição (reverberar): toda data de negócio que vira evento all-day deve ser comparada por data de calendário, nunca por horário local.**
 - **[CRÍTICO, CORRIGIDO] RLS perdia o tenant no refresh pós-commit (afetava TODOS os módulos).** A `Session` ligada à Engine devolvia a conexão ao pool no `commit()`; o `db.refresh()` seguinte pegava outra conexão sem a GUC `app.current_tenant_id` → RLS escondia a linha → 500 "Could not refresh instance". Funcionava só quando o pool reusava a mesma conexão. **Fix:** `tenant_session` agora prende a Session a UMA conexão dedicada (`engine.connect()`) por todo o request; o refresh pós-commit usa a mesma conexão (GUC setada). Validado: criar em tenant novo OK em todos os módulos + isolamento entre tenants intacto. Regra: qualquer novo helper de sessão de tenant DEVE usar conexão dedicada, nunca a Engine direto.
 
