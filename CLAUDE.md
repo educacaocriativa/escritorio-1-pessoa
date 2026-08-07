@@ -213,8 +213,9 @@ Ao criar/alterar qualquer funcionalidade:
 - [x] **Estornar conta paga (só Contas a Pagar)** (botão "Estornar" por linha, só em "Pago"): `POST /payables/bills/{id}/reverse` volta o status para `open`/`paid_at=None`, reabrindo a edição completa (dados + anexos) e devolvendo o evento da Agenda de "concluído" para pendente. Confirmação via `confirm()` do navegador. Contas a Pagar nunca move dinheiro (não passa pela Carteira), então o estorno é uma troca de status simples e segura.
   - **Decisão de escopo:** a mesma capacidade foi implementada e revisada para Contas a Receber, mas **descartada antes do merge**: pagar → estornar → pagar de novo (o fluxo principal do estorno) duplicaria o `PlatformEarning` da venda no painel do Master (GMV/taxas globais), porque esse ledger não guarda vínculo de volta à `Transaction`/`Charge` de origem — reverter e repagar 3x uma cobrança de R$100 reportaria R$400 de GMV. Corrigir isso direito exige uma migration ligando `platform_earnings` à transação de origem; decisão do usuário foi não introduzir esse efeito colateral agora. Se o estorno de cobranças for retomado, resolver esse vínculo é pré-requisito (ver `docs/superpowers/specs/2026-07-27-estornar-conta-paga-design.md`).
 
-## Financeiro: Controle Bancário e Conferência (Epic 8 — Ondas 0 e 1 ✅, Onda 2 em andamento)
+## Financeiro: Controle Bancário e Conferência (Epic 8 — Ondas 0, 1 e 2 ✅ em produção)
 > Docs: `docs/prd/epic-8-controle-bancario.md` · `docs/architecture/controle-bancario-design.md` + `...-ratificacao.md` · `docs/decisions/0003-controle-bancario-nativo.md` · `docs/qa/epic-8-onda-0-1-gate-2026-07-30.md` · pesquisa em `docs/research/2026-07-29-*`
+> Onda 2: `docs/architecture/controle-bancario-onda2-design.md` + `...-onda2-ratificacao.md` · `docs/qa/epic-8-onda-2-gate-2026-08-04.md` (veredito **CONCERNS**) · `docs/qa/epic-8-gate-8.19-8.20-2026-08-07.md`
 
 **Por que existe.** Receber tem três testemunhas independentes (gateway, webhook, o dinheiro entrando). **Pagar não tem nenhuma**: se o dono paga pelo app do banco e não lança, nada protesta — e o silêncio de uma despesa não lançada é indistinguível do silêncio de um mês sem despesa. Sem âncora externa, DRE infla lucro, Lucratividade distorce e a Projeção mente. O banco é a testemunha que faltava. **O objetivo é achar furos, não fazer escrituração** — não é competir com o contador.
 
@@ -255,6 +256,8 @@ A Onda 1 mede a divergência com o razão bancário **vazio**, porque nada no si
 
 **A leitura do gate só é válida a partir do primeiro ciclo completo posterior à Onda 2**, e sob a pré-condição de que toda conta paga e todo recebimento da janela tenham conta bancária informada. Antes disso, o número não significa nada.
 
+⚠️ **E mesmo isto é otimista demais — a ratificação da Onda 2 corrigiu esta frase.** Lida ao pé da letra, a pré-condição acima é **insatisfazível** (uma cobrança do trilho nunca terá conta bancária, pela Invariante do Trilho), e reescrita em termos executáveis ela se parte em quatro, cada um zerado por uma onda diferente. **O gate não abre "depois da Onda 2" em geral: abre para um tenant cujos únicos eventos que movem conta real na janela sejam baixa de Contas a Pagar e recebimento fora do trilho.** Quem registra rendimento de aplicação precisa da Onda **2b**; quando o payout virar real, da **3**. Ver a seção da Onda 2 abaixo, item 5.
+
 **Regra de método que fica** (vale para qualquer métrica que decida escopo): antes de usar um número como gate, pergunte **o que ele mede quando o sistema está incompleto**. Se a resposta for "mede a própria incompletude", ele não é gate — é termômetro do que ainda não foi construído, e vai sempre pedir mais construção.
 
 **⚠️ REGRA — INSTANCIAÇÃO OBRIGATÓRIA** (derivada no mesmo dia, depois de a mesma seção quebrar duas vezes de formas opostas — primeiro medindo a própria incompletude, depois virando insatisfazível):
@@ -265,7 +268,7 @@ Por que o critério de decisão é onde mais se erra: todo o resto do design tem
 
 Custo de aplicar, medido nos quatro casos reais que teria pego: 2 a 5 segundos cada. Nenhum exigia mais análise — todos exigiam **um exemplo**.
 
-**Ondas** (renumeradas — a numeração antiga em qualquer doc anterior a 30/07/2026 aponta para outro conteúdo): `0 ✅ → 1 ✅ → 2 (origem do movimento) → 2b (aplicação) → 3 (payout) → 4 (import OFX) → 5 (match) → 6 (baixa de Contas a Receber, **bloqueada** pelo vínculo ausente `platform_earnings → transaction`, mesmo pré-requisito do estorno de cobranças descartado acima)`. Critério da ordem: **dependência externa crescente** — 2, 2b e 3 não dependem de nada fora do repositório.
+**Ondas** (renumeradas — a numeração antiga em qualquer doc anterior a 30/07/2026 aponta para outro conteúdo): `0 ✅ → 1 ✅ → 2 ✅ (origem do movimento) → 2b (aplicação) → 3 (payout) → 4 (import OFX) → 5 (match) → 6 (baixa de Contas a Receber, **bloqueada** pelo vínculo ausente `platform_earnings → transaction`, mesmo pré-requisito do estorno de cobranças descartado acima)`. Critério da ordem: **dependência externa crescente** — 2, 2b e 3 não dependem de nada fora do repositório.
 
 **A Regra da Origem** (Onda 2, `docs/architecture/controle-bancario-onda2-design.md`): todo evento que o sistema já emite e que move dinheiro no banco **escreve o movimento bancário**; a porta manual e a importação existem para o **resíduo**, e só o resíduo justifica o custo delas. Antes de desenhar a porta de entrada de um plano de dados novo, enumere os eventos que o sistema já emite e ligue-os primeiro — foi não fazer isso que produziu o erro do gate acima.
 
@@ -276,16 +279,359 @@ Custo de aplicar, medido nos quatro casos reais que teria pego: 2 a 5 segundos c
 - **Dívida:** `test_tenancy_guard.py` só varre `*/router.py` — um `service.py` que abrisse sessão global passaria batido. Auditado nesta onda: **nenhuma violação hoje**.
 - **Dívida:** o gate global `test_todo_saldo_declara_origem` (varredura de contrato exigindo par de proveniência para todo campo de saldo) foi **adiado com registro formal** — hoje a cobertura é por instância. Inventário no artefato de QA: 14 campos `saldo_*_cents`, 6 sem irmão, mais 8 campos de saldo que o regex nem alcança.
 - **Dívida:** `days_since_last_declared_balance` implementada e **sem consumidor**.
-- **Dívida:** **a Onda 2 inteira (Stories 8.9–8.20) não está documentada aqui.** A origem do movimento, a baixa com conta bancária, os agendados, as transferências e as correções das 8.19/8.20 **existem e estão em produção** — quem ler só este arquivo conclui que a Onda 2 não começou. É a mesma dívida que o Epic 5 carrega logo abaixo, e ela cresceu: o `CLAUDE.md` para na Onda 1. Ver `docs/prd/epic-8-controle-bancario.md` §6 e as stories.
-
 - **Dívida:** `packages/shared-types/src/generated.ts` defasado desde o PR #45, com **zero** menções a `bank` e sem check de drift no CI.
 - **Dívida:** `scripts/check.sh` resolve `ruff`/`python` do PATH (que pode não ser o do venv) e **mascara falha de frontend** com `|| true` no vitest — rode as etapas individualmente até isso ser corrigido.
 - **Dívida:** o **Epic 5 (Inteligência Financeira) nunca foi documentado aqui.** DRE, DRE em matriz, Lucratividade por contrato, Projeção de Caixa, Diagnóstico, Plano de Contas, Centros de Custo e Investimentos **existem e estão em produção**, mas quem lê só este arquivo conclui que não. Ver `docs/prd/epic-5-inteligencia-financeira.md`.
 
-### Onda 2 — "tenho a conta e NÃO sei o saldo" (Story 8.21, PR #94, 2026-08-07)
+### Onda 2 — a origem do movimento (Stories 8.9–8.20, PR #71, 2026-08-04)
 
-⚠️ **Esta seção cobre SÓ a Story 8.21.** As demais stories da Onda 2 (8.9–8.20) estão em produção e
-**não estão documentadas aqui** — ver a dívida logo abaixo.
+Antes dela o razão bancário era livro em branco: **nada no e1p escrevia nele**, e baixar uma conta a
+pagar não gerava movimento bancário nenhum. É por isso que a divergência da Onda 1 media a ausência
+de uma porta e não o furo (a correção do gate acima). A Onda 2 abre a porta: **todo evento que o
+sistema já emite e que move dinheiro numa conta real escreve o movimento, na mesma transação**, e a
+porta manual e a importação passam a existir só para o **resíduo**.
+
+⚠️ **As migrations desta onda são a `0064` e a `0065` — não a `0061`/`0062`.** As stories e o gate de
+QA dizem `0061`/`0062`; foram renumeradas no merge, porque as frentes de WhatsApp (`0062`, `0063`,
+`0066`–`0072`) e do fuso do tenant (`0073`) entraram no meio. A 8.18 exigia ler `alembic heads`
+**programaticamente** antes de escrever o `down_revision` e por isso não quebrou; as que copiaram o
+número do documento erraram **todas as vezes**. Vale para a baseline de testes também: as stories
+declararam `1051/22/304` da 8.9 até a 8.20, contra `1451/38/476` medidos pelo gate. **O repo vence o
+documento, e a divergência se mede antes de começar, nunca depois de o CI ficar vermelho.**
+
+#### 1. A classe de defeito que mais custou: o documento que afirma sobre a camada de baixo
+
+**Quatro vezes neste épico um comentário ou docstring descreveu o comportamento de outro módulo, e
+nenhuma das quatro tinha código atrás.** Não são descuidos isolados — é uma classe, e é a que produz
+os defeitos mais caros porque *desliga quem viria conferir*:
+
+- **A docstring que matou 36 testes.** `_validate_reference_date` dizia que declarar o saldo na data
+  de abertura é *"o caso mais sadio que existe"* e que **"a comparação vale"**. A premissa está
+  certa — a data pode ser gravada sem inconsistência, que era a pergunta **da 8.4**. A conclusão
+  responde a pergunta **da 8.5** (*"esta comparação detecta alguma coisa?"*), cuja resposta é **não**,
+  pelo mesmo motivo. **Duas perguntas, uma resposta, sinal trocado.** Consequência: dos 36 testes de
+  `test_bank_reconciliation_report.py`, **zero** exercitavam o caso de propósito — quem foi escrever
+  o teste leu que o caso era o mais sadio que existe e foi testar outra coisa. E havia uma **segunda
+  ponta** repetindo a frase (a docstring de `test_data_igual_a_abertura_e_aceita`), que confirmaria o
+  erro para quem fosse conferir. Corrigido pela 8.20; hoje um teste assere que a docstring **não**
+  contém `"a comparação vale"` e **contém** `"tautológica"`.
+- **A Regra da Origem (d) existia só em prosa.** A 8.9 escreveu *"movimento de origem do sistema não é
+  editável nem ignorável"* na docstring, e o comentário em `update_transaction` afirmava que a edição
+  *"é impedida antes, pela Regra da Origem (d)"* — **sem nada no código**. Nem `update_transaction` nem
+  `ignore_transaction` olhavam para `tx.source`. Qualquer perna de transferência e todo movimento de
+  `payable`/`charge` desde a 8.12 podiam ser **ignorados pela tela**, e ignorar uma das duas pernas de
+  uma transferência produz na Conferência uma divergência com a aparência exata de lançamento
+  faltante. A 8.18 teve de implementar a guarda que deveria herdar (`_recusa_se_origem_do_sistema`,
+  `bank/service.py:1167`, escrita contra `SOURCES_SISTEMA`, nunca contra `'transfer'` solto).
+- **`app/scripts/bank_audit.py` era citado como ativo existente em três documentos e nunca existiu.**
+  O epic mandava "não recriar" um script inexistente. Sem o `grep` do @po, o @dev o teria criado
+  inteiro — escopo inventado. A obrigação virou **teste**, não script.
+- A quarta é a entrada de CPF/CNPJ do §6.1 deste arquivo, que induziu a 8.2 a especificar validação
+  fraca.
+
+> **A regra que fica:** *"o valor é bem definido"* e *"o valor é informativo"* são afirmações
+> diferentes, e a primeira **não implica** a segunda. Toda vez que uma docstring de validação (que
+> responde *"posso gravar isto?"*) opina sobre o **consumo** do dado (*"e serve para X"*), a opinião
+> está fora da jurisdição de quem a escreveu — e **não vai ter teste, porque o teste dela mora no
+> outro módulo**. Uma afirmação sobre o comportamento de outra camada é verificável; verifique-a ou
+> não a escreva.
+
+#### 2. O teste que passa e não prova nada — oito ocorrências independentes
+
+Foi a família dominante da onda. Quase toda armadilha cara aqui foi **teste verde sobre código
+errado**, e o mutante foi o único instrumento que as achou. As formas, todas reais:
+
+- **Afirma o mecanismo, não o efeito.** `expect(linha.className).toContain("flex-wrap")` passou com a
+  `FilaPagamentosPage` **quebrada em produção por duas sessões**: `flex-wrap` sozinho não quebra a
+  linha quando a descrição é `min-w-0 flex-1` (`flex: 1 1 0%` encolhe até caber, e o wrap nunca age).
+  Duas auditorias estruturais deram confiança; a terceira sessão — a primeira com stack de dev viva —
+  viu a tela. Custou o **terceiro** PR de fix de campo por 360px (#89, 2026-08-06), depois dos #56 e
+  #58 que o epic já contabilizava. **Layout só se prova medindo.**
+- **Par de recortes complementares sem caso na borda.** O mutante `posted_at > since` → `>=`
+  **sobreviveu a 58 testes verdes**: todos os cenários usavam data futura, e a borda era o único lugar
+  onde os dois recortes podem se sobrepor. Regra: **um teste em cada lado passa com os dois
+  operadores** — a invariante tem de ser escrita como partição (`(…, hoje]` e `(hoje, …)`, sem
+  sobreposição e sem buraco).
+- **`and` de duas condições com um caso só.** A guarda `fitid IS NULL AND import_batch_id IS NULL`
+  era testada com as duas setadas juntas; remover metade mantinha a linha viva pelo outro marcador.
+  **Uma condição, um caso.**
+- **Asserção por substring genérica.** `"trilho" in detail` casava também com *"fora do trilho"*, e a
+  guarda podia ser removida sem ninguém notar. A distinção importa fora do teste: mandar quem tem
+  dinheiro na Carteira para *"use a edição da cobrança"* leva o dono a um lugar que não resolve.
+- **O cenário não produzia o estado que o teste dizia medir.** Um teste de dupla contagem de agendada
+  agendava *"para hoje"* — e a borda é estrita (`paid_on == hoje ⇒ paid`), então **não havia
+  `scheduled` nenhum no banco**. Verde, medindo o vazio. Hoje a pré-condição (`status == "scheduled"`)
+  é asserida **antes** de o número ser medido.
+- **Um teste caía no caso degenerado por acidente e passava por causa do bug.**
+  `test_checkpoint_na_borda_do_start_serve` usava `opening_date` e `reference_date` iguais. Consertado
+  **na fixture**, com a docstring dizendo **por que** a data foi afastada — senão a próxima pessoa
+  "simplifica" de volta.
+- **Gate estático não vê o que não é import.** Uma anotação `-> "Payable | None"` **em string, sem
+  import nenhum**, passa nos dois gates da 8.9 (AST *e* texto cru). Só morre com um gate que proíba a
+  **string** em qualquer posição. E o mutante `importlib.import_module("app.modules." + "pay" +
+  "ables")` **sobreviveu ao gate de QA** — teto conhecido de qualquer gate estático, registrado como
+  INFO e não como falha.
+- **O remédio óbvio cobre um ramo e deixa o outro.** *"Se a divergência der zero, ignore"* resolve o
+  🟢 falso e **deixa vivo** o ramo em que as duas declarações discordam e o produto manda o dono caçar
+  um lançamento que não existe. Só o teste do segundo ramo mata o mutante.
+
+> **A regra que fica, escrita na 8.9 e reconfirmada na 8.14:** **um mutante que nenhum teste mata não
+> é um teste faltando — é um teste do TIPO ERRADO.** E: restaure mutação por **cópia de arquivo, nunca
+> por `git checkout`** — um `checkout` sobre arquivo com trabalho não commitado já apagou uma sessão
+> inteira nesta onda.
+
+#### 3. O épico quase se auto-aprovou, duas vezes
+
+`derived_balance(until=opening_date) ≡ opening_balance_cents` **por construção** (`_movements_sums`
+usa `posted_at > opening_date`, estrito). Então declarar o saldo no dia da abertura produz
+`divergencia_cents == 0` com qualquer tolerância, satisfaz `todas_batendo` e emite **🟢 "Está tudo
+batendo"** para um tenant com 45 contas pagas e razão bancário **vazio**. É a mesma família do erro do
+gate: **um número que mede a própria incompletude com aparência de fato.**
+
+- **A correção é "não avaliável no bloco 1, VÁLIDO no bloco 4"** — o degenerado é a **comparação**, não
+  a **declaração**. *"O saldo da conta no dia em que ela abriu"* é verdade, e recusá-la com 422
+  apagaria uma afirmação verdadeira: o inverso do princípio da Onda 0. **Rejeitado também "aceitar e
+  apenas anotar ao lado"** — é a pior das três: **uma nota que convive com o verde perde para o
+  verde.**
+- **A segunda porta era materializar o saldo de abertura como checkpoint** (a direção "natural", e o
+  que a 8.19 quase fez). Injetaria exatamente o mesmo 🟢, agora **no dia do cadastro**. A diferença que
+  importa: um checkpoint que o dono declara **por ato** pode valer qualquer número; o materializado
+  **não pode** — ele é literalmente a âncora do derivado. **Um checkpoint que a conferência precisa
+  ignorar não é um checkpoint.**
+- **Por isso a 8.20 tinha de mergear ANTES da 8.16** (epic §6.1): a 8.16 consome o bloco 1 para o sinal
+  de completude, e com a comparação degenerada de pé o épico ganha um caminho para emitir 🟢 no mesmo
+  ciclo em que a nota do bloco 4 diria que o gate ainda não pode ser lido.
+- **O 🟢 é segurado por `divergencia_cents is not None`, não pelo contador de dias** — sutileza que a
+  8.19 poderia ter quebrado sem perceber ao fazer o contador nunca mais ser `None`.
+
+#### 4. A premissa sobre o dado que ninguém verificou com o dono — três em três semanas
+
+A 8.19 nasceu com **duas premissas falsas**, as duas mortas por uma frase do fundador:
+
+- a heurística `opening_balance_cents != 0` para separar *"digitou"* de *"aceitou o default"* — morta
+  por *"o zero é pq cadastrei a conta com saldo zero no dia de hoje… então o zero é consciente"*. A
+  regra excluía **exatamente quem deveria incluir**, com falso negativo **silencioso**;
+- *"a Projeção está afirmando sem lastro em produção"* — morta por *"é o saldo real hoje"*. Com R$ 0,00
+  real e ~R$ 18.000/mês de saída, *"Caixa no limite (0 dias)"* e os 4 críticos eram **verdadeiros**. A
+  tela estava certa; a story é que estava errada.
+
+Custou dois desenhos e reduziu a story de *"entra na frente de toda a Onda 2"* para **três arquivos de
+leitura**. Com o epic §1.2 (a falha de escopo) e a §3.1.1 (o erro do gate), são **três em três
+semanas** do mesmo padrão: uma premissa plausível sobre o estado dos dados, **não verificada com o
+dono**, que quase virou construção. É a origem da **regra da instanciação obrigatória** acima.
+
+⚠️ **Risco operacional que fica, e que nenhum sinal do produto avisa:** entre recuar a `opening_date`
+de uma conta e terminar de repagar as contas legadas, `derived_balance(hoje)` semeia a Projeção com o
+saldo antigo **apresentado como saldo de hoje** — runway longo demais e alerta de janela negativa
+**calado**. Faça recuo e repagamento **na mesma sessão**; se partir em dias, **Projeção e Diagnóstico
+não devem ser lidos no intervalo.** O sistema não distingue *"conta dormente"* de *"tudo aconteceu e
+nada foi registrado"*. A ordem do mutirão também não é negociável: recuar a abertura declarando o
+saldo daquele dia → estornar → repagar informando conta e data. Invertida, deixa contas estornadas e
+**nenhuma repagável** (o piso de `_validate_posted_at` recusa com 422).
+
+#### 5. O gate NÃO abre "depois da Onda 2" — corrige o que este arquivo dizia
+
+A pré-condição, lida ao pé da letra (*"toda cobrança recebida precisa ter conta informada"*), era
+**insatisfazível**: pela Invariante do Trilho uma `Charge` do trilho tem `transaction_id` e **nunca**
+terá `bank_account_id` — e o trilho é o caminho normal do produto. A ratificação a reescreveu em
+quatro termos, cada um com o predicado que o decide e a **onda que o zera**: **P1** baixa de Contas a
+Pagar sem conta (Onda 2) · **P2** recebimento fora do trilho sem conta (Onda 2) · **P3** rendimento de
+aplicação sem perna bancária (**Onda 2b**) · **P4** payout da Carteira (**Onda 3**, hoje vazio por
+construção — `request_payout` só marca `withdrawn`).
+
+**Consequência que muda a leitura do épico:** o gate abre depois da Onda 2 **apenas para um tenant
+cujos únicos eventos que movem conta real sejam P1 e P2**. Quem registra rendimento de aplicação
+precisa da **2b**; quando o payout virar real, da **3**. Não é escopo novo — P3 e P4 sempre foram
+termos da divergência.
+
+⚠️ **O achado A-1, que teria fechado a métrica primária do épico para sempre.** A `Charge` sintética
+de rendimento (`investments/service.py`, Story 5.6) nasce `paid` com `transaction_id=NULL` **e**
+`bank_account_id=NULL` — caía **inteira** na população do termo P2. Para quem tem conta de
+investimento (o fundador tem), o gate **nunca abriria**, e o defeito não se anunciaria como defeito:
+se anunciaria como *"a pré-condição ainda não foi satisfeita, continue corrigindo lançamentos"*, para
+sempre. **Dois @sm trabalhando em paralelo: a 8.15 lembrou o predicado `_not_investment_yield()`, a
+8.16 esqueceu.** O predicado é **importado de `receivables/service.py`, nunca reescrito** — a guarda de
+lógica ternária SQL (`coalesce(external_ref, '')`) que ele carrega é o que um reescritor perderia,
+excluindo **todas** as cobranças normais em silêncio.
+
+#### 6. O acoplamento invisível que segura a Projeção (leia antes de tocar em `projection.py`)
+
+O recorte que impede a dupla contagem no dia agendado tira a agendada de `_window_sums` **confiando**
+que o movimento já está no `saldo_inicial`. Isso só é verdade porque **`_saldo_inicial` passa
+`until=today`**. Trocado por `None` ou por `SEM_CORTE`, a agendada futura passa a contar **nos dois
+lugares**, em silêncio, pelo lado oposto — num arquivo que a story do recorte declara **não tocar**.
+O comentário que já existia ali dizia **por que** o argumento existe, mas **não dizia o que quebra** —
+e o que quebra está noutro arquivo. Hoje há um espião sobre `active_balance_total` capturando o kwarg
+`until`: **é o que torna o recorte auditável, e não só correto hoje.**
+
+Pelo mesmo motivo `active_balance_total` **manteve** o default antigo quando `derived_balance` e
+`derived_balances_as_of` mudaram o significado de `until=None` para "hoje". A assimetria é
+**deliberada e testada** (`test_active_balance_total_so_e_chamada_com_until_explicito`); uniformizar as
+três é decisão de Onda 2b/3 e **exige revisitar esta seção junto** — não é limpeza de passagem.
+
+#### 7. Decisões cujo motivo some no código
+
+- **A idempotência é o índice único parcial `(tenant_id, source, origin_id) WHERE origin_id IS NOT
+  NULL` — NUNCA o `dedup_hash`.** No manual, `_manual_dedup_hash` chaveia no **UUID da própria linha**,
+  único por construção: **nunca deduplica nada**. Ele existe para o pipeline de importação. E
+  `origin_dedup_hash = sha256(f"{source}|{origin_id}")` é **sem** `bank_account_id`, de propósito —
+  trocar a conta de um lançamento é **UPDATE da mesma linha**, e com a conta no hash deixaria de ser.
+  ⚠️ A justificativa escrita no AC da 8.9 para a cláusula parcial era **falsa** (`NULL` é distinto de
+  `NULL` em índice único por padrão) e o mutante que a removia **sobreviveu**. A cláusula fica por
+  tamanho/intenção e por não depender de um comportamento que é **configurável desde o PG15**
+  (`NULLS NOT DISTINCT`).
+- **`tenant_id` é a PRIMEIRA coluna do índice único** porque **índice único é global e não respeita
+  RLS**: sem isso o tenant B receberia violação inexplicável causada por dado do tenant A — bug **e**
+  vazamento de existência. Lição já paga na 8.2.
+- **`origin_id` é `VARCHAR(64)`, não 36 nem 48.** Ele não é "o id do lançamento": é **chave de
+  origem** — perna única = id; multi-perna = `f"{id}:{perna}"`. Em Postgres `VARCHAR(n)` é
+  armazenamento variável (64 e 36 custam o mesmo em disco), mas errar para menos custa `ALTER COLUMN`
+  **sobre tabela com dado sob `FORCE RLS`**. Só a transferência quebraria, e só em produção:
+  `f"{uuid}:out"` tem 40 chars. `test_origin_id_cabe_na_coluna` varre **cada forma de chave** do
+  repositório e reprova em CI, não no `ALTER`.
+- **Transferência = duas pernas `:out`/`:in` pareadas por `transfer_id`.** A forma "o mesmo `origin_id`
+  nas duas + índice relaxado" **destrói a idempotência onde ela mais importa**: um retry move o
+  dinheiro duas vezes. E a alternativa "coluna `leg` no índice" destruiria a garantia para **todas** as
+  origens em silêncio, porque `leg` seria `NULL` em toda origem de perna única.
+- **`scheduled` é estado próprio, não `paid` com data futura** — rejeitado por **bug verificado**, não
+  por gosto: com `paid`+futuro a conta sai dos fluxos de saída **e** o movimento não entra no saldo, e
+  os R$ 5.000 agendados **somem por completo da Projeção**. A máquina de falso negativo da Onda 0
+  ressuscitada, na mesma tela que a Onda 0 consertou. O estado é **derivado da data** (`scheduled ⟺
+  paid_at.date() > hoje`), a API nunca aceita `status` do cliente, e **o worker não é componente da
+  aritmética**: o movimento nasce com `posted_at` na data agendada e o saldo é função da data — entra
+  sozinho quando o dia chega. O worker só move o `status`.
+- **O estorno APAGA o movimento.** Um movimento bancário é a afirmação *"este dinheiro saiu"*;
+  estornado, o sistema não afirma mais isso. Rejeitados: **contrapartida `+valor`** (inventa um crédito
+  que nunca existiu, e na Onda 4 a importação acharia dois órfãos irreconciliáveis) e
+  **`status='ignored'`** (é julgamento do dono, não estado de sistema — e **colide com o índice único**
+  no repagamento).
+- **Não existe coluna `payment_route`.** A rota é **derivada** dos dois ponteiros; um rótulo separado
+  pode divergir do fato e vira a terceira fonte de verdade. Gate de AST reprova o nome em qualquer
+  posição, **inclusive como kwarg**.
+- **`bank` não importa `payables`/`receivables` — e a saída não é import lazy nem SQL cru.** Os dois
+  seriam **evasão**, e *"evadir um gate é pior do que quebrá-lo às claras"*. A forma é **porta de saída
+  registrada**: `Protocol` + DTO com `referencia_id` **opaco** (o campo não pode nem **nomear** um
+  conceito do outro módulo), implementação no módulo de negócio, fiação em `app/main.py`. **O gate fica
+  verde porque a dependência sumiu.**
+- **Fail-closed é de BOOT, não de request.** A app **não sobe** sem o probe registrado. *"Um erro de
+  fiação é condição de startup"* — e um 500 numa ação legítima do dono (lançar uma tarifa de R$ 2,90)
+  é o pior lugar imaginável para descobrir que o `main.py` não ligou um `Protocol`. Precedente: a
+  guarda do `JWT_SECRET` fraco. E o probe não registrado faz o relatório **recusar**, nunca devolver
+  zero: **zero por ausência de medição não é zero**, e a tela diria por omissão *"nenhum termo
+  pendente"* — a leitura errada que já custou uma decisão de produto neste épico.
+- **`SEM_CORTE = date.max` é feio de propósito, e a feiura é a funcionalidade.** Não existe
+  `incluir_futuro=True`: um booleano seria discreto, e discrição é o que não se quer num campo que
+  inclui o futuro num saldo. Assim a decisão fica **visível no diff** e uma busca por `SEM_CORTE` lista
+  todos os lugares que a tomaram.
+- **Conta de outro tenant devolve 404, não 409** — 409 vazaria existência. Com zero contas próprias
+  todo id recebe 409; com contas próprias, um id alheio recebe 404.
+- **O seletor de conta e a data vivem DENTRO da mesma barra fixa do botão**, com teste de co-localização
+  por ancestral comum — porque **dois PRs de fix já foram pagos** por elemento fora da área visível, e
+  numa delas uma conta real foi marcada paga sem o usuário conseguir ver o checkbox. Pré-selecionar a
+  conta primária **não** torna o campo opcional: o AC exige o nome da conta **no próprio botão**
+  (*"Anexar e dar baixa · sai do Itaú PJ"*), porque um default invisível é na prática um campo pulado.
+  Sem conta primária, **nada** é pré-selecionado e a ação fica desabilitada — **silêncio, nunca um
+  palpite.**
+- **Nomear um débito inocente é pior do que ficar calado.** O critério de casamento do débito suspeito
+  é `|valor − divergência| <= max(R$ 50, 10%)`, não `[0,5×, 2×]` — o fator 2 casaria um débito de
+  R$ 5.000 com uma divergência de R$ 2.500. **Um sinal por relatório, não por cobrança**, e sem opção
+  de desligar: *"o dono que mais precisa é o que desliga"*. E **nenhuma palavra** sobre split, taxa ou
+  receita da e1p no texto: recebimento fora do trilho é vazamento de receita da plataforma, mas a
+  decisão é informação **neutra ao dono, nunca reportada ao Master**.
+- **O nome "agendamento suspeito" foi banido por varredura de texto.** Depois que o worker promove
+  `scheduled → paid`, **nada no dado distingue** *"agendei e o banco não executou"* de *"paguei no
+  caixa e o banco não compensou"* — o adjetivo não sobrevive ao worker. Virou `debito_nao_confirmado`,
+  e uma varredura reprova o **radical "agendad"** no motor e na tela, para a renomeação não ser
+  desfeita por um *"voltei o nome antigo, ficou mais claro"* daqui a três meses.
+- **A natureza do lançamento manual não é whitelist rígida** — texto curto, vocabulário sugerido,
+  *"Outro (descreva)"* sempre aceito: *"o extrato está cheio de coisas que não imaginamos; recusar um
+  fato bancário legítimo porque não está na lista recria a incompletude que a onda combate"*. A
+  obrigatoriedade é **de UI**; a API segue aceitando `null`, senão todo movimento legado quebraria.
+
+#### 8. O que ficou aberto
+
+- **Dívida:** ⚠️ **`charges.bank_account_id` continua SEM o índice irmão.** `payables` tem
+  `ix_payables_bank_account`; `charges` não tem, e o caminho de leitura do gate filtra por essa coluna
+  a cada diagnóstico. Assimetria sem justificativa escrita — **verificada ainda aberta em 07/08**.
+- **Dívida:** ⚠️ **o débito suspeito casa conta por `bank_account_name`**, e `bank_accounts` **não tem
+  unicidade de `name` por tenant** (o único índice único é `(tenant_id, institution_code, branch,
+  number) WHERE number <> ''`). **Duas contas "Itaú" no mesmo tenant fazem o débito de uma explicar a
+  divergência da outra** — e o produto nomeia a conta errada, que é o modo de falha que o próprio
+  epic diz ser *"pior do que ficar calado"*. Resolver exige `bank_account_id` em
+  `CompletenessAccountInput`. **Verificada ainda aberta em 07/08** (`engine.py:480`).
+- **Dívida:** **a lista de caminhos de mutação do design §3.3 ainda tem CINCO** — *baixar, trocar
+  conta, trocar data, estornar, repagar*. O gate achou o sexto (**cancelar**) da pior forma: cancelar
+  uma conta a pagar agendada deixava o movimento bancário **órfão**, e
+  `test_cache_de_movimento_nunca_diverge_do_origin_id` **passava**, porque cobria exatamente os cinco
+  enumerados. **A lista era a garantia, e a garantia estava incompleta.** O defeito está **corrigido**
+  (`cancel_payable` recusa `scheduled` com 409, regressão em `test_payables.py:185`), mas **a lista
+  não foi para seis**. Quem enumerar casos como prova de completude: a enumeração é o teto da
+  cobertura, não a cobertura.
+- **Dívida:** **`operation_nature` não entrou em `BankTransactionUpdate`** — preencher a natureza de um
+  movimento legado **pela tela de edição não é possível hoje**. Verificada aberta.
+- **Dívida:** ⚠️ a validação em ~360px da tela **Contas & Saldos** segue pendente (a dívida da Onda 1,
+  logo acima) **e o `TotaisCard` usa `flex-wrap` puro** — exatamente o padrão que a 8.13 provou
+  insuficiente sozinho. Não é só "não validada": está escrita com o padrão que dá falso verde.
+- **Dívida:** `contas_sem_checkpoint` virou **nome impreciso** — passou a contar também as contas com
+  checkpoint degenerado. O **texto** de todas as superfícies foi corrigido para *"não avaliada(s)"*; o
+  **nome do campo de API** não. Decisão consciente: renomear campo de contrato por precisão semântica,
+  com a nota já dizendo a verdade na tela, custa mais do que ganha.
+- **Dívida:** o OpenAPI da rota de conferência descreve **um** dos dois motivos de `indisponivel` —
+  quem ler a doc conclui que `indisponivel ⇒ saldo_banco_data === null`, e o discriminador é
+  justamente o contrário.
+- **Dívida:** o 🟡 do Diagnóstico diz *"sem comparação avaliável no período"* nos **dois** motivos, sem
+  distingui-los. A **severidade está certa**; falta a precisão do texto, e a nota por conta na tela já
+  a tem.
+- **Dívida:** `"Agendado para entrar"` nasce **sem consumidor visível** (só ganha valor com recebimento
+  fora do trilho com data futura), e `app.worker` **não registra o probe** de contagem dupla — hoje
+  inofensivo porque nenhum caminho do worker chama `create_transaction`, com a guarda de boot como
+  rede se um dia chamar.
+- **Dívida:** SIG-001 (a virada de mês apagando conferência recente) segue aberto e é **vizinho do
+  bloco 4** — quem mexer no bloco 4 deve lê-lo antes. Foi mantido **fora** da 8.16 de propósito: fundir
+  correção de regra existente com regras novas no mesmo diff tira do gate a capacidade de julgar qual
+  mudança quebrou o quê. Mesmo argumento que manteve 8.19 e 8.20 separadas.
+- **Dívida:** `generated.ts` **cresceu** nesta onda (duas rotas novas, `bank_transfers`, os campos de
+  agendado) e continua sem check de drift no CI.
+
+#### 9. O que foi construído
+
+- [x] **A Regra da Origem** (`bank/origin.py::sync_origin_movement`, migration `0064`) — **a única
+  função do repositório que escreve `source ∈ SOURCES_SISTEMA`**, guardada por allowlist de call sites.
+  Não commita: movimento e lançamento entram na **mesma transação**. Toda regra é escrita contra os
+  **conjuntos** `SOURCES_SISTEMA`/`SOURCES_EXTERNA`, nunca contra valor solto de `source` — porque
+  `source` mistura dois eixos desde a `0059` e consertar exigiria reescrever coluna sob `FORCE RLS` por
+  estética. **Alimenta `saldo_sistema`, NUNCA `saldo_banco`**: a divergência cair porque o sistema
+  passou a saber mais é o objetivo; cair porque um lado foi ajustado contra o outro continua proibido.
+- [x] **`until=None` passa a significar hoje** em `derived_balance`/`derived_balances_as_of` —
+  pré-requisito de tudo com data futura. Sem ele, um agendamento entra no "Total em contas".
+- [x] **Baixa de Contas a Pagar com conta bancária obrigatória** e data editável (default no
+  vencimento, por decisão do fundador: *"se estiver fazendo retroativo, é pq não deu certo no dia"*).
+  409 acionável `{"acao":"cadastrar_conta"}`, com cadastro embutido que **retoma a baixa**.
+- [x] **`scheduled`** — agendar sem sumir da Projeção. Cabe em `String(12)`, e é por isso que **não há
+  migration**.
+- [x] **Recebimento fora do trilho** (`settle_off_rail`) — o dono declara o Pix que caiu direto na
+  conta dele. **Nunca** toca a Carteira, **nunca** cria `Transaction`/`PlatformEarning`. Guardado pela
+  **Invariante do Trilho**: para toda `Charge` paga, **exatamente um** de `transaction_id` e
+  `bank_account_id` é não-nulo. O caminho do gateway mantém `paid_at = now()` e **não é editável** —
+  fato externo atestado por terceiro; editá-lo transformaria uma testemunha em opinião.
+- [x] **Diagnóstico e conferência aprendem a onda** — 🟡 de recebimento fora do trilho, desambiguação
+  do débito não confirmado, e até **três notas** no bloco 4, uma por termo não-zero, **cada uma
+  nomeando a onda que a fecha**. Achatá-las prometeria na tela *"isso some quando você terminar o
+  mutirão"* sobre um termo que não some. Zero termos ⇒ zero notas, e **é esse silêncio que sinaliza que
+  o gate pode ser lido**. A nota **ANOTA, nunca SUBTRAI** (Regra 5).
+- [x] **Manual curado + guarda de contagem dupla** — o formulário pergunta **para que serve**
+  (`operation_nature`, coluna que já existia, zero migration); lançar à mão um débito que já tem conta
+  a pagar correspondente (mesmo valor, ±3 dias) dá **409 com escolha**, `confirmar_avulso=true` para
+  insistir. A janela e o valor exato são **deliberadamente os mesmos** do enriquecimento da Onda 4 —
+  dois números para *"estas duas linhas são o mesmo dinheiro?"* seriam duas respostas quando o matcher
+  chegar.
+- [x] **Transferência entre contas próprias** (`bank_transfers`, migration `0065`) — DRE-neutra por
+  construção, com snapshot campo a campo provando; **zero acoplamento com `investments`** (dois gates,
+  AST e texto cru); `kind` **derivado** dos dois seletores, sem terceiro campo que possa discordar
+  deles. `DELETE` apaga as duas pernas — sem ele, a única correção possível seria a contrapartida que o
+  design rejeita nominalmente.
+
+### Onda 2 (correção) — "tenho a conta e NÃO sei o saldo" (Story 8.21, PR #94, 2026-08-07)
 
 **O defeito.** `bank_accounts.opening_balance_cents` é `NOT NULL DEFAULT 0` e o formulário
 pré-preenchia `"0,00"` — então *"informei zero"* e *"não informei nada"* eram **a mesma linha**. Uma
