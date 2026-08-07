@@ -78,11 +78,24 @@ def test_baixa_nao_duplica_o_fato_em_reenvio_de_webhook(
 
 
 def test_conta_paga_grava_fato(client: TestClient, headers, db):
+    """⚠️ O vencimento é no PASSADO de propósito, e `date.today()` aqui seria bug.
+
+    `apply_paid` com `paid_on=None` cai no `due_date`, e `status_por_data` compara esse valor
+    com `hoje_do_tenant(db)` — o dia no fuso do TENANT, não o do relógio de quem roda o teste.
+    Com `date.today()` (dia UTC do runner), qualquer execução entre 21h e meia-noite em
+    America/Sao_Paulo faz o vencimento cair no futuro: a conta vira `scheduled`, o fato não é
+    emitido (corretamente — dinheiro que ainda não saiu não é fato) e o teste falha por um
+    motivo que não tem nada a ver com o que ele mede.
+
+    É exatamente o bug do commit #84 ("a suíte parava de valer entre 21h e meia-noite"), e
+    este teste caiu nele no CI das 00:32 UTC. Uma data folgadamente no passado torna a
+    asserção verdadeira em qualquer fuso e a qualquer hora.
+    """
     conta = client.post(
         "/payables/bills",
         json={
             "description": "Aluguel da sala", "amount_cents": 89000,
-            "due_date": str(date.today()), "category": "estrutura",
+            "due_date": str(date.today() - timedelta(days=5)), "category": "estrutura",
         },
         headers=headers,
     ).json()
