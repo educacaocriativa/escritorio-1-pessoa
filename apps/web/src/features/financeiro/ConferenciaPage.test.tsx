@@ -212,6 +212,10 @@ describe("AC4 — a frase vem ANTES da tabela, e nomeia a conta", () => {
     // repete a mesma resposta nas células de saldo — em nenhum lugar aparece um R$ 0,00 falso).
     expect(screen.getAllByText("Não sei").length).toBeGreaterThan(0);
     expect(screen.queryByText(/R\$\s*0,00/)).toBeNull();
+    // O eixo B qualifica um VALOR — com "Não sei" no lugar do valor não há porta de entrada que
+    // nomear, e o rótulo antigo ("sem saldo informado") afirmava sobre uma conta que **tem** saldo
+    // de partida, informado no cadastro (Story 8.19). A linha inteira sai.
+    expect(screen.queryByText("sem saldo informado")).toBeNull();
   });
 
   it("Story 8.20 — saldo informado na data de ABERTURA: a tela não manda declarar de novo", async () => {
@@ -251,6 +255,11 @@ describe("AC4 — a frase vem ANTES da tabela, e nomeia a conta", () => {
     // A data declarada continua visível na coluna do lado do banco (o campo segue preenchido).
     const corpo = container.querySelector("tbody") as HTMLElement;
     expect(within(corpo).getByText(/em 30\/07\/2026/)).toBeInTheDocument();
+    // ⚠️ **O achado do gate (F-1).** O AC5 enumerou três superfícies agregadas e faltou a quarta:
+    // o rótulo do eixo B, que renderizava `fonteLabel(null)` = "sem saldo informado" — na MESMA
+    // célula em que esta story acabou de escrever a data da declaração, e ao lado da nota que diz
+    // "Você informou o saldo desta conta em 30/07/2026". A linha se contradizia.
+    expect(within(corpo).queryByText("sem saldo informado")).toBeNull();
     // Nenhum ícone de alerta: é "não dá para conferir", não é erro.
     expect(screen.queryByLabelText("Divergência fora da tolerância")).toBeNull();
   });

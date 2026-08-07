@@ -106,9 +106,26 @@ export const FONTE_LABEL: Record<string, string> = {
   ofx: "lido do extrato",
 };
 
-/** Rótulo do eixo B. `null` = nenhuma porta de entrada (não houve saldo informado). */
-export function fonteLabel(fonte: string | null): string {
-  if (fonte === null) return "sem saldo informado";
+/**
+ * Rótulo do eixo B. **O parâmetro NÃO aceita `null`, e isso é a correção — não estilo.**
+ *
+ * A forma anterior era `fonteLabel(fonte: string | null)` e devolvia **`"sem saldo informado"`**
+ * para `null`. `saldo_banco_fonte` é `null` nos **dois** estados não avaliáveis, e nos dois a frase
+ * era falsa:
+ *
+ * - **declarado, porém não comparável** (Story 8.20): o dono informou o saldo, e a célula ao lado
+ *   exibia a data dele (`em 30/07/2026`) enquanto esta linha dizia que não havia saldo informado —
+ *   a mesma linha se contradizia. É a quarta superfície agregada, que o AC5 da 8.20 não enumerou.
+ * - **sem checkpoint na janela** (Story 8.19): a conta **tem** saldo de partida, informado no
+ *   cadastro; `opening_balance_cents` e `opening_date` são `NOT NULL`. Dizer "sem saldo informado"
+ *   é a mesma afirmação sem lastro que a 8.19 removeu da nota do bloco 4.
+ *
+ * **O eixo B qualifica um VALOR** — ele diz por qual porta *aquele saldo* entrou. Onde o valor é
+ * `null` (a célula mostra "Não sei"), não há porta a nomear, e o consumidor **não renderiza a
+ * linha** em vez de inventar um motivo. O tipo estreito é a guarda mecânica: a frase falsa não pode
+ * voltar sem o `tsc` reprovar.
+ */
+export function fonteLabel(fonte: string): string {
   return FONTE_LABEL[fonte] ?? fonte;
 }
 
