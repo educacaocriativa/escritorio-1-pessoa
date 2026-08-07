@@ -12,7 +12,8 @@ texto livre é ele falar primeiro — e o toque num botão de resposta rápida �
 from __future__ import annotations
 
 import dataclasses
-from datetime import UTC, date, datetime
+from datetime import UTC, date, datetime, time
+from zoneinfo import ZoneInfo
 
 import pytest
 from fastapi.testclient import TestClient
@@ -45,8 +46,27 @@ REGISTER = {
     "password": "uma-senha-bem-grande",
 }
 
-DEZ_E_CINCO_UTC = datetime(2026, 8, 6, 10, 5, tzinfo=UTC)
 TELEFONE = "5543984074017"
+
+_SP = ZoneInfo("America/Sao_Paulo")
+
+
+def _sete_e_cinco_de_hoje() -> datetime:
+    """07:05 no fuso do tenant, **no dia de HOJE de verdade**.
+
+    ⚠️ Não fixe a data aqui. Este arquivo injeta o relógio numa ponta (`tick(agora=...)`) e a
+    outra ponta lê o relógio de parede: `responder_optin` resolve o dia com `hoje_do_tenant(db)`,
+    sem `now` injetado, porque é uma FRONTEIRA — o toque no botão acontece agora, e é o briefing
+    de hoje que ele libera. Com uma data literal, o briefing gerado e o procurado passam a ser de
+    dias diferentes assim que a suíte cruza a meia-noite.
+
+    Aconteceu: a versão anterior usava `datetime(2026, 8, 6, 10, 5, UTC)`, passou local às 23h de
+    São Paulo do dia 6 e reprovou no CI às 00:01 do dia 7 (PR #90). O `tick` só compara a HORA
+    local com `briefing_hour`, então derivar o dia do relógio real não afrouxa nada — só faz as
+    duas pontas concordarem por construção.
+    """
+    hoje = datetime.now(_SP).date()
+    return datetime.combine(hoje, time(7, 5), tzinfo=_SP).astimezone(UTC)
 
 
 @pytest.fixture()
@@ -185,7 +205,7 @@ def test_mensagem_de_texto_comum_nao_tem_payload_de_botao() -> None:
 def test_primeiro_passo_e_o_template_curto(
     db: Session, tenant_id, tenant_meta, usuario_com_optin, aconteceu_algo
 ):
-    tick(db, tenant_id=tenant_id, agora=DEZ_E_CINCO_UTC)
+    tick(db, tenant_id=tenant_id, agora=_sete_e_cinco_de_hoje())
 
     n = db.query(Notification).one()
     assert n.purpose == PURPOSE_VIMA_BRIEFING
@@ -254,7 +274,7 @@ def test_sem_payload_o_template_sai_como_sempre(monkeypatch) -> None:
 def test_toque_no_botao_libera_o_briefing_inteiro(
     db: Session, tenant_id, tenant_meta, usuario_com_optin, aconteceu_algo
 ):
-    tick(db, tenant_id=tenant_id, agora=DEZ_E_CINCO_UTC)
+    tick(db, tenant_id=tenant_id, agora=_sete_e_cinco_de_hoje())
     ingest_webhook_payload(
         db, tenant_id=tenant_id, messages=meta_provider.parse_inbound(_toque_no_botao())
     )
@@ -277,7 +297,7 @@ def test_o_toque_nao_cria_contato_no_crm(
 
     Sem ela o dono viraria lead do próprio funil todo dia — um card novo a cada toque no botão."""
     antes = db.query(Client).count()
-    tick(db, tenant_id=tenant_id, agora=DEZ_E_CINCO_UTC)
+    tick(db, tenant_id=tenant_id, agora=_sete_e_cinco_de_hoje())
     ingest_webhook_payload(
         db, tenant_id=tenant_id, messages=meta_provider.parse_inbound(_toque_no_botao())
     )
@@ -288,7 +308,7 @@ def test_tocar_duas_vezes_nao_manda_o_briefing_duas_vezes(
     db: Session, tenant_id, tenant_meta, usuario_com_optin, aconteceu_algo
 ):
     """Dedo escorregando no celular não pode custar duas mensagens iguais."""
-    tick(db, tenant_id=tenant_id, agora=DEZ_E_CINCO_UTC)
+    tick(db, tenant_id=tenant_id, agora=_sete_e_cinco_de_hoje())
     for i in range(2):
         (msg,) = meta_provider.parse_inbound(_toque_no_botao())
         # `wa_message_id` distinto: dois toques DE VERDADE, não a reentrega do mesmo evento (que
@@ -309,7 +329,7 @@ def test_toque_de_um_estranho_nao_libera_briefing_nenhum(
 ):
     """O payload do botão é conhecido e um cliente qualquer poderia repeti-lo. Sem o vínculo com
     um usuário DO TENANT, o briefing do dono sairia para quem escrevesse a string certa."""
-    tick(db, tenant_id=tenant_id, agora=DEZ_E_CINCO_UTC)
+    tick(db, tenant_id=tenant_id, agora=_sete_e_cinco_de_hoje())
     ingest_webhook_payload(
         db,
         tenant_id=tenant_id,
