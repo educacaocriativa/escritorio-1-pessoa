@@ -49,7 +49,22 @@ Ao criar/alterar qualquer funcionalidade:
    - **regression-tester** — garante que o novo não quebrou o antigo.
    - **bug-hunter** — caça bugs/edge cases no código novo.
    - **dedup-checker** — encontra duplicação e código que já existe (DRY).
-4. Só considere a tarefa concluída quando os 3 passarem.
+4. **Escreva a entrada NESTE arquivo** — o que passou a existir, a regra que fica para quem mexer
+   nisso depois, e a dívida que sobrou. Escrita a partir do **código que subiu**, não do que a story
+   pretendia. Dívida que esta mudança FECHOU sai daqui: dívida resolvida e ainda escrita manda o
+   próximo leitor resolver de novo o que já está resolvido.
+5. Só considere a tarefa concluída quando os 3 agentes passarem **E** a entrada existir.
+
+> **Por que o passo 4 tem o mesmo peso do teste.** Documentar como último passo é documentar o que
+> vai ser cortado — a sessão acaba, o CI fica verde, o fundador diz "sobe", e a entrada nunca é
+> escrita. Não dói na hora: a funcionalidade funciona. Dói depois, e sempre no mesmo lugar — quem lê
+> só este arquivo conclui que a funcionalidade **não existe**. Foi exatamente assim que o **Epic 5
+> inteiro** (9 stories, em produção desde julho) ficou invisível aqui por um mês.
+>
+> Por isso toda story carrega, como **último AC numerado**, a entrada no CLAUDE.md — mesma régua do
+> teste: um AC que ninguém pula. Quem valida: `story-draft-checklist` §7 (no draft, pelo @sm/@po) e
+> `story-dod-checklist` item 7 (antes de "Ready for Review", pelo @dev). Refactor puro não some com
+> o AC: satisfaz com uma linha explícita dizendo que nada mudou para o próximo leitor, e por quê.
 
 ## 6. Estado atual / roadmap
 - [x] Fundação do monorepo, docs, agentes de QA, CI local.
@@ -213,6 +228,133 @@ Ao criar/alterar qualquer funcionalidade:
 - [x] **Estornar conta paga (só Contas a Pagar)** (botão "Estornar" por linha, só em "Pago"): `POST /payables/bills/{id}/reverse` volta o status para `open`/`paid_at=None`, reabrindo a edição completa (dados + anexos) e devolvendo o evento da Agenda de "concluído" para pendente. Confirmação via `confirm()` do navegador. Contas a Pagar nunca move dinheiro (não passa pela Carteira), então o estorno é uma troca de status simples e segura.
   - **Decisão de escopo:** a mesma capacidade foi implementada e revisada para Contas a Receber, mas **descartada antes do merge**: pagar → estornar → pagar de novo (o fluxo principal do estorno) duplicaria o `PlatformEarning` da venda no painel do Master (GMV/taxas globais), porque esse ledger não guarda vínculo de volta à `Transaction`/`Charge` de origem — reverter e repagar 3x uma cobrança de R$100 reportaria R$400 de GMV. Corrigir isso direito exige uma migration ligando `platform_earnings` à transação de origem; decisão do usuário foi não introduzir esse efeito colateral agora. Se o estorno de cobranças for retomado, resolver esse vínculo é pré-requisito (ver `docs/superpowers/specs/2026-07-27-estornar-conta-paga-design.md`).
 
+## Financeiro: Inteligência Financeira (Epic 5 — Stories 5.1–5.9 ✅ em produção desde 2026-07-11)
+> Docs: `docs/prd/epic-5-inteligencia-financeira.md` · stories `docs/stories/5.1`–`5.9` · a DRE em
+> matriz e a tela de Lucratividade vieram **fora do fluxo de story** (PRs #46–#52, 2026-07-23/24) e
+> estão em `docs/runlogs/financeiro-dre-matriz-lucratividade-RUN-LOG.md`.
+
+**Por que existe.** Contas a Pagar/Receber dizem o que entrou e o que saiu. Nenhuma delas responde
+**se dá lucro, de onde vem o lucro, e se o caixa aguenta até lá**. O Epic 5 é a camada analítica
+**só-leitura** sobre os dados operacionais que já existiam — não um módulo de escrituração, e não
+concorre com o contador. O Epic 8 (abaixo) veio depois para ancorar essa camada no banco: sem
+âncora, DRE infla lucro, Lucratividade distorce e a Projeção mente.
+
+### As 4 regras que nenhum relatório deste módulo pode violar
+1. **O sinal vem da TABELA DE ORIGEM, nunca do `grupo_dre`.** `Charge` (entrada) = **+1**;
+   `Payable` (saída) = **−1**. O grupo é só rótulo de exibição — **nunca derive nem inverta o sinal
+   a partir dele**. O total de um grupo é a soma **já-com-sinal**; o resultado é a **SOMA** dos
+   grupos de resultado (todos menos `INVESTIMENTO`; `SEM_CATEGORIA` fica fora).
+   Isto **generaliza** `RECEITA − CUSTO − DESPESA − TRIBUTOS ± FINANCEIRO`, **não é idêntico a ela**:
+   `chart_account_id` é livre nas duas tabelas, então existe `Charge` em `CUSTO_DIRETO` (nota de
+   crédito) e `Payable` em `RECEITA` (reembolso). Nesses casos as duas divergem, e é o **sinal
+   natural que está certo** — o estorno *reduz* o grupo em vez de inflá-lo.
+   **Footgun:** os totais já vêm assinados (custo é NEGATIVO). Quem fizer `receita − custo`
+   esperando custo positivo faz dupla-negação. Consuma `resultado_cents`, não re-derive.
+   Regra canônica escrita por extenso no docstring de `financial_intelligence/dre.py` — é lá que o
+   próximo relatório do módulo deve ler antes de somar qualquer coisa.
+2. **Duas datas, dois regimes — nunca inverter.** DRE e lucratividade usam **`competence_date`**
+   (competência); caixa e projeção usam **`paid_at`** (o dinheiro mudando de mão), e enquanto o
+   item está em aberto a projeção usa `due_date` como pagamento *previsto*. Fixado na 5.2, no
+   docstring dos models de `payables`/`receivables`.
+3. **Análise não escreve.** Rateio de overhead, baldes da fila, células da matriz, rentabilidade —
+   tudo calculado na leitura, nada persistido no lançamento original. Cada serviço tem teste que
+   compara snapshot antes/depois de duas chamadas.
+4. **Regra determinística primeiro, IA narrando depois.** Os sinais 🟢🟡🔴 existem e estão corretos
+   **sem `ANTHROPIC_API_KEY`** — a IA só reformula texto, nunca origina número.
+
+### O que existe (tudo com item no menu, grupo "Análise & Configuração Financeira")
+| Tela | Rota | Backend |
+|---|---|---|
+| **Plano de contas** (5.1) | `/financeiro/plano-contas` | `chart_of_accounts/` · migration **0045** |
+| **DRE** + **DRE em matriz** (5.3 + PRs #49–#52) | `/financeiro/dre` | `financial_intelligence/dre.py` · `GET /dre`, `/dre/matrix`, `/dre/matrix/entries` |
+| **Lucratividade** por contrato (5.4 + PR #47) | `/financeiro/lucratividade` e `/financeiro/contratos/:id/dre` | `profitability.py` · `GET /contracts-dre`, `/contracts/{id}/dre`, `/contracts/{id}/ledger` · migration **0047** |
+| **Centros de custo** (5.5) | `/financeiro/centros-custo` | `cost_centers/` · `GET /by-cost-center` · migration **0048** |
+| **Investimentos** (5.6) | `/financeiro/investimentos` | `investments/` · migration **0049** |
+| **Projeção de caixa** (5.7) | `/financeiro/projecao-caixa` | `projection.py` · `GET /projection` |
+| **Diagnóstico** (5.8) | `/financeiro/diagnostico` | `engine.py` + `diagnostics.py` + `ai_narrator.py` · `GET /diagnostics` |
+| **Fila de pagamentos** (5.9) | `/financeiro/fila-pagamentos` | `payables.payment_queue()` · `GET /payables/queue` · sem migration |
+
+- **Fundação (5.1/5.2).** `ChartAccount` (RLS): `grupo_dre` num enum fixo (`RECEITA`, `CUSTO_DIRETO`,
+  `DESPESA_FIXA`, `TRIBUTOS`, `FINANCEIRO`, `INVESTIMENTO`) + categoria livre única por grupo;
+  arquivar não apaga histórico. A **0046** acrescentou `competence_date`/`paid_at`/`chart_account_id`
+  a `charges` e `payables` — tudo **nullable**, nada legado invalidado, competência com backfill a
+  partir do vencimento. Não classificado cai no bucket **"sem categoria"**, que aparece no relatório
+  em vez de sumir.
+  - ⚠️ **A armadilha que a 0046 pagou por nós, e que qualquer migration futura com `UPDATE` vai
+    encontrar de novo:** o backfill rodava como **no-op silencioso** no Postgres real. As tabelas têm
+    `FORCE ROW LEVEL SECURITY` e a migration roda como `e1p_app` (non-superuser) **sem**
+    `app.current_tenant_id` setado → a política filtra o `UPDATE` a **zero linhas**, sem erro. **O
+    SQLite dos testes unitários não pega isso.** Fix: desabilitar a RLS só durante o backfill e
+    restaurar (`ENABLE` + `FORCE`) — DDL é transacional no Postgres, sem janela de exposição.
+    **Regra: migration que faz `UPDATE` em tabela com FORCE-RLS precisa ser validada contra Postgres
+    real, não contra a suíte.**
+- **DRE em matriz** (a tela que o menu chama de "DRE"): meses nas colunas, grupos/categorias nas
+  linhas, agrupável por **DRE** ou por **centro de custo** (`group_by`). Clicar numa célula abre o
+  drawer com os lançamentos analíticos daquela categoria naquele mês. `TOTAL GERAL` aparece antes do
+  Investimento, e há uma linha `TOTAL GERAL + INVESTIMENTO` (gasto do período incluindo capex) —
+  somada por `kind="informational"`, não pelo grupo nomeado, porque no modo centro de custo as linhas
+  de investimento ficam espalhadas e não têm seção própria.
+- **Lucratividade (5.4).** O eixo "projeto" é o **`Contract`** que já existia — `contract_id`
+  nullable em `charges`/`payables`; sem vínculo, o lançamento cai no bucket implícito **"Empresa"**
+  (overhead). Calcula margem de contribuição (R$ e %), break-even e o **rateio do overhead só na
+  leitura**. Divisão por zero coberta nos três pontos (margem sem receita, break-even sem margem
+  positiva, rateio sem receita) — retorna `None`/0, nunca 500.
+- **Investimentos (5.6) — o único caminho de escrita novo no modelo de dinheiro.** Registrar
+  rendimento cria uma **`Charge` já nascida `paid`** (com `external_ref="investment:{id}"`,
+  `chart_account_id` no grupo `FINANCEIRO`) **sem** passar por `mark_paid`/`build_transaction` —
+  logo **não gera `Transaction` nem `PlatformEarning`**: rendimento é receita financeira, não venda
+  com split. Como nasce paga, um webhook posterior é no-op idempotente. Em troca, ela é **filtrada
+  na leitura** de `receivables.list_charges` e do `paid` do summary
+  (`coalesce(external_ref,'') NOT LIKE 'investment:%'` — o `coalesce` é obrigatório: sem ele o `NOT
+  LIKE` sobre NULL avalia NULL e some com tudo), para não poluir a tela de Cobranças. Aparece na DRE
+  no grupo FINANCEIRO, que é onde deve aparecer.
+- **Projeção (5.7).** 30/60/90 dias + runway, em regime de caixa. **Itens vencidos e ainda em aberto
+  entram em todas as janelas** — decisão da @architect contra a implementação original: esconder
+  obrigação vencida deixa a projeção otimista exatamente para quem já está apertado. A incerteza é
+  comunicada **por transparência** (`overdue_inflow_cents`/`overdue_outflow_cents` expostos à parte),
+  nunca por exclusão silenciosa. ⚠️ **O `saldo_inicial` desta projeção mudou no Epic 8** (Ondas 0 e
+  2): não é mais o saldo da Carteira — leia a seção do Epic 8 abaixo antes de mexer nele.
+- **Diagnóstico (5.8).** `engine.py` é **puro** (sem I/O, sem relógio) e determinístico; `diagnostics.py`
+  faz a leitura; `ai_narrator.py` narra em PT-BR **depois** de passar o texto pelo `core/anonymizer`
+  e grava rastro "Ação executada pela IA" (Regras de Ouro nº 2 e nº 3). Os sinais de hoje: margem,
+  runway, janela de projeção, rentabilidade — mais completude, off-rail e débito suspeito, que o
+  Epic 8 acrescentou. A pureza do `engine.py` é garantida por **gate AST**, não por convenção.
+
+### Dívida (verificada contra o código, 2026-08-07)
+- 🔴 **O anonimizador não cobre nome livre, e o Diagnóstico manda nome livre.** `core/anonymizer.py`
+  é 100% regex sobre PII estrutural (CPF/CNPJ/e-mail/telefone/cartão) — **sem NER**. Duas regras do
+  motor injetam nome cru no payload que vai ao Claude: `_margin_signals` usa `contract.title` (e
+  título de contrato carrega nome de contraparte rotineiramente) e `_investment_signals` usa
+  `inv.name`. **É débito transversal do core, não defeito da 5.8** — o Jurídico, em produção e sob
+  segredo de justiça, tem exatamente a mesma lacuna. O fundador **aceitou o risco residual em
+  2026-07-11**; o gate registrado é: **não expor isto com `ANTHROPIC_API_KEY` real em produção sem o
+  hardening do anonimizador (story própria, escopo Financeiro + Jurídico) ou um aceite adicional por
+  escrito.** Ver `docs/stories/5.8.story.md` §"PENDÊNCIA FORMAL A ABRIR" e §6.1 abaixo.
+- **Duas fórmulas de "resultado" convivem.** A tela de contrato segue o AC2 (margem de contribuição =
+  só `RECEITA` + `CUSTO_DIRETO`; outros grupos do contrato ficam fora, sinalizados por uma `note`);
+  a regra geral da 5.3 somaria todos os grupos de resultado. A divergência foi declarada pelo @dev e
+  nunca reconciliada. Quem for unificar: decida qual é a canônica **antes** de escrever a terceira.
+- **Bucket "sem categoria" mostra a soma líquida** (receber − pagar) numa linha só; separar entradas
+  de saídas se virar ruído.
+- **Sem observabilidade do fallback `COALESCE(competence_date, due_date)`** — contar quantas linhas
+  caem no fallback denunciaria backfill incompleto da 0046. Hoje ninguém conta.
+- **`kind`/`index_rate_label` do investimento são rótulos livres** — nenhuma integração com CDI/IPCA
+  reais; rentabilidade é sobre o que foi digitado.
+- **Os cortes da fila (hoje / 7 / 30 dias) são convenção da 5.9**, não do PRD — bordas inclusivas à
+  direita, cobertas por teste em cada borda.
+- **Seletor "vincular a contrato" só existe nos modais de CRIAÇÃO** de Pagar/Cobranças (o relink por
+  `PATCH` funciona e é testado, só não tem UI); e a Ficha 360° do cliente não tem link "Ver DRE".
+- **`paid_at` não aparece em lugar nenhum da tela de DRE** (nem na matriz, nem no drawer). Follow-up
+  identificado e não pedido.
+- **Render-test de DOM das telas do Epic 5.** As stories registraram isto como limitação de tooling
+  ("o projeto não tem jsdom") — **a premissa não vale mais**: `jsdom` + `@testing-library` entraram
+  desde então e outras telas já têm `.test.tsx`. O que falta agora é escrever os testes de
+  `DrePage`, `ContratoDrePage`, `DiagnosticoPage`, `InvestimentosPage`, `PlanoContasPage` e
+  `CentrosCustoPage` — a lógica pura já é coberta pelos `.ts` irmãos.
+- **Nenhuma das 5 waves da DRE em matriz / Lucratividade tem story formal** em `docs/stories/`.
+  Dívida de rastreabilidade registrada 5 vezes no RUN-LOG e nunca fechada. Foi assim que uma
+  feature inteira ficou pronta numa worktree órfã por semanas sem ninguém saber — ver o RUN-LOG.
+
 ## Financeiro: Controle Bancário e Conferência (Epic 8 — Ondas 0, 1 e 2 ✅ em produção)
 > Docs: `docs/prd/epic-8-controle-bancario.md` · `docs/architecture/controle-bancario-design.md` + `...-ratificacao.md` · `docs/decisions/0003-controle-bancario-nativo.md` · `docs/qa/epic-8-onda-0-1-gate-2026-07-30.md` · pesquisa em `docs/research/2026-07-29-*`
 > Onda 2: `docs/architecture/controle-bancario-onda2-design.md` + `...-onda2-ratificacao.md` · `docs/qa/epic-8-onda-2-gate-2026-08-04.md` (veredito **CONCERNS**) · `docs/qa/epic-8-gate-8.19-8.20-2026-08-07.md`
@@ -281,7 +423,10 @@ Custo de aplicar, medido nos quatro casos reais que teria pego: 2 a 5 segundos c
 - **Dívida:** `days_since_last_declared_balance` implementada e **sem consumidor**.
 - **Dívida:** `packages/shared-types/src/generated.ts` defasado desde o PR #45, com **zero** menções a `bank` e sem check de drift no CI.
 - **Dívida:** `scripts/check.sh` resolve `ruff`/`python` do PATH (que pode não ser o do venv) e **mascara falha de frontend** com `|| true` no vitest — rode as etapas individualmente até isso ser corrigido.
-- **Dívida:** o **Epic 5 (Inteligência Financeira) nunca foi documentado aqui.** DRE, DRE em matriz, Lucratividade por contrato, Projeção de Caixa, Diagnóstico, Plano de Contas, Centros de Custo e Investimentos **existem e estão em produção**, mas quem lê só este arquivo conclui que não. Ver `docs/prd/epic-5-inteligencia-financeira.md`.
+- ~~**Dívida:** o Epic 5 nunca foi documentado aqui.~~ **FECHADA em 2026-08-07** — ver a seção
+  "Financeiro: Inteligência Financeira (Epic 5)" acima. A camada que o Epic 8 ancora agora está
+  escrita. E a causa raiz foi fechada junto: a entrada no CLAUDE.md virou **AC obrigatório de toda
+  story** (§5, passo 4) — documentar deixou de ser o último passo, que é o passo que se corta.
 
 ### Onda 2 — a origem do movimento (Stories 8.9–8.20, PR #71, 2026-08-04)
 
@@ -1145,6 +1290,7 @@ O produto já gastava IA em produção e **não sabia quanto, nem por quem**: se
 ## 6.1 Dívida técnica / TODO de segurança (de revisão QA — endereçar antes de produção)
 - **Enumeração de e-mail no /register:** retorna 409 "e-mail já cadastrado" (UX comum em signup, mas revela existência). Reavaliar quando houver fluxo de e-mail/confirmação.
 - **Validação de CPF/CNPJ:** ~~hoje só valida tamanho; falta dígito verificador~~ — **desatualizado, corrigido em 2026-07-30.** `apps/api/app/core/validators.py` **já valida dígito verificador** e normaliza, e é usado por `auth`, `crm`, `contracts`, `platform` e `bank`. O que resta em aberto é só a **unicidade por tenant**. (Esta entrada induziu a Story 8.2 a especificar validação fraca; o @dev conferiu o código, viu que a premissa era falsa e seguiu o padrão real — comportamento correto: **quando uma instrução se apoiar em premissa que você verificar ser falsa, siga o repo e documente**.)
+- 🔴 **Anonimizador sem NER — nome livre chega CRU ao Claude (Regra de Ouro nº 2).** `core/anonymizer.py` é 100% regex e mascara só PII **estrutural** (CPF/CNPJ/e-mail/telefone/cartão). Nome próprio, razão social, título de contrato e nome de aplicação passam intactos. Atinge **dois módulos em produção**: o **Jurídico** (peças sob segredo de justiça) e o **Diagnóstico Financeiro** (`_margin_signals` manda `contract.title`; `_investment_signals` manda `inv.name`). Risco residual **aceito pelo fundador em 2026-07-11**, com gate: não expor com `ANTHROPIC_API_KEY` real em produção sem hardening (story própria cobrindo os dois módulos) ou aceite adicional por escrito. Cuidado ao corrigir: estender para nomes tem risco de **over-masking** quebrar o Jurídico. Ver `docs/stories/5.8.story.md`.
 - **Hardening da tabela `users` (global):** não tem RLS (login por e-mail é global). Garantir que módulos de negócio NUNCA consultem `users` via `get_db` sem filtro de tenant.
 - **Idle timeout LGPD (30min):** configurado mas não implementado (JWT é stateless, expira em 7 dias). Implementar tracking de atividade / refresh curto quando o frontend de auth entrar.
 - **Truncagem bcrypt por bytes (72):** pode cortar caractere multibyte; documentado, aceitável.
