@@ -25,8 +25,11 @@ from app.modules.notifications.models import Notification
 from app.modules.settings import service as settings_service
 from app.modules.whatsapp_session.models import PublicWhatsappInstance
 from app.modules.whatsapp_templates.models import (
+    PAYLOAD_BOTAO_BRIEFING,
     PURPOSE_CLIENT_MOVED,
     PURPOSE_STAFF_INVITE,
+    PURPOSE_VIMA_BRIEFING,
+    PURPOSE_VIMA_BRIEFING_TEXTO,
     STATUS_APPROVED,
     WhatsappTemplate,
 )
@@ -81,6 +84,11 @@ def _render_template_preview(body_text: str, variables: list[str]) -> str:
 # operacional expira em 1h. Ausente da tabela (ou purpose=None) = nunca expira (compat).
 _MONEY_PURPOSES = frozenset({"charge_reminder", "contract_send", "quote_send"})
 _ONE_HOUR_PURPOSES = frozenset({"client_moved", "staff_invite", "funnel_node"})
+# O briefing expira no fim do DIA do tenant, pela mesma mecânica de `_MONEY_PURPOSES` e por outra
+# razão: o briefing de hoje entregue amanhã não é notícia atrasada, é ruído. Uma hora (a validade
+# "operacional") seria curta demais — o worker pode ficar minutos atrás numa manhã movimentada, e
+# perder o briefing por isso seria pior do que entregá-lo às 9h.
+_END_OF_DAY_PURPOSES = _MONEY_PURPOSES | {PURPOSE_VIMA_BRIEFING, PURPOSE_VIMA_BRIEFING_TEXTO}
 
 
 def _compute_expires_at(db: Session, *, tenant_id: str, purpose: str | None) -> datetime | None:
@@ -89,10 +97,12 @@ def _compute_expires_at(db: Session, *, tenant_id: str, purpose: str | None) -> 
     now = datetime.now(UTC)
     if purpose in _ONE_HOUR_PURPOSES:
         return now + timedelta(hours=1)
-    if purpose in _MONEY_PURPOSES:
-        profile = settings_service.get_profile(db, tenant_id)
+    if purpose in _END_OF_DAY_PURPOSES:
+        # `timezone_of(db, tenant_id)`, e não `get_profile(...).timezone`: o fuso mora em
+        # `tenants` desde a 0073 e a coluna do perfil ficou congelada. Usa a variante POR ID
+        # porque `process_pending`/`enqueue` já recebem o `tenant_id` explicitamente.
         try:
-            tz = ZoneInfo(profile.timezone)
+            tz = ZoneInfo(settings_service.timezone_of(db, tenant_id))
         except (ZoneInfoNotFoundError, ValueError):
             tz = ZoneInfo("America/Sao_Paulo")
         local_now = now.astimezone(tz)
@@ -262,6 +272,14 @@ def process_pending(db: Session, *, tenant_id: str, limit: int = 50) -> int:
                     template_name=notification.whatsapp_template_name,
                     language=notification.whatsapp_template_language or "pt_BR",
                     variables=notification.whatsapp_template_variables or [],
+                    # O botão é característica do PROPÓSITO, não da linha: derivá-lo aqui evita
+                    # uma coluna nova em `notifications` para um dado que é constante por
+                    # propósito. Só o aviso do briefing tem botão.
+                    quick_reply_payload=(
+                        PAYLOAD_BOTAO_BRIEFING
+                        if notification.purpose == PURPOSE_VIMA_BRIEFING
+                        else None
+                    ),
                 )
             else:
                 status = whatsapp.send_text(

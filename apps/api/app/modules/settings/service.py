@@ -54,10 +54,13 @@ def _validate_template_bindings(db: Session, bindings: dict[str, str]) -> None:
             )
 
 
+# Campos do PATCH que moram no PERFIL. `timezone` saiu daqui na 0073 (mora em `tenants` agora) e
+# é gravado à parte em `update_profile` — deixá-lo na lista escreveria numa coluna que ninguém
+# mais lê, e a tela mostraria o valor antigo depois de salvar.
 _FIELDS = (
     "display_name", "document", "email", "phone", "address", "website", "about",
     "logo_url", "primary_color", "secondary_color", "accent_color", "text_color",
-    "bg_color", "font", "timezone",
+    "bg_color", "font",
     "whatsapp_token", "whatsapp_phone_id", "whatsapp_waba_id", "whatsapp_app_secret",
 )
 
@@ -69,27 +72,39 @@ def tenant_timezone(db: Session) -> str:
 
     - **não cria** perfil e **não commita**. É chamado de dentro de regras de negócio (baixa de
       conta, projeção de caixa); um efeito colateral de escrita ali seria uma armadilha;
-    - **não pede `tenant_id`**. A sessão já é RLS-escopada (Regra de Ouro nº 1) e a query traz o
-      perfil do tenant corrente — o mesmo motivo pelo qual `get_profile` faz `select(TenantProfile)`
-      sem filtro manual.
+    - **não pede `tenant_id`**. A sessão já é RLS-escopada (Regra de Ouro nº 1).
 
-    Fail-safe por construção: tenant ainda sem perfil (ou coluna nula) cai no fuso padrão, nunca
-    levanta. A validação de que a string É um fuso IANA mora em `tenant_zone`, que também não
-    levanta — juntas, garantem que fuso ruim no banco jamais derruba uma request.
+    O fuso vive em `tenants` (global, sem RLS) desde a migration 0073, então quem faz o recorte
+    por tenant aqui é o JOIN com `tenant_profiles`, que TEM RLS: a policy resolve a linha do
+    tenant corrente e o join traz o fuso dela. Sem o join, um `select(Tenant.timezone)` sem
+    `where` numa tabela global devolveria o fuso de um tenant QUALQUER.
+
+    Fail-safe por construção: tenant ainda sem perfil cai no fuso padrão, nunca levanta — mesmo
+    comportamento de antes da 0073. A validação de que a string É um fuso IANA mora em
+    `tenant_zone`, que também não levanta.
     """
-    return db.scalar(select(TenantProfile.timezone)) or DEFAULT_TENANT_TIMEZONE
+    return (
+        db.scalar(select(Tenant.timezone).join(TenantProfile, TenantProfile.tenant_id == Tenant.id))
+        or DEFAULT_TENANT_TIMEZONE
+    )
 
 
 def timezone_of(db: Session, tenant_id: str) -> str:
     """O fuso de um tenant NOMEADO — para contextos **sem** sessão RLS.
 
-    `tenant_timezone(db)` depende do escopo RLS da sessão; `/auth/login`, `/auth/register` e
-    `/auth/me` rodam com `get_db` (sessão crua, ainda sem tenant no contexto) e ali um `select`
-    sem `where` traria o perfil errado num banco multi-tenant. Por isso o filtro é explícito
-    aqui — e é a única situação em que ele é correto.
+    `/auth/login`, `/auth/register`, `/auth/me` e `/auth/change-password` rodam com `get_db`
+    (sessão crua, sem a GUC de tenant) e é daqui que a sessão entregue ao frontend tira o fuso.
+
+    ⚠️ **Antes da 0073 esta função lia `tenant_profiles` — que tem `FORCE ROW LEVEL SECURITY` — e
+    devolvia o padrão para TODO mundo.** O `where` explícito não salvava: a policy filtra o SELECT
+    antes, e o problema nunca foi *qual* linha trazer, e sim *conseguir enxergar alguma*. Agora o
+    fuso vive em `tenants`, tabela GLOBAL sem RLS, legível em qualquer sessão.
+
+    ⚠️ **`tenants` não tem RLS: o filtro por `tenant_id` aqui é obrigatório**, mesma exceção
+    documentada de `users`. Gate em `test_auth_timezone_rls.py::test_o_fuso_NAO_atravessa_tenants`.
     """
     return (
-        db.scalar(select(TenantProfile.timezone).where(TenantProfile.tenant_id == tenant_id))
+        db.scalar(select(Tenant.timezone).where(Tenant.id == tenant_id))
         or DEFAULT_TENANT_TIMEZONE
     )
 
@@ -169,6 +184,13 @@ def update_profile(
         val = getattr(data, f)
         if val is not None:
             setattr(profile, f, val)
+    # O fuso é o único campo do PATCH que NÃO mora no perfil: desde a 0073 ele vive em `tenants`,
+    # para que `/auth/login` (sessão crua) consiga lê-lo. Filtro explícito por id porque `tenants`
+    # não tem RLS — é a exceção documentada da Regra de Ouro nº 1.
+    if data.timezone is not None:
+        tenant = db.get(Tenant, tenant_id)
+        if tenant is not None:
+            tenant.timezone = data.timezone
     # None no PATCH = "não altera"; "" desvincula (sem auto-enroll). Mesmo padrão de
     # contract_id/cost_center_id em receivables/service.py::update_charge.
     if data.default_entry_funnel_id is not None:

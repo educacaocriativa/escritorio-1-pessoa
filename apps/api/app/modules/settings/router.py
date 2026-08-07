@@ -14,13 +14,16 @@ router = APIRouter(prefix="/settings", tags=["settings"])
 _guard = require_module("settings")
 
 
-def _out(p: TenantProfile) -> ProfileOut:
+def _out(db: Session, p: TenantProfile) -> ProfileOut:
     return ProfileOut(
         display_name=p.display_name, document=p.document, email=p.email, phone=p.phone,
         address=p.address, website=p.website, about=p.about, logo_url=p.logo_url,
         primary_color=p.primary_color, secondary_color=p.secondary_color,
         accent_color=p.accent_color, text_color=p.text_color, bg_color=p.bg_color, font=p.font,
-        timezone=p.timezone, default_entry_funnel_id=p.default_entry_funnel_id,
+        # O fuso vem de `tenants` desde a 0073, não do perfil — ler `p.timezone` aqui mostraria
+        # a coluna congelada que ninguém mais escreve.
+        timezone=service.tenant_timezone(db),
+        default_entry_funnel_id=p.default_entry_funnel_id,
         whatsapp_configured=bool(p.whatsapp_token and p.whatsapp_phone_id and p.whatsapp_waba_id),
         whatsapp_provider=p.whatsapp_provider,
         whatsapp_phone_id=p.whatsapp_phone_id or "",
@@ -34,7 +37,7 @@ def _out(p: TenantProfile) -> ProfileOut:
 def get_profile(
     user: CurrentUser = Depends(_guard), db: Session = Depends(get_tenant_db)
 ) -> ProfileOut:
-    return _out(service.get_profile(db, user.tenant_id))
+    return _out(db, service.get_profile(db, user.tenant_id))
 
 
 @router.patch("/profile", response_model=ProfileOut)
@@ -49,4 +52,4 @@ def update_profile(
         )
     except service.SettingsError as e:
         raise HTTPException(status_code=e.status_code, detail=str(e)) from e
-    return _out(profile)
+    return _out(db, profile)

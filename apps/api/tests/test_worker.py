@@ -500,6 +500,12 @@ def test_o_sweep_NAO_ganhou_contador_novo(client: TestClient, db):
     promoção de agendadas, onde os dois lados somam. Aqui os dois contadores são eventos
     OPOSTOS do ciclo de vida da sessão (uma conexão subiu × uma caiu); a soma deles não
     responde pergunta nenhuma, e cada um sozinho responde a sua.
+
+    ⚠️ **`briefings_gerados` entrou na Onda 4 da Vima (etapa 6) pelo MESMO critério.** Responde a
+    *"quantos briefings este sweep gerou?"* — pergunta que nenhum dos outros responde, e cuja soma
+    com qualquer um deles não produziria número nenhum. Não é uma partição de `notifications_
+    processed`: um briefing gerado pode não virar notificação alguma (dia sem novidade, WhatsApp
+    desligado), e uma notificação pode não vir de briefing nenhum.
     """
     client.post("/auth/register", json=REGISTER)
     cm = _cm_factory(db)
@@ -512,6 +518,7 @@ def test_o_sweep_NAO_ganhou_contador_novo(client: TestClient, db):
         "scheduled_promoted",
         "whatsapp_connections_dropped",
         "whatsapp_connections_promoted",
+        "briefings_gerados",
         "errors",
     }
 

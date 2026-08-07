@@ -35,6 +35,7 @@ from app.modules.funnels import engine as funnels_engine
 from app.modules.notifications import service as notifications_service
 from app.modules.payables import service as payables_service
 from app.modules.receivables import service as receivables_service
+from app.modules.vima import scheduler as vima_scheduler
 from app.modules.whatsapp_inbox import service as whatsapp_inbox_service
 from app.modules.whatsapp_session import service as whatsapp_session_service
 from app.seed import PLATFORM_SLUG
@@ -92,6 +93,10 @@ def run_sweep(
         # vida da sessão (uma subiu × uma caiu), não dois recortes de um mesmo número. Somá-los
         # produziria um total sem significado. Ver `test_o_sweep_NAO_ganhou_contador_novo`.
         "whatsapp_connections_promoted": 0,
+        # Quantos briefings da Vima este sweep GEROU (não quantos existem). Contador PRÓPRIO pelo
+        # mesmo critério de `whatsapp_connections_promoted`: responde a uma pergunta que nenhum
+        # dos outros responde, e somá-lo a qualquer um deles não produziria número nenhum.
+        "briefings_gerados": 0,
         "errors": [],
     }
 
@@ -204,10 +209,31 @@ def run_sweep(
                 {"tenant_id": tenant_id, "stage": "whatsapp_connections", "error": str(exc)}
             )
 
+        # Etapa 6 — o briefing da Vima, no horário de cada usuário (sessão SEPARADA das outras
+        # cinco). Roda DEPOIS da fila de notificações (etapa 2) de propósito: o WhatsApp que ela
+        # enfileira sai no sweep SEGUINTE, e não no mesmo. É uma diferença de minutos no intervalo
+        # do worker, e mantém a etapa fazendo uma coisa só — gerar. Inverter a ordem faria a
+        # entrega depender de a geração ter acontecido antes no mesmo laço, que é justamente o
+        # tipo de acoplamento entre etapas que o isolamento de falha por etapa existe para evitar.
+        #
+        # ⚠️ `now` é o MESMO relógio das outras etapas (ver a docstring): duas noções de "agora"
+        # dentro de um sweep fariam as etapas discordarem sobre que dia é hoje.
+        try:
+            with tenant_session_factory(tenant_id) as db:
+                briefings = vima_scheduler.tick(
+                    db, tenant_id=tenant_id, agora=now or datetime.now(UTC)
+                )
+            result["briefings_gerados"] += briefings
+        except Exception as exc:  # noqa: BLE001 — idem: isola a falha por tenant (IV2)
+            logger.exception("[worker] briefing da vima falhou tenant=%s", tenant_id)
+            result["errors"].append(
+                {"tenant_id": tenant_id, "stage": "vima_briefing", "error": str(exc)}
+            )
+
     logger.info(
         "[worker] sweep: tenants=%s funil_resumido=%s notificacoes=%s midia_whatsapp=%s "
         "agendadas_promovidas=%s conexoes_whatsapp_promovidas=%s conexoes_whatsapp_caidas=%s "
-        "erros=%s",
+        "briefings=%s erros=%s",
         result["tenants_checked"],
         result["funnel_resumed"],
         result["notifications_processed"],
@@ -215,6 +241,7 @@ def run_sweep(
         result["scheduled_promoted"],
         result["whatsapp_connections_promoted"],
         result["whatsapp_connections_dropped"],
+        result["briefings_gerados"],
         len(result["errors"]),
     )
     return result
