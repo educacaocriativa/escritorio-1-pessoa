@@ -164,4 +164,29 @@ describe("BriefingPage — preferências na própria tela", () => {
     expect(await screen.findByText(/não foi aprovado pela Meta/)).toBeInTheDocument();
     expect(screen.getByLabelText(/whatsapp/i)).toBeDisabled();
   });
+
+  it("entrega perdida não tranca a troca de horário", async () => {
+    const user = userEvent.setup();
+    mockGet(BRIEFING, {
+      ...PREFS,
+      // O estado que trava: ligado ANTES, indisponível AGORA (a Meta pausou o template, ou o
+      // WhatsApp da empresa caiu). Reenviar `enabled: true` levaria 422 do backend e o dono
+      // ficaria sem conseguir mudar nem o próprio horário.
+      briefing_whatsapp_enabled: true,
+      briefing_whatsapp_disponivel: false,
+      briefing_whatsapp_indisponivel_motivo: "O template do briefing foi pausado pela Meta.",
+    });
+    vi.mocked(api.patch).mockResolvedValue({ data: PREFS });
+    renderPage();
+
+    await user.click(await screen.findByRole("button", { name: /prefer/i }));
+    await user.click(screen.getByRole("button", { name: /salvar/i }));
+
+    await waitFor(() =>
+      expect(api.patch).toHaveBeenCalledWith("/auth/me/preferences", {
+        briefing_hour: "07:00",
+        briefing_whatsapp_enabled: false,
+      }),
+    );
+  });
 });

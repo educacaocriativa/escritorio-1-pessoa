@@ -33,7 +33,11 @@ export default function PreferenciasSection({
     try {
       const { data } = await api.patch<BriefingPreferences>("/auth/me/preferences", {
         briefing_hour: hora,
-        briefing_whatsapp_enabled: zap,
+        // Manda o que está NA TELA, não o que veio do servidor. Um tenant que tinha o WhatsApp
+        // ligado e perdeu a entrega (template despausado pela Meta, WhatsApp desconectado) chega
+        // aqui com `enabled=true` e `disponivel=false`: reenviar `true` levaria um 422 do
+        // backend e o usuário não conseguiria nem trocar o próprio horário.
+        briefing_whatsapp_enabled: zap && !indisponivel,
       });
       onSaved(data);
       setOk(true);
