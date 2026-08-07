@@ -44,6 +44,14 @@ PURPOSE_CLIENT_MOVED = "client_moved"
 # template da Cloud API não aceita quebra de linha (o briefing tem várias). O toque no botão abre
 # a janela e o texto inteiro sai depois, livre — ver `vima/scheduler.py`.
 PURPOSE_VIMA_BRIEFING = "vima_briefing_aviso"
+# O que pedimos de volta quando o dono TOCA o botão do aviso. Mora aqui, e não em `vima/`, porque
+# quem o envia (`notifications.process_pending`) e quem o reconhece (`whatsapp_inbox.service`)
+# importariam `vima.scheduler` — que por sua vez importa `notifications`, fechando o ciclo.
+#
+# ⚠️ É NOSSO valor, definido no componente de botão do envio (`meta.send_template`), e não o
+# rótulo que o tenant escreve no console da Meta. Sem enviá-lo, a Meta devolveria o rótulo —
+# texto livre — e não haveria constante nenhuma para casar do lado de cá.
+PAYLOAD_BOTAO_BRIEFING = "vima_briefing"
 # O briefing inteiro, já dentro da janela aberta pelo toque. Texto livre: NÃO tem template e por
 # isso não entra em `PURPOSE_VARIABLE_SPECS` (que é a tabela de vínculo propósito→template).
 PURPOSE_VIMA_BRIEFING_TEXTO = "vima_briefing_texto"

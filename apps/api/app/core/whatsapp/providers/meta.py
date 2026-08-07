@@ -151,22 +151,42 @@ def delete_template(*, waba_id: str, token: str, name: str) -> None:
 
 
 def send_template(
-    *, to: str, token: str, phone_id: str, template_name: str, language: str, variables: list[str]
+    *,
+    to: str,
+    token: str,
+    phone_id: str,
+    template_name: str,
+    language: str,
+    variables: list[str],
+    quick_reply_payload: str | None = None,
 ) -> str:
     """Retorna 'sent' | 'logged' | 'failed'.
 
     MESMO contrato/invariante de send_text: NUNCA propaga exceção (fire-and-forget, graceful
     degradation) — 'logged' quando token ou phone_id vier vazio; 'failed' se a chamada falhar;
     'sent' em 200 OK.
+
+    `quick_reply_payload` (opcional): o valor que queremos de volta quando o contato tocar o
+    PRIMEIRO botão de resposta rápida do template. Sem ele, a Meta devolve no webhook o **rótulo**
+    do botão — texto livre que o tenant escreveu no console dela ("Ver resumo", "Bora", "Sim") —, e
+    não haveria constante nenhuma para casar do lado de cá. Só o aviso do briefing usa; os outros
+    cinco propósitos não têm botão e continuam saindo sem o componente.
     """
     if not token or not phone_id:
         logger.info("[whatsapp:logged] template para=%s nome=%s", to, template_name)
         return "logged"
-    components = (
-        [{"type": "body", "parameters": [{"type": "text", "text": v} for v in variables]}]
-        if variables
-        else []
-    )
+    components: list[dict] = []
+    if variables:
+        components.append(
+            {"type": "body", "parameters": [{"type": "text", "text": v} for v in variables]}
+        )
+    if quick_reply_payload:
+        components.append({
+            "type": "button",
+            "sub_type": "quick_reply",
+            "index": "0",  # o primeiro botão do template — o único que o aviso do briefing tem
+            "parameters": [{"type": "payload", "payload": quick_reply_payload}],
+        })
     try:
         resp = httpx.post(
             f"https://graph.facebook.com/v21.0/{phone_id}/messages",
@@ -273,6 +293,20 @@ def send_media(
         return "failed"
 
 
+def _botao(msg: dict) -> tuple[str | None, str]:
+    """`(payload, rótulo)` do botão tocado. Payload não confiável: campo fora do formato vira
+    `(None, "")` — a mensagem ainda entra na conversa, só não dispara ação nenhuma."""
+    botao = msg.get("button")
+    if isinstance(botao, dict):  # botão de TEMPLATE
+        return botao.get("payload") or None, str(botao.get("text") or "")
+    interativo = msg.get("interactive")
+    if isinstance(interativo, dict):  # botão INTERATIVO
+        resposta = interativo.get("button_reply")
+        if isinstance(resposta, dict):
+            return resposta.get("id") or None, str(resposta.get("title") or "")
+    return None, ""
+
+
 def parse_inbound(payload: dict) -> list[InboundMessage]:
     """Extrai as mensagens do formato aninhado do payload da Meta. Payload não confiável (a
     Meta não garante o shape interno) — dois níveis de tolerância, preservados do antigo
@@ -307,7 +341,20 @@ def parse_inbound(payload: dict) -> list[InboundMessage]:
                     kind = msg.get("type", "text")
                     text_body = ""
                     media_ref = None
-                    if kind == "text":
+                    button_payload = None
+                    if kind in ("button", "interactive"):
+                        # Toque em botão. Duas formas, ambas conferidas na documentação da Meta:
+                        # botão de TEMPLATE vem como `type="button"` + `button:{payload,text}`;
+                        # botão interativo, como `type="interactive"` +
+                        # `interactive.button_reply:{id,title}`.
+                        #
+                        # Vira `kind="text"` a partir daqui: para a caixa de entrada é uma
+                        # mensagem do contato como outra qualquer, e o rótulo do botão é o corpo
+                        # dela — é o que o dono vê no fio da conversa. Quem age sobre o toque lê
+                        # `button_payload`, não o texto.
+                        button_payload, text_body = _botao(msg)
+                        kind = "text"
+                    elif kind == "text":
                         text_field = msg.get("text", {})
                         if not isinstance(text_field, dict):
                             continue  # isola só esta mensagem — ver docstring
@@ -331,6 +378,7 @@ def parse_inbound(payload: dict) -> list[InboundMessage]:
                         # importa num tenant que troque de transporte.
                         chat_jid=f"{from_phone}@s.whatsapp.net" if from_phone else None,
                         sender_phone=from_phone, sender_name=push_name or None,
+                        button_payload=button_payload,
                     ))
                 except (AttributeError, TypeError, KeyError):
                     continue  # isola só esta mensagem — ver docstring

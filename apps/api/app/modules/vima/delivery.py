@@ -30,6 +30,10 @@ from app.modules.whatsapp_templates.models import (
 )
 
 SEM_TELEFONE = "Cadastre um WhatsApp no seu perfil para receber o briefing por lá."
+SEM_WHATSAPP = (
+    "O WhatsApp da empresa ainda não está conectado. Conecte em Configurações e o briefing "
+    "passa a sair por lá também."
+)
 TEMPLATE_PENDENTE = (
     "O template do briefing ainda não foi aprovado pela Meta. Enquanto isso, o briefing "
     "continua na tela todo dia — só o envio por WhatsApp é que não sai."
@@ -61,6 +65,12 @@ def avaliar(db: Session, *, phone: str | None) -> Entrega:
     if not capabilities.for_profile(profile).templates:
         # Evolution: sem template e sem janela de 24h — o briefing inteiro sai em um passo.
         return Entrega(disponivel=True, motivo=None)
+
+    # `for_profile(None)` é Meta por definição documentada — inclusive para quem nunca conectou
+    # WhatsApp nenhum. Sem esta guarda, esse tenant leria "a Meta ainda não aprovou o template",
+    # que é verdade e é a resposta errada: ele não está esperando a Meta, está esperando conectar.
+    if not profile or not (profile.whatsapp_token and profile.whatsapp_phone_id):
+        return Entrega(disponivel=False, motivo=SEM_WHATSAPP)
 
     template = _template_do_aviso(db, profile)
     if template is None:

@@ -164,12 +164,14 @@ def test_process_pending_uses_send_template_when_fields_set(db, monkeypatch):
     calls = {"template": 0, "text": 0}
 
     def _send_template(*, to, template_name, language, variables, profile=None, token=None,
-                       phone_id=None):
+                       phone_id=None, quick_reply_payload=None):
         calls["template"] += 1
         assert to == "dono@example.com"
         assert template_name == "tmpl_client_moved"
         assert language == "pt_BR"
         assert variables == ["Maria Cliente", "Proposta Enviada"]
+        # Só o aviso do briefing da Vima leva botão; os outros propósitos saem sem componente.
+        assert quick_reply_payload is None
         return "sent"
 
     def _send_text(*_a, **_k):

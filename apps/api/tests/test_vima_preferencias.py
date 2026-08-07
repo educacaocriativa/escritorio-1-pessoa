@@ -130,8 +130,20 @@ def test_horario_muda_sem_mexer_no_whatsapp(client: TestClient, headers):
     assert r.json()["briefing_whatsapp_enabled"] is False
 
 
+@pytest.fixture()
+def tenant_meta_conectado(db: Session, tenant_id: str) -> TenantProfile:
+    """Tenant na Cloud API COM credenciais — mas ainda sem o template do briefing aprovado."""
+    perfil = TenantProfile(
+        tenant_id=tenant_id, display_name="Vima ME", whatsapp_provider="meta",
+        whatsapp_token="tok", whatsapp_phone_id="pid",
+    )
+    db.add(perfil)
+    db.commit()
+    return perfil
+
+
 def test_tenant_meta_sem_template_diz_por_que_nao_da(
-    client: TestClient, headers, dono_com_telefone
+    client: TestClient, headers, dono_com_telefone, tenant_meta_conectado
 ):
     """A dependência é EXTERNA (aprovação da Meta) e fora do repositório. A tela precisa dizer
     o motivo em vez de oferecer um botão que não entrega nada."""
@@ -143,6 +155,18 @@ def test_tenant_meta_sem_template_diz_por_que_nao_da(
         "/auth/me/preferences", json={"briefing_whatsapp_enabled": True}, headers=headers
     )
     assert r.status_code == 422
+
+
+def test_quem_nunca_conectou_whatsapp_le_o_motivo_CERTO(
+    client: TestClient, headers, dono_com_telefone
+):
+    """Perfil ausente cai em Meta por definição (`for_profile(None)`), mas este tenant não está
+    esperando a Meta aprovar nada — está esperando conectar. Dizer "a Meta ainda não aprovou"
+    seria verdade e resposta errada: manda o dono esperar em vez de agir."""
+    p = client.get("/auth/me/preferences", headers=headers).json()
+    assert p["briefing_whatsapp_disponivel"] is False
+    assert "não está conectado" in p["briefing_whatsapp_indisponivel_motivo"]
+    assert "Meta" not in p["briefing_whatsapp_indisponivel_motivo"]
 
 
 def test_tenant_evolution_pode_ligar_sem_template_nenhum(
@@ -172,6 +196,7 @@ def test_tenant_meta_com_template_aprovado_pode_ligar(
     db.flush()
     perfil = TenantProfile(
         tenant_id=tenant_id, display_name="Vima ME",
+        whatsapp_token="tok", whatsapp_phone_id="pid",
         whatsapp_template_bindings={PURPOSE_VIMA_BRIEFING: tpl.id},
     )
     db.add(perfil)

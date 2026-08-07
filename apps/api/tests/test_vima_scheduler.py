@@ -161,7 +161,13 @@ def test_quem_nao_ligou_o_whatsapp_recebe_so_a_tela(
 def test_briefing_ja_lido_na_tela_nao_vira_whatsapp(
     db: Session, tenant_id, tenant_br, dono, aconteceu_algo
 ):
-    """Quem abriu o app antes da hora já recebeu a notícia. Mandar de novo é eco, não aviso."""
+    """Quem abriu o app antes da hora já recebeu a notícia. Mandar de novo é eco, não aviso.
+
+    ⚠️ O mecanismo é *"o tick só entrega o que ele mesmo gerou"*, e não uma checagem de `read_at`:
+    o briefing já existia (a tela o criou), então o tick não gera e não entrega. A leitura em si
+    não é consultada. Vale a distinção porque o caso vizinho — gerado pela tela e **não** lido —
+    também fica sem WhatsApp, e é uma consequência aceita, não um descuido (ver a docstring de
+    `scheduler.tick`)."""
     from app.core.tenancy import CurrentUser
     from app.modules.vima import service
 

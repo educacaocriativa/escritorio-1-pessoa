@@ -36,6 +36,17 @@ class InboundMessage:
     # o telefone real mesmo quando `key.participant` vem mascarado como `@lid`.
     sender_phone: str | None = None
     sender_name: str | None = None
+    # O payload do botão de resposta rápida que o contato TOCOU, quando foi um toque e não texto.
+    #
+    # Só o provider Meta o preenche, e é o suficiente: quem produz botão neste produto é o aviso
+    # do briefing (`vima/scheduler`), e ele só é enviado sob a Meta — a Evolution recebe o
+    # briefing inteiro em um passo e nunca manda botão nenhum. Um tenant que MIGRE de Meta para
+    # QR code entre o aviso e o toque perde aquele toque; a mensagem é gravada normalmente e o
+    # briefing continua na tela.
+    #
+    # ⚠️ Vem do payload do COMPONENTE de botão que nós enviamos, não do rótulo que o tenant
+    # escreveu no console da Meta — ver `providers/meta.send_template(quick_reply_payload=...)`.
+    button_payload: str | None = None
     media_bytes: bytes | None = None  # mídia JÁ decodificada (Evolution, quando webhookBase64
     # está ligado) — ingest cria o Attachment na hora, sem depender do worker.
     media_mime_type: str | None = None
