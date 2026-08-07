@@ -154,7 +154,14 @@ class ConferenciaConta:
     - **declarado, porém não comparável** (Story 8.20) — houve checkpoint na janela, mas o
       `reference_date` dele é a **própria data de abertura da conta**. O estado numérico é
       **idêntico** ao anterior, com **um** desvio deliberado: `saldo_banco_data` fica
-      **preenchido**. É o único discriminador que o consumidor tem entre *"você não me informou
+      **preenchido**. ⚠️ `saldo_banco_fonte` continua `None` aqui, mas **por outro motivo** que o do
+      estado anterior: houve porta de entrada (o checkpoint tem `origin`), e ela é **descartada de
+      propósito** — o eixo B qualifica um **valor**, e aqui não há valor (`saldo_banco_cents` é
+      `None`). Nomear a porta de um saldo que o payload não carrega é afirmar sobre o que não está
+      lá. Quem renderiza guarda por `saldo_banco_fonte is not None` e **omite a linha** — não a
+      traduz para um motivo (foi assim que a tela chegou a dizer *"sem saldo informado"* sobre esta
+      conta; ver `conferencia.ts::fonteLabel`).
+      `saldo_banco_data` é o único discriminador que o consumidor tem entre *"você não me informou
       saldo nenhum"* e *"você me informou, mas nesta data isso não decide nada"* — sem ele a tela
       responderia
       *"declare o saldo para eu conferir"* a quem acabou de declarar, em laço. Por que a comparação

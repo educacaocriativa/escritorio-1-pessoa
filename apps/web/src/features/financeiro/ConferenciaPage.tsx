@@ -319,7 +319,13 @@ function LinhaConta({ conta: c }: { conta: ConferenciaConta }) {
         </p>
         {/* Os DOIS eixos, lado a lado e sem se misturarem: A = plano, B = porta de entrada. */}
         <p className="text-xs text-neutral-400">{origemLabel(c.saldo_banco_origem)}</p>
-        <p className="text-xs text-neutral-400">{fonteLabel(c.saldo_banco_fonte)}</p>
+        {/* O eixo B qualifica o VALOR acima. Sem valor não há porta a nomear: a linha some, em vez
+            de afirmar um motivo. O rótulo antigo dizia "sem saldo informado" também na conta que
+            declarou o saldo na data de abertura (8.20) e na que tem saldo de partida do cadastro
+            (8.19) — ver `fonteLabel`. */}
+        {c.saldo_banco_fonte !== null && (
+          <p className="text-xs text-neutral-400">{fonteLabel(c.saldo_banco_fonte)}</p>
+        )}
         {c.saldo_banco_data && (
           <p className="text-xs text-neutral-400">em {formatDateBR(c.saldo_banco_data)}</p>
         )}
