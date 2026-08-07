@@ -88,6 +88,7 @@ def conta(client: TestClient, headers) -> dict:
             "name": "Itaú PJ",
             "kind": "checking",
             "opening_balance_cents": 10_000_00,
+            "opening_balance_is_known": True,
             "opening_date": ABERTURA.isoformat(),
         },
         headers=headers,

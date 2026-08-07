@@ -109,6 +109,7 @@ def _account(
             "kind": kind,
             "number": number,
             "opening_balance_cents": opening,
+            "opening_balance_is_known": True,
             "opening_date": opening_date.isoformat(),
         },
         headers=headers,
@@ -598,6 +599,7 @@ def test_a_guarda_de_futuro_nao_mora_na_guarda_generica_do_modulo():
 
     conta = BankAccount(
         tenant_id="t", name="X", kind=KIND_CHECKING, opening_balance_cents=0,
+        opening_balance_is_known=True,
         opening_date=ABERTURA,
     )
     amanha = _hoje() + timedelta(days=1)

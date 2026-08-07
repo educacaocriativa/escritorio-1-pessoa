@@ -587,6 +587,7 @@ def _seed_business_data(db: Session, tenant_id: str) -> None:
             number="56789-0",
             holder_document="11444777000161",
             opening_balance_cents=1_000_00,
+            opening_balance_is_known=True,
             opening_date=date(2026, 7, 1),
         )
     )

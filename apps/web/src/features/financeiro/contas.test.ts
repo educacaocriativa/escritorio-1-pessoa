@@ -72,6 +72,7 @@ function conta(over: Partial<BankAccount> = {}): BankAccount {
     holder_document: "",
     pix_key: "",
     opening_balance_cents: 0,
+    opening_balance_is_known: true,
     opening_date: "2026-01-01",
     is_primary: true,
     archived_at: null,

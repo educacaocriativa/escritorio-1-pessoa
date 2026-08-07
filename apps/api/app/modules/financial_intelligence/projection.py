@@ -102,7 +102,7 @@ from datetime import UTC, date, datetime, time, timedelta
 from sqlalchemy import and_, case, func, or_, select
 from sqlalchemy.orm import Session
 
-from app.core.money_planes import ORIGEM_MISTO, ORIGEM_PLATAFORMA
+from app.core.money_planes import ORIGEM_INDISPONIVEL, ORIGEM_MISTO, ORIGEM_PLATAFORMA
 from app.modules.bank import service as bank_service
 from app.modules.bank.models import KIND_INVESTMENT
 from app.modules.payables.models import STATUS_OPEN as PAYABLE_OPEN
@@ -122,6 +122,40 @@ DEFAULT_WINDOWS: tuple[int, ...] = (30, 60, 90)
 # por coincidência. Se divergissem, o sintoma seria `origem="misto"` com parcela bancária 0 (ou o
 # inverso) — um estado que nenhum teste procuraria porque ninguém o teria imaginado.
 _KINDS_FORA_DO_CAIXA: tuple[str, ...] = (KIND_INVESTMENT,)
+
+# Story 8.21 — **as origens que NÃO sustentam uma afirmação**, num lugar só.
+#
+# Até aqui as duas supressões (runway e alert) comparavam `== ORIGEM_PLATAFORMA` em três pontos
+# separados. Acrescentar `indisponivel` repetindo a comparação criaria a chance de um dos três
+# ficar para trás — e o sintoma seria a Projeção afirmando runway sobre um saldo que ninguém
+# declarou, exatamente o defeito que a Story 8.21 existe para fechar, sobrevivendo à própria
+# correção. **Um conjunto, três consumidores.**
+#
+# `misto` e `banco` ficam de fora porque são justamente os casos com lastro.
+_ORIGENS_SEM_LASTRO: frozenset[str] = frozenset({ORIGEM_PLATAFORMA, ORIGEM_INDISPONIVEL})
+
+
+def _note_saldo_nao_declarado(nomes: tuple[str, ...]) -> str:
+    """A nota que NOMEIA A SAÍDA quando a Projeção cala por saldo não declarado (Story 8.21 AC4b).
+
+    ⚠️ **Ela não é decoração — é metade da decisão da @architect.** Suprimir a Projeção inteira
+    quando *qualquer* conta elegível está sem saldo declarado é agressivo por construção: quatro
+    contas conhecidas e uma não bastam para calar runway e alerta. Sem dizer **quais**, o dono vê
+    o número sumir e não tem o que fazer — é o beco sem saída do WhatsApp item 12(b), em que a
+    única saída oferecida era um template que não existia.
+
+    Mora em `CashProjection.notes`, que já existe e já é renderizado (`ProjecaoCaixaPage.tsx`):
+    **zero campo novo de API.**
+    """
+    if len(nomes) == 1:
+        quais = f"a conta {nomes[0]}"
+    else:
+        quais = "as contas " + ", ".join(nomes[:-1]) + f" e {nomes[-1]}"
+    return (
+        f"O e1p não sabe de quanto partir: você marcou que não sabe o saldo de {quais}. O total "
+        "acima continua somando o que é conhecido, mas o runway e o alerta ficam calados até você "
+        "informar esse saldo em Contas & Saldos."
+    )
 
 # A frase "Saldo inicial vem do disponível da Carteira" saiu daqui na Story 8.1: ela é sobre
 # PROCEDÊNCIA, não sobre o regime caixa×competência, e agora tem nota própria
@@ -271,6 +305,11 @@ class _SaldoInicial:
     plataforma_cents: int
     origem: str
     tem_aplicacao_ativa: bool
+    # Story 8.21 — nomes das contas elegíveis cujo saldo de abertura o dono NÃO declarou. Sai da
+    # MESMA lista que a decisão já carregou (mesma razão de `tem_aplicacao_ativa`): calculá-lo
+    # fora custaria uma segunda consulta e criaria um segundo lugar decidindo o que conta como
+    # "sem saldo declarado". Vazio ⟺ `origem != ORIGEM_INDISPONIVEL` por saldo não declarado.
+    contas_sem_saldo_declarado: tuple[str, ...] = ()
 
     @property
     def total_cents(self) -> int:
@@ -325,15 +364,36 @@ def _saldo_inicial(db: Session, *, today: date) -> _SaldoInicial:
             tem_aplicacao_ativa=tem_aplicacao_ativa,
         )
 
+    # ── Story 8.21 — o terceiro fato: o dono AFIRMOU o saldo de partida desta conta? ────────────
+    #
+    # ⚠️ **A decisão continua sendo pela EXISTÊNCIA da conta, jamais pelo VALOR** — a docstring
+    # acima segue inteiramente válida. O que entra aqui não é `total != 0` disfarçado: é um fato
+    # próprio, gravado no cadastro (`bank_accounts.opening_balance_is_known`), que distingue
+    # "o saldo é zero" de "não sei o saldo".
+    #
+    # **BASTA UMA conta desconhecida para calar a Projeção inteira** (veredito da @architect). Somar
+    # só as conhecidas erraria nas DUAS direções, e nada na tela diria em qual: `opening_balance_
+    # cents` **pode ser negativo** (cheque especial), então a parcela que falta tanto subestima
+    # quanto superestima o caixa. Subestimar dispara alerta sem motivo (Regra 7: "uma tela que
+    # grita por R$ 3 destrói a confiança no sinal"); superestimar CALA o alerta que deveria soar —
+    # a máquina de falso negativo que a Onda 0 desmontou, e que atinge justamente quem tem cheque
+    # especial. Um instrumento que erra nos dois sentidos sem indicar qual não é instrumento.
+    sem_saldo_declarado = tuple(a.name for a in elegiveis if not a.opening_balance_is_known)
+
     return _SaldoInicial(
         # `until=today` é a MESMA âncora do resto da projeção (nunca `date.today()` local aqui
         # dentro): o saldo de partida e as janelas precisam falar do mesmo dia.
+        # ⚠️ **O número continua sendo calculado e exposto mesmo sob `indisponivel`** — princípio
+        # da Onda 0, literal: *suprimir a afirmação, nunca o número*. O que morre é `runway.days` e
+        # `windows[].alert`; o saldo e as duas parcelas continuam na tela, e a nota diz quais
+        # contas faltam.
         banco_cents=bank_service.active_balance_total(
             db, until=today, exclude_kinds=_KINDS_FORA_DO_CAIXA
         ),
         plataforma_cents=plataforma_cents,
-        origem=ORIGEM_MISTO,
+        origem=ORIGEM_INDISPONIVEL if sem_saldo_declarado else ORIGEM_MISTO,
         tem_aplicacao_ativa=tem_aplicacao_ativa,
+        contas_sem_saldo_declarado=sem_saldo_declarado,
     )
 
 
@@ -550,7 +610,10 @@ def cash_projection(
     # AC4b — o veredito de janela negativa é calado quando o saldo de partida não tem lastro. Sem
     # a condição `burn_rate > 0` (diferente do runway): o `alert` é por janela, não depende de
     # queima média. `saldo_projetado_cents` NÃO muda — só o veredito.
-    alert_suprimido = saldo_inicial_origem == ORIGEM_PLATAFORMA
+    # ⚠️ **Story 8.21 — o conjunto, não a comparação.** Era `== ORIGEM_PLATAFORMA`; agora
+    # `indisponivel` (saldo de abertura não declarado) cala pelo mesmo mecanismo, sem uma
+    # linha de aritmética alterada — o alert é calculado igual e só DEPOIS suprimido.
+    alert_suprimido = saldo_inicial_origem in _ORIGENS_SEM_LASTRO
     projected_windows: list[ProjectionWindow] = []
     for i, w in enumerate(ordered):
         saldo = saldo_inicial + inflows[i] - outflows[i]
@@ -583,7 +646,7 @@ def cash_projection(
 
     # AC3 — o número de dias é calado quando havia queima E o saldo de partida não tem lastro.
     # Calculado acima como antes; suprimido só DEPOIS (invariante: suprimido ⇒ days is None).
-    days_suprimido = saldo_inicial_origem == ORIGEM_PLATAFORMA and burn_rate > 0
+    days_suprimido = saldo_inicial_origem in _ORIGENS_SEM_LASTRO and burn_rate > 0
     if days_suprimido:
         runway_days = None
 
@@ -592,6 +655,10 @@ def cash_projection(
         notes.append(_NOTE_ORIGEM_PLATAFORMA)
     if saldo_inicial_origem == ORIGEM_MISTO:
         notes.append(_NOTE_ORIGEM_MISTO)
+    # Story 8.21 AC4b — a supressão NOMEIA A SAÍDA. Sem isto o dono vê o runway sumir e não
+    # descobre o que fazer; ver `_note_saldo_nao_declarado`.
+    if partida.contas_sem_saldo_declarado:
+        notes.append(_note_saldo_nao_declarado(partida.contas_sem_saldo_declarado))
     # AC3 — a exclusão das aplicações é dita em voz alta SEMPRE que existir conta de aplicação
     # ativa, e não só sob `misto`.
     # ⚠️ **Desvio declarado da Task 2**, que condicionava esta nota a `origem == ORIGEM_MISTO`. O

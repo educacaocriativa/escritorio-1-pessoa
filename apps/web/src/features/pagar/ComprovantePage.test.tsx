@@ -452,6 +452,8 @@ describe("ComprovantePage — a escolha da baixa (Story 8.13)", () => {
     expect(screen.getByRole("heading", { name: "Nova conta" })).toBeTruthy();
 
     await userEvent.type(screen.getByLabelText("Nome da conta"), "Nubank PJ");
+    // Story 8.21 — a escolha do saldo é OBRIGATÓRIA e trava o salvar.
+    await userEvent.click(screen.getByLabelText("Não sei o saldo agora"));
     await userEvent.click(screen.getByRole("button", { name: "Cadastrar conta" }));
 
     // A candidata continua escolhida (a tela nunca foi desmontada) e a conta nova está selecionada.

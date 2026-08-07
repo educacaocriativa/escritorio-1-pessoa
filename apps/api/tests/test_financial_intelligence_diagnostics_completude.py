@@ -67,6 +67,7 @@ def _account(
             "name": name,
             "kind": "checking",
             "opening_balance_cents": opening,
+            "opening_balance_is_known": True,
             "opening_date": opening_date.isoformat(),
         },
         headers=headers,

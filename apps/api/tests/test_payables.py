@@ -42,6 +42,7 @@ def conta(client: TestClient, headers) -> str:
             "name": "Itaú PJ",
             "kind": "checking",
             "opening_balance_cents": 500_000,
+            "opening_balance_is_known": True,
             "opening_date": ABERTURA.isoformat(),
         },
         headers=headers,

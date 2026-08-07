@@ -106,6 +106,7 @@ def test_conta_paga_grava_fato(client: TestClient, headers, db):
             "institution_code": "341", "branch": "1234", "number": "56789-0",
             "holder_document": "11.444.777/0001-61", "pix_key": "banco@example.com",
             "opening_balance_cents": 150000,
+            "opening_balance_is_known": True,
             "opening_date": str(date.today() - timedelta(days=90)),
         },
         headers=headers,

@@ -129,6 +129,7 @@ def _seed_tenant(
                 BankAccount(
                     id=conta_id, tenant_id=tenant_id, name="Conta do tenant",
                     kind=KIND_CHECKING, opening_balance_cents=bank_opening,
+                    opening_balance_is_known=True,
                     opening_date=abertura,
                 )
             )

@@ -229,6 +229,7 @@ def _recebe_fora_do_trilho(db: Session, tenant_id: str, *, quantas: int = 3) -> 
         name="Itaú PJ",
         kind=KIND_CHECKING,
         opening_balance_cents=1_000_000,
+        opening_balance_is_known=True,
         opening_date=date(2026, 7, 1),
     )
     db.add(conta)

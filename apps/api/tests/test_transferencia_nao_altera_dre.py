@@ -83,6 +83,7 @@ def _conta(client: TestClient, headers, *, name: str, kind: str, opening: int, n
             "kind": kind,
             "number": number,
             "opening_balance_cents": opening,
+            "opening_balance_is_known": True,
             "opening_date": ABERTURA.isoformat(),
         },
         headers=headers,

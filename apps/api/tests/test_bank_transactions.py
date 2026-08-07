@@ -82,6 +82,7 @@ def _account(
         "name": "Itaú PJ",
         "kind": KIND_CHECKING,
         "opening_balance_cents": opening,
+        "opening_balance_is_known": True,
         "opening_date": OPENING.isoformat(),
     }
     payload.update(over)

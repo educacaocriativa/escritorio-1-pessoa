@@ -100,6 +100,16 @@ class BankAccount(Base, TenantMixin, TimestampMixin):
     # PONTO DE PARTIDA do saldo derivado — NÃO é o saldo. Ver aviso (b). Pode ser NEGATIVO (conta
     # no limite / cheque especial). Centavos, BigInteger (Regra de Ouro: dinheiro nunca é float).
     opening_balance_cents: Mapped[int] = mapped_column(BigInteger, default=0, nullable=False)
+    # O ATO de declarar, ao lado do VALOR declarado acima. São dois eixos, não um campo achatado
+    # (Story 8.21): sem esta coluna, "informei zero" e "não informei nada" são a MESMA linha, e a
+    # Projeção afirma runway sobre um saldo que ninguém informou.
+    #   True  → `opening_balance_cents` é uma AFIRMAÇÃO do dono.
+    #   False → o dono disse que NÃO SABE; o valor fica `0` e é PLACEHOLDER, não afirmação.
+    # ⚠️ Sem `default=` do lado Python de propósito: quem constrói precisa DECLARAR. O
+    # `server_default` da migration 0074 existiu só para as linhas legadas e foi derrubado no mesmo
+    # passo — se ficasse, todo INSERT que omitisse a coluna gravaria "eu sei o saldo" em silêncio,
+    # que é o defeito que esta coluna existe para matar.
+    opening_balance_is_known: Mapped[bool] = mapped_column(Boolean, nullable=False)
     # A partir de quando o e1p conhece esta conta. Movimento anterior a esta data NÃO entra no
     # saldo derivado (a fórmula do design §3.1 é `posted_at > opening_date`) — ele já está DENTRO
     # do `opening_balance_cents`, e contá-lo de novo seria dobrar o valor.

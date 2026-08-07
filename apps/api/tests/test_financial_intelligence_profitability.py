@@ -542,6 +542,7 @@ def test_AC14_lucratividade_IDENTICA_com_e_sem_conta_agendada(client: TestClient
             "name": "Itau PJ",
             "kind": "checking",
             "opening_balance_cents": 100_000_00,
+            "opening_balance_is_known": True,
             "opening_date": (datetime.now(UTC).date() - timedelta(days=400)).isoformat(),
         },
         headers=headers,

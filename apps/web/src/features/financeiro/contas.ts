@@ -35,6 +35,14 @@ export interface BankAccount {
   holder_document: string;
   pix_key: string;
   opening_balance_cents: number;
+  /**
+   * Story 8.21 — o ATO de declarar, ao lado do VALOR acima. `false` significa que o dono disse
+   * que **não sabe** o saldo de partida; nesse caso `opening_balance_cents` é `0` e é
+   * **placeholder, não afirmação**, e a Projeção de Caixa cala runway e alerta.
+   * É este campo que o `AccountModal` lê para renderizar a escolha em modo EDIÇÃO — sem ele o
+   * caminho "descobri o saldo depois" não teria como existir na tela.
+   */
+  opening_balance_is_known: boolean;
   opening_date: string;
   is_primary: boolean;
   /** ISO datetime ou `null`. Conta arquivada nunca entra em soma nenhuma. */

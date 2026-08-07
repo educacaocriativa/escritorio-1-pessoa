@@ -34,7 +34,13 @@ import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy.orm import Session
 
-from app.core.money_planes import ORIGEM_BANCO, ORIGEM_MISTO, ORIGEM_PLATAFORMA, ORIGENS
+from app.core.money_planes import (
+    ORIGEM_BANCO,
+    ORIGEM_INDISPONIVEL,
+    ORIGEM_MISTO,
+    ORIGEM_PLATAFORMA,
+    ORIGENS,
+)
 from app.core.tz import DEFAULT_TENANT_TIMEZONE, tenant_today
 from app.modules.bank import reconciliation, service
 from app.modules.bank.models import (
@@ -78,6 +84,7 @@ def _payload(**over) -> dict:
         "holder_document": "11.444.777/0001-61",
         "pix_key": "banco@example.com",
         "opening_balance_cents": 1_500_00,
+        "opening_balance_is_known": True,
         "opening_date": OPENING,
     }
     base.update(over)
@@ -112,7 +119,23 @@ def test_saldo_derivado_nao_e_coluna_no_modelo():
     """AC5, dito de forma que uma story futura não consiga contornar sem ver o teste falhar."""
     columns = set(BankAccount.__table__.columns.keys())
     assert "opening_balance_cents" in columns
-    proibidas = {c for c in columns if "balance" in c and c != "opening_balance_cents"}
+    # ⚠️ **Story 8.21 — exceção NOMINAL, e o "nominal" é a guarda.** `opening_balance_is_known`
+    # casa com a substring `"balance"` e trip este gate, mas **não é saldo**: é o ATO de declarar,
+    # um booleano. Este gate existe para impedir saldo MATERIALIZADO (design §3.1) — uma coluna que
+    # guarde CENTAVOS e possa divergir dos próprios movimentos. Um booleano não pode divergir de
+    # nada.
+    # **Onde a exceção PARA:** nenhuma coluna que guarde centavos entra neste conjunto, nunca.
+    # Alargá-lo para um padrão (`endswith("_is_known")`, `"_flag"`, etc.) devolveria ao gate a
+    # frouxidão que ele existe para não ter — a próxima coluna de saldo passaria batida.
+    # **Renomear a coluna para fugir da substring foi considerado e REJEITADO:** seria deixar o
+    # teste ditar o vocabulário do domínio — `opening_balance_is_known` é o nome que diz o que ela
+    # é, e um teste não escolhe o vocabulário do negócio.
+    _ATO_NAO_E_SALDO = {"opening_balance_is_known"}
+    proibidas = {
+        c
+        for c in columns
+        if "balance" in c and c != "opening_balance_cents" and c not in _ATO_NAO_E_SALDO
+    }
     assert not proibidas, (
         f"Coluna de saldo apareceu em bank_accounts: {proibidas}. O saldo é DERIVADO (design "
         "§3.1) — materializá-lo troca a única propriedade que este produto vende (que o número é "
@@ -454,6 +477,7 @@ def test_patch_edita_os_campos_da_conta(client: TestClient, headers):
             "branch": "4321",
             "pix_key": "novo@example.com",
             "opening_balance_cents": 2_000_00,
+            "opening_balance_is_known": True,
             "opening_date": "2026-06-01",
         },
         headers=headers,
@@ -1043,3 +1067,138 @@ def test_projecao_pela_rota_tambem_muda(client: TestClient, headers):
     # IV4 — mudança estritamente ADITIVA: todo campo que existia antes continua existindo.
     assert set(antes) <= set(depois)
     assert {"saldo_inicial_banco_cents", "saldo_inicial_plataforma_cents"} <= set(depois)
+
+
+# ── Story 8.21 — o ATO de declarar, ao lado do VALOR ──────────────────────────────────────────
+
+
+def _sem_saldo(client: TestClient, headers, **over) -> dict:
+    body = {
+        "name": "C6 PJ",
+        "kind": KIND_CHECKING,
+        "opening_balance_is_known": False,
+        "opening_date": OPENING,
+    }
+    body.update(over)
+    r = client.post("/bank/accounts", json=body, headers=headers)
+    assert r.status_code == 201, r.text
+    return r.json()
+
+
+def test_criar_sem_dizer_se_sabe_o_saldo_e_422(client: TestClient, headers):
+    """AC3, o NÃO-MEMBRO. `opening_balance_cents` tem `= 0` no schema e é exatamente isso que faz
+    o zero nascer sozinho até pela API — o campo do ATO não repete o erro."""
+    payload = _payload()
+    del payload["opening_balance_is_known"]
+    assert client.post("/bank/accounts", json=payload, headers=headers).status_code == 422
+
+
+def test_criar_dizendo_que_NAO_sabe_dispensa_o_valor(client: TestClient, headers):
+    """AC3, o MEMBRO — e o valor é IGNORADO, não guardado ao lado de "não sei"."""
+    acc = _sem_saldo(client, headers, opening_balance_cents=999_00)
+    assert acc["opening_balance_is_known"] is False
+    assert acc["opening_balance_cents"] == 0, "valor junto de 'não sei' guardaria duas afirmações"
+
+
+def test_o_flag_sai_na_leitura_em_todas_as_rotas(client: TestClient, headers):
+    """AC5b. Sem isto o formulário não teria como mostrar o estado atual em modo edição, e o
+    caminho "descobri o saldo depois" ficaria sem UI — capacidade sem consumidor."""
+    acc = _sem_saldo(client, headers)
+    for body in (
+        acc,
+        client.get(f"/bank/accounts/{acc['id']}", headers=headers).json(),
+        client.get("/bank/accounts", headers=headers).json()[0],
+    ):
+        assert body["opening_balance_is_known"] is False
+
+
+def test_conta_sem_saldo_declarado_nao_afirma_procedencia_em_NENHUMA_das_duas_rotas(
+    client: TestClient, headers
+):
+    """AC5 — as DUAS rotas, e é por isso que o teste nomeia as duas.
+
+    A procedência é ATRIBUÍDA no router (`:85` e `:327`), não defaultada no schema: mudar só o
+    default entregaria o AC verde na leitura e morto em produção. E deixar a segunda rota de fora
+    seria trocar uma afirmação falsa por outra, uma camada acima — o defeito que a 8.20 nomeou.
+    """
+    acc = _sem_saldo(client, headers)
+    lista = client.get("/bank/accounts", headers=headers).json()[0]
+    balance = client.get(f"/bank/accounts/{acc['id']}/balance", headers=headers).json()
+    assert lista["saldo_derivado_origem"] == ORIGEM_INDISPONIVEL
+    assert balance["saldo_derivado_origem"] == ORIGEM_INDISPONIVEL
+    # ⚠️ O NÚMERO continua lá: quem diz "não sei" é a ORIGEM. Anular o saldo seria propagar `None`
+    # pela âncora da fórmula do §3.1 — o desenho que a @architect rejeitou.
+    assert isinstance(balance["saldo_derivado_cents"], int)
+
+
+def test_conta_COM_saldo_declarado_segue_dizendo_banco(client: TestClient, headers):
+    """O NÃO-MEMBRO do AC5: sem ele, "sempre indisponível" passaria no teste acima."""
+    acc = _create(client, headers)
+    assert acc["saldo_derivado_origem"] == ORIGEM_BANCO
+    assert (
+        client.get(f"/bank/accounts/{acc['id']}/balance", headers=headers).json()[
+            "saldo_derivado_origem"
+        ]
+        == ORIGEM_BANCO
+    )
+
+
+def test_dizer_que_passou_a_saber_SEM_informar_o_saldo_e_422(client: TestClient, headers):
+    """AC7 ramo 1. Afirmar "agora eu sei" mantendo o placeholder `0` declara que o banco tinha
+    zero num dia em que ninguém olhou — a divergência inventada da 8.11, por outra porta."""
+    acc = _sem_saldo(client, headers)
+    r = client.patch(
+        f"/bank/accounts/{acc['id']}", json={"opening_balance_is_known": True}, headers=headers
+    )
+    assert r.status_code == 422, r.text
+
+
+def test_informar_o_saldo_SEM_declarar_o_ato_e_422(client: TestClient, headers):
+    """AC7 ramo 2 — **a armadilha que esta story existe para fechar.**
+
+    O `AccountModal` envia `opening_balance_cents` em quase todo salvamento. Aceitar isso em
+    silêncio gravaria o número certo com a conta ainda "não sei" e a Projeção continuaria calada,
+    SEM EXPLICAÇÃO: o dono faria exatamente o que a nota mandou e nada mudaria. Pior que não ter
+    saída — é uma saída que parece funcionar. A guarda mora na API porque a tela é UMA das portas,
+    não a única (Atalho do iOS, script, `curl`).
+    """
+    acc = _sem_saldo(client, headers)
+    r = client.patch(
+        f"/bank/accounts/{acc['id']}", json={"opening_balance_cents": 12_345_00}, headers=headers
+    )
+    assert r.status_code == 422, r.text
+
+
+def test_descobrir_o_saldo_depois_e_caminho_de_primeira_classe(client: TestClient, headers):
+    """AC7, o caminho FELIZ: os dois campos no MESMO PATCH, e a Projeção volta a afirmar."""
+    acc = _sem_saldo(client, headers)
+    r = client.patch(
+        f"/bank/accounts/{acc['id']}",
+        json={"opening_balance_is_known": True, "opening_balance_cents": 12_345_00},
+        headers=headers,
+    )
+    assert r.status_code == 200, r.text
+    assert r.json()["opening_balance_is_known"] is True
+    assert r.json()["opening_balance_cents"] == 12_345_00
+    assert r.json()["saldo_derivado_origem"] == ORIGEM_BANCO
+
+
+def test_editar_so_o_nome_NAO_reescreve_o_ato(client: TestClient, headers):
+    """O NÃO-MEMBRO do AC6/AC7: um PATCH que reescreve estado que ninguém pediu para mudar é
+    como se perde um dado. Sem este teste, "mandar sempre o flag" passaria nos anteriores."""
+    acc = _sem_saldo(client, headers)
+    r = client.patch(f"/bank/accounts/{acc['id']}", json={"name": "C6 (matriz)"}, headers=headers)
+    assert r.status_code == 200, r.text
+    assert r.json()["opening_balance_is_known"] is False
+
+
+def test_voltar_a_NAO_saber_e_livre_e_preserva_o_numero(client: TestClient, headers):
+    """AC7 — `true → false` não apaga `opening_balance_cents`: o número volta a valer se o dono
+    voltar atrás, e apagá-lo destruiria uma afirmação que foi verdadeira."""
+    acc = _create(client, headers)
+    r = client.patch(
+        f"/bank/accounts/{acc['id']}", json={"opening_balance_is_known": False}, headers=headers
+    )
+    assert r.status_code == 200, r.text
+    assert r.json()["opening_balance_cents"] == 1_500_00
+    assert r.json()["saldo_derivado_origem"] == ORIGEM_INDISPONIVEL

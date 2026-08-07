@@ -122,6 +122,7 @@ def _seed_bank_account(
                 name=name,
                 kind=KIND_CHECKING,
                 opening_balance_cents=opening,
+                opening_balance_is_known=True,
                 opening_date=START,
             )
             session.add(account)
@@ -306,6 +307,7 @@ def _seed_onda2(
                 name=conta,
                 kind=KIND_CHECKING,
                 opening_balance_cents=1_000_000,
+                opening_balance_is_known=True,
                 opening_date=START,
             )
             cliente = Client(tenant_id=tenant_id, name="Cliente Pix")

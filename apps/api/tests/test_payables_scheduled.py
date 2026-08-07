@@ -95,6 +95,7 @@ def _conta(client: TestClient, headers, **over) -> dict:
         "name": "Itaú PJ",
         "kind": "checking",
         "opening_balance_cents": 10_000_00,
+        "opening_balance_is_known": True,
         "opening_date": ABERTURA.isoformat(),
     }
     payload.update(over)

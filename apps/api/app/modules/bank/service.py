@@ -448,6 +448,53 @@ def _validate_opening_date_recuo(
     )
 
 
+def _validate_saldo_conhecido(
+    *, account: BankAccount, novo_conhecido: bool | None, novo_saldo: int | None
+) -> None:
+    """Recusa (422) as duas formas de o par (valor, ato) sair incoerente num PATCH — Story 8.21.
+
+    **É a mesma família de `_validate_opening_date_recuo`**, e pela mesma razão: um saldo de
+    partida que o dono não afirmou produz uma **divergência inventada** na conferência, e
+    divergência inventada é pior que divergência escondida — depois de duas caçadas frustradas ele
+    para de confiar no sinal, e o sinal é o produto.
+
+    **Ramo 1 — `false → true` sem informar o saldo.** Afirmar *"agora eu sei"* mantendo o
+    placeholder `0` é declarar que o banco tinha zero num dia em que ninguém olhou. O número tem de
+    vir no MESMO PATCH.
+
+    **Ramo 2 — informar saldo numa conta `is_known=false` sem declarar o ato.** ⚠️ **Este é o que
+    fecha a armadilha real**, e ele existe porque a tela é UMA das portas, não a única. O
+    `AccountModal` envia `opening_balance_cents` em quase todo salvamento; aceitar isso em silêncio
+    gravaria o número certo com a conta ainda "não sei" e a **Projeção continuaria suprimida sem
+    explicação** — o dono faria exatamente o que a nota mandou e nada mudaria. Pior que não ter
+    saída: é uma saída que parece funcionar. A guarda protege a API contra todo o resto (Atalho do
+    iOS, script, `curl`, cliente futuro), exatamente como a docstring da guarda irmã argumenta.
+
+    **O caminho `true → false` é livre** e **não apaga** `opening_balance_cents`: o número volta a
+    valer se o dono voltar atrás, e apagá-lo destruiria uma afirmação que foi verdadeira.
+    """
+    virou_conhecido = novo_conhecido is True and not account.opening_balance_is_known
+    if virou_conhecido and novo_saldo is None:
+        raise BankError(
+            "Para dizer que você sabe o saldo desta conta, informe o valor no mesmo passo. Sem "
+            "ele, o e1p partiria do zero que ficou guardado como marcador e a conferência "
+            "acusaria uma diferença que não existe.",
+            422,
+        )
+    informou_valor_sem_declarar_ato = (
+        novo_saldo is not None
+        and novo_conhecido is None
+        and not account.opening_balance_is_known
+    )
+    if informou_valor_sem_declarar_ato:
+        raise BankError(
+            "Esta conta está marcada como 'não sei o saldo'. Informar o valor sem mudar essa "
+            "marca gravaria o número e manteria a Projeção de Caixa calada, sem explicação — "
+            "declare também que você passou a saber o saldo.",
+            422,
+        )
+
+
 # ── Leitura ──────────────────────────────────────────────────────────────────────────────────
 
 
@@ -803,7 +850,13 @@ def create_account(
         number=data.number,
         holder_document=data.holder_document,
         pix_key=data.pix_key,
-        opening_balance_cents=data.opening_balance_cents,
+        # Story 8.21 — quando o dono diz que NÃO SABE, o valor é IGNORADO e gravado como `0`.
+        # Aceitar um número junto de "não sei" guardaria duas afirmações contraditórias na mesma
+        # linha, e a segunda venceria em silêncio na primeira leitura.
+        opening_balance_cents=(
+            data.opening_balance_cents if data.opening_balance_is_known else 0
+        ),
+        opening_balance_is_known=data.opening_balance_is_known,
         opening_date=opening_date,
         # Sem primária ativa (tenant novo, ou a anterior foi arquivada) → esta assume.
         is_primary=primary_account(db) is None,
@@ -857,6 +910,14 @@ def update_account(
             account=acc, nova=nova_abertura, novo_saldo=data.opening_balance_cents
         )
 
+    # Story 8.21 — a quarta guarda, e ela também compara contra o estado ATUAL da conta, então
+    # entra ANTES de qualquer escrita, junto das três de data.
+    _validate_saldo_conhecido(
+        account=acc,
+        novo_conhecido=data.opening_balance_is_known,
+        novo_saldo=data.opening_balance_cents,
+    )
+
     if data.kind is not None:
         acc.kind = _validate_kind(data.kind)
     if nova_abertura is not None:
@@ -870,6 +931,7 @@ def update_account(
         "holder_document",
         "pix_key",
         "opening_balance_cents",
+        "opening_balance_is_known",
     ):
         value = getattr(data, field)
         if value is not None:
