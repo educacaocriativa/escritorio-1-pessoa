@@ -10,11 +10,11 @@ vi.mock("../../lib/api", () => ({
 }));
 
 const ENTRADA = {
-  id: "1", kind: "lead_created", title: "Chegou pelo site", body: "",
+  id: "1", kind: "crm.lead.criado", title: "Chegou pelo site", body: "",
   actor: "pagina:lead", is_ai: false, at: "2026-07-01T10:00:00Z",
 };
 const RETORNO = {
-  id: "2", kind: "lead_return", title: "Voltou pelo site",
+  id: "2", kind: "crm.lead.retornou", title: "Voltou pelo site",
   body: "Quero orcamento para 50 convidados",
   actor: "pagina:lead", is_ai: false, at: "2026-08-04T14:32:00Z",
 };

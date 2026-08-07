@@ -15,16 +15,18 @@ from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
-from app.core import audit, events
+from app.core import audit, events, facts
+from app.core.facts import (
+    CRM_ETAPA_MOVIDA,
+    CRM_LEAD_CRIADO,
+    CRM_LEAD_REABERTO,
+    CRM_LEAD_RETORNOU,
+    Fact,
+)
 from app.core.phone import normalize_br
 from app.modules.crm.models import (
     DEFAULT_STAGES,
-    KIND_LEAD_CREATED,
-    KIND_LEAD_RETURN,
-    KIND_REOPENED,
-    KIND_STAGE_MOVE,
     Client,
-    ClientEvent,
     PipelineStage,
 )
 from app.modules.crm.schemas import ClientCreate, ClientUpdate, StageCreate, StageUpdate
@@ -174,19 +176,29 @@ def record_event(
     actor: str,
     body: str = "",
     is_ai: bool = False,
-) -> ClientEvent:
-    """Grava um fato narrativo. **NÃO commita** — quem chama decide o momento.
+) -> Fact:
+    """Grava um fato narrativo do CRM. **NÃO commita** — quem chama decide o momento.
 
-    Mesmo padrão de `receivables.build_charge`: assim o evento entra na MESMA transação do
-    fato que ele descreve, e não existe estado em que o card mudou de coluna mas a história
-    não registrou (ou o contrário).
+    Mesmo padrão de `receivables.build_charge`: assim o fato entra na MESMA transação do
+    acontecimento que ele descreve, e não existe estado em que o card mudou de coluna mas a
+    história não registrou (ou o contrário).
+
+    Wrapper fino sobre `core.facts.record`: existe para que os call sites do CRM não repitam
+    `module="crm"` nem `subject_type="client"`, e porque a assinatura já era esta.
     """
-    event = ClientEvent(
-        tenant_id=tenant_id, client_id=client_id, kind=kind,
-        title=title[:140], body=body, actor=actor, is_ai=is_ai,
+    return facts.record(
+        db,
+        tenant_id=tenant_id,
+        module="crm",
+        kind=kind,
+        title=title,
+        actor=actor,
+        body=body,
+        client_id=client_id,
+        subject_type="client",
+        subject_id=client_id,
+        is_ai=is_ai,
     )
-    db.add(event)
-    return event
 
 
 _ROTULO_DE_CHEGADA = {
@@ -239,7 +251,7 @@ def create_client(db: Session, *, tenant_id: str, actor: str, data: ClientCreate
     # dívida MNT-001 registrada no CLAUDE.md.
     db.flush()
     record_event(
-        db, tenant_id=tenant_id, client_id=client.id, kind=KIND_LEAD_CREATED,
+        db, tenant_id=tenant_id, client_id=client.id, kind=CRM_LEAD_CRIADO,
         title=_titulo_de_chegada(client.source), actor=actor, body=data.notes,
     )
     audit.record(db, tenant_id=tenant_id, actor=actor, action="crm.client.create", target=client.id)
@@ -327,7 +339,7 @@ def absorb_lead(
 
     corpo = "\n".join(filter(None, [data.notes, *complementos]))
     record_event(
-        db, tenant_id=tenant_id, client_id=existente.id, kind=KIND_LEAD_RETURN,
+        db, tenant_id=tenant_id, client_id=existente.id, kind=CRM_LEAD_RETORNOU,
         title=_titulo_de_retorno(data.source), actor=actor, body=corpo,
     )
 
@@ -342,7 +354,7 @@ def absorb_lead(
             # Reabrir é entrar numa etapa nova: a negociação anterior fechou e esta é outra.
             existente.stage_entered_at = datetime.now(UTC)
             record_event(
-                db, tenant_id=tenant_id, client_id=existente.id, kind=KIND_REOPENED,
+                db, tenant_id=tenant_id, client_id=existente.id, kind=CRM_LEAD_REABERTO,
                 title=f"Reaberto em {ativas[0].name} (estava em {etapa.name})", actor=actor,
             )
 
@@ -444,7 +456,7 @@ def move_client(
     # Guarda os NOMES, não os ids: renomear ou arquivar a coluna depois não pode reescrever
     # o que aconteceu naquele dia (princípio do `raw_description` de bank_transactions).
     record_event(
-        db, tenant_id=tenant_id, client_id=client.id, kind=KIND_STAGE_MOVE,
+        db, tenant_id=tenant_id, client_id=client.id, kind=CRM_ETAPA_MOVIDA,
         title=f"Movido de {nome_origem} → {target.name}", actor=actor, is_ai=by_ai,
     )
     audit.record(
@@ -475,17 +487,26 @@ def last_interaction_map(db: Session) -> dict[str, datetime]:
     que alguém esquecesse de atualizar. Assim é correto por construção.
 
     A sessão já está isolada por tenant (RLS): nada de filtro manual de `tenant_id`.
+
+    ⚠️ O filtro `module == "crm"` em `facts` PRESERVA o recorte que existia quando a tabela
+    era `client_events`. "Última interação" no card do Kanban significa "quando eu toquei
+    neste lead" — um pagamento compensado ou uma conta paga são fatos daquele contato, mas
+    não são um toque comercial, e contá-los faria todo card parecer recém-trabalhado. Ampliar
+    o recorte é decisão de produto, não consequência da consolidação em `facts`.
     """
     ultimo: dict[str, datetime] = {}
-    for tabela, coluna in (
-        (ClientEvent, ClientEvent.client_id),
-        (WhatsappMessage, WhatsappMessage.client_id),
+    for tabela, coluna, extra in (
+        (Fact, Fact.client_id, Fact.module == "crm"),
+        (WhatsappMessage, WhatsappMessage.client_id, None),
     ):
-        linhas = db.execute(
+        consulta = (
             select(coluna, func.max(tabela.created_at))
             .where(coluna.is_not(None))
             .group_by(coluna)
-        ).all()
+        )
+        if extra is not None:
+            consulta = consulta.where(extra)
+        linhas = db.execute(consulta).all()
         for client_id, quando in linhas:
             if quando is None:
                 continue

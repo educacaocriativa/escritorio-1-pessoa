@@ -12,7 +12,11 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.config import settings
-from app.core import ai, audit, payment_gateway
+from app.core import ai, audit, facts, payment_gateway
+from app.core.facts import (
+    FIN_COBRANCA_PROTESTADA,
+    FIN_PAGAMENTO_RECEBIDO,
+)
 from app.core.recurrence import advance, occurrences
 
 # O estado é DERIVADO da data, nunca escolhido (Story 8.15 AC5, herdando a 8.14). O helper é
@@ -440,6 +444,44 @@ def update_charge(db: Session, *, charge_id: str, tenant_id: str, actor: str, da
     return charge
 
 
+
+def _nome_do_contato(db: Session, client_id: str | None) -> str:
+    """Nome para o texto CONGELADO do fato. Sem contato, um rótulo honesto em vez de vazio."""
+    if not client_id:
+        return "contato não identificado"
+    client = db.get(Client, client_id)
+    return client.name if client is not None else "contato não identificado"
+
+
+def _registra_recebimento(db: Session, charge: Charge) -> None:
+    """Grava o fato "o dinheiro entrou" — **uma vez por cobrança**, e só quando entrou mesmo.
+
+    Chamado dos TRÊS caminhos que reconhecem dinheiro novo (`mark_paid` pelo gateway,
+    `settle_off_rail` pelo dono, `promote_scheduled` pelo worker) e de nenhum outro:
+    `update_payment` corrige uma baixa já feita, e corrigir não é receber de novo.
+
+    A guarda de `STATUS_PAID` é o que impede o briefing de anunciar dinheiro que ainda não
+    chegou: uma liquidação fora do trilho com data futura grava `scheduled`, e quem torna isso
+    um fato é o `promote_scheduled`, no dia.
+
+    ⚠️ **Não guarda o valor no título** (Invariante 2). Quem compõe o briefing lê
+    `charge.amount_cents` na origem, pelo par `(subject_type, subject_id)`.
+    """
+    if charge.status != STATUS_PAID:
+        return
+    facts.record(
+        db,
+        tenant_id=charge.tenant_id,
+        module="financeiro",
+        kind=FIN_PAGAMENTO_RECEBIDO,
+        title=f"Pagamento de {_nome_do_contato(db, charge.client_id)} recebido",
+        actor="system",
+        client_id=charge.client_id,
+        subject_type="charge",
+        subject_id=charge.id,
+    )
+
+
 def protest_charge(db: Session, *, charge_id: str, tenant_id: str, actor: str) -> Charge:
     """Protesta uma cobrança VENCIDA e em aberto (registra o protesto; cartório real é dívida)."""
     charge = get_charge(db, charge_id)
@@ -450,6 +492,12 @@ def protest_charge(db: Session, *, charge_id: str, tenant_id: str, actor: str) -
     if charge.protested_at is not None:
         return charge  # idempotente
     charge.protested_at = datetime.now(UTC)
+    facts.record(
+        db, tenant_id=tenant_id, module="financeiro", kind=FIN_COBRANCA_PROTESTADA,
+        title=f"Cobrança de {_nome_do_contato(db, charge.client_id)} protestada",
+        actor=actor, client_id=charge.client_id,
+        subject_type="charge", subject_id=charge.id,
+    )
     audit.record(
         db, tenant_id=tenant_id, actor=actor, action="receivable.protest", target=charge.id
     )
@@ -504,6 +552,7 @@ def mark_paid(db: Session, *, charge_id: str, tenant_id: str, actor: str, by_ai:
         ev = db.get(AgendaEvent, charge.agenda_event_id)
         if ev is not None:
             ev.status = AGENDA_STATUS_DONE  # não fica "atrasado" na agenda
+    _registra_recebimento(db, charge)
     audit.record(db, tenant_id=tenant_id, actor=actor, action="receivable.paid", target=charge.id)
     db.commit()
     db.refresh(charge)
@@ -777,6 +826,10 @@ def settle_off_rail(
         bank_account_id=acc.id,
         posted_at=received_on,
     )
+    # Só vira fato se o status resultante for `paid`: com data futura isto grava
+    # `scheduled`, e anunciar no briefing dinheiro que ainda não chegou seria mentira.
+    # Quem transforma a agendada em fato é `promote_scheduled`, no dia.
+    _registra_recebimento(db, charge)
     audit.record(
         db, tenant_id=tenant_id, actor=actor, action="receivable.settle_off_rail", target=charge.id
     )
@@ -996,6 +1049,8 @@ def promote_scheduled(
     )
     for charge in vencidas:
         charge.status = STATUS_PAID
+        # A agendada acabou de virar dinheiro real — este é o momento do fato.
+        _registra_recebimento(db, charge)
         audit.record(
             db,
             tenant_id=tenant_id,

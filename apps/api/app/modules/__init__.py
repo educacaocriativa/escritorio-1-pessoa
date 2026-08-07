@@ -37,6 +37,7 @@ from app.modules.quotes.router import router as quotes_router
 from app.modules.receivables.router import router as receivables_router
 from app.modules.settings.router import router as settings_router
 from app.modules.stock.router import router as stock_router
+from app.modules.vima.router import router as vima_router
 from app.modules.wallet.router import router as wallet_router
 from app.modules.whatsapp_inbox.router import internal_router as whatsapp_inbox_internal_router
 from app.modules.whatsapp_inbox.router import public_router as whatsapp_inbox_public_router
@@ -84,4 +85,5 @@ ALL_ROUTERS: list[APIRouter] = [
     google_calendar_public_router,
     integrations_leads_router,
     integrations_leads_public_router,
+    vima_router,
 ]

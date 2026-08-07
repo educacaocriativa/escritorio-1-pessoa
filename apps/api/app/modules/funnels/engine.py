@@ -21,7 +21,8 @@ from datetime import UTC, datetime, timedelta
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.core import audit
+from app.core import audit, facts
+from app.core.facts import OP_JORNADA_FALHOU
 from app.core.tz import format_datetime_br
 from app.modules.crm.models import Client
 from app.modules.funnels import service
@@ -178,18 +179,46 @@ def _log(run: FunnelRun, node: dict, status: str, message: str) -> None:
 
 
 # ── Núcleo: anda pelo grafo até esperar, terminar ou falhar ─────────────────
+
+def _marca_falha(db: Session, *, run: FunnelRun, funnel: Funnel | None, motivo: str) -> None:
+    """Marca a jornada como falha **e grava o fato**. Único ponto — são quatro caminhos.
+
+    Uma ação de nó que falha marca a `run` como `failed` e **não derruba a request**, por
+    design. A consequência é que hoje ninguém é avisado: a automação simplesmente para de
+    funcionar, em silêncio, e o dono descobre semanas depois porque um cliente reclamou.
+
+    ⚠️ Quatro sites chegam aqui (limite de passos, nó inexistente, ação que levantou, funil
+    removido). Espalhar `facts.record` por eles deixaria o quinto — que alguém acrescenta
+    depois — mudo, sem quebrar teste nenhum. É a mesma lição do gate de `stage_entered_at`.
+    """
+    run.status = RUN_FAILED
+    run.error = motivo
+    facts.record(
+        db,
+        tenant_id=run.tenant_id,
+        module="operacao",
+        kind=OP_JORNADA_FALHOU,
+        title=f"Automação “{(funnel.name if funnel else 'removida')[:70]}” falhou",
+        body=motivo[:500],
+        actor="system",
+        client_id=run.client_id,
+        subject_type="funnel_run",
+        subject_id=run.id,
+    )
+
+
 def _drive(db: Session, *, tenant_id: str, actor: str, funnel: Funnel, run: FunnelRun) -> None:
     steps = 0
     while run.status == RUN_RUNNING and run.current_node_id:
         if steps >= MAX_STEPS_PER_DRIVE:
-            run.status = RUN_FAILED
-            run.error = "Limite de passos atingido (possível ciclo no funil)"
+            _marca_falha(db, run=run, funnel=funnel,
+                         motivo="Limite de passos atingido (possível ciclo no funil)")
             break
         steps += 1
         node = _node(funnel, run.current_node_id)
         if node is None:
-            run.status = RUN_FAILED
-            run.error = f"Nó '{run.current_node_id}' não existe no funil"
+            _marca_falha(db, run=run, funnel=funnel,
+                         motivo=f"Nó '{run.current_node_id}' não existe no funil")
             break
         data = node.get("data") or {}
         key = data.get("key", "")
@@ -220,8 +249,7 @@ def _drive(db: Session, *, tenant_id: str, actor: str, funnel: Funnel, run: Funn
                 _log(run, node, "ok", result.get("message", ""))
             except service.FunnelError as e:
                 _log(run, node, "failed", str(e))
-                run.status = RUN_FAILED
-                run.error = str(e)
+                _marca_falha(db, run=run, funnel=funnel, motivo=str(e))
                 break
         else:
             _log(run, node, "passthrough", data.get("label", key or "nó"))
@@ -272,8 +300,7 @@ def tick(db: Session, *, tenant_id: str, actor: str, now: datetime | None = None
     for run in due:
         funnel = db.get(Funnel, run.funnel_id)
         if funnel is None:
-            run.status = RUN_FAILED
-            run.error = "Funil foi removido"
+            _marca_falha(db, run=run, funnel=None, motivo="Funil foi removido")
             continue
         run.status = RUN_RUNNING
         run.resume_at = None

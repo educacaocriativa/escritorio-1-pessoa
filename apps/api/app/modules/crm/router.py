@@ -4,9 +4,9 @@ from __future__ import annotations
 from fastapi import APIRouter, Depends, HTTPException, Query, Response
 from sqlalchemy.orm import Session
 
+from app.core.facts import CRM_NOTA_CRIADA
 from app.core.tenancy import CurrentUser, get_tenant_db, require_module
 from app.modules.crm import service, timeline
-from app.modules.crm.models import KIND_NOTE
 from app.modules.crm.schemas import (
     Board,
     BoardClient,
@@ -219,7 +219,7 @@ def create_note(
     except service.CrmError as e:
         raise _err(e) from e
     event = service.record_event(
-        db, tenant_id=user.tenant_id, client_id=client_id, kind=KIND_NOTE,
+        db, tenant_id=user.tenant_id, client_id=client_id, kind=CRM_NOTA_CRIADA,
         title=data.title, body=data.body, actor=user.user_id, is_ai=user.is_ai,
     )
     db.commit()

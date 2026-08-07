@@ -1,8 +1,10 @@
-"""Timeline do contato: mescla o narrativo (client_events) com o financeiro (charges/quotes)."""
+"""Timeline do contato: mescla o narrativo (`facts`) com o financeiro (charges/quotes)."""
 from datetime import date
 
 import pytest
 from fastapi.testclient import TestClient
+
+from app.core.facts import Fact
 
 REGISTER = {
     "legal_name": "Estúdio Ana",
@@ -33,11 +35,11 @@ def test_timeline_comeca_com_a_chegada(client: TestClient, headers, contato):
     assert resp.status_code == 200
     corpo = resp.json()
     assert corpo["truncated"] is False
-    assert [e["kind"] for e in corpo["entries"]] == ["lead_created"]
+    assert [e["kind"] for e in corpo["entries"]] == ["crm.lead.criado"]
 
 
 def test_timeline_inclui_a_cobranca_sem_copiar_o_valor(client: TestClient, headers, contato, db):
-    """O financeiro é LIDO de `charges`. Nenhuma linha de `client_events` guarda o valor.
+    """O financeiro é LIDO de `charges`. Nenhuma linha de `facts` guarda o valor.
 
     A cobrança é semeada direto no banco (e não pela rota) de propósito: o contrato de
     `POST /receivables/charges` não é definido por este plano, e o que está sendo provado
@@ -45,7 +47,7 @@ def test_timeline_inclui_a_cobranca_sem_copiar_o_valor(client: TestClient, heade
     """
     from sqlalchemy import select
 
-    from app.modules.crm.models import Client, ClientEvent
+    from app.modules.crm.models import Client
     from app.modules.receivables.models import Charge
 
     tenant_id = db.scalar(select(Client.tenant_id).where(Client.id == contato))
@@ -64,7 +66,7 @@ def test_timeline_inclui_a_cobranca_sem_copiar_o_valor(client: TestClient, heade
 
     # A fonte única do valor continua sendo `charges`: nenhum evento narrativo o copiou.
     eventos = list(
-        db.scalars(select(ClientEvent).where(ClientEvent.client_id == contato)).all()
+        db.scalars(select(Fact).where(Fact.client_id == contato)).all()
     )
     assert all("1.200,00" not in (e.title + e.body) for e in eventos)
 
@@ -77,7 +79,7 @@ def test_timeline_ordena_do_mais_recente_para_o_mais_antigo(client: TestClient, 
     entries = client.get(f"/crm/clients/{contato}/timeline", headers=headers).json()["entries"]
     ats = [e["at"] for e in entries]
     assert ats == sorted(ats, reverse=True)
-    assert entries[-1]["kind"] == "lead_created"  # o mais antigo é a chegada
+    assert entries[-1]["kind"] == "crm.lead.criado"  # o mais antigo é a chegada
 
 
 def test_gravar_nota_aparece_na_timeline(client: TestClient, headers, contato):
@@ -87,10 +89,10 @@ def test_gravar_nota_aparece_na_timeline(client: TestClient, headers, contato):
         headers=headers,
     )
     assert resp.status_code == 201
-    assert resp.json()["kind"] == "note"
+    assert resp.json()["kind"] == "crm.nota.criada"
 
     entries = client.get(f"/crm/clients/{contato}/timeline", headers=headers).json()["entries"]
-    nota = next(e for e in entries if e["kind"] == "note")
+    nota = next(e for e in entries if e["kind"] == "crm.nota.criada")
     assert nota["title"] == "Desconto aprovado"
     assert "10%" in nota["body"]
 

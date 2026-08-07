@@ -13,8 +13,9 @@ import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy import select
 
+from app.core.facts import Fact
 from app.modules.crm import merge, service
-from app.modules.crm.models import Client, ClientEvent
+from app.modules.crm.models import Client
 from app.modules.crm.schemas import ClientCreate
 from app.modules.receivables.models import Charge
 
@@ -48,7 +49,7 @@ def test_descobre_as_tabelas_em_vez_de_listar():
     tabelas = merge.tabelas_que_apontam_para_cliente()
     # Uma amostra de módulos independentes entre si: se a descoberta quebrar, alguma some.
     assert {"charges", "quotes", "contracts", "notifications", "whatsapp_chats",
-            "whatsapp_messages", "client_events"} <= set(tabelas)
+            "whatsapp_messages", "facts"} <= set(tabelas)
     assert "clients" not in tabelas  # a própria tabela não tem `client_id`
 
 
@@ -141,9 +142,9 @@ def test_eventos_dos_dois_cards_ficam_na_mesma_linha_do_tempo(db, tenant_id):
     db.commit()
 
     eventos = db.scalars(
-        select(ClientEvent).where(ClientEvent.client_id == sobrevivente.id)
+        select(Fact).where(Fact.client_id == sobrevivente.id)
     ).all()
-    assert len(eventos) == 2  # o "lead_created" de cada card, agora no mesmo fio
+    assert len(eventos) == 2  # o "crm.lead.criado" de cada card, agora no mesmo fio
 
 
 def test_complementa_buraco_mas_nunca_sobrescreve(db, tenant_id):

@@ -284,7 +284,7 @@ const GRUPO = {
 const TIMELINE_DO_CRM = {
   entries: [
     {
-      id: "e1", kind: "lead_created", title: "Chegou pelo site", body: "",
+      id: "e1", kind: "crm.lead.criado", title: "Chegou pelo site", body: "",
       actor: "pagina:lead", is_ai: false, at: "2026-07-01T10:00:00Z",
     },
   ],

@@ -5,6 +5,7 @@ garanta que ele seja importado aqui (direta ou indiretamente).
 """
 # noqa: F401 — imports existem só para registrar as tabelas no metadata.
 from app.core.audit import AuditEntry, PlatformAuditEntry  # noqa: F401
+from app.core.facts import Fact  # noqa: F401
 from app.db.base import Base
 from app.modules.agenda.models import AgendaEvent  # noqa: F401
 from app.modules.attachments.models import Attachment, PublicImage  # noqa: F401
@@ -22,7 +23,7 @@ from app.modules.contracts.models import (  # noqa: F401
     PublishedContract,
 )
 from app.modules.cost_centers.models import CostCenter  # noqa: F401
-from app.modules.crm.models import Client, ClientEvent, PipelineStage  # noqa: F401
+from app.modules.crm.models import Client, PipelineStage  # noqa: F401
 from app.modules.device_tokens.models import DeviceToken  # noqa: F401
 from app.modules.funnels.models import Funnel, FunnelRun  # noqa: F401
 from app.modules.google_calendar.models import GoogleCredential  # noqa: F401
@@ -37,6 +38,7 @@ from app.modules.quotes.models import PublishedProposal, Quote  # noqa: F401
 from app.modules.receivables.models import Charge  # noqa: F401
 from app.modules.settings.models import TenantProfile  # noqa: F401
 from app.modules.stock.models import StockItem, StockMovement  # noqa: F401
+from app.modules.vima.models import Briefing  # noqa: F401
 from app.modules.wallet.models import (  # noqa: F401
     PlatformEarning,
     PlatformSetting,

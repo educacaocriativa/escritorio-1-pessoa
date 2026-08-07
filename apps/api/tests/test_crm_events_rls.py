@@ -168,9 +168,14 @@ def test_phone_cru_nao_foi_alterado_pelo_backfill(ambiente):
     assert phone == "(11) 99999-8888"
 
 
-def test_client_events_isolado_entre_tenants(ambiente):
+def test_facts_isolado_entre_tenants(ambiente):
+    """A linha do tempo narrativa mudou de casa na 0069 (`client_events` → `facts`).
+
+    A RLS precisa valer na tabela nova exatamente como valia na antiga — uma tabela que troca
+    de nome sem levar a policy junto é vazamento silencioso.
+    """
     engine = create_engine(ambiente["url"], poolclass=NullPool)
-    evento_id = str(uuid4())
+    fato_id = str(uuid4())
     try:
         with engine.begin() as conn:
             conn.execute(
@@ -182,12 +187,13 @@ def test_client_events_isolado_entre_tenants(ambiente):
             )
             conn.execute(
                 text(
-                    "INSERT INTO client_events (id, tenant_id, client_id, kind, title, body, "
-                    "actor, is_ai, created_at, updated_at) VALUES "
-                    "(:id, :t, :c, 'note', 'Decisao', 'fechamos com 10%', 'ana@example.com', "
-                    "false, now(), now())"
+                    "INSERT INTO facts (id, tenant_id, module, kind, title, body, client_id, "
+                    "subject_type, subject_id, actor, is_ai, occurred_at, origin, "
+                    "created_at, updated_at) VALUES "
+                    "(:id, :t, 'crm', 'crm.nota.criada', 'Decisao', 'fechamos com 10%', :c, "
+                    "'client', :c, 'ana@example.com', false, now(), 'emitted', now(), now())"
                 ),
-                {"id": evento_id, "t": ambiente["tenant_a"], "c": client_id},
+                {"id": fato_id, "t": ambiente["tenant_a"], "c": client_id},
             )
 
         # controle POSITIVO: o dono enxerga
@@ -197,7 +203,7 @@ def test_client_events_isolado_entre_tenants(ambiente):
                 {"t": ambiente["tenant_a"]},
             )
             assert conn.scalar(
-                text("SELECT count(*) FROM client_events WHERE id = :id"), {"id": evento_id}
+                text("SELECT count(*) FROM facts WHERE id = :id"), {"id": fato_id}
             ) == 1
 
         # caso NEGATIVO: outro tenant não enxerga
@@ -207,11 +213,11 @@ def test_client_events_isolado_entre_tenants(ambiente):
                 {"t": ambiente["tenant_b"]},
             )
             assert conn.scalar(
-                text("SELECT count(*) FROM client_events WHERE id = :id"), {"id": evento_id}
+                text("SELECT count(*) FROM facts WHERE id = :id"), {"id": fato_id}
             ) == 0
 
         # caso NEGATIVO: sessão sem GUC não enxerga nada (fail-closed)
         with engine.begin() as conn:
-            assert conn.scalar(text("SELECT count(*) FROM client_events")) == 0
+            assert conn.scalar(text("SELECT count(*) FROM facts")) == 0
     finally:
         engine.dispose()
