@@ -16,7 +16,7 @@ Spec mestre completa: [`docs/MODULES.md`](docs/MODULES.md). Origem: `/Volumes/Ex
 - **Frontend:** React 18 + Vite + TypeScript + Tailwind. Design system "Portal" (ver `packages/design-tokens`).
 - **Monorepo:** pnpm workspaces (JS) + app Python isolado. Tipos compartilhados em `packages/shared-types`.
 - **Mobile (futuro):** Expo / React Native, reaproveitando API + `packages/`.
-- **IA:** Anthropic SDK, modelo `claude-opus-4-8`.
+- **IA:** Anthropic SDK. **Não há modelo global** — cada tarefa tem o seu em `core/ai.MODELO_POR_TAREFA`, e toda chamada é contabilizada (ver §Contabilidade de IA).
 - **Infra AWS:** container enxuto (EC2 Graviton + Docker) → ECS Fargate. RDS Postgres, S3+CloudFront, SSM, SQS. Ver `docs/AWS-DEPLOYMENT.md`.
 
 ## 3. Regras de ouro (NUNCA violar)
@@ -490,6 +490,9 @@ comportamento era incoerente por porta de entrada.
   que a Onda 0 do Epic 8 desfez. Ler da origem também deu o histórico financeiro
   **retroativo** de graça. `title`/`body` são texto CONGELADO (renomear a coluna do Kanban não
   reescreve o passado), no princípio do `raw_description` de `bank_transactions`.
+  - ⚠️ **`client_events` NÃO EXISTE MAIS** (migration 0069, 2026-08-06): foi absorvida por
+    `facts` e dropada. Tudo o que este item descreve continua valendo — mudou a tabela, não
+    a regra. `crm/timeline.py` lê de `facts`. Ver §Vima abaixo.
 - [x] **`ClientEvent.created_at` tem default do lado do PYTHON**, sobrescrevendo o
   `server_default=func.now()` do `TimestampMixin`. No Postgres `now()` é o timestamp da
   TRANSAÇÃO: `lead_return` e `reopened`, gravados no mesmo commit por `absorb_lead`, sairiam
@@ -537,11 +540,122 @@ setter do React que recebe função a trata como updater e a **executa**. O guar
 `load` degrada para aviso em vez de estourar.
 
 **Dívida:** os cards duplicados que já existiam **não foram mesclados** (decisão do fundador:
-a correção vale daqui para frente) — quem for mesclá-los depois precisa juntar `client_events`,
-`charges`, `quotes`, `contracts` e `whatsapp_chats` do card absorvido, e não só apagar a linha.
+a correção vale daqui para frente) — quem for mesclá-los depois precisa juntar `facts`
+(ex-`client_events`), `charges`, `quotes`, `contracts` e `whatsapp_chats` do card absorvido, e não só apagar a linha.
 Não há ferramenta de mescla na tela. Também não há "ligar conversa não identificada a um
 contato" nem marcação de histórico como lido. **Validação manual em ~360px do painel de
 Conversas ainda não foi feita** — bloqueia release, não bloqueia merge.
+
+## Vima: o Registro de Fatos e o briefing (PR #85, 2026-08-06)
+
+> Spec: `docs/superpowers/specs/2026-08-06-vima-registro-de-fatos-e-briefing-design.md` ·
+> Plano: `docs/superpowers/plans/2026-08-06-vima-registro-de-fatos-e-briefing.md`
+
+`core/events.py` é in-process e síncrono, e nada era persistido — nenhuma consulta respondia
+"o que aconteceu desde ontem à noite", então o dono abria cinco telas e montava o quadro na
+cabeça. **`facts` é a memória narrativa do negócio inteiro**, e o briefing é a leitura dela.
+
+- [x] **`core/facts.py` + migration 0069** — tabela `facts` (RLS), taxonomia
+  `<módulo>.<entidade>.<verbo>`. **Absorveu `client_events`, que foi DROPADA** — se você
+  procurar aquela tabela, é esta. `crm/timeline.py` lê daqui.
+  - ⚠️ **Duas invariantes viraram guarda mecânica em `facts.record`**, não disciplina: (1) o
+    `kind` precisa começar com o `module` (senão trinta módulos produzem `payment_received` e
+    `payment.received` convivendo em seis meses); (2) o `title` **não pode conter dinheiro** —
+    o valor é lido de `charges`/`payables`/`quotes` na composição, nunca copiado. Violar
+    qualquer uma levanta `FactError` e estoura a transação de propósito.
+  - **`module` é o vocabulário de `User.allowed_modules`**, NÃO o nome da pasta: `quotes` e
+    `pages` emitem sob `comercial`. É o eixo de permissão do briefing.
+  - `occurred_at` (quando aconteceu) é distinto de `created_at` (quando gravamos). A janela do
+    briefing usa o primeiro.
+- [x] **Oito módulos emitem** — `crm` · `whatsapp_inbox` · `receivables` · `payables` ·
+  `agenda` · `quotes` · `pages` · `funnels`. Onde há vários caminhos para o mesmo
+  acontecimento, um helper concentra a emissão (`_registra_recebimento`, `_marca_falha`):
+  espalhar `facts.record` deixaria mudo o quinto caminho que alguém acrescentar depois, **sem
+  quebrar teste nenhum**.
+  - Das quatro formas de marcar cobrança paga, `update_payment` **não** emite (corrigir a data
+    de uma baixa não é receber de novo), e liquidação `scheduled` também não — dinheiro com
+    data futura ainda não entrou, e anunciá-lo no briefing seria mentira.
+- [x] **`GET /vima/briefing`** (+ `POST /vima/briefing/{id}/read`), migration 0070. Idempotente
+  por `(tenant, usuário, dia)`: F5 relê o gravado em vez de pagar narração nova, e o dono
+  reencontra de tarde as mesmas palavras da manhã.
+  - **A IA só NARRA.** Fato, Ausência e Tendência são determinísticos; o compositor decide *o
+    que* entra e em que ordem, a Claude decide só *como* dizer. Inferência ("há oportunidade de
+    vender para 3 clientes semelhantes") ficou para o V4 por assimetria de credibilidade: fato
+    errado é bug, inferência errada ensina o dono a não confiar no briefing.
+  - **Sem `ANTHROPIC_API_KEY` o briefing sai íntegro** por template — e nesse caso **não grava
+    rastro de IA**, porque não houve IA. Mesmo padrão de `financial_intelligence/ai_narrator.py`.
+  - **Ausência é o que faz funcionar no dia 1:** ela lê estado em aberto + relógio, não o log,
+    então não depende de backfill (e **não houve backfill** — os fatos valem da implantação em
+    diante). Cinco famílias: prazo estourado, dinheiro com data, ninguém respondeu, contato
+    sumido, card parado, topo seco. Limiares injetáveis porque o V2 (DNA da Empresa) vai
+    substituí-los.
+  - **A regra do silêncio:** ausência é reportada ao CRUZAR o limiar, não enquanto permanece
+    cruzada — só volta quando os dias dobram. Sem isso o briefing vira papel de parede em duas
+    semanas e o dono lê por cima, inclusive no dia em que aparece a quinta pendência. É a Regra
+    7 do Epic 8 ("dentro da banda: verde e SILÊNCIO") em outro domínio.
+  - **`vazio` significa "nada ACONTECEU", não "nenhuma linha".** Um tenant recém-criado sempre
+    tem pendência e tendência (topo sem lead, o 🟡 de completude do Epic 8), então um flag que
+    olhasse `linhas` nunca seria verdadeiro.
+  - **A agregação tem como eixo a FRASE repetida** (`kind` + `title`), não o `kind`: quarenta
+    vezes a mesma sentença é uma notícia, cinquenta notas diferentes são cinquenta
+    acontecimentos, e fundi-las por `kind` seria omitir, não resumir.
+  - **O filtro de permissão decide quais REGRAS RODAM, não quais resultados aparecem** — para
+    um funcionário só de CRM a regra financeira não é executada, não é calculada e escondida.
+    Elimina a classe inteira de bug em que um dado proibido vaza porque alguém esqueceu o
+    filtro na saída. A decisão é a MESMA de `require_module` (owner vê tudo; lista vazia vê
+    tudo) — divergir daria dois significados a `allowed_modules`.
+  - Gate em `tests/test_fuso_do_tenant.py`: varredura AST sobre `app/modules/vima/` separando
+    carimbar um INSTANTE (legítimo) de derivar QUE DIA É HOJE (regressão). `absences`,
+    `composer` e `permissions` são puros e não podem ler o relógio nem para instante.
+- **Dívida:** `occurred_at` das mensagens de WhatsApp cai no default em vez do `messageTimestamp`
+  real (`InboundMessage` não carrega o campo) — janela de erro de segundos na virada do dia;
+  expurgo dos sujeitos polimórficos (LGPD) não tem rotina, só `client_id` cascateia;
+  `comercial.topo.sem_lead` é a única Ausência que lê o log, então enquanto o registro for novo
+  ela dispara por falta de histórico e não por falta de lead; o anonimizador não mascara nomes
+  apesar da docstring dizer que sim (pré-existente, o briefing herda). **A tela é a Onda 4** —
+  hoje o briefing só existe como API.
+
+## Contabilidade de IA e roteamento de modelo por tarefa (PR #87, 2026-08-06)
+
+O produto já gastava IA em produção e **não sabia quanto, nem por quem**: seis módulos chamavam
+`ai.complete` e cinco descartavam os tokens que a Anthropic devolvia. A conta chegava pela fatura.
+
+- [x] **Ledger `ai_usage`** (migration 0071, RLS `FORCE`) — tenant, usuário, tarefa, **o modelo
+  que realmente rodou** (não o configurado) e quatro contadores de token. Cache tem colunas
+  próprias porque tem **preço próprio** (leitura ~0,1× do input, escrita ~1,25×): achatá-lo em
+  `input_tokens` daria conta errada.
+- [x] **`db`, `tenant_id` e `task` são OBRIGATÓRIOS em `ai.complete`** — é o que torna
+  impossível chamar a IA sem contabilizar. Esquecer vira `TypeError` na hora, não uma linha
+  faltando na conta seis meses depois. Mesma disciplina de `payables.is_overdue`, que exige
+  `today` pela mesma razão. Tudo keyword-only (`db` inclusive), ao contrário de
+  `facts.record(db, *, ...)`: vários testes de narrador mockam `ai.complete` com `lambda **kw`.
+- ⚠️ **A regra de gravação do ledger é o OPOSTO da de `facts.record`** — quem ler por analogia
+  vai concluir errado. `facts` falha junto com a transação de propósito. Aqui não: quando o
+  ledger grava, a chamada à Anthropic **já aconteceu e já custou dinheiro**; derrubar a
+  transação perderia o documento que o usuário esperou 40 segundos para receber, e o gasto
+  teria ocorrido do mesmo jeito. É best-effort com `logger.exception`.
+  - **E `try/except` sozinho NÃO entrega essa promessa.** Um `flush()` que falha deixa a
+    `Session` em rollback pendente: o `except` engole a exceção e o **commit do CHAMADOR** morre
+    depois, longe dali, com mensagem que não menciona IA. `begin_nested()` (SAVEPOINT) delimita
+    a falha. Provado por mutação — sem ele, o teste quebra com `PendingRollbackError` apontando
+    para `facts.module`. **Se mexer nessa função, mantenha o savepoint.**
+- [x] **`MODELO_POR_TAREFA` substituiu o `anthropic_model` global** (`ANTHROPIC_MODEL` saiu do
+  `.env`). O critério é o **custo do erro**, não o tamanho do texto: `claude-haiku-4-5` onde a
+  IA só reescreve o que um motor determinístico calculou (`vima.briefing`,
+  `financeiro.diagnostico`, `receivables.cobranca`); `claude-sonnet-5` onde ela redige
+  (`quotes.escopo`, `funnels.compose`, `marketing.carrossel`); `claude-opus-5` onde alucinar tem
+  consequência jurídica (`juridico.documento`).
+  - **Tarefa desconhecida cai no default, e o default é o modelo mais CAPAZ, não o mais barato**
+    — roteada por engano para Haiku degradaria em silêncio; para Opus, só custa mais, e o
+    excedente aparece no ledger.
+  - `claude-opus-5` custa **o mesmo** que o `claude-opus-4-8` que estava global ($5/$25 por
+    Mtok): foi ganho de capacidade sem centavo a mais.
+  - Gate `test_toda_tarefa_roteada_usa_um_modelo_conhecido`: um typo num ID viraria 404 só em
+    produção, na primeira chamada real daquela tarefa.
+- **Escopo:** só MEDIR. Sem cobrança, tela ou teto de gasto — medir é reversível, decisão de
+  preço não é, e ela não foi tomada. **Sem backfill:** o consumo passado não foi guardado por
+  ninguém e não tem como ser reconstruído. **Dívida:** `LegalDocument.input_tokens` continua
+  guardando tokens na linha do documento, agora em paralelo ao ledger (não foi removido).
 
 ## 6.0 Correções importantes
 - **[CORRIGIDO 2026-08-05] O sistema inteiro passou a viver no fuso do tenant (era UTC).** O sintoma que o fundador viu foi a linha do tempo do Funil exibindo `Aguardando até 2026-08-05T11:11:32.812731+00:00` — formato de máquina e 3h adiantado. A investigação achou **três** defeitos com a mesma raiz: existia infra de fuso (`core/tz.py` + `tenant.timezone`, migration 0044) mas só 3 módulos a consumiam.
