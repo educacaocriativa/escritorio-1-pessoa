@@ -77,7 +77,8 @@ def narrate_with_source(
 ) -> tuple[str, str]:
     """Como `narrate_signals`, mas devolve `(texto, origem)` onde origem ∈ {"ai", "template"} —
     usado pela rota para informar a UI qual caminho gerou a narrativa. Nunca levanta:
-    - sem sinais / sem `ANTHROPIC_API_KEY` / erro da IA → (template, "template"), SEM rastro;
+    - sem sinais / sem `ANTHROPIC_API_KEY` / sem `db`+`tenant_id` / erro da IA →
+      (template, "template"), SEM rastro;
     - com IA → (texto anonimizado→narrado→desanonimizado, "ai") + `audit.record(is_ai=True)`
       + commit quando `db`+`tenant_id` vierem (Regra de Ouro nº 3).
     """
@@ -88,23 +89,33 @@ def narrate_with_source(
     if not settings.anthropic_api_key:
         return fallback_narrative(signals), "template"
 
+    # Sem onde contabilizar, não se chama a IA. `db`/`tenant_id` são opcionais nesta assinatura
+    # (narração pura em teste), e `ai.complete` passou a exigi-los — em vez de furar a regra com
+    # um tenant fictício, esta borda cai no template, que é o mesmo caminho já usado quando não
+    # há chave. Toda chamada que de fato acontece fica registrada no ledger.
+    if db is None or tenant_id is None:
+        return fallback_narrative(signals), "template"
+
     source = _source_text(signals)
     # Regra de Ouro nº 2: anonimiza ANTES de chamar a IA; desanonimiza LOCALMENTE na volta.
     safe_text, mapping = anonymizer.mask(source)
     try:
-        result = ai.complete(system=_SYSTEM, user_message=safe_text, max_tokens=800)
+        result = ai.complete(
+            db=db, tenant_id=tenant_id, task="financeiro.diagnostico",
+            system=_SYSTEM, user_message=safe_text, max_tokens=800,
+        )
     except Exception:  # noqa: BLE001 — IA nunca pode derrubar o diagnóstico (IV3): cai no template.
         return fallback_narrative(signals), "template"
 
     final = anonymizer.unmask(result.text.strip(), mapping)
 
     # Regra de Ouro nº 3: houve ação REAL de IA → grava o rastro "Ação executada pela IA".
-    if db is not None and tenant_id is not None:
-        audit.record(
-            db, tenant_id=tenant_id, actor=actor,
-            action="financial_diagnostics.narrated", target=target, is_ai=True,
-        )
-        db.commit()
+    # A guarda de `None` que existia aqui saiu: a borda acima já garantiu que ambos existem.
+    audit.record(
+        db, tenant_id=tenant_id, actor=actor,
+        action="financial_diagnostics.narrated", target=target, is_ai=True,
+    )
+    db.commit()
 
     return final, "ai"
 

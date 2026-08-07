@@ -136,7 +136,10 @@ def generate(db: Session, *, tenant_id: str, actor: str, data: DocumentCreate) -
         return doc
 
     try:
-        result = complete(system=system_prompt, user_message=safe_message, max_tokens=8192)
+        result = complete(
+            db=db, tenant_id=tenant_id, task="juridico.documento",
+            system=system_prompt, user_message=safe_message, max_tokens=8192,
+        )
     except Exception as e:  # noqa: BLE001
         raise JuridicoError(f"Falha na geração por IA: {e}", 502) from e
 

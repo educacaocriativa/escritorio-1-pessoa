@@ -70,7 +70,10 @@ def narrar(
 
     seguro, mapa = anonymizer.mask(fonte)
     try:
-        resposta = ai.complete(system=_SYSTEM, user_message=seguro, max_tokens=1500)
+        resposta = ai.complete(
+            db=db, tenant_id=tenant_id, task="vima.briefing",
+            system=_SYSTEM, user_message=seguro, max_tokens=1500,
+        )
     except Exception:  # noqa: BLE001 — a IA nunca derruba o briefing: cai no template.
         logger.exception("Narração da Vima falhou; caindo no template")
         return Narracao(texto=fonte, por_ia=False)

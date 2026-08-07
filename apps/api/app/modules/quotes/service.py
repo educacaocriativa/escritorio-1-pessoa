@@ -333,8 +333,12 @@ def summary(db: Session) -> dict:
     }
 
 
-def generate_scope(brief: str) -> str:
-    """IA redige a descrição comercial do escopo (fallback p/ o próprio briefing)."""
+def generate_scope(db: Session, *, tenant_id: str, brief: str) -> str:
+    """IA redige a descrição comercial do escopo (fallback p/ o próprio briefing).
+
+    `db`/`tenant_id` existem só para a contabilidade de IA (`core/ai_usage`) — esta função
+    não lê nem escreve nada de negócio.
+    """
     if not settings.anthropic_api_key:
         return brief.strip()
     system = (
@@ -342,7 +346,10 @@ def generate_scope(brief: str) -> str:
         "de escopo profissional e enxuta (1-2 frases) para um orçamento. Responda só com o texto."
     )
     try:
-        return ai.complete(system=system, user_message=brief, max_tokens=300).text.strip()
+        return ai.complete(
+            db=db, tenant_id=tenant_id, task="quotes.escopo",
+            system=system, user_message=brief, max_tokens=300,
+        ).text.strip()
     except Exception:
         return brief.strip()
 
