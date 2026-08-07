@@ -20,7 +20,7 @@ from datetime import date
 from fastapi import APIRouter, Depends, HTTPException, Query, Response
 from sqlalchemy.orm import Session
 
-from app.core.money_planes import ORIGEM_BANCO, ORIGEM_INDISPONIVEL
+from app.core.money_planes import ORIGEM_BANCO
 from app.core.tenancy import CurrentUser, get_tenant_db, require_module
 from app.modules.bank import reconciliation, service, transfers
 from app.modules.bank.models import (
@@ -89,9 +89,7 @@ def _out(
         # mas afirmá-lo como vindo do plano `banco` seria a mesma mentira da Projeção, uma camada
         # acima. Anular `saldo_derivado_cents` está fora de questão: seria propagar `None` pela
         # âncora da fórmula do §3.1, que é justamente o desenho que a @architect rejeitou.
-        saldo_derivado_origem=(
-            ORIGEM_BANCO if a.opening_balance_is_known else ORIGEM_INDISPONIVEL
-        ),
+        saldo_derivado_origem=service.origem_do_saldo_derivado(a),
         # Story 8.14 — o que já tem dia marcado e ainda não aconteceu. Os dois em MÓDULO, com o
         # irmão de procedência: nenhum saldo trafega sem plano declarado (Regra dos Planos §1.3c).
         agendado_saida_cents=agendado.saida_cents,
@@ -338,9 +336,7 @@ def account_balance(
         raise _err(e) from e
     return BankBalanceOut(
         saldo_derivado_cents=saldo,
-        saldo_derivado_origem=(
-            ORIGEM_BANCO if acc.opening_balance_is_known else ORIGEM_INDISPONIVEL
-        ),
+        saldo_derivado_origem=service.origem_do_saldo_derivado(acc),
         until=corte,
     )
 

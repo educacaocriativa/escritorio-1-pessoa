@@ -49,6 +49,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.core import audit
+from app.core.money_planes import ORIGEM_BANCO, ORIGEM_INDISPONIVEL
 from app.db.base import _uuid
 from app.modules.bank.models import (
     KIND_INVESTMENT,
@@ -493,6 +494,22 @@ def _validate_saldo_conhecido(
             "declare também que você passou a saber o saldo.",
             422,
         )
+    # **Ramo 3 — valor NOVO junto de "não sei", no mesmo PATCH.** [Achado do @qa no gate desta
+    # story.] `create_account` já recusa isto (força `0`, com o comentário de que aceitar guardaria
+    # duas afirmações contraditórias na mesma linha), e o argumento não muda por ser edição — a
+    # assimetria era só do laço genérico de `update_account`, que escrevia os dois campos sem
+    # olhar um para o outro.
+    # ⚠️ **Recusar não é o mesmo que APAGAR.** O caminho `true → false` sozinho continua livre e
+    # PRESERVA `opening_balance_cents` (AC7): o número volta a valer se o dono voltar atrás, e
+    # apagá-lo destruiria uma afirmação que foi verdadeira. O que se recusa é a instrução
+    # **contraditória**, não o esquecimento.
+    if novo_conhecido is False and novo_saldo is not None:
+        raise BankError(
+            "Você marcou que não sabe o saldo desta conta e informou um valor no mesmo passo — "
+            "as duas coisas não podem ser verdade. Escolha uma: informe o saldo, ou marque que "
+            "não sabe (o valor que já estava guardado é preservado).",
+            422,
+        )
 
 
 # ── Leitura ──────────────────────────────────────────────────────────────────────────────────
@@ -798,6 +815,28 @@ def agendado_sums(
         )
         for a in accounts
     }
+
+
+def origem_do_saldo_derivado(account: BankAccount) -> str:
+    """A procedência do saldo derivado de UMA conta — **o único lugar que decide isso**.
+
+    [Achado do `dedup-checker` no gate da Story 8.21.] A regra estava escrita duas vezes no
+    `router.py`, uma por rota que expõe saldo derivado (`BankAccountOut` e `BankBalanceOut`). São
+    a **mesma conta** vista por duas portas: se as cópias divergissem, `GET /bank/accounts` diria
+    `banco` e `GET /bank/accounts/{id}/balance` diria `indisponivel` para a mesma linha, e a falha
+    apareceria longe de quem pudesse relacionar as duas decisões.
+
+    É exatamente a classe que este repo já pagou uma vez: `core/whatsapp/__init__.py::_resolve`
+    foi feito **derivar** de `capabilities.for_profile` em vez de repetir a comparação, pelo mesmo
+    motivo (`CLAUDE.md`, WhatsApp item 12). Uma superfície nova nasce chamando esta função; não
+    copiando o ternário.
+
+    **`indisponivel` quando o dono não declarou o saldo de abertura** (Story 8.21): o saldo
+    derivado dessa conta parte de um `0` que é placeholder, não afirmação. O NÚMERO continua
+    existindo e sendo exposto — princípio da Onda 0, *suprimir a afirmação, nunca o número* —;
+    quem diz "não sei" é a procedência.
+    """
+    return ORIGEM_BANCO if account.opening_balance_is_known else ORIGEM_INDISPONIVEL
 
 
 def _balances_for(

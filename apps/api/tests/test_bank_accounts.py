@@ -1202,3 +1202,51 @@ def test_voltar_a_NAO_saber_e_livre_e_preserva_o_numero(client: TestClient, head
     assert r.status_code == 200, r.text
     assert r.json()["opening_balance_cents"] == 1_500_00
     assert r.json()["saldo_derivado_origem"] == ORIGEM_INDISPONIVEL
+
+
+def test_as_duas_rotas_de_saldo_derivam_da_MESMA_funcao_de_procedencia():
+    """Gate do achado do `dedup-checker` (gate da 8.21) — varredura AST, não asserção de valor.
+
+    A regra de procedência esteve escrita DUAS vezes no `router.py`, uma por rota que expõe saldo
+    derivado. São a mesma conta vista por duas portas: divergindo, `GET /bank/accounts` diria
+    `banco` e `GET /bank/accounts/{id}/balance` diria `indisponivel` para a MESMA linha, e a falha
+    apareceria longe de quem pudesse relacionar as duas decisões.
+
+    É a classe que este repo já pagou: `whatsapp.__init__._resolve` foi feito DERIVAR de
+    `capabilities.for_profile` pelo mesmo motivo (`CLAUDE.md`, WhatsApp item 12). Este teste é o
+    equivalente de `test_capabilities_e_despachante_nunca_divergem` para o módulo bancário.
+
+    ⚠️ Assere sobre o TEXTO do router de propósito: um teste de valor passaria com as duas cópias
+    coerentes hoje e não protegeria a terceira superfície que alguém acrescentar amanhã.
+    """
+    import inspect
+
+    from app.modules.bank import router as bank_router
+
+    fonte = inspect.getsource(bank_router)
+    assert "ORIGEM_BANCO if" not in fonte, (
+        "A regra de procedência do saldo derivado voltou a ser escrita à mão no router. Use "
+        "`service.origem_do_saldo_derivado(conta)` — um lugar só decide isso."
+    )
+    # E o controle positivo: as rotas de fato chamam a função (senão o teste acima passaria
+    # trivialmente num router que parou de declarar procedência).
+    assert fonte.count("service.origem_do_saldo_derivado(") == 2
+
+
+def test_valor_junto_de_NAO_SEI_no_mesmo_patch_e_422(client: TestClient, headers):
+    """Achado do `bug-hunter` (gate da 8.21) — a assimetria entre criar e editar.
+
+    `create_account` já recusava guardar um valor ao lado de "não sei" (força `0`, com o
+    comentário de que seriam duas afirmações contraditórias na mesma linha). O `update_account`
+    aceitava, porque o laço genérico escrevia os dois campos sem olhar um para o outro.
+
+    ⚠️ **Recusar não é apagar:** o `true → false` SOZINHO continua livre e preserva o número —
+    ver `test_voltar_a_NAO_saber_e_livre_e_preserva_o_numero`, que é o não-membro deste.
+    """
+    acc = _create(client, headers)
+    r = client.patch(
+        f"/bank/accounts/{acc['id']}",
+        json={"opening_balance_is_known": False, "opening_balance_cents": 999_00},
+        headers=headers,
+    )
+    assert r.status_code == 422, r.text
