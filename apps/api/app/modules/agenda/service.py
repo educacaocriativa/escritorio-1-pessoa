@@ -72,10 +72,12 @@ def create_event(
         # em vez da meia-noite UTC crua. Import lazy de settings.get_profile p/ não acoplar o
         # módulo-núcleo Agenda ao módulo settings (mesmo padrão de quotes→contracts no CLAUDE.md).
         from app.core.tz import day_window_utc
-        from app.modules.settings.service import get_profile
+        from app.modules.settings.service import tenant_timezone
 
-        profile = get_profile(db, tenant_id)
-        starts_at, ends_at = day_window_utc(data.starts_at.date(), profile.timezone)
+        # `tenant_timezone(db)`, e não `get_profile(...).timezone`: o fuso mora em `tenants` desde
+        # a 0073, e a coluna do perfil ficou congelada. Também é melhor por si — este caminho não
+        # precisava CRIAR perfil, que é o que `get_profile` faz.
+        starts_at, ends_at = day_window_utc(data.starts_at.date(), tenant_timezone(db))
 
     conflicts: list[AgendaEvent] = []
     if data.kind in OCCUPYING_KINDS:

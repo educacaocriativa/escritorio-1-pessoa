@@ -11,6 +11,7 @@ from datetime import datetime
 from sqlalchemy import JSON, Boolean, DateTime, ForeignKey, String, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
+from app.core.tz import DEFAULT_TENANT_TIMEZONE
 from app.db.base import Base, TimestampMixin, _uuid
 
 
@@ -21,6 +22,15 @@ class Tenant(Base, TimestampMixin):
     slug: Mapped[str] = mapped_column(String(63), unique=True, index=True, nullable=False)
     legal_name: Mapped[str] = mapped_column(String(255), nullable=False)
     document: Mapped[str] = mapped_column(String(18), nullable=False)  # CPF/CNPJ
+    # Fuso IANA do tenant — a âncora de "hoje" de todo o sistema (`settings.hoje_do_tenant`).
+    #
+    # Mora AQUI, e não em `TenantProfile`, porque `/auth/login` e `/auth/me` entregam o fuso junto
+    # com a sessão e rodam em sessão crua: `tenant_profiles` tem RLS FORCE e a leitura voltava
+    # vazia, caindo no padrão em silêncio para todo tenant. Fuso é identidade, não brand kit.
+    # Ver a migration 0073 e `tests/test_auth_timezone_rls.py`.
+    timezone: Mapped[str] = mapped_column(
+        String(64), default=DEFAULT_TENANT_TIMEZONE, nullable=False
+    )
 
     users: Mapped[list[User]] = relationship(back_populates="tenant")
 
