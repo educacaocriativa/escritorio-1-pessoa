@@ -50,3 +50,9 @@ class InvestmentAccount(Base, TenantMixin, TimestampMixin):
     # Rendimento acumulado (centavos) — soma dos rendimentos já lançados via register_yield.
     accrued_yield_cents: Mapped[int] = mapped_column(BigInteger, default=0, nullable=False)
     opened_at: Mapped[date] = mapped_column(Date, nullable=False)
+    # A conta bancária ONDE ESTE DINHEIRO ESTÁ (Onda 2b-i, migration 0075). Ligação 1:1 com uma
+    # `bank_account` `kind='investment'`, por referência SOLTA (sem FK dura — padrão do projeto).
+    # `None` = ainda não vinculada, e nesse estado `register_yield` recusa com **409 acionável**:
+    # rendimento sem perna bancária é o termo P3 da pré-condição do gate do Epic 8, e é a recusa
+    # que o mantém vazio POR CONSTRUÇÃO (mesmo mecanismo pelo qual a 8.12 zerou P1).
+    bank_account_id: Mapped[str | None] = mapped_column(String(36), default=None, nullable=True)

@@ -482,12 +482,15 @@ def _note_total_parcial(sem_checkpoint: int) -> str:
 # Moram aqui, ao lado de `_note_sem_checkpoint` e `_note_total_parcial`, pelo mesmo motivo delas:
 # duas redações do mesmo fato viram duas frases diferentes na tela conforme o caminho.
 #
-# **Por que P1/P2 e P3 têm frases separadas, e não uma só com a soma:** P1 e P2 **somem sozinhos**
-# quando o dono terminar de corrigir os lançamentos legados — a ação existe e é dele. P3 **não some
-# nesta onda**: fecha na Onda 2b, e não há nada que ele possa fazer à mão. Uma nota que promete
-# *"isso some quando você terminar o mutirão"* sobre um termo que não some é a mesma classe de
-# afirmação sem lastro que a Onda 0 removeu da Projeção — e nomear a onda em cada nota é o que
-# impede o dono de caçar um termo que software nenhum consegue fechar ainda.
+# **Por que P1/P2 e P3 continuam com frases separadas depois da Onda 2b-i:** os dois termos pedem
+# ações DIFERENTES do dono. P1/P2 pedem informar a conta em cada lançamento legado, um por um; P3
+# pede vincular a aplicação à conta bancária dela, **uma vez**. Achatá-las numa frase só mandaria o
+# dono caçar lançamento a lançamento um termo que se resolve num clique.
+#
+# ⚠️ **Antes da Onda 2b-i a razão era outra, e ela mudou junto com o produto:** P3 não fechava com
+# trabalho nenhum, e a frase NOMEAVA A ONDA que o fecharia, para impedir o dono de caçar um termo
+# que software nenhum conseguia fechar ainda. Entregue a 2b-i, nomear aquela onda viraria promessa
+# sobre coisa já entregue — a nota passou a nomear a AÇÃO. Ver `_note_rendimento_sem_perna`.
 #
 # **Zero termo não-zero ⇒ zero nota.** Silêncio, mesma disciplina anti-ruído do resto do épico — e
 # é exatamente esse silêncio que sinaliza *"agora o gate pode ser lido"*.
@@ -505,13 +508,25 @@ def _note_sem_conta_informada(quantidade: int, valor_cents: int) -> str:
 
 
 def _note_rendimento_sem_perna(quantidade: int, valor_cents: int) -> str:
-    """P3 — o termo que **NÃO fecha nesta onda**. A frase diz isso, para ninguém tentar
-    corrigi-lo à mão."""
+    """P3 — o termo que a **Onda 2b-i fechou por construção**, e a frase mudou junto.
+
+    Antes da 2b-i esta nota dizia *"este termo só fecha na Onda 2b"*, porque não havia **nada** que
+    o dono pudesse fazer. Agora há: `investments.register_yield` recusa (409 acionável) rendimento
+    em aplicação sem conta vinculada, então todo rendimento novo nasce com perna e a população é
+    vazia. Manter a frase antiga seria prometer na tela uma onda **já entregue** — a mesma classe
+    de afirmação sem lastro que a Onda 0 removeu da Projeção, só que ao contrário.
+
+    **A nota fica, mesmo inalcançável no caminho normal.** Se ela disparar, não é mais uma onda
+    faltando: é linha legada ou defeito, e ela precisa dizer o que **FAZER**. Apagar contador e
+    nota foi a alternativa rejeitada — a 2b-ii mexe justamente nesses dados, e um termo apagado
+    não avisa se eles voltarem inconsistentes.
+    """
     plural = "s" if quantidade > 1 else ""
     return (
         f"{quantidade} rendimento{plural} de aplicação deste período ({_brl(valor_cents)}) ainda "
         f"não gera{'m' if quantidade > 1 else ''} movimento bancário. A divergência abaixo "
-        "**inclui** esse valor. Este termo só fecha na Onda 2b — não há o que corrigir à mão."
+        "**inclui** esse valor. Vincule a aplicação à conta bancária dela para que o rendimento "
+        "passe a aparecer no extrato."
     )
 
 

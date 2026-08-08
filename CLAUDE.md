@@ -581,13 +581,13 @@ A pré-condição, lida ao pé da letra (*"toda cobrança recebida precisa ter c
 terá `bank_account_id` — e o trilho é o caminho normal do produto. A ratificação a reescreveu em
 quatro termos, cada um com o predicado que o decide e a **onda que o zera**: **P1** baixa de Contas a
 Pagar sem conta (Onda 2) · **P2** recebimento fora do trilho sem conta (Onda 2) · **P3** rendimento de
-aplicação sem perna bancária (**Onda 2b**) · **P4** payout da Carteira (**Onda 3**, hoje vazio por
+aplicação sem perna bancária (**Onda 2b-i** ✅, ver abaixo) · **P4** payout da Carteira (**Onda 3**, hoje vazio por
 construção — `request_payout` só marca `withdrawn`).
 
 **Consequência que muda a leitura do épico:** o gate abre depois da Onda 2 **apenas para um tenant
 cujos únicos eventos que movem conta real sejam P1 e P2**. Quem registra rendimento de aplicação
-precisa da **2b**; quando o payout virar real, da **3**. Não é escopo novo — P3 e P4 sempre foram
-termos da divergência.
+precisava da **2b-i** — ✅ **entregue**, ver a seção dela abaixo; quando o payout virar real,
+precisa da **3**. Não é escopo novo — P3 e P4 sempre foram termos da divergência.
 
 ⚠️ **O achado A-1, que teria fechado a métrica primária do épico para sempre.** A `Charge` sintética
 de rendimento (`investments/service.py`, Story 5.6) nasce `paid` com `transaction_id=NULL` **e**
@@ -837,6 +837,90 @@ desde a Onda 0 **sem gatilho nenhum**; esta story é o gatilho.
   AC9 da 8.13. E: conta `is_known=false` + recuo de data pede um saldo cujo campo está escondido no
   formulário; tem saída (marcar *"sei o saldo"* revela o campo), mas a mensagem de erro pede algo que
   não está visível.
+
+### Onda 2b-i — a perna bancária do rendimento (o termo P3 fecha)
+
+> Spec: `docs/superpowers/specs/2026-08-07-onda-2b-i-perna-bancaria-do-rendimento-design.md` ·
+> Plano: `docs/superpowers/plans/2026-08-07-onda-2b-i-perna-bancaria-do-rendimento.md`
+
+**A Onda 2b foi PARTIDA EM DUAS, e o recorte é a decisão.** O §647 do PRD descreve cinco
+entregáveis; só dois tocam o gate, e o mais arriscado do épico inteiro (o backfill de
+`principal_cents` sob `FORCE RLS`) não é nenhum dos dois. **2b-i** entrega o vínculo e o movimento;
+**2b-ii** fica com o principal derivado, o backfill, o 409 de edição e o extrato na tela. Manter o
+backfill colado ao destravamento da métrica primária refaria o acoplamento que o épico já desfez
+uma vez ao separar a 2b da Onda 2.
+
+#### O achado que motivou o recorte, e que teria custado a onda inteira
+
+`receivables.contar_rendimentos_sem_perna_bancaria` **não verificava se existia perna bancária** —
+nenhum join, nenhum `NOT EXISTS`. Contava todo rendimento da janela. Pré-2b era inofensivo, porque
+*"todos os rendimentos"* e *"os sem perna"* eram o mesmo conjunto. Ligado o movimento, eles se
+separam e P3 seguiria contando o que passou a ter perna: **o gate não abriria nem depois da onda que
+existe para destravá-lo**, e a nota continuaria dizendo *"este termo só fecha na Onda 2b"* sobre uma
+onda já fechada. O único teste que tocava a função afirmava que ela era `callable`.
+
+> **A regra que fica (reverberar): função cujo NOME promete um filtro tem de tê-lo, mesmo quando o
+> filtro é hoje redundante.** Ela esteve certa **por coincidência de população** durante uma onda
+> inteira. A coincidência não deixa rastro no código, não quebra teste ao terminar, e o dia em que
+> ela termina é exatamente o dia em que a função vira defeito. É a família do §2 desta seção (o
+> teste que passa e não prova nada) com um agravante: **aqui o teste correto não podia sequer ser
+> escrito** no caminho de produção — o membro que o mataria era inconstruível.
+
+#### O que foi construído
+
+- [x] **`investment_accounts.bank_account_id`** (migration `0075`) — ligação 1:1 com a
+  `bank_account` `kind='investment'`. `investment_accounts` **não** é absorvida: ela é a faceta de
+  PRODUTO (rentabilidade, indexador), a `bank_account` é ONDE o dinheiro está. Índice único parcial
+  com `tenant_id` na FRENTE (índice único é global e não respeita RLS — lição da 8.2). **Sem
+  `UPDATE`:** `ADD COLUMN`/`CREATE INDEX` são DDL e a RLS não os alcança; a aplicação que já existia
+  é vinculada pelo dono, **por ato**, na tela. Validada contra Postgres real via `rls_e2e`.
+- [x] **`register_yield` sem vínculo recusa com 409 acionável** (`{"acao":"cadastrar_conta"}`,
+  terceira cópia da string, sincronia por teste). **É isso que põe P3 em zero POR CONSTRUÇÃO** — o
+  mesmo mecanismo pelo qual a 8.12 zerou P1. A degradação graciosa da Onda 3 (*"nada acontece, nada
+  quebra"*) foi rejeitada aqui, e a diferença é **quem está na sala**: o payout é disparado pelo
+  sistema, sem humano a quem perguntar; o rendimento é o dono digitando um valor agora.
+- [x] **`register_yield` gera `bank_transaction` `source='yield'`** pelo mesmo
+  `sync_origin_movement`, na mesma transação, nascido conciliado. **`SOURCE_YIELD` já estava em
+  `SOURCES_SISTEMA` desde a `0059`** — como nenhuma regra do repo é escrita contra `source` solto,
+  todas já cobriam `yield` sem uma linha de mudança. Precisa de `db.flush()` antes: o id da `Charge`
+  tem default **Python-side** e sem ele o `origin_id` nasceria vazio (o defeito MNT-001).
+  **A IV1 da 5.6 NÃO foi relaxada:** `bank_transactions` é o plano do BANCO,
+  `Transaction`/`PlatformEarning` são o da PLATAFORMA, e continuam intocados.
+- [x] **`posted_at` = data do rendimento, não o instante do registro** — que erraria sempre que o
+  dono lançasse com atraso. O resíduo (competência 31/07 × crédito 01/08) é o **termo 3** da
+  decomposição da divergência, que a banda de tolerância existe para absorver. **A escolha só é
+  barata porque o predicado de P3 é `NOT EXISTS`:** ele pergunta *"existe perna?"*, não *"a perna
+  caiu nesta janela?"*. Se a data fosse o eixo do termo, isto seria decisão de gate.
+- [x] **Data futura: 422** — a decisão que `bank/transfers.py:185` exigia que a 2b tomasse **em vez
+  de copiar**. A razão não é a da transferência: um rendimento que ainda não caiu não é um
+  rendimento, e não teria para onde ir — não existe `scheduled` para rendimento, nem superfície,
+  nem caminho de promoção (Art. IV). Comparação com `hoje_do_tenant`, nunca com `now(UTC)`.
+- [x] **A nota de P3 deixou de nomear uma onda e passou a nomear a AÇÃO** (*"Vincule a aplicação à
+  conta bancária dela"*). Ela fica mesmo inalcançável no caminho normal: se disparar, é linha legada
+  ou defeito, e apagá-la deixaria a 2b-ii sem quem avise se os dados voltarem inconsistentes.
+- [x] **A tela vincula** — seletor único para os dois modais, e no 409 o modal vincula e **reenvia o
+  rendimento sem o dono redigitar valor e data**. Sem esta parte o 409 seria um beco: backend
+  pedindo um vínculo que não tinha onde ser criado (a classe do item 12 do WhatsApp).
+
+#### Três coisas que só apareceram implementando
+
+- **O gate da allowlist do `sync_origin_movement` pegou o chamador novo, e é para isso que ele
+  existe.** `investments/service.py` entrou em `_CHAMADORES_PERMITIDOS` **com a justificativa** —
+  que é o que faz a revisão acontecer, e não uma linha na lista.
+- **Um teste meu passou ANTES da implementação, pelo motivo errado.** `register_yield` grava
+  `paid_at = now()` (o instante do registro) enquanto `posted_at` usa a competência informada: uma
+  janela em julho não continha o `paid_at` de um rendimento registrado em agosto, e P3 dava `(0,0)`
+  por vacuidade. Corrigido com **controle positivo** (o mesmo rendimento sem perna, que conta).
+- **`date.today()` é a data LOCAL e `paid_at` é `now(UTC)`** — às 23h em UTC−3 as duas já são dias
+  diferentes, e uma janela de teste de um dia só perdia o rendimento pela borda, em silêncio.
+
+- **Dívida:** o ramo *"origem desliquidada → apaga"* de `sync_origin_movement` é **inalcançável**
+  para `source='yield'` (não existe estorno nem exclusão de rendimento; o router só expõe
+  `register_yield`). Está na docstring para não parecer esquecimento na 2b-ii.
+- **Dívida:** **aceite visual em ~360px do campo de vínculo NÃO foi feito** — mesma dívida da 8.13
+  AC9 e da 8.21. Bloqueia release, não bloqueia merge.
+- **Dívida:** a 2b-ii continua com o único backfill do épico, e ele continua sendo o item de maior
+  risco.
 
 
 ## WhatsApp Evolution: em produção de verdade (deploy 2026-08-04)

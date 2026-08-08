@@ -67,6 +67,7 @@ def _seed_tenant(app_url: str, tenant_id: str, *, principal: int, yield_cents: i
     """Cria, para um tenant (GUC setada ANTES dos INSERTs), uma conta FINANCEIRO + uma conta de
     investimento e registra um rendimento (via o service real). Retorna o id da conta de
     investimento."""
+    from app.modules.bank.models import BankAccount
     from app.modules.chart_of_accounts.models import ChartAccount
     from app.modules.investments import service as inv_service
     from app.modules.investments.models import InvestmentAccount
@@ -85,9 +86,19 @@ def _seed_tenant(app_url: str, tenant_id: str, *, principal: int, yield_cents: i
             rend = ChartAccount(
                 tenant_id=tenant_id, grupo_dre="FINANCEIRO", categoria="Rendimento de aplicação"
             )
+            # Onda 2b-i: sem vínculo, `register_yield` recusa com 409 — e é essa recusa que mantém
+            # o termo P3 vazio por construção. O seed reflete o estado NORMAL da aplicação.
+            banco = BankAccount(
+                tenant_id=tenant_id, name="CDB Itaú", kind="investment", number="",
+                opening_balance_cents=0, opening_balance_is_known=True,
+                opening_date=date(2026, 1, 1),
+            )
+            session.add(banco)
+            session.flush()
             acc = InvestmentAccount(
                 tenant_id=tenant_id, name="CDB", kind="CDB", index_rate_label="CDI",
                 principal_cents=principal, accrued_yield_cents=0, opened_at=date(2026, 1, 10),
+                bank_account_id=banco.id,
             )
             session.add_all([rend, acc])
             session.flush()
@@ -126,6 +137,103 @@ def _rentability_under(app_url: str, tenant_id: str, account_id: str) -> dict | 
                 session.close()
     finally:
         engine.dispose()
+
+
+def _bank_account_for(app_url: str, tenant_id: str) -> str:
+    """Cria uma `bank_account` `kind='investment'` para o tenant. Devolve o id."""
+    from app.modules.bank.models import BankAccount
+
+    engine = create_engine(app_url, poolclass=NullPool)
+    try:
+        with engine.connect() as conn:
+            conn.execute(
+                text("SELECT set_config('app.current_tenant_id', :tid, false)"), {"tid": tenant_id}
+            )
+            conn.commit()
+            session = Session(bind=conn)
+            acc = BankAccount(
+                tenant_id=tenant_id, name="CDB Itaú", kind="investment", number="",
+                opening_balance_cents=0, opening_balance_is_known=True,
+                opening_date=date(2026, 1, 1),
+            )
+            session.add(acc)
+            session.commit()
+            acc_id = acc.id
+            session.close()
+            return acc_id
+    finally:
+        engine.dispose()
+
+
+def _tentar_vincular(app_url: str, tenant_id: str, inv_id: str, bank_id: str) -> int | None:
+    """Tenta vincular sob a ótica de `tenant_id`. Devolve o `status_code` do erro, ou None se
+    o vínculo foi aceito."""
+    from app.modules.investments import service as inv_service
+    from app.modules.investments.schemas import InvestmentAccountUpdate
+
+    engine = create_engine(app_url, poolclass=NullPool)
+    try:
+        with engine.connect() as conn:
+            conn.execute(
+                text("SELECT set_config('app.current_tenant_id', :tid, false)"), {"tid": tenant_id}
+            )
+            conn.commit()
+            session = Session(bind=conn)
+            try:
+                inv_service.update_account(
+                    session, account_id=inv_id, tenant_id=tenant_id, actor="teste",
+                    data=InvestmentAccountUpdate(bank_account_id=bank_id),
+                )
+                return None
+            except inv_service.InvestmentError as e:
+                return e.status_code
+            finally:
+                session.close()
+    finally:
+        engine.dispose()
+
+
+def test_vincular_a_conta_bancaria_de_OUTRO_tenant_da_404_e_NUNCA_409() -> None:
+    """A conta existe — no tenant B. Para o tenant A ela **não existe**, e a resposta é 404.
+
+    **409 aqui confirmaria a existência da linha alheia**: seria vazamento de existência com cara
+    de validação. É o mesmo critério já fixado em `bank_service.get_account`, e o que a 8.2 pagou
+    para aprender.
+
+    ⚠️ **Só o Postgres reproduz.** No SQLite da suíte unitária a linha do tenant B é visível, o
+    vínculo seria ACEITO, e o teste equivalente lá (`test_conta_bancaria_inexistente_da_404...`)
+    passa por outro motivo — ele usa um id que não existe em lugar nenhum.
+    """
+    with PostgresContainer(
+        "postgres:16-alpine",
+        username=_ROOT_USER,
+        password=_ROOT_PASS,
+        dbname=_DB_NAME,
+        driver="psycopg",
+    ) as pg:
+        host = pg.get_container_host_ip()
+        port = pg.get_exposed_port(5432)
+        super_url = f"postgresql+psycopg://{_ROOT_USER}:{_ROOT_PASS}@{host}:{port}/{_DB_NAME}"
+        app_url = f"postgresql+psycopg://e1p_app:{_APP_PASS}@{host}:{port}/{_DB_NAME}"
+
+        _bootstrap_rls_role(super_url)
+        _run_migrations_as_app(app_url)  # aplica a cadeia inteira, incl. a 0075
+
+        tenant_a = str(uuid4())
+        tenant_b = str(uuid4())
+        inv_a = _seed_tenant(app_url, tenant_a, principal=1_000_000, yield_cents=10_000)
+        bank_b = _bank_account_for(app_url, tenant_b)
+
+        # CONTROLE POSITIVO: a própria conta de A é aceita — sem isto, um 404 universal
+        # (por bug na validação) passaria como se fosse isolamento funcionando.
+        bank_a = _bank_account_for(app_url, tenant_a)
+        assert _tentar_vincular(app_url, tenant_a, inv_a, bank_a) is None, (
+            "a conta do PRÓPRIO tenant tem de ser aceita — senão o 404 abaixo não prova nada"
+        )
+
+        assert _tentar_vincular(app_url, tenant_a, inv_a, bank_b) == 404, (
+            "RLS falhou, ou o erro virou 409: A não pode nem saber que a conta de B existe"
+        )
 
 
 def test_investment_cross_tenant_a_nao_ve_b() -> None:

@@ -172,6 +172,20 @@ def _cenario_completo(client: TestClient, headers, tenant_id: str, conta: dict) 
         headers=headers,
     )
     assert conta_dre.status_code == 201, conta_dre.text
+    # Onda 2b-i: a aplicação precisa apontar para a conta bancária dela — sem vínculo,
+    # `register_yield` recusa com 409 acionável, e é essa recusa que mantém o termo P3 vazio.
+    conta_aplicacao = client.post(
+        "/bank/accounts",
+        json={
+            "name": "CDB Itaú",
+            "kind": "investment",
+            "opening_balance_cents": 0,
+            "opening_balance_is_known": True,
+            "opening_date": ABERTURA.isoformat(),
+        },
+        headers=headers,
+    )
+    assert conta_aplicacao.status_code == 201, conta_aplicacao.text
     aplicacao = client.post(
         "/investments",
         json={
@@ -179,6 +193,7 @@ def _cenario_completo(client: TestClient, headers, tenant_id: str, conta: dict) 
             "kind": "CDB",
             "principal_cents": 1_000_000,
             "opened_at": ABERTURA.isoformat(),
+            "bank_account_id": conta_aplicacao.json()["id"],
         },
         headers=headers,
     )
