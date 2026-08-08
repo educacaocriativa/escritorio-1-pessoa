@@ -38,6 +38,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.core.money_planes import ORIGEM_BANCO, ORIGEM_INDISPONIVEL, ORIGENS
+from app.modules.bank import origin as bank_origin
 from app.modules.bank import reconciliation
 from app.modules.bank import service as bank_service
 from app.modules.bank.models import (
@@ -46,6 +47,7 @@ from app.modules.bank.models import (
     KIND_SAVINGS,
     ORIGIN_MANUAL,
     ORIGIN_OFX,
+    SOURCE_YIELD,
     BankAccount,
     BankBalanceCheckpoint,
     BankTransaction,
@@ -1432,6 +1434,50 @@ def test_a1_o_rendimento_de_aplicacao_nao_entra_no_termo_de_conta_informada(
     assert "R$ 480,00" in nota
     assert "Onda 2b" in nota, "o termo P3 NÃO fecha nesta onda — a nota tem de dizer isso"
     assert "não há o que corrigir à mão" in nota
+
+
+def test_rendimento_COM_perna_bancaria_sai_do_termo_P3(
+    client: TestClient, headers, db: Session
+):
+    """**O membro que era inconstruível no caminho de produção, e por isso o defeito viveu.**
+
+    `contar_rendimentos_sem_perna_bancaria` contava TODO rendimento da janela — nenhum join,
+    nenhum `NOT EXISTS`. Pré-2b isso era inofensivo, porque *"todos os rendimentos"* e *"os
+    rendimentos sem perna"* eram o mesmo conjunto. Ligado o movimento (Onda 2b-i), os dois se
+    separam, e sem este predicado P3 seguiria contando os rendimentos que passaram a ter perna:
+    **o gate não abriria nem depois da onda que existe para destravá-lo**, e a nota diria *"este
+    termo só fecha na Onda 2b"* sobre uma onda já fechada.
+
+    O saldo declarado já inclui o rendimento (1.000.000 + 48.000) justamente para que a conta
+    continue batendo e a única coisa medida aqui seja o termo P3.
+
+    **Mutantes que este teste mata:** remover o `~_tem_perna_bancaria` do `where` (P3 volta a 1);
+    trocar `SOURCE_YIELD` por outro `source` no `NOT EXISTS` (idem).
+    """
+    tenant_id = _tenant_id(client, headers)
+    conta = _account(client, headers, opening=1_000_000)
+    _declarar(client, headers, conta["id"], balance_cents=1_048_000)
+    rendimento = _charge_de_rendimento(db, tenant_id, valor=48_000, pago_em=date(2026, 7, 14))
+
+    bank_origin.sync_origin_movement(
+        db,
+        tenant_id=tenant_id,
+        actor="teste",
+        source=SOURCE_YIELD,
+        origin_id=rendimento.id,
+        bank_account_id=conta["id"],
+        posted_at=date(2026, 7, 14),
+        amount_cents=48_000,
+        description="Rendimento CDB",
+    )
+    db.commit()
+
+    r = _report(db)
+    assert r.rendimentos_sem_perna_bancaria == 0, (
+        "o rendimento TEM perna bancária — contá-lo em P3 mantém o gate fechado depois da 2b"
+    )
+    assert r.valor_rendimentos_sem_perna_cents == 0
+    assert r.notes == [], "zero termo não-zero ⇒ zero nota"
 
 
 def test_os_dois_termos_geram_duas_notas_com_ondas_diferentes(

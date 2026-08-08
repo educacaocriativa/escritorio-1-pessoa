@@ -49,7 +49,7 @@ from app.modules.agenda.models import (
 # a reprova.
 from app.modules.bank import origin as bank_origin
 from app.modules.bank import service as bank_service
-from app.modules.bank.models import SOURCE_CHARGE, BankAccount
+from app.modules.bank.models import SOURCE_CHARGE, SOURCE_YIELD, BankAccount, BankTransaction
 from app.modules.chart_of_accounts import service as chart_service
 from app.modules.contracts import service as contracts_service
 from app.modules.cost_centers import service as cost_centers_service
@@ -986,14 +986,37 @@ def contar_rendimentos_sem_perna_bancaria(
     O predicado é a **negação** do mesmo `_not_investment_yield()` usado em P2 — literalmente o
     complemento, e não uma segunda escrita do `LIKE 'investment:%'`. As duas populações particionam
     as cobranças pelo mesmo corte, então elas não podem divergir.
+
+    ⚠️ **A partir da Onda 2b-i o predicado inclui o `NOT EXISTS` sobre `bank_transactions`, e sem
+    ele esta função MENTIA pelo nome.** Antes dela o corpo contava TODO rendimento da janela:
+    coincidia com a intenção só porque perna nenhuma existia. Ligado o movimento
+    (`investments.register_yield` → `sync_origin_movement`), os dois conjuntos se separam, e contar
+    o rendimento que JÁ tem perna manteria o gate fechado depois da própria onda que o destrava —
+    com a nota do bloco 4 prometendo na tela uma onda já entregue. **Função cujo nome promete um
+    filtro tem de tê-lo, mesmo quando o filtro é hoje redundante:** a redundância não deixa rastro
+    no código e termina sem quebrar teste nenhum.
     """
     de, ate = janela_de_caixa(start, end)
+    # Correlaciona por `origin_id`, que para origem de perna única **É** o id do lançamento
+    # (`bank/transfers.py:18`) — nunca por data: a pergunta do termo é *"existe perna?"*, e não
+    # *"a perna caiu nesta janela?"*. É essa indiferença à data que torna barata a escolha de
+    # `posted_at` em `register_yield` (o resíduo de um dia é o termo 3 da divergência, que a banda
+    # de tolerância absorve, e não um problema de gate).
+    _tem_perna_bancaria = (
+        select(BankTransaction.id)
+        .where(
+            BankTransaction.source == SOURCE_YIELD,
+            BankTransaction.origin_id == Charge.id,
+        )
+        .exists()
+    )
     row = db.execute(
         select(func.count(), func.coalesce(func.sum(Charge.amount_cents), 0)).where(
             ~_not_investment_yield(),
             Charge.paid_at.is_not(None),
             Charge.paid_at >= de,
             Charge.paid_at < ate,
+            ~_tem_perna_bancaria,
         )
     ).one()
     return int(row[0] or 0), int(row[1] or 0)
