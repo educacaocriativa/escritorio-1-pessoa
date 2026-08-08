@@ -1,25 +1,32 @@
 import type { TenantProfile } from "@e1p/shared-types";
-import { Building2, Check, Filter, MessageCircle, Workflow } from "lucide-react";
+import { Building2, Check, Filter, MessageCircle, Sparkles, Workflow } from "lucide-react";
 import { useCallback, useEffect, useState } from "react";
 import { api, apiErrorMessage } from "../../lib/api";
 import { formatTime } from "../../lib/datetime";
 import { applyBrandTheme } from "../../lib/theme";
 import { useFuso } from "../../store/auth";
 import CanaisTab from "./CanaisTab";
+import EmpresaDnaTab from "./EmpresaDnaTab";
 import EmpresaTab from "./EmpresaTab";
 import IntegracoesTab from "./IntegracoesTab";
 import VendasTab from "./VendasTab";
 
-type Tab = "empresa" | "canais" | "integracoes" | "vendas";
+type Tab = "empresa" | "dna" | "canais" | "integracoes" | "vendas";
 
 const TABS: { key: Tab; label: string; icon: typeof Building2 }[] = [
   { key: "empresa", label: "Empresa", icon: Building2 },
+  { key: "dna", label: "A sua empresa", icon: Sparkles },
   { key: "canais", label: "Canais", icon: MessageCircle },
   { key: "integracoes", label: "Integrações", icon: Workflow },
   { key: "vendas", label: "Vendas", icon: Filter },
 ];
 
-/** Abas cujo conteúdo edita o perfil do tenant — só nelas o botão Salvar faz sentido. */
+/**
+ * Abas cujo conteúdo edita o perfil do tenant — só nelas o botão Salvar faz sentido.
+ *
+ * A aba `dna` NÃO entra aqui: ela salva sozinha, pergunta a pergunta, e um "Salvar" pairando
+ * sobre ela sugeriria que há algo pendente quando não há.
+ */
 const PERFIL_TABS: Tab[] = ["empresa", "vendas"];
 
 export default function ConfiguracoesPage() {
@@ -101,6 +108,7 @@ export default function ConfiguracoesPage() {
       </div>
 
       {tab === "empresa" && <EmpresaTab p={p} set={set} />}
+      {tab === "dna" && <EmpresaDnaTab />}
       {tab === "canais" && <CanaisTab />}
       {tab === "integracoes" && <IntegracoesTab />}
       {tab === "vendas" && (
