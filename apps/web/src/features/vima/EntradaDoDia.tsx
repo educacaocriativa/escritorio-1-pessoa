@@ -16,7 +16,15 @@ import { useFuso } from "../../store/auth";
  */
 export const CHAVE_ENTRADA = "e1p_briefing_dia";
 
-type Decisao = "perguntando" | "vima" | "cockpit";
+/**
+ * Marca de "o núcleo do DNA já foi decidido NESTE aparelho" — respondido ou pulado, tanto faz.
+ *
+ * Não carrega data, ao contrário de `CHAVE_ENTRADA`: o núcleo é de uma vez na vida, não de uma
+ * vez por dia.
+ */
+export const CHAVE_NUCLEO = "e1p_dna_nucleo";
+
+type Decisao = "perguntando" | "nucleo" | "vima" | "cockpit";
 
 /**
  * Decide qual é a porta de entrada do dia.
@@ -38,16 +46,46 @@ export default function EntradaDoDia({ children }: { children: ReactNode }) {
   useEffect(() => {
     if (decisao !== "perguntando") return;
     let vivo = true;
-    api
-      .get<Briefing>("/vima/briefing")
-      .then(({ data }) => {
-        if (!vivo) return;
-        gravarMarca(hoje);
-        setDecisao(data?.read_at ? "cockpit" : "vima");
-      })
-      .catch(() => {
-        if (vivo) setDecisao("cockpit");
-      });
+
+    function decidirPeloBriefing() {
+      api
+        .get<Briefing>("/vima/briefing")
+        .then(({ data }) => {
+          if (!vivo) return;
+          gravarMarca(hoje);
+          setDecisao(data?.read_at ? "cockpit" : "vima");
+        })
+        .catch(() => {
+          if (vivo) setDecisao("cockpit");
+        });
+    }
+
+    // O núcleo do DNA vem ANTES do briefing, e só no primeiro acesso: um dono que nunca
+    // respondeu nada recebe um briefing que fala com todo mundo do mesmo jeito. Perguntar
+    // primeiro é o que faz a leitura dele já nascer calibrada — de amanhã em diante.
+    if (lerMarcaNucleo() === null) {
+      api
+        .get<unknown[]>("/dna/faltantes", { params: { gancho: "nucleo" } })
+        .then(({ data }) => {
+          if (!vivo) return;
+          if (data?.length) {
+            setDecisao("nucleo");
+            return;
+          }
+          gravarMarcaNucleo();
+          decidirPeloBriefing();
+        })
+        // 403 = sub-usuário sem `settings`. O DNA é da empresa e não é dele: segue para o
+        // briefing normalmente, sem nunca ver a pergunta.
+        .catch(() => {
+          if (vivo) decidirPeloBriefing();
+        });
+      return () => {
+        vivo = false;
+      };
+    }
+
+    decidirPeloBriefing();
     return () => {
       vivo = false;
     };
@@ -56,8 +94,25 @@ export default function EntradaDoDia({ children }: { children: ReactNode }) {
   if (decisao === "perguntando") {
     return <div className="py-10 text-center text-sm text-neutral-400">Um instante…</div>;
   }
+  if (decisao === "nucleo") return <Navigate to="/dna/nucleo" replace />;
   if (decisao === "vima") return <Navigate to="/vima" replace />;
   return <>{children}</>;
+}
+
+function lerMarcaNucleo(): string | null {
+  try {
+    return localStorage.getItem(CHAVE_NUCLEO);
+  } catch {
+    return null;
+  }
+}
+
+function gravarMarcaNucleo(): void {
+  try {
+    localStorage.setItem(CHAVE_NUCLEO, "1");
+  } catch {
+    // Sem a marca, a entrada consulta o servidor toda visita — mais lento, correto.
+  }
 }
 
 /** `localStorage` pode lançar (modo privativo do Safari, cota) — e isso não pode derrubar a app. */
