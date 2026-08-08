@@ -85,7 +85,8 @@ export interface ConferenciaReport {
    */
   lancamentos_sem_conta_informada: number;
   valor_sem_conta_informada_cents: number;
-  /** Fecha na **Onda 2b**, não nesta — por isso tem contador e frase próprios. */
+  /** Fechou na **Onda 2b-i** (o rendimento passou a gerar movimento). Contador e frase próprios
+   *  continuam: P1/P2 e P3 pedem AÇÕES diferentes do dono. */
   rendimentos_sem_perna_bancaria: number;
   valor_rendimentos_sem_perna_cents: number;
 }

@@ -1432,8 +1432,13 @@ def test_a1_o_rendimento_de_aplicacao_nao_entra_no_termo_de_conta_informada(
     nota = r.notes[0]
     assert "1 rendimento de aplicação" in nota
     assert "R$ 480,00" in nota
-    assert "Onda 2b" in nota, "o termo P3 NÃO fecha nesta onda — a nota tem de dizer isso"
-    assert "não há o que corrigir à mão" in nota
+    # ⚠️ MUDANÇA DELIBERADA na Onda 2b-i, e não "ajuste para o teste passar": a nota deixou de
+    # nomear a onda porque a onda foi ENTREGUE. Prometer "fecha na Onda 2b" depois da 2b-i é
+    # afirmação sobre coisa já feita. O que a nota nomeia agora é a AÇÃO, que passou a existir.
+    assert "Onda 2b" not in nota, (
+        "a Onda 2b-i fechou este termo — prometer uma onda já entregue é mentira na tela"
+    )
+    assert "Vincule a aplicação" in nota, "a nota nomeia a AÇÃO, agora que existe uma"
 
 
 def test_rendimento_COM_perna_bancaria_sai_do_termo_P3(
@@ -1499,7 +1504,11 @@ def test_os_dois_termos_geram_duas_notas_com_ondas_diferentes(
     assert r.lancamentos_sem_conta_informada == 1 and r.rendimentos_sem_perna_bancaria == 1
     assert len(r.notes) == 2
     assert "Onda 2:" in r.notes[0] and "Onda 2b" not in r.notes[0]
-    assert "Onda 2b" in r.notes[1]
+    # A segunda nota deixou de nomear onda nenhuma na Onda 2b-i (ver `_note_rendimento_sem_perna`).
+    # O que a distingue da primeira continua sendo o mesmo: elas pedem AÇÕES diferentes — informar
+    # a conta em cada lançamento legado × vincular a aplicação uma vez.
+    assert "Vincule a aplicação" in r.notes[1]
+    assert "Onda 2b" not in r.notes[1]
 
 
 def test_zero_termo_nao_zero_e_zero_nota(client: TestClient, headers, db: Session):
