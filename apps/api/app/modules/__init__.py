@@ -16,6 +16,7 @@ from app.modules.contracts.router import router as contracts_router
 from app.modules.cost_centers.router import router as cost_centers_router
 from app.modules.crm.router import router as crm_router
 from app.modules.device_tokens.router import router as device_tokens_router
+from app.modules.dna.router import router as dna_router
 from app.modules.financial_intelligence.router import router as financial_intelligence_router
 from app.modules.funnels.router import router as funnels_router
 from app.modules.google_calendar.router import public_router as google_calendar_public_router
@@ -50,6 +51,7 @@ ALL_ROUTERS: list[APIRouter] = [
     agenda_router,
     crm_router,
     device_tokens_router,
+    dna_router,
     cockpit_router,
     platform_router,
     notifications_router,
