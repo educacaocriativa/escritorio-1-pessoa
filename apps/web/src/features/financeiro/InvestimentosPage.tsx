@@ -4,11 +4,14 @@ import Modal, { Field } from "../../components/Modal";
 import { api, apiErrorMessage } from "../../lib/api";
 import { usePrimaryAction } from "../../store/pageActions";
 import { type ChartAccount } from "./planoContas";
+import type { BankAccount } from "./contas";
 import {
+  contasDeAplicacao,
   formatBRL,
   formatPct,
   type InvestmentAccount,
   type Rentability,
+  rotuloDoVinculo,
   SUGGESTED_KINDS,
 } from "./investimentos";
 
@@ -26,12 +29,17 @@ export default function InvestimentosPage() {
   const [open, setOpen] = useState(false);
   const [yieldFor, setYieldFor] = useState<InvestmentAccount | null>(null);
   const [error, setError] = useState<string | null>(null);
+  // Onda 2b-i: as contas de aplicação disponíveis para vínculo. Carregadas UMA vez aqui e passadas
+  // aos dois modais — refazer o GET dentro de cada um daria duas listas que podem divergir.
+  const [contas, setContas] = useState<BankAccount[]>([]);
 
   const hasPeriod = Boolean(start && end);
 
   const load = useCallback(async () => {
     const { data } = await api.get<InvestmentAccount[]>("/investments");
     setAccounts(data);
+    const { data: bancarias } = await api.get<BankAccount[]>("/bank/accounts");
+    setContas(contasDeAplicacao(bancarias));
     const params = hasPeriod ? { start, end } : undefined;
     const entries = await Promise.all(
       data.map(async (a) => {
@@ -113,7 +121,12 @@ export default function InvestimentosPage() {
                   Registrar rendimento
                 </button>
               </div>
-              <div className="mt-4 grid grid-cols-2 gap-4 sm:grid-cols-4">
+              <div className="mt-4 grid grid-cols-2 gap-4 sm:grid-cols-5">
+                <Stat
+                  label="Conta bancária"
+                  value={rotuloDoVinculo(a, contas)}
+                  tone={a.bank_account_id ? undefined : "text-amber-700"}
+                />
                 <Stat label="Principal" value={formatBRL(a.principal_cents)} />
                 <Stat label="Rendimento acumulado" value={formatBRL(a.accrued_yield_cents)} />
                 <Stat
@@ -136,12 +149,18 @@ export default function InvestimentosPage() {
         })}
       </div>
 
-      <NewAccountModal open={open} onClose={() => setOpen(false)} onCreated={load} />
+      <NewAccountModal
+        open={open}
+        onClose={() => setOpen(false)}
+        onCreated={load}
+        contas={contas}
+      />
       <RegisterYieldModal
         account={yieldFor}
         onClose={() => setYieldFor(null)}
         onDone={load}
         onError={setError}
+        contas={contas}
       />
     </div>
   );
@@ -156,20 +175,65 @@ function Stat({ label, value, tone }: { label: string; value: string; tone?: str
   );
 }
 
+/**
+ * O seletor da conta bancária da aplicação (Onda 2b-i). UM componente, dois consumidores — o
+ * cadastro e o caminho de recuperação do 409. Duas cópias divergiriam no primeiro ajuste.
+ *
+ * A lista já chega filtrada por `contasDeAplicacao`: conta corrente não aparece, porque escolhê-la
+ * levaria a um 422 depois de o dono já ter decidido.
+ */
+function SeletorDeConta({
+  contas,
+  value,
+  onChange,
+}: {
+  contas: BankAccount[];
+  value: string;
+  onChange: (v: string) => void;
+}) {
+  return (
+    <label className="block">
+      <span className="mb-1 block text-xs font-medium text-neutral-600">
+        Conta bancária da aplicação
+      </span>
+      <select
+        value={value}
+        onChange={(e) => onChange(e.target.value)}
+        className="w-full rounded-lg border border-neutral-200 px-3 py-2 text-sm outline-none focus:border-primary-400"
+      >
+        <option value="">Escolha a conta…</option>
+        {contas.map((c) => (
+          <option key={c.id} value={c.id}>
+            {c.name}
+          </option>
+        ))}
+      </select>
+      {contas.length === 0 && (
+        <span className="mt-1 block text-xs text-amber-700">
+          Nenhuma conta do tipo aplicação cadastrada. Cadastre-a em Contas &amp; Saldos.
+        </span>
+      )}
+    </label>
+  );
+}
+
 function NewAccountModal({
   open,
   onClose,
   onCreated,
+  contas,
 }: {
   open: boolean;
   onClose: () => void;
   onCreated: () => void;
+  contas: BankAccount[];
 }) {
   const [name, setName] = useState("");
   const [kind, setKind] = useState<string>(SUGGESTED_KINDS[0]);
   const [indexLabel, setIndexLabel] = useState("");
   const [principal, setPrincipal] = useState("");
   const [openedAt, setOpenedAt] = useState("");
+  const [bankAccountId, setBankAccountId] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
 
@@ -183,12 +247,16 @@ function NewAccountModal({
         index_rate_label: indexLabel,
         principal_cents: Math.round(Number(principal.replace(",", ".")) * 100) || 0,
         opened_at: openedAt,
+        // Onda 2b-i: a aplicação nasce vinculada. Sem isso o dono cadastra e leva um 409 no
+        // primeiro rendimento — o beco que o 409 acionável existe justamente para evitar.
+        bank_account_id: bankAccountId || null,
       });
       onCreated();
       setName("");
       setIndexLabel("");
       setPrincipal("");
       setOpenedAt("");
+      setBankAccountId("");
       onClose();
     } catch (err) {
       setError(apiErrorMessage(err));
@@ -229,6 +297,7 @@ function NewAccountModal({
           placeholder="Ex.: 10000,00"
         />
         <Field label="Data de aplicação" value={openedAt} onChange={setOpenedAt} type="date" />
+        <SeletorDeConta contas={contas} value={bankAccountId} onChange={setBankAccountId} />
         {error && <p className="rounded-lg bg-red-50 p-2 text-sm text-danger">{error}</p>}
         <button
           onClick={save}
@@ -247,11 +316,13 @@ function RegisterYieldModal({
   onClose,
   onDone,
   onError,
+  contas,
 }: {
   account: InvestmentAccount | null;
   onClose: () => void;
   onDone: () => void;
   onError: (msg: string) => void;
+  contas: BankAccount[];
 }) {
   const [amount, setAmount] = useState("");
   const [date, setDate] = useState("");
@@ -259,6 +330,9 @@ function RegisterYieldModal({
   const [financeiro, setFinanceiro] = useState<ChartAccount[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
+  // Onda 2b-i: ligado pelo 409 acionável do backend (`detail.acao === "cadastrar_conta"`).
+  const [precisaVincular, setPrecisaVincular] = useState(false);
+  const [bankAccountId, setBankAccountId] = useState("");
 
   // Carrega só as contas do grupo FINANCEIRO (o rendimento é receita financeira — AC2).
   useEffect(() => {
@@ -276,6 +350,13 @@ function RegisterYieldModal({
     setError(null);
     setSaving(true);
     try {
+      // Se o 409 pediu o vínculo e o dono acabou de escolher a conta, vincula ANTES de reenviar —
+      // assim ele não perde o valor e a data que já digitou. É o que transforma o 409 num desvio
+      // de um passo em vez de um beco.
+      if (precisaVincular && bankAccountId) {
+        await api.patch(`/investments/${account.id}`, { bank_account_id: bankAccountId });
+        setPrecisaVincular(false);
+      }
       await api.post(`/investments/${account.id}/yield`, {
         amount_cents: Math.round(Number(amount.replace(",", ".")) * 100),
         date,
@@ -284,8 +365,23 @@ function RegisterYieldModal({
       onDone();
       setAmount("");
       setDate("");
+      setBankAccountId("");
       onClose();
     } catch (err) {
+      // O 409 acionável não é erro de tela: é um pedido de dado que falta, com o caminho junto.
+      // Por isso ele NÃO sobe para `onError` (a faixa vermelha da página) — fica no modal, ao
+      // lado do campo que o resolve.
+      const detail = (err as { response?: { data?: { detail?: unknown } } })?.response?.data
+        ?.detail;
+      if (
+        typeof detail === "object" &&
+        detail !== null &&
+        (detail as { acao?: string }).acao === "cadastrar_conta"
+      ) {
+        setPrecisaVincular(true);
+        setError((detail as { mensagem?: string }).mensagem ?? null);
+        return;
+      }
       const msg = apiErrorMessage(err);
       setError(msg);
       onError(msg);
@@ -324,10 +420,13 @@ function RegisterYieldModal({
             ))}
           </select>
         </label>
+        {precisaVincular && (
+          <SeletorDeConta contas={contas} value={bankAccountId} onChange={setBankAccountId} />
+        )}
         {error && <p className="rounded-lg bg-red-50 p-2 text-sm text-danger">{error}</p>}
         <button
           onClick={save}
-          disabled={saving || !amount.trim() || !date}
+          disabled={saving || !amount.trim() || !date || (precisaVincular && !bankAccountId)}
           className="w-full rounded-pill bg-accent-400 py-2.5 font-semibold text-white transition hover:bg-accent-500 disabled:opacity-60"
         >
           {saving ? "Registrando..." : "Registrar rendimento"}
