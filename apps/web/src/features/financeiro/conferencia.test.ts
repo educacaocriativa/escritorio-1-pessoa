@@ -405,7 +405,7 @@ describe("Story 8.16 — as notas do bloco 4: a tela ANOTA, nunca recalcula", ()
     valor_rendimentos_sem_perna_cents: 48_000,
     notes: [
       "7 lançamentos deste período não informam de qual conta saiu ou entrou (R$ 3.120,00). A divergência abaixo **inclui** esse valor. Este termo fecha na Onda 2: assim que todo lançamento informar a conta, ele vai a zero sozinho.",
-      "3 rendimentos de aplicação deste período (R$ 480,00) ainda não geram movimento bancário. A divergência abaixo **inclui** esse valor. Este termo só fecha na Onda 2b — não há o que corrigir à mão.",
+      "3 rendimentos de aplicação deste período (R$ 480,00) ainda não geram movimento bancário. A divergência abaixo **inclui** esse valor. Vincule a aplicação à conta bancária dela para que o rendimento passe a aparecer no extrato.",
     ],
   });
 
@@ -438,15 +438,23 @@ describe("Story 8.16 — as notas do bloco 4: a tela ANOTA, nunca recalcula", ()
     // do mesmo fato viram duas frases diferentes conforme o caminho.
     expect(comTermos.notes).toHaveLength(2);
     expect(comTermos.notes[0]).toContain("Onda 2:");
-    expect(comTermos.notes[1]).toContain("Onda 2b");
+    // MUDANÇA DELIBERADA na Onda 2b-i: a nota deixou de nomear a onda porque a onda foi
+    // ENTREGUE, e passou a nomear a AÇÃO que passou a existir (vincular a aplicação).
+    expect(comTermos.notes[1]).toContain("Vincule a aplicação");
+    expect(comTermos.notes[1]).not.toContain("Onda 2b");
   });
 
-  it("cada nota nomeia a ONDA que a fecha, e elas são diferentes", () => {
-    // P1/P2 somem quando o dono terminar de corrigir os lançamentos; P3 NÃO some nesta onda. Uma
-    // nota que promete "isso some quando você terminar o mutirão" sobre um termo que não some é a
-    // mesma afirmação sem lastro que a Onda 0 removeu da Projeção.
-    expect(comTermos.notes[0]).not.toContain("Onda 2b");
-    expect(comTermos.notes[1]).toContain("não há o que corrigir à mão");
+  it("cada nota pede a AÇÃO que fecha o seu termo, e elas são diferentes", () => {
+    // Até a Onda 2b-i, P3 não fechava com trabalho nenhum e a nota NOMEAVA A ONDA que o fecharia
+    // — era o que impedia o dono de caçar um termo que software nenhum conseguia fechar.
+    // Entregue a 2b-i, a ação existe, e a nota passou a nomeá-la. O que continua separando as
+    // duas frases é que elas pedem coisas diferentes: informar a conta em cada lançamento legado,
+    // um por um (P1/P2), × vincular a aplicação à conta bancária dela, UMA vez (P3). Achatá-las
+    // mandaria o dono caçar lançamento a lançamento um termo que se resolve num clique.
+    expect(comTermos.notes[0]).toContain("Este termo fecha na Onda 2:");
+    expect(comTermos.notes[0]).not.toContain("Vincule a aplicação");
+    expect(comTermos.notes[1]).toContain("Vincule a aplicação");
+    expect(comTermos.notes[1]).not.toContain("Onda 2b");
   });
 
   it("UX-001: as notas novas não reusam 'no banco' nem os rótulos de saldo vizinhos", () => {

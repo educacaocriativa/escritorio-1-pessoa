@@ -525,8 +525,8 @@ describe("Story 8.16 — as notas do bloco 4 na tela: declaração de limite, n�
     "lançamento informar a conta, ele vai a zero sozinho.";
   const NOTA_P3 =
     "3 rendimentos de aplicação deste período (R$ 480,00) ainda não geram movimento bancário. " +
-    "A divergência abaixo **inclui** esse valor. Este termo só fecha na Onda 2b — não há o que " +
-    "corrigir à mão.";
+    "A divergência abaixo **inclui** esse valor. Vincule a aplicação à conta bancária dela " +
+    "para que o rendimento passe a aparecer no extrato.";
 
   it("as notas aparecem JUNTO das que já existem, sem bloco novo e sem cor de alerta", async () => {
     // AC10: a nota é declaração de limite, não problema. Ela entra no mesmo `<ul>` de `notes` que a

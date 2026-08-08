@@ -16,7 +16,7 @@ RLS/isolamento cross-tenant é validado à parte no Postgres real (test_investme
 """
 from __future__ import annotations
 
-from datetime import date
+from datetime import UTC, date, datetime
 
 import pytest
 from fastapi.testclient import TestClient
@@ -57,9 +57,50 @@ def _account(client: TestClient, headers, grupo: str, categoria: str) -> str:
     return r.json()["id"]
 
 
-def _investment(
-    client: TestClient, headers, *, name="CDB Banco X", principal=1_000_000, opened="2026-01-10"
+def _conta_bancaria(
+    client: TestClient, headers, *, name="CDB Itaú", kind="investment", opening_date="2026-01-01"
 ) -> dict:
+    """A `bank_account` ONDE O DINHEIRO DA APLICAÇÃO ESTÁ (Onda 2b-i).
+
+    `kind='investment'` funciona desde a Onda 1 — o que a 2b-i acrescenta é a ligação 1:1 com a
+    faceta de PRODUTO (`investment_accounts`), que é quem sabe rentabilidade e indexador.
+    """
+    r = client.post(
+        "/bank/accounts",
+        json={
+            "name": name,
+            "kind": kind,
+            "number": "",
+            "opening_balance_cents": 0,
+            "opening_balance_is_known": True,
+            "opening_date": opening_date,
+        },
+        headers=headers,
+    )
+    assert r.status_code == 201, r.text
+    return r.json()
+
+
+def _investment(
+    client: TestClient,
+    headers,
+    *,
+    name="CDB Banco X",
+    principal=1_000_000,
+    opened="2026-01-10",
+    bank_account_id: str | None = "auto",
+) -> dict:
+    """A aplicação **nasce vinculada por padrão** (Onda 2b-i), e isso não é conveniência de teste.
+
+    Depois do 409 de `register_yield`, aplicação sem vínculo é um estado de transição — o dono
+    passa por ele uma vez e sai. Fazer o helper refletir o estado NORMAL é o que mantém os treze
+    call sites de rendimento exercitando o caminho real. Quem quer o estado de transição pede
+    `bank_account_id=None`, explicitamente, e há exatamente um teste que o faz.
+
+    Cada aplicação ganha a SUA conta: o índice único `(tenant_id, bank_account_id)` é 1:1.
+    """
+    if bank_account_id == "auto":
+        bank_account_id = _conta_bancaria(client, headers, name=f"Conta {name}")["id"]
     r = client.post(
         "/investments",
         json={
@@ -68,6 +109,7 @@ def _investment(
             "index_rate_label": "CDI 110%",
             "principal_cents": principal,
             "opened_at": opened,
+            "bank_account_id": bank_account_id,
         },
         headers=headers,
     )
@@ -304,7 +346,10 @@ def test_rentability_total_and_period(client: TestClient, headers):
     rend = _account(client, headers, "FINANCEIRO", "Rendimento de aplicação")
     acc = _investment(client, headers, principal=1_000_000)
     # dois rendimentos em julho + um em agosto (fora do período consultado)
-    for amount, d in [(20_000, "2026-07-05"), (30_000, "2026-07-25"), (5_000, "2026-08-10")]:
+    # ⚠️ A data de agosto é 01, não 10: desde a Onda 2b-i `register_yield` recusa data FUTURA com
+    # 422, e o teste precisa de uma data de agosto que já tenha passado. A intenção do caso é
+    # "agosto não entra no período de julho" — ela sobrevive intacta.
+    for amount, d in [(20_000, "2026-07-05"), (30_000, "2026-07-25"), (5_000, "2026-08-01")]:
         client.post(
             f"/investments/{acc['id']}/yield",
             json={"amount_cents": amount, "date": d, "chart_account_id": rend},
@@ -375,3 +420,290 @@ def test_yield_appears_in_dre_financeiro_group(client: TestClient, headers, db: 
     assert cats["Rendimento de aplicação"] == 18_000
     # e conta no resultado operacional (FINANCEIRO ∈ RESULT_GROUPS)
     assert report.resultado_cents == 18_000
+
+
+# ── Onda 2b-i — o vínculo 1:1 com a conta bancária da aplicação ──────────────────────────────
+
+
+def test_vincular_a_aplicacao_a_conta_bancaria_dela(client: TestClient, headers):
+    """O caminho feliz do vínculo, pelo PATCH — é assim que a aplicação LEGADA é vinculada.
+
+    O vínculo é ato do dono, na tela: por isso a migration 0075 não faz backfill nenhum, e é
+    justamente o backfill ausente que a mantém fora da armadilha do `FORCE ROW LEVEL SECURITY`.
+    """
+    conta = _conta_bancaria(client, headers)
+    acc = _investment(client, headers, bank_account_id=None)  # o estado LEGADO, pré-2b-i
+    assert acc["bank_account_id"] is None
+
+    r = client.patch(
+        f"/investments/{acc['id']}", json={"bank_account_id": conta["id"]}, headers=headers
+    )
+    assert r.status_code == 200, r.text
+    assert r.json()["bank_account_id"] == conta["id"]
+
+
+def test_vincular_ja_na_criacao(client: TestClient, headers):
+    """A aplicação NOVA nasce vinculada — senão o dono cadastra e leva um 409 no primeiro
+    rendimento, que é o beco que o 409 acionável existe para evitar."""
+    conta = _conta_bancaria(client, headers)
+    acc = _investment(client, headers, bank_account_id=conta["id"])
+    assert acc["bank_account_id"] == conta["id"]
+
+
+def test_a_conta_vinculada_precisa_ser_do_tipo_aplicacao(client: TestClient, headers):
+    """Vincular a aplicação a uma conta CORRENTE creditaria o rendimento no lugar errado — e os
+    dois saldos derivados passariam a mentir juntos."""
+    corrente = _conta_bancaria(client, headers, name="Itaú PJ", kind="checking")
+    acc = _investment(client, headers)
+
+    r = client.patch(
+        f"/investments/{acc['id']}", json={"bank_account_id": corrente["id"]}, headers=headers
+    )
+    assert r.status_code == 422, r.text
+    assert "aplicação" in r.json()["detail"]
+
+
+def test_conta_bancaria_inexistente_da_404_e_NUNCA_409(client: TestClient, headers):
+    """404 fail-closed. **409 confirmaria a existência da linha** — e conta de outro tenant chega
+    aqui exatamente assim, escondida pela RLS. O equivalente cross-tenant real mora em
+    `test_investments_rls.py` (`rls_e2e`): no SQLite desta suíte a RLS não existe."""
+    acc = _investment(client, headers)
+    r = client.patch(
+        f"/investments/{acc['id']}",
+        json={"bank_account_id": "00000000-0000-0000-0000-000000000000"},
+        headers=headers,
+    )
+    assert r.status_code == 404, r.text
+
+
+def test_conta_bancaria_arquivada_e_recusada(client: TestClient, headers):
+    """Conta arquivada não recebe lançamento novo — vinculá-la produziria um rendimento que o
+    dono não consegue mais ver movimentar."""
+    conta = _conta_bancaria(client, headers)
+    assert client.post(f"/bank/accounts/{conta['id']}/archive", headers=headers).status_code == 200
+    acc = _investment(client, headers)
+
+    r = client.patch(
+        f"/investments/{acc['id']}", json={"bank_account_id": conta["id"]}, headers=headers
+    )
+    assert r.status_code == 409, r.text
+    assert "arquivada" in r.json()["detail"]
+
+
+def test_a_acao_do_409_e_a_MESMA_string_de_payables_e_receivables():
+    """**O contrato do 409 acionável é UM, com três constantes — e o teste é a sincronia.**
+
+    A string é duplicada de propósito: fazer `investments` importar `payables` só por uma palavra
+    seria acoplamento gratuito entre módulos de negócio (mesmo motivo pelo qual `receivables` já a
+    duplica). O que garante que as três não divirjam é **este teste**, não um comentário — a UI
+    reconhece a situação por `acao`, e um segundo valor faria a tela deixar de oferecer o vínculo
+    **sem erro nenhum**, só sem funcionar.
+    """
+    from app.modules.investments import service as investments_service
+    from app.modules.payables import service as payables_service
+    from app.modules.receivables import service as receivables_service
+
+    assert (
+        investments_service.ACAO_CADASTRAR_CONTA
+        == payables_service.ACAO_CADASTRAR_CONTA
+        == receivables_service.ACAO_CADASTRAR_CONTA
+    )
+
+
+def test_registrar_rendimento_sem_vinculo_da_409_ACIONAVEL(client: TestClient, headers):
+    """**É este 409 que põe P3 em zero POR CONSTRUÇÃO** — o mesmo mecanismo pelo qual a 8.12 zerou
+    P1 ao tornar a coluna obrigatória: a população esvazia sozinha e não depende de o dono lembrar
+    de vincular.
+
+    A degradação graciosa da Onda 3 (*"nada acontece, nada quebra"*) é certa LÁ e errada AQUI, e a
+    diferença é quem está na sala: o payout é disparado pelo sistema, sem humano na tela a quem
+    perguntar; o rendimento é o dono digitando um valor agora.
+
+    **Mutante que este teste mata:** remover a guarda — o rendimento volta a ser criável sem perna,
+    e P3 deixa de ser zero por construção.
+    """
+    acc = _investment(client, headers, bank_account_id=None)
+    r = client.post(
+        f"/investments/{acc['id']}/yield",
+        json={"amount_cents": 48_000, "date": "2026-07-14"},
+        headers=headers,
+    )
+    assert r.status_code == 409, r.text
+    detail = r.json()["detail"]
+    assert detail["acao"] == "cadastrar_conta", "a UI reconhece a situação por este campo"
+    assert "Vincule esta aplicação" in detail["mensagem"]
+
+
+def test_erro_comum_de_investments_continua_sendo_string(client: TestClient, headers):
+    """Controle negativo do `detail` estruturado: **só** o erro acionável o preenche. Se todo erro
+    virasse dict, a tela quebraria em toda mensagem que ela hoje lê como texto."""
+    r = client.patch("/investments/nao-existe", json={"name": "X"}, headers=headers)
+    assert r.status_code == 404
+    assert isinstance(r.json()["detail"], str)
+
+
+# ── Onda 2b-i — a perna bancária do rendimento ───────────────────────────────────────────────
+
+
+def test_registrar_rendimento_gera_o_movimento_bancario_NASCIDO_CONCILIADO(
+    client: TestClient, headers, db: Session
+):
+    """O coração da Onda 2b-i: o rendimento passa a ter perna bancária.
+
+    **Crédito** (sinal positivo — o sinal vem da tabela de origem, `Charge` = +1, convenção
+    canônica ratificada na 5.3), `origin_id = charge.id` **sem sufixo** (perna única ⇒ o
+    `origin_id` É o id), e `status='matched'` porque movimento de origem do sistema **nasce
+    conciliado**: ele não passa pelo matcher, e é isso que a Regra da Origem compra.
+    """
+    from app.modules.bank.models import SOURCE_YIELD, BankTransaction
+
+    conta = _conta_bancaria(client, headers)
+    acc = _investment(client, headers, bank_account_id=conta["id"])
+
+    r = client.post(
+        f"/investments/{acc['id']}/yield",
+        json={"amount_cents": 48_000, "date": "2026-07-14"},
+        headers=headers,
+    )
+    assert r.status_code == 200, r.text
+
+    charge = db.scalars(
+        select(Charge).where(Charge.external_ref == f"investment:{acc['id']}")
+    ).one()
+    tx = db.scalars(select(BankTransaction).where(BankTransaction.source == SOURCE_YIELD)).one()
+
+    assert tx.origin_id == charge.id, "perna única ⇒ o origin_id É o id, sem sufixo"
+    assert tx.bank_account_id == conta["id"]
+    assert tx.amount_cents == 48_000, "crédito: o sinal vem da tabela de origem (Charge = +1)"
+    assert tx.posted_at == date(2026, 7, 14)
+    assert tx.status == "matched", "movimento de origem do sistema NASCE conciliado"
+
+
+def test_o_rendimento_com_perna_SAI_do_termo_P3(client: TestClient, headers, db: Session):
+    """A ponta que fecha o círculo, pelo caminho REAL.
+
+    O predicado (`contar_rendimentos_sem_perna_bancaria`) e o movimento foram construídos
+    separados; os dois poderiam estar corretos e **não se encontrarem** — é este teste que prova
+    que a onda entrega o que a justifica.
+
+    ⚠️ **A janela é a de HOJE, e a primeira versão deste teste passava sem implementação nenhuma
+    por não ser.** `register_yield` grava `paid_at = now()` (o INSTANTE do registro), enquanto
+    `posted_at` do movimento usa a data de COMPETÊNCIA informada. Uma janela em julho não continha
+    o `paid_at` de um rendimento registrado hoje, então P3 dava `(0, 0)` por vacuidade — o teste
+    verde sobre o vazio, que é a família de defeito dominante deste épico.
+
+    O **controle positivo** (a aplicação sem vínculo, que conta) é o que impede a vacuidade de
+    voltar: se a janela deixar de conter o rendimento, ele quebra primeiro. E foi ele que pegou a
+    segunda armadilha — a janela é aberta em ±1 dia porque `date.today()` é a data LOCAL da
+    máquina enquanto `paid_at` é `now(UTC)`: às 22h em UTC−3 as duas já são dias diferentes, e uma
+    janela de um dia só perderia o rendimento pela borda, silenciosamente.
+    """
+    from datetime import timedelta
+
+    from app.modules.receivables.service import contar_rendimentos_sem_perna_bancaria
+
+    hoje = date.today()
+    de, ate = hoje - timedelta(days=1), hoje + timedelta(days=1)
+    conta = _conta_bancaria(client, headers)
+    acc = _investment(client, headers, bank_account_id=conta["id"])
+    r = client.post(
+        f"/investments/{acc['id']}/yield",
+        json={"amount_cents": 48_000, "date": hoje.isoformat()},
+        headers=headers,
+    )
+    assert r.status_code == 200, r.text
+
+    assert contar_rendimentos_sem_perna_bancaria(db, start=de, end=ate) == (0, 0), (
+        "o rendimento tem perna — P3 tem de estar vazio"
+    )
+
+    # CONTROLE POSITIVO: o mesmo rendimento, sem perna, CONTA. Sem isto o assert acima passaria
+    # por qualquer motivo que esvaziasse a população — janela errada inclusive.
+    legada = _investment(client, headers, name="Legada", bank_account_id=None)
+    from app.modules.investments.models import external_ref_for
+
+    db.add(
+        Charge(
+            tenant_id=db.scalars(select(Charge)).first().tenant_id,
+            description="Rendimento legado",
+            amount_cents=7_000,
+            due_date=hoje,
+            method="pix",
+            kind="service",
+            status=STATUS_PAID,
+            external_ref=external_ref_for(legada["id"]),
+            paid_at=datetime.now(UTC),
+        )
+    )
+    db.commit()
+    assert contar_rendimentos_sem_perna_bancaria(db, start=de, end=ate) == (1, 7_000), (
+        "o rendimento SEM perna tem de contar — senão a janela do teste não mede nada"
+    )
+
+
+def test_rendimento_com_data_FUTURA_e_recusado(client: TestClient, headers):
+    """**A decisão que `bank/transfers.py:185` exige que a 2b tome em vez de copiar a forma.**
+
+    A razão NÃO é a mesma da transferência. É que um rendimento que ainda não caiu não é um
+    rendimento; e, ao contrário de uma `Payable` com data futura, ele não teria para onde ir — não
+    existe estado `scheduled` para rendimento, nem superfície onde apareceria, nem caminho de
+    promoção. Aceitá-lo inventaria a quarta semântica de agendamento que o Art. IV proíbe.
+    """
+    from datetime import timedelta
+
+    conta = _conta_bancaria(client, headers)
+    acc = _investment(client, headers, bank_account_id=conta["id"])
+    # +2 dias, e não +1: com +1 a borda das 21h em UTC−3 tornaria o teste dependente da hora em
+    # que a suíte roda — exatamente a classe de flake que `hoje_do_tenant` existe para eliminar.
+    futuro = date.today() + timedelta(days=2)
+
+    r = client.post(
+        f"/investments/{acc['id']}/yield",
+        json={"amount_cents": 48_000, "date": futuro.isoformat()},
+        headers=headers,
+    )
+    assert r.status_code == 422, r.text
+    assert "ainda não caiu" in r.json()["detail"]
+
+
+def test_rendimento_de_HOJE_e_aceito(client: TestClient, headers):
+    """**A borda, do lado de dentro** — sem este par, a guarda acima passaria com `>=` no lugar de
+    `>` e recusaria o rendimento que o dono lança no dia em que ele caiu.
+
+    (É a lição do mutante `posted_at > since` → `>=` que sobreviveu a 58 testes verdes na Onda 2:
+    par de recortes complementares sem caso na borda não prova partição nenhuma.)
+    """
+    conta = _conta_bancaria(client, headers)
+    acc = _investment(client, headers, bank_account_id=conta["id"])
+
+    r = client.post(
+        f"/investments/{acc['id']}/yield",
+        json={"amount_cents": 1_000, "date": date.today().isoformat()},
+        headers=headers,
+    )
+    assert r.status_code == 200, r.text
+
+
+def test_registrar_rendimento_CONTINUA_sem_criar_Transaction_nem_PlatformEarning(
+    client: TestClient, headers, db: Session
+):
+    """**IV1 da Story 5.6, reafirmada e NÃO relaxada pela perna bancária.**
+
+    `bank_transactions` é o plano do BANCO; `Transaction`/`PlatformEarning` são o plano da
+    PLATAFORMA. Misturar os dois é a Regra dos Planos do Epic 8 — e foi essa mistura que produziu
+    o bug de origem daquele épico.
+    """
+    conta = _conta_bancaria(client, headers)
+    acc = _investment(client, headers, bank_account_id=conta["id"])
+    tx_antes = len(list(db.scalars(select(Transaction)).all()))
+    pe_antes = len(list(db.scalars(select(PlatformEarning)).all()))
+
+    client.post(
+        f"/investments/{acc['id']}/yield",
+        json={"amount_cents": 48_000, "date": "2026-07-14"},
+        headers=headers,
+    )
+
+    db.expire_all()
+    assert len(list(db.scalars(select(Transaction)).all())) == tx_antes
+    assert len(list(db.scalars(select(PlatformEarning)).all())) == pe_antes
