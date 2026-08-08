@@ -1,20 +1,18 @@
 """DNA da Empresa — respostas do dono
 
-Revision ID: 0075
-Revises: 0074
+Revision ID: 0076
+Revises: 0075
 Create Date: 2026-08-08
 
-⚠️ **COLISÃO CONHECIDA, ainda não resolvida.** Existe uma `0075_investment_bank_account.py` numa
-frente paralela (branch `onda-2b-i`) que ainda NÃO mergeou. As duas nasceram de `0074` e as duas
-reivindicam a revision `0075`.
+⚠️ **Nasceu como `0075` e foi RENUMERADA.** Esta migration e a `0075_investment_bank_account.py`
+(Epic 8, Onda 2b-i) foram escritas em paralelo, as duas a partir de `0074`, e as duas
+reivindicavam o mesmo id. A outra mergeou primeiro (PR #100), então esta renumerou — **quem
+mergeia depois renumera**, e antes do merge, nunca depois: duas revisions com o mesmo id fazem
+`alembic upgrade head` escolher uma em silêncio, e a outra some sem erro nenhum.
 
-**Quem mergear DEPOIS renumera** — é a única resolução possível, e ela precisa acontecer ANTES do
-merge, não depois: duas revisions com o mesmo id fazem `alembic upgrade head` escolher uma em
-silêncio, e a outra some sem erro nenhum. Reconfira com `ls migrations/versions/ | sort | tail -3`
-imediatamente antes de abrir o PR.
-
-Numerar 0076 preventivamente seria pior: a cadeia deste branch ficaria `0074 → 0076` com o elo
-faltando, impossível de rodar e impossível de testar enquanto a outra frente não mergeasse.
+Numerar `0076` preventivamente, antes de a outra mergear, teria sido pior: a cadeia deste branch
+ficaria `0074 → 0076` com o elo faltando, impossível de rodar e de testar. É a terceira vez que
+este repositório encosta nessa armadilha (ver a `0072`).
 
 Sem backfill: não existe resposta anterior a esta migration, então a armadilha da RLS no backfill
 (ver 0046/0066/0067/0068/0069) não se aplica. Só DDL.
@@ -24,8 +22,8 @@ from collections.abc import Sequence
 import sqlalchemy as sa
 from alembic import op
 
-revision: str = "0075"
-down_revision: str | None = "0074"
+revision: str = "0076"
+down_revision: str | None = "0075"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 
