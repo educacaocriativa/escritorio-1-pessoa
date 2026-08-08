@@ -52,6 +52,10 @@ LIMIARES_PADRAO: dict[str, int] = {
     "card_parado_dias": 10,
     "topo_sem_lead_dias": 5,
     "prazo_vencendo_dias": 1,
+    # Nasce com o MESMO valor de `prazo_vencendo_dias` porque hoje as duas regras dividem
+    # aquele número. Quem passa a lê-lo é `_dinheiro_com_data` — aqui a chave existe para que
+    # o catálogo do DNA possa apontar para ela.
+    "dinheiro_com_data_dias": 1,
 }
 
 
