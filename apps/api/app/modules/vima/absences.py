@@ -96,7 +96,7 @@ def coletar(
     compatível com a data de referência —, e o serviço passa o relógio real. Como todo o resto
     deste módulo, o relógio entra por parâmetro: nada aqui dentro chama `now()`.
     """
-    lim = {**LIMIARES_PADRAO, **(limiares or {})}
+    lim: dict[str, int | None] = {**LIMIARES_PADRAO, **(limiares or {})}
     instante = agora or datetime.combine(hoje, time.max, tzinfo=UTC)
     fora: list[Ausencia] = []
 
@@ -108,7 +108,12 @@ def coletar(
         fora.extend(_silencio_nosso(db, hoje, lim, instante))
         fora.extend(_contato_sumido(db, hoje, lim))
         fora.extend(_cards_parados(db, hoje, lim))
-        fora.extend(_topo_seco(db, hoje, lim))
+        # `None` significa REGRA NÃO EXECUTADA, não "limiar infinito" — mesma forma do filtro
+        # de permissão, que não roda a regra em vez de calcular e esconder. Só topo seco pode
+        # ser desligado, porque é a única que dispara sobre o VAZIO: sem cards não há card
+        # parado, mas sem lead nenhum ela cutuca todo dia, para sempre.
+        if lim.get("topo_sem_lead_dias") is not None:
+            fora.extend(_topo_seco(db, hoje, lim))
 
     return [a for a in fora if not _ja_dita(a, ja_reportadas)]
 

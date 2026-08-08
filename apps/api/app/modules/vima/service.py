@@ -19,6 +19,7 @@ from sqlalchemy.orm import Session
 
 from app.core.facts import Fact
 from app.core.tenancy import CurrentUser
+from app.modules.dna import resolver as dna_resolver
 from app.modules.payables.models import Payable
 from app.modules.quotes.models import Quote
 from app.modules.receivables.models import Charge
@@ -59,6 +60,9 @@ def gerar_ou_ler(db: Session, *, user: CurrentUser, hoje: date | None = None) ->
         fatos=fatos,
         ausencias=absences.coletar(
             db, user=user, hoje=dia, agora=agora,
+            # O DNA da Empresa entra aqui, e só aqui. Sem resposta, o dicionário vem vazio e os
+            # defaults conservadores do V1 continuam valendo.
+            limiares=dna_resolver.limiares(db),
             ja_reportadas=_ja_reportadas(db, user=user),
         ),
         tendencias=trends.coletar(db, user=user, hoje=dia),
@@ -132,7 +136,16 @@ def _fatos_da_janela(db: Session, *, user: CurrentUser, desde: datetime) -> list
 
 
 def _ja_reportadas(db: Session, *, user: CurrentUser) -> dict[str, int]:
-    """As ausências que o briefing anterior deste usuário já disse — a regra do silêncio."""
+    """As ausências que o briefing anterior deste usuário já disse — a regra do silêncio.
+
+    ⚠️ **Recalibrar zera o registro.** Se o dono aperta "card parado" de 10 para 5 dias e o
+    briefing continua calado porque já disse aquilo ontem, a configuração parece quebrada — e a
+    próxima que ele mexer, ele não acredita.
+
+    A limpeza é GROSSA de propósito: derruba o silêncio de todas as regras, não só da que mudou.
+    Mesma linha do fator 2 da escalada, "arbitrário e deliberadamente grosso". Discriminar por
+    regra exigiria um mapa `kind`→limiar que existiria só para isto, e recalibrar é raro.
+    """
     anterior = db.scalar(
         select(Briefing)
         .where(Briefing.user_id == user.user_id)
@@ -140,6 +153,8 @@ def _ja_reportadas(db: Session, *, user: CurrentUser) -> dict[str, int]:
         .limit(1)
     )
     if anterior is None:
+        return {}
+    if dna_resolver.recalibrado_apos(db, anterior.reference_date):
         return {}
     try:
         dados = json.loads(anterior.payload)

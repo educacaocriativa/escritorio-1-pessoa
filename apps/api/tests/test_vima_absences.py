@@ -208,3 +208,20 @@ def test_conta_a_pagar_usa_o_limiar_proprio_e_nao_o_do_prazo(db: Session, usuari
         limiares={"prazo_vencendo_dias": 0, "dinheiro_com_data_dias": 7},
     )
     assert [a for a in longo if a.kind == "financeiro.conta.vencendo"]
+
+
+def test_topo_seco_desligado_nao_roda_a_regra(db: Session, usuario_owner):
+    """`None` = regra NÃO EXECUTADA, não "limiar infinito".
+
+    É a mesma forma do filtro de permissão do V1: não roda em vez de calcular e esconder. Se o
+    `None` chegasse a `timedelta(days=...)`, o briefing estouraria com TypeError para todo dono
+    que desligasse o aviso — e desligar é justamente o que a única pergunta com essa opção
+    oferece.
+    """
+    ligado = coletar(db, user=usuario_owner, hoje=HOJE)
+    assert [a for a in ligado if a.kind == "comercial.topo.sem_lead"]
+
+    desligado = coletar(
+        db, user=usuario_owner, hoje=HOJE, limiares={"topo_sem_lead_dias": None}
+    )
+    assert not [a for a in desligado if a.kind == "comercial.topo.sem_lead"]
