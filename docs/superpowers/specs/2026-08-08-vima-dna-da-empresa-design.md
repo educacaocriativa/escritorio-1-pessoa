@@ -131,9 +131,10 @@ existe e é o lugar certo.
 **`value` nulo distingue "pulei" de "nunca me perguntaram"** sem tabela nova. É o que sustenta a
 quarentena de 7 dias descrita em [Cadência](#cadência-as-duas-regras-de-silêncio).
 
-**A escrita valida contra o catálogo.** Chave desconhecida → 422. Valor fora de `opcoes` para
-formato `escolha` → 422. Texto acima de 2.000 caracteres → 422. Sem isso o `value` JSON vira
-depósito de qualquer coisa e o resolver quebra na leitura, longe de quem escreveu.
+**A escrita valida contra o catálogo.** Chave desconhecida → **404** (a pergunta não existe como
+recurso). Valor fora de `opcoes` → **400**. Texto acima de 2.000 caracteres → **400**. Sem isso o
+`value` JSON vira depósito de qualquer coisa e o resolver quebra na leitura, longe de quem
+escreveu.
 
 ### O V2 não chama IA
 
@@ -424,7 +425,8 @@ produto — e a trilha de quem mudou o quê é trabalho de `core/audit.py`.
 | `key` única e prefixada pelo `eixo` | Vocabulário divergente em seis meses (lição de `facts.kind`) |
 | Toda pergunta de `escolha` tem ao menos 2 `opcoes` | Pergunta impossível de responder chega ao dono |
 | Varredura AST de `app/modules/dna/` em `test_fuso_do_tenant.py` | Cadência em UTC cru: dois interrogatórios no mesmo dia fora de SP |
-| Resposta fora de `opcoes` → 422 | `value` JSON vira depósito e o resolver quebra na leitura |
+| Resposta fora de `opcoes` → 400 | `value` JSON vira depósito e o resolver quebra na leitura |
+| Resposta órfã (opção que saiu do catálogo) cai no default | Um ajuste de catálogo derruba o briefing de quem já tinha respondido |
 | `limiares()` devolve só Calibração | Retrato ganha consumidor por acidente e o contrato morre |
 | Default preservado quando não há resposta | Tenant que não respondeu muda de comportamento sem ter pedido |
 
@@ -434,7 +436,7 @@ produto — e a trilha de quem mudou o quê é trabalho de `core/audit.py`.
 
 | Onda | Entregável | Dá para parar aqui? |
 |---|---|---|
-| **1** | `dna/catalog.py` com as 45 e as guardas · migration `dna_answers` (RLS `FORCE`) · rotas `GET /dna/pendente`, `PUT /dna/{key}`, `POST /dna/{key}/pular` · validação | Sim — nada visível mudou |
+| **1** | `dna/catalog.py` com as 45 e as guardas · migration `dna_answers` (RLS `FORCE`) · rotas `GET /dna/pendente` (com cadência), `GET /dna/faltantes` (sem), `GET /dna/respostas`, `PUT /dna/{key}`, `POST /dna/{key}/pular` · validação | Sim — nada visível mudou |
 | **2** | `dna/resolver.py` ligado em `absences` via `vima/service.py` · `dinheiro_com_data_dias` separado de `prazo_vencendo_dias` · limpeza do silêncio | Sim — **o DNA já muda o briefing**, respondendo pela API |
 | **3** | Núcleo de 6 no primeiro acesso, em `EntradaDoDia`, pulável, 360px | Sim |
 | **4** | Ganchos: Calibração colada à ausência no briefing + ganchos de contexto | Sim |
