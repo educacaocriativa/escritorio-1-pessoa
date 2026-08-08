@@ -4,6 +4,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import Attachments from "../../components/Attachments";
 import Modal, { Field } from "../../components/Modal";
 import { api, apiErrorMessage, getGoogleStatus } from "../../lib/api";
+import GanchoDaVima from "../dna/GanchoDaVima";
 import { usePrimaryAction } from "../../store/pageActions";
 import { formatDateTime, formatDay, formatTime, today } from "../../lib/datetime";
 import { useFuso } from "../../store/auth";
@@ -122,6 +123,7 @@ export default function AgendaPage() {
 
   return (
     <div className="space-y-4">
+      <GanchoDaVima gancho="agenda.evento.criado" />
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div className="flex items-center gap-2">
           <button onClick={() => nav(-1)} className="rounded-lg p-1.5 text-neutral-500 hover:bg-neutral-100">
