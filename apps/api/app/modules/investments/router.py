@@ -37,7 +37,13 @@ def _out(a: InvestmentAccount) -> InvestmentAccountOut:
 
 
 def _err(e: service.InvestmentError) -> HTTPException:
-    return HTTPException(status_code=e.status_code, detail=str(e))
+    """`detail` estruturado quando o erro é ACIONÁVEL; string em todo o resto.
+
+    Só `ContaNaoVinculadaError` preenche `detail` — é o contrato do 409 que a 8.12 fixou (AC9) e
+    que a tela consome para oferecer o vínculo sem o dono perder o que já digitou. Sem o `detail`,
+    o front recebe uma frase e não tem como saber que existe uma ação.
+    """
+    return HTTPException(status_code=e.status_code, detail=e.detail or str(e))
 
 
 @router.get("", response_model=list[InvestmentAccountOut])

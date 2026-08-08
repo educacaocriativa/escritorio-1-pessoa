@@ -67,6 +67,7 @@ def _seed_tenant(app_url: str, tenant_id: str, *, principal: int, yield_cents: i
     """Cria, para um tenant (GUC setada ANTES dos INSERTs), uma conta FINANCEIRO + uma conta de
     investimento e registra um rendimento (via o service real). Retorna o id da conta de
     investimento."""
+    from app.modules.bank.models import BankAccount
     from app.modules.chart_of_accounts.models import ChartAccount
     from app.modules.investments import service as inv_service
     from app.modules.investments.models import InvestmentAccount
@@ -85,9 +86,19 @@ def _seed_tenant(app_url: str, tenant_id: str, *, principal: int, yield_cents: i
             rend = ChartAccount(
                 tenant_id=tenant_id, grupo_dre="FINANCEIRO", categoria="Rendimento de aplicação"
             )
+            # Onda 2b-i: sem vínculo, `register_yield` recusa com 409 — e é essa recusa que mantém
+            # o termo P3 vazio por construção. O seed reflete o estado NORMAL da aplicação.
+            banco = BankAccount(
+                tenant_id=tenant_id, name="CDB Itaú", kind="investment", number="",
+                opening_balance_cents=0, opening_balance_is_known=True,
+                opening_date=date(2026, 1, 1),
+            )
+            session.add(banco)
+            session.flush()
             acc = InvestmentAccount(
                 tenant_id=tenant_id, name="CDB", kind="CDB", index_rate_label="CDI",
                 principal_cents=principal, accrued_yield_cents=0, opened_at=date(2026, 1, 10),
+                bank_account_id=banco.id,
             )
             session.add_all([rend, acc])
             session.flush()

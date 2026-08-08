@@ -66,6 +66,42 @@ class InvestmentError(Exception):
     def __init__(self, message: str, status_code: int = 400):
         super().__init__(message)
         self.status_code = status_code
+        # `None` = o router serializa `str(e)` como sempre. Só o erro ACIONÁVEL abaixo preenche.
+        self.detail: dict | None = None
+
+
+# ── O 409 ACIONÁVEL, no MESMO formato que a Story 8.12 fixou (AC9) ───────────────────────────
+#
+# ⚠️ **A string é duplicada de `payables.service.ACAO_CADASTRAR_CONTA` DE PROPÓSITO**, e a
+# sincronia é garantida por **teste**, não por comentário:
+# `test_investments.py::test_a_acao_do_409_e_a_MESMA_string_de_payables_e_receivables` compara as
+# três constantes. Fazer `investments` importar `payables` só por causa de uma palavra seria
+# acoplamento gratuito entre dois módulos de negócio — o mesmo motivo pelo qual `receivables` a
+# duplica em vez de importar.
+ACAO_CADASTRAR_CONTA = "cadastrar_conta"
+
+SEM_CONTA_VINCULADA_MSG = (
+    "Para registrar o rendimento o e1p precisa saber em qual conta o dinheiro entrou — é isso "
+    "que faz o movimento aparecer no seu extrato e a conferência valer alguma coisa. Vincule "
+    "esta aplicação à conta bancária dela uma vez e o rendimento segue normalmente."
+)
+
+
+class ContaNaoVinculadaError(InvestmentError):
+    """A aplicação não aponta para conta bancária nenhuma, e o rendimento precisa de uma perna.
+
+    **É esta recusa que mantém o termo P3 vazio POR CONSTRUÇÃO** (pré-condição do gate do Epic 8),
+    e não a disciplina de o dono lembrar de vincular. Mesmo mecanismo pelo qual a Story 8.12 zerou
+    P1 ao tornar a conta obrigatória na baixa.
+
+    ⚠️ **409, e o formato é o mesmo dos outros dois módulos**: a tela reconhece a situação por
+    `detail["acao"]` e oferece o vínculo ali mesmo. Um segundo valor no `acao` quebraria isso
+    **sem erro nenhum**, só deixando de funcionar.
+    """
+
+    def __init__(self) -> None:
+        super().__init__(SEM_CONTA_VINCULADA_MSG, 409)
+        self.detail = {"acao": ACAO_CADASTRAR_CONTA, "mensagem": SEM_CONTA_VINCULADA_MSG}
 
 
 def get_account(db: Session, account_id: str) -> InvestmentAccount:
@@ -198,6 +234,9 @@ def register_yield(
     tabela de origem (`Charge` = +1), nunca do grupo_dre (convenção canônica ratificada na 5.3).
     """
     acc = get_account(db, account_id)
+    # Onda 2b-i: a perna bancária exige saber ONDE o dinheiro entrou. Sem vínculo, 409 ACIONÁVEL.
+    if not acc.bank_account_id:
+        raise ContaNaoVinculadaError()
     if chart_account_id:
         _validate_financeiro_account(db, chart_account_id)
 

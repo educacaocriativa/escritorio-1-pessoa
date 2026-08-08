@@ -88,8 +88,19 @@ def _investment(
     name="CDB Banco X",
     principal=1_000_000,
     opened="2026-01-10",
-    bank_account_id: str | None = None,
+    bank_account_id: str | None = "auto",
 ) -> dict:
+    """A aplicação **nasce vinculada por padrão** (Onda 2b-i), e isso não é conveniência de teste.
+
+    Depois do 409 de `register_yield`, aplicação sem vínculo é um estado de transição — o dono
+    passa por ele uma vez e sai. Fazer o helper refletir o estado NORMAL é o que mantém os treze
+    call sites de rendimento exercitando o caminho real. Quem quer o estado de transição pede
+    `bank_account_id=None`, explicitamente, e há exatamente um teste que o faz.
+
+    Cada aplicação ganha a SUA conta: o índice único `(tenant_id, bank_account_id)` é 1:1.
+    """
+    if bank_account_id == "auto":
+        bank_account_id = _conta_bancaria(client, headers, name=f"Conta {name}")["id"]
     r = client.post(
         "/investments",
         json={
@@ -418,7 +429,7 @@ def test_vincular_a_aplicacao_a_conta_bancaria_dela(client: TestClient, headers)
     justamente o backfill ausente que a mantém fora da armadilha do `FORCE ROW LEVEL SECURITY`.
     """
     conta = _conta_bancaria(client, headers)
-    acc = _investment(client, headers)
+    acc = _investment(client, headers, bank_account_id=None)  # o estado LEGADO, pré-2b-i
     assert acc["bank_account_id"] is None
 
     r = client.patch(
@@ -474,3 +485,55 @@ def test_conta_bancaria_arquivada_e_recusada(client: TestClient, headers):
     )
     assert r.status_code == 409, r.text
     assert "arquivada" in r.json()["detail"]
+
+
+def test_a_acao_do_409_e_a_MESMA_string_de_payables_e_receivables():
+    """**O contrato do 409 acionável é UM, com três constantes — e o teste é a sincronia.**
+
+    A string é duplicada de propósito: fazer `investments` importar `payables` só por uma palavra
+    seria acoplamento gratuito entre módulos de negócio (mesmo motivo pelo qual `receivables` já a
+    duplica). O que garante que as três não divirjam é **este teste**, não um comentário — a UI
+    reconhece a situação por `acao`, e um segundo valor faria a tela deixar de oferecer o vínculo
+    **sem erro nenhum**, só sem funcionar.
+    """
+    from app.modules.investments import service as investments_service
+    from app.modules.payables import service as payables_service
+    from app.modules.receivables import service as receivables_service
+
+    assert (
+        investments_service.ACAO_CADASTRAR_CONTA
+        == payables_service.ACAO_CADASTRAR_CONTA
+        == receivables_service.ACAO_CADASTRAR_CONTA
+    )
+
+
+def test_registrar_rendimento_sem_vinculo_da_409_ACIONAVEL(client: TestClient, headers):
+    """**É este 409 que põe P3 em zero POR CONSTRUÇÃO** — o mesmo mecanismo pelo qual a 8.12 zerou
+    P1 ao tornar a coluna obrigatória: a população esvazia sozinha e não depende de o dono lembrar
+    de vincular.
+
+    A degradação graciosa da Onda 3 (*"nada acontece, nada quebra"*) é certa LÁ e errada AQUI, e a
+    diferença é quem está na sala: o payout é disparado pelo sistema, sem humano na tela a quem
+    perguntar; o rendimento é o dono digitando um valor agora.
+
+    **Mutante que este teste mata:** remover a guarda — o rendimento volta a ser criável sem perna,
+    e P3 deixa de ser zero por construção.
+    """
+    acc = _investment(client, headers, bank_account_id=None)
+    r = client.post(
+        f"/investments/{acc['id']}/yield",
+        json={"amount_cents": 48_000, "date": "2026-07-14"},
+        headers=headers,
+    )
+    assert r.status_code == 409, r.text
+    detail = r.json()["detail"]
+    assert detail["acao"] == "cadastrar_conta", "a UI reconhece a situação por este campo"
+    assert "Vincule esta aplicação" in detail["mensagem"]
+
+
+def test_erro_comum_de_investments_continua_sendo_string(client: TestClient, headers):
+    """Controle negativo do `detail` estruturado: **só** o erro acionável o preenche. Se todo erro
+    virasse dict, a tela quebraria em toda mensagem que ela hoje lê como texto."""
+    r = client.patch("/investments/nao-existe", json={"name": "X"}, headers=headers)
+    assert r.status_code == 404
+    assert isinstance(r.json()["detail"], str)
