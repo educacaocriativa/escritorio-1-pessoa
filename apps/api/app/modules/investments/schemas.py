@@ -18,6 +18,9 @@ class InvestmentAccountCreate(BaseModel):
     index_rate_label: str = Field(default="", max_length=64)  # rótulo do indexador/taxa
     principal_cents: int = Field(default=0, ge=0)  # principal aplicado (centavos)
     opened_at: date
+    # A conta bancária da aplicação (Onda 2b-i). Opcional na criação, obrigatória para lançar
+    # rendimento — ver `service.ContaNaoVinculadaError`.
+    bank_account_id: str | None = Field(default=None, max_length=36)
 
     @field_validator("name")
     @classmethod
@@ -39,6 +42,9 @@ class InvestmentAccountUpdate(BaseModel):
     kind: str | None = Field(default=None, max_length=24)
     index_rate_label: str | None = Field(default=None, max_length=64)
     principal_cents: int | None = Field(default=None, ge=0)
+    # Onda 2b-i. `None` = não altera (o vínculo não é removível por aqui: desvincular reabriria o
+    # termo P3 para os rendimentos futuros, e não existe caso de uso para isso).
+    bank_account_id: str | None = Field(default=None, max_length=36)
 
     @field_validator("name")
     @classmethod
@@ -76,6 +82,7 @@ class InvestmentAccountOut(BaseModel):
     principal_cents: int
     accrued_yield_cents: int
     opened_at: date
+    bank_account_id: str | None
     created_at: datetime
 
 

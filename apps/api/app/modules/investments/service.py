@@ -44,6 +44,8 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.core import audit
+from app.modules.bank import service as bank_service
+from app.modules.bank.models import KIND_INVESTMENT
 from app.modules.chart_of_accounts import service as chart_service
 from app.modules.chart_of_accounts.models import GRUPO_FINANCEIRO
 from app.modules.investments.models import InvestmentAccount, external_ref_for
@@ -77,6 +79,8 @@ def get_account(db: Session, account_id: str) -> InvestmentAccount:
 def create_account(
     db: Session, *, tenant_id: str, actor: str, data: InvestmentAccountCreate
 ) -> InvestmentAccount:
+    if data.bank_account_id:
+        _validate_bank_account(db, data.bank_account_id)
     acc = InvestmentAccount(
         tenant_id=tenant_id,
         name=data.name,
@@ -85,6 +89,7 @@ def create_account(
         principal_cents=data.principal_cents,
         accrued_yield_cents=0,
         opened_at=data.opened_at,
+        bank_account_id=data.bank_account_id,
     )
     db.add(acc)
     audit.record(db, tenant_id=tenant_id, actor=actor, action="investment.create", target=acc.id)
@@ -107,6 +112,10 @@ def update_account(
         acc.index_rate_label = data.index_rate_label
     if data.principal_cents is not None:
         acc.principal_cents = data.principal_cents
+    if data.bank_account_id is not None:
+        # Onda 2b-i: é por aqui que a aplicação LEGADA é vinculada — ato do dono, não backfill.
+        _validate_bank_account(db, data.bank_account_id)
+        acc.bank_account_id = data.bank_account_id
     audit.record(db, tenant_id=tenant_id, actor=actor, action="investment.update", target=acc.id)
     db.commit()
     db.refresh(acc)
@@ -133,6 +142,43 @@ def _validate_financeiro_account(db: Session, chart_account_id: str) -> None:
         raise InvestmentError(
             "A conta do plano de contas do rendimento deve pertencer ao grupo FINANCEIRO", 422
         )
+
+
+_CONTA_NAO_E_APLICACAO_MSG = (
+    "A conta bancária de uma aplicação precisa ser do tipo 'aplicação'. Se o dinheiro está numa "
+    "conta corrente, ele não está aplicado — e o rendimento cairia na conta errada, fazendo os "
+    "dois saldos derivados mentirem juntos."
+)
+
+# ⚠️ Duplicada em substância de `payables.service._CONTA_ARQUIVADA_MSG` DE PROPÓSITO. Aquela
+# constante é privada do módulo de Contas a Pagar, e importar um símbolo `_` entre dois módulos de
+# negócio seria acoplamento gratuito — o mesmo motivo pelo qual `receivables` duplica
+# `ACAO_CADASTRAR_CONTA` em vez de importá-la. O que NÃO é duplicado é o `acao` do 409, porque
+# aquele é contrato com a UI e tem teste de sincronia.
+_CONTA_ARQUIVADA_MSG = (
+    "A conta bancária escolhida está arquivada e não recebe lançamentos novos. Escolha outra "
+    "conta ou cadastre a conta que você usa hoje — com o saldo de abertura do dia."
+)
+
+
+def _validate_bank_account(db: Session, bank_account_id: str) -> None:
+    """A conta bancária do vínculo existe (RLS), é aplicação e está ativa? (Onda 2b-i)
+
+    **404 se inexistente ou de outro tenant** — `bank_service.get_account` é fail-closed e a RLS
+    esconde a linha alheia. Nunca 409 nesse caso: 409 confirmaria a existência da linha, que é
+    vazamento de existência com cara de validação (critério já fixado no módulo `bank`).
+
+    **422 se a conta não for `kind='investment'`.** A faceta de produto fala de UMA aplicação; se
+    ela apontasse para uma conta corrente, o rendimento creditaria onde o dinheiro não está.
+    """
+    try:
+        acc = bank_service.get_account(db, bank_account_id)
+    except bank_service.BankError as e:
+        raise InvestmentError("Conta bancária não encontrada", e.status_code) from e
+    if acc.kind != KIND_INVESTMENT:
+        raise InvestmentError(_CONTA_NAO_E_APLICACAO_MSG, 422)
+    if acc.archived_at is not None:
+        raise InvestmentError(_CONTA_ARQUIVADA_MSG, 409)
 
 
 def register_yield(

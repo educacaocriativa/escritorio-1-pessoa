@@ -57,8 +57,38 @@ def _account(client: TestClient, headers, grupo: str, categoria: str) -> str:
     return r.json()["id"]
 
 
+def _conta_bancaria(
+    client: TestClient, headers, *, name="CDB Itaú", kind="investment", opening_date="2026-01-01"
+) -> dict:
+    """A `bank_account` ONDE O DINHEIRO DA APLICAÇÃO ESTÁ (Onda 2b-i).
+
+    `kind='investment'` funciona desde a Onda 1 — o que a 2b-i acrescenta é a ligação 1:1 com a
+    faceta de PRODUTO (`investment_accounts`), que é quem sabe rentabilidade e indexador.
+    """
+    r = client.post(
+        "/bank/accounts",
+        json={
+            "name": name,
+            "kind": kind,
+            "number": "",
+            "opening_balance_cents": 0,
+            "opening_balance_is_known": True,
+            "opening_date": opening_date,
+        },
+        headers=headers,
+    )
+    assert r.status_code == 201, r.text
+    return r.json()
+
+
 def _investment(
-    client: TestClient, headers, *, name="CDB Banco X", principal=1_000_000, opened="2026-01-10"
+    client: TestClient,
+    headers,
+    *,
+    name="CDB Banco X",
+    principal=1_000_000,
+    opened="2026-01-10",
+    bank_account_id: str | None = None,
 ) -> dict:
     r = client.post(
         "/investments",
@@ -68,6 +98,7 @@ def _investment(
             "index_rate_label": "CDI 110%",
             "principal_cents": principal,
             "opened_at": opened,
+            "bank_account_id": bank_account_id,
         },
         headers=headers,
     )
@@ -375,3 +406,71 @@ def test_yield_appears_in_dre_financeiro_group(client: TestClient, headers, db: 
     assert cats["Rendimento de aplicação"] == 18_000
     # e conta no resultado operacional (FINANCEIRO ∈ RESULT_GROUPS)
     assert report.resultado_cents == 18_000
+
+
+# ── Onda 2b-i — o vínculo 1:1 com a conta bancária da aplicação ──────────────────────────────
+
+
+def test_vincular_a_aplicacao_a_conta_bancaria_dela(client: TestClient, headers):
+    """O caminho feliz do vínculo, pelo PATCH — é assim que a aplicação LEGADA é vinculada.
+
+    O vínculo é ato do dono, na tela: por isso a migration 0075 não faz backfill nenhum, e é
+    justamente o backfill ausente que a mantém fora da armadilha do `FORCE ROW LEVEL SECURITY`.
+    """
+    conta = _conta_bancaria(client, headers)
+    acc = _investment(client, headers)
+    assert acc["bank_account_id"] is None
+
+    r = client.patch(
+        f"/investments/{acc['id']}", json={"bank_account_id": conta["id"]}, headers=headers
+    )
+    assert r.status_code == 200, r.text
+    assert r.json()["bank_account_id"] == conta["id"]
+
+
+def test_vincular_ja_na_criacao(client: TestClient, headers):
+    """A aplicação NOVA nasce vinculada — senão o dono cadastra e leva um 409 no primeiro
+    rendimento, que é o beco que o 409 acionável existe para evitar."""
+    conta = _conta_bancaria(client, headers)
+    acc = _investment(client, headers, bank_account_id=conta["id"])
+    assert acc["bank_account_id"] == conta["id"]
+
+
+def test_a_conta_vinculada_precisa_ser_do_tipo_aplicacao(client: TestClient, headers):
+    """Vincular a aplicação a uma conta CORRENTE creditaria o rendimento no lugar errado — e os
+    dois saldos derivados passariam a mentir juntos."""
+    corrente = _conta_bancaria(client, headers, name="Itaú PJ", kind="checking")
+    acc = _investment(client, headers)
+
+    r = client.patch(
+        f"/investments/{acc['id']}", json={"bank_account_id": corrente["id"]}, headers=headers
+    )
+    assert r.status_code == 422, r.text
+    assert "aplicação" in r.json()["detail"]
+
+
+def test_conta_bancaria_inexistente_da_404_e_NUNCA_409(client: TestClient, headers):
+    """404 fail-closed. **409 confirmaria a existência da linha** — e conta de outro tenant chega
+    aqui exatamente assim, escondida pela RLS. O equivalente cross-tenant real mora em
+    `test_investments_rls.py` (`rls_e2e`): no SQLite desta suíte a RLS não existe."""
+    acc = _investment(client, headers)
+    r = client.patch(
+        f"/investments/{acc['id']}",
+        json={"bank_account_id": "00000000-0000-0000-0000-000000000000"},
+        headers=headers,
+    )
+    assert r.status_code == 404, r.text
+
+
+def test_conta_bancaria_arquivada_e_recusada(client: TestClient, headers):
+    """Conta arquivada não recebe lançamento novo — vinculá-la produziria um rendimento que o
+    dono não consegue mais ver movimentar."""
+    conta = _conta_bancaria(client, headers)
+    assert client.post(f"/bank/accounts/{conta['id']}/archive", headers=headers).status_code == 200
+    acc = _investment(client, headers)
+
+    r = client.patch(
+        f"/investments/{acc['id']}", json={"bank_account_id": conta["id"]}, headers=headers
+    )
+    assert r.status_code == 409, r.text
+    assert "arquivada" in r.json()["detail"]
