@@ -826,6 +826,20 @@ _CHAMADORES_PERMITIDOS: dict[str, str] = {
         "ponto de escrita das pernas, e `delete_transfer` reusa o mesmo sincronizador "
         "(`bank_account_id=None`) em vez de recopiar a guarda da linha puramente sintética."
     ),
+    "modules/investments/service.py": (
+        "**Onda 2b-i** — o rendimento de aplicação é o QUARTO chamador de produção da Regra da "
+        "Origem (`source='yield'`, `amount_cents` POSITIVO, perna única ⇒ `origin_id = charge.id` "
+        "sem sufixo). `register_yield` chama o sincronizador na MESMA transação da `Charge` "
+        "sintética, depois de um `db.flush()` — o id da Charge tem default Python-side e sem o "
+        "flush o `origin_id` nasceria vazio. "
+        "⚠️ **A perna NÃO relaxa a IV1 da Story 5.6:** `bank_transactions` é o plano do BANCO; "
+        "`Transaction`/`PlatformEarning` são o plano da PLATAFORMA e continuam intocados. Ela "
+        "existe porque rendimento move dinheiro numa conta REAL do dono, e um evento assim sem "
+        "movimento correspondente é o termo **P3** da pré-condição do gate do Epic 8 — o termo "
+        "que esta onda existe para zerar. "
+        "Direção `investments → bank` permitida e pré-decidida em `test_money_planes.py`; a "
+        "volta (`bank → investments`) segue proibida por dois gates, AST e texto cru."
+    ),
     "modules/receivables/service.py": (
         "**Story 8.15** — o recebimento fora do trilho (`settle_off_rail`/`update_off_rail_"
         "payment`) é o SEGUNDO chamador de produção da Regra da Origem, e o primeiro do lado das "

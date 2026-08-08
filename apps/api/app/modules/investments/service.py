@@ -35,6 +35,13 @@ baixado (`status=paid`), sem NUNCA chamar `receivables.mark_paid`/`wallet.build_
   `external_ref LIKE 'investment:%'` em `list_charges`/`summary`; ou a alternativa do @sm de uma
   tabela de lançamentos financeiros dedicada). A DRE (5.3) já inclui este lançamento corretamente,
   pois agrega `charges` por `chart_account_id`+competência direto (não via `list_charges`).
+
+⚠️ ONDA 2b-i: `register_yield` passou a gerar TAMBÉM um `bank_transaction` `source='yield'`, pelo
+`sync_origin_movement`. Isso **NÃO relaxa a IV1** acima: `bank_transactions` é o plano do BANCO;
+`Transaction`/`PlatformEarning` são o plano da PLATAFORMA, e continuam intocados. Misturar os dois
+é a Regra dos Planos do Epic 8, e foi exatamente essa mistura que produziu o bug de origem dele.
+A perna existe porque rendimento **move dinheiro numa conta real do dono** — e um evento assim sem
+`bank_transaction` correspondente é o termo P3, que invalida a leitura do gate do épico.
 """
 from __future__ import annotations
 
@@ -44,8 +51,9 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.core import audit
+from app.modules.bank import origin as bank_origin
 from app.modules.bank import service as bank_service
-from app.modules.bank.models import KIND_INVESTMENT
+from app.modules.bank.models import KIND_INVESTMENT, SOURCE_YIELD
 from app.modules.chart_of_accounts import service as chart_service
 from app.modules.chart_of_accounts.models import GRUPO_FINANCEIRO
 from app.modules.investments.models import InvestmentAccount, external_ref_for
@@ -54,6 +62,7 @@ from app.modules.investments.schemas import (
     InvestmentAccountUpdate,
 )
 from app.modules.receivables.models import STATUS_PAID, Charge
+from app.modules.settings.service import hoje_do_tenant
 
 # Valores INERTES nos campos que só teriam efeito no split (kind/method) — nunca são usados porque
 # a Charge de rendimento não passa por mark_paid/build_transaction. Mantidos válidos por serem
@@ -217,6 +226,21 @@ def _validate_bank_account(db: Session, bank_account_id: str) -> None:
         raise InvestmentError(_CONTA_ARQUIVADA_MSG, 409)
 
 
+def _today(db: Session) -> date:
+    """A MESMA âncora de "hoje" do sistema (fuso do tenant) — nunca um segundo relógio.
+
+    `datetime.now(UTC).date()` aqui adiantaria o dia das 21h à meia-noite em UTC−3 e recusaria,
+    como "futuro", um rendimento legítimo lançado à noite. Gate: `tests/test_fuso_do_tenant.py`.
+    """
+    return hoje_do_tenant(db)
+
+
+_DATA_FUTURA_MSG = (
+    "A data do rendimento não pode ser futura — um rendimento que ainda não caiu não é um "
+    "rendimento. Lance-o no dia em que o banco creditar."
+)
+
+
 def register_yield(
     db: Session,
     *,
@@ -237,6 +261,14 @@ def register_yield(
     # Onda 2b-i: a perna bancária exige saber ONDE o dinheiro entrou. Sem vínculo, 409 ACIONÁVEL.
     if not acc.bank_account_id:
         raise ContaNaoVinculadaError()
+    # ⚠️ `bank/transfers.py:185` EXIGE que a 2b decida isto em vez de copiar a forma da
+    # transferência — e a razão aqui é outra. Não é "o e1p registra o que já aconteceu": é que um
+    # rendimento que ainda não caiu não é um rendimento, e ele não teria PARA ONDE ir. Ao contrário
+    # de uma `Payable` com data futura, não existe estado `scheduled` para rendimento, nem
+    # superfície onde ele apareceria, nem caminho de promoção. Aceitá-lo inventaria a quarta
+    # semântica de agendamento que o Art. IV proíbe.
+    if date > _today(db):
+        raise InvestmentError(_DATA_FUTURA_MSG, 422)
     if chart_account_id:
         _validate_financeiro_account(db, chart_account_id)
 
@@ -261,6 +293,35 @@ def register_yield(
         external_ref=external_ref_for(account_id),  # MARCA a origem (rendimento) + correlação
     )
     db.add(charge)
+    db.flush()  # o id da Charge tem default PYTHON-side; sem o flush o `origin_id` nasceria vazio
+
+    # ── A perna bancária (Onda 2b-i) ─────────────────────────────────────────────────────────
+    # Pelo MESMO `sync_origin_movement` de payables/receivables/transfers — a **única** função do
+    # repositório que escreve `source ∈ SOURCES_SISTEMA`. Não commita: movimento e lançamento
+    # entram na MESMA transação, e é o commit abaixo que fecha os dois. Nasce `status='matched'`.
+    #
+    # **`posted_at=date` e não `paid_at::date`:** o `date` é o dia em que o rendimento caiu para o
+    # dono. Usar o instante do registro erraria sempre que ele lançasse com qualquer atraso. O
+    # resíduo (competência 31/07 × crédito 01/08) é o **termo 3** da decomposição da divergência —
+    # resíduo estrutural, que a banda de tolerância existe para absorver. E ele **não alcança o
+    # gate**: o predicado de P3 pergunta *"existe perna?"*, não *"a perna caiu nesta janela?"*.
+    #
+    # ⚠️ O ramo *"origem desliquidada → apaga"* de `sync_origin_movement` é **INALCANÇÁVEL** para
+    # `source='yield'`: não existe caminho de estorno nem de exclusão de rendimento hoje (o router
+    # só expõe `register_yield`). Escrito aqui para quem reencontrar o ramo morto na 2b-ii não
+    # achar que foi esquecimento.
+    bank_origin.sync_origin_movement(
+        db,
+        tenant_id=tenant_id,
+        actor=actor,
+        source=SOURCE_YIELD,
+        origin_id=charge.id,
+        bank_account_id=acc.bank_account_id,
+        posted_at=date,
+        amount_cents=amount_cents,  # crédito: o sinal vem da tabela de origem (Charge = +1)
+        description=f"Rendimento de aplicação: {acc.name}",
+    )
+
     audit.record(
         db, tenant_id=tenant_id, actor=actor, action="investment.register_yield", target=acc.id
     )
