@@ -166,8 +166,17 @@ def _prazos_estourados(db: Session, hoje: date, lim: dict[str, int]) -> list[Aus
 
 
 def _dinheiro_com_data(db: Session, hoje: date, lim: dict[str, int]) -> list[Ausencia]:
-    """Conta a pagar e cobrança a receber que a data alcançou. Duas direções, uma regra."""
-    limite = hoje + timedelta(days=lim["prazo_vencendo_dias"])
+    """Conta a pagar e cobrança a receber que a data alcançou.
+
+    ⚠️ As duas direções NÃO seguem a mesma regra, apesar de morarem juntas: conta a pagar tem
+    antecedência (`due_date <= hoje + limiar`), cobrança a receber só aparece DEPOIS de vencida
+    (`due_date < hoje`, sem limiar). Um recebimento que vence amanhã não é dito por ninguém —
+    dívida registrada no spec do V2, e o motivo de a pergunta do DNA falar só de conta a pagar.
+
+    O limiar é `dinheiro_com_data_dias`, próprio, e não mais o `prazo_vencendo_dias` da agenda:
+    prazo de entrega se quer saber em cima, boleto se quer saber com folga para ter o dinheiro.
+    """
+    limite = hoje + timedelta(days=lim["dinheiro_com_data_dias"])
     fora: list[Ausencia] = []
 
     contas = db.scalars(

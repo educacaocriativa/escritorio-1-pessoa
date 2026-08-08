@@ -179,3 +179,32 @@ def test_ausencia_reincide_quando_escala(db, usuario_owner, card_parado_ha_12_di
         ja_reportadas={**briefing_de_ontem_com_o_card, "comercial.card.parado:c1": 3},
     )
     assert any(a.kind == "comercial.card.parado" for a in ausencias)
+
+
+def test_conta_a_pagar_usa_o_limiar_proprio_e_nao_o_do_prazo(db: Session, usuario_owner):
+    """Prazo de entrega se quer saber em cima; boleto, com folga para ter o dinheiro.
+
+    Um número só para as duas coisas é a fusão que o DNA torna insustentável ao perguntar em
+    voz alta.
+    """
+    db.add(
+        Payable(
+            tenant_id=TENANT, description="Aluguel", amount_cents=250_000,
+            due_date=date(2026, 8, 11), status=STATUS_OPEN,
+        )
+    )
+    db.commit()
+
+    # Antecedência curta: a conta de daqui a 5 dias ainda não é notícia.
+    curto = coletar(
+        db, user=usuario_owner, hoje=HOJE,
+        limiares={"prazo_vencendo_dias": 7, "dinheiro_com_data_dias": 1},
+    )
+    assert not [a for a in curto if a.kind == "financeiro.conta.vencendo"]
+
+    # Antecedência longa: agora é.
+    longo = coletar(
+        db, user=usuario_owner, hoje=HOJE,
+        limiares={"prazo_vencendo_dias": 0, "dinheiro_com_data_dias": 7},
+    )
+    assert [a for a in longo if a.kind == "financeiro.conta.vencendo"]
