@@ -56,6 +56,10 @@ LIMIARES_PADRAO: dict[str, int] = {
     # aquele número. Quem passa a lê-lo é `_dinheiro_com_data` — aqui a chave existe para que
     # o catálogo do DNA possa apontar para ela.
     "dinheiro_com_data_dias": 1,
+    # A cobrança a receber passou a ter antecedência própria, e o número NÃO é derivado do da
+    # conta a pagar: juntar dinheiro para pagar um boleto e cutucar um cliente antes de ele
+    # atrasar são intenções diferentes, com prazos diferentes. 3 é escolha do dono do produto.
+    "cobranca_antecedencia_dias": 3,
 }
 
 
@@ -213,20 +217,21 @@ def _prazos_estourados(db: Session, hoje: date, lim: dict[str, int]) -> list[Aus
 def _dinheiro_com_data(db: Session, hoje: date, lim: dict[str, int]) -> list[Ausencia]:
     """Conta a pagar e cobrança a receber que a data alcançou.
 
-    ⚠️ As duas direções NÃO seguem a mesma regra, apesar de morarem juntas: conta a pagar tem
-    antecedência (`due_date <= hoje + limiar`), cobrança a receber só aparece DEPOIS de vencida
-    (`due_date < hoje`, sem limiar). Um recebimento que vence amanhã não é dito por ninguém —
-    dívida registrada no spec do V2, e o motivo de a pergunta do DNA falar só de conta a pagar.
+    As duas direções seguem a MESMA regra desde 2026-08-09 — cada uma com o seu limiar. Antes,
+    conta a pagar tinha antecedência e cobrança só aparecia depois de vencida: o dono era
+    avisado com folga do que devia e surpreendido pelo que não recebeu, que é o inverso do que
+    ajuda numa empresa de uma pessoa. O toque antes do vencimento só muda o resultado do lado
+    de quem recebe.
 
-    O limiar é `dinheiro_com_data_dias`, próprio, e não mais o `prazo_vencendo_dias` da agenda:
-    prazo de entrega se quer saber em cima, boleto se quer saber com folga para ter o dinheiro.
+    Os limiares são separados porque as intenções são: `dinheiro_com_data_dias` é "quanto tempo
+    preciso para ter o dinheiro", `cobranca_antecedencia_dias` é "quanto antes eu cutuco".
     """
-    limite = hoje + timedelta(days=lim["dinheiro_com_data_dias"])
+    limite_conta = hoje + timedelta(days=lim["dinheiro_com_data_dias"])
     fora: list[Ausencia] = []
 
     contas = db.scalars(
         select(Payable)
-        .where(Payable.status == PAYABLE_ABERTA, Payable.due_date <= limite)
+        .where(Payable.status == PAYABLE_ABERTA, Payable.due_date <= limite_conta)
         .order_by(Payable.due_date)
     ).all()
     for conta in contas:
@@ -242,18 +247,28 @@ def _dinheiro_com_data(db: Session, hoje: date, lim: dict[str, int]) -> list[Aus
             )
         )
 
+    limite_cobranca = hoje + timedelta(days=lim["cobranca_antecedencia_dias"])
     cobrancas = db.scalars(
         select(Charge)
-        .where(Charge.status == COBRANCA_ABERTA, Charge.due_date < hoje)
+        .where(Charge.status == COBRANCA_ABERTA, Charge.due_date <= limite_cobranca)
         .order_by(Charge.due_date)
     ).all()
     for cobranca in cobrancas:
         dias = (hoje - cobranca.due_date).days
+        alvo = cobranca.description or "Cobrança"
+        if dias > 0:
+            quando = f"venceu há {dias} dia(s) e não foi paga"
+        elif dias == 0:
+            quando = "vence hoje"
+        else:
+            quando = f"vence em {cobranca.due_date.strftime('%d/%m')}"
         fora.append(
             Ausencia(
-                module="financeiro", kind="financeiro.cobranca.vencida",
-                title=f"{cobranca.description or 'Cobrança'} — {_brl(cobranca.amount_cents)} "
-                      f"venceu há {dias} dia(s) e não foi paga",
+                # ⚠️ Era `financeiro.cobranca.vencida`, que virou mentira quando a linha passou
+                # a sair ANTES de vencer. O renome custa uma repetição no dia do deploy (as
+                # chaves gravadas usam o nome velho), e é barato: o comportamento mudou mesmo.
+                module="financeiro", kind="financeiro.cobranca.vencendo",
+                title=f"{alvo} — {_brl(cobranca.amount_cents)} {quando}",
                 dias=dias, subject_type="charge", subject_id=cobranca.id,
                 client_id=cobranca.client_id,
             )
