@@ -240,3 +240,41 @@ def test_o_gate_da_vima_tem_o_que_varrer():
     arquivos = {p.name for p in VIMA_DIR.glob("*.py")}
     assert VIMA_PUROS <= arquivos
     assert "service.py" in arquivos  # o membro que PODE ler instante, e não pode derivar "hoje"
+
+
+# ── O mesmo gate, aplicado ao módulo `dna` ──────────────────────────────────────────────
+#
+# A cadência do DNA é por DIA ("uma pergunta por dia", "pulada em quarentena de 7 dias"). Em
+# UTC−3, derivar esse dia do relógio do servidor interroga o dono duas vezes na mesma noite —
+# e a regressão passaria meses despercebida, porque em São Paulo funciona.
+
+DNA_DIR = pathlib.Path(__file__).resolve().parents[1] / "app" / "modules" / "dna"
+
+# Puros por contrato: recebem `hoje` (e `fuso`) por parâmetro e não podem tocar no relógio nem
+# para instante. `service.py` PODE carimbar instante (`answered_at`) e não pode derivar "hoje".
+DNA_PUROS = {"catalog.py", "cadencia.py", "resolver.py"}
+
+
+@pytest.mark.parametrize("caminho", sorted(DNA_DIR.glob("*.py")), ids=lambda p: p.name)
+def test_dna_nunca_deriva_hoje_do_relogio_do_servidor(caminho: pathlib.Path):
+    arvore = ast.parse(caminho.read_text(encoding="utf-8"))
+    puro = caminho.name in DNA_PUROS
+
+    for forma, no in _chamadas_de_relogio(arvore):
+        if forma in {"today", "utcnow"} or _vira_data(arvore, no):
+            pytest.fail(
+                f"{caminho.name}:{no.lineno} deriva 'hoje' do relógio do servidor. "
+                "A cadência do DNA é por DIA — em UTC−3 isso interroga o dono duas vezes."
+            )
+        if puro:
+            pytest.fail(
+                f"{caminho.name}:{no.lineno} lê o relógio, e este módulo é PURO: "
+                "`hoje` entra por parâmetro, e quem o deriva é o router."
+            )
+
+
+def test_o_gate_do_dna_tem_o_que_varrer():
+    """A instanciação obrigatória: um conjunto vazio passaria calado para sempre."""
+    arquivos = {p.name for p in DNA_DIR.glob("*.py")}
+    assert DNA_PUROS <= arquivos
+    assert "service.py" in arquivos

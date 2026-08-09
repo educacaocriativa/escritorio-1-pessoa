@@ -19,6 +19,9 @@ class LinhaOut(BaseModel):
     secao: str
     module: str
     texto: str
+    # Só ausência preenche. Default `""` porque briefings gravados ANTES do V2 não têm o campo
+    # no payload — sem ele, reler um deles quebraria a tela.
+    kind: str = ""
 
 
 class BriefingOut(BaseModel):

@@ -2,6 +2,7 @@ import type { Quote, QuotesSummary } from "@e1p/shared-types";
 import { useCallback, useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { api } from "../../lib/api";
+import GanchoDaVima from "../dna/GanchoDaVima";
 import { usePrimaryAction } from "../../store/pageActions";
 
 const brl = (c: number) => (c / 100).toLocaleString("pt-BR", { style: "currency", currency: "BRL" });
@@ -48,6 +49,8 @@ export default function OrcamentosPage() {
         <p className="text-sm text-neutral-500">Página / Orçamentos</p>
         <h1 className="text-2xl font-bold text-neutral-800">Orçamentos</h1>
       </div>
+
+      <GanchoDaVima gancho="quotes.orcamento.criado" />
 
       <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
         <Stat label="Rascunhos" value={String(summary.draft_count)} tone="text-neutral-700" />

@@ -5,6 +5,7 @@ import Attachments from "../../components/Attachments";
 import Modal, { Field } from "../../components/Modal";
 import { api, apiErrorMessage, publicApi } from "../../lib/api";
 import { pluralize } from "../../lib/pluralize";
+import GanchoDaVima from "../dna/GanchoDaVima";
 import { usePrimaryAction } from "../../store/pageActions";
 import ChartAccountSelect from "../financeiro/ChartAccountSelect";
 import { type BankAccount, hojeISO } from "../financeiro/contas";
@@ -145,6 +146,8 @@ export default function CobrancasPage() {
           Financeiro.
         </p>
       </div>
+
+      <GanchoDaVima gancho="receivables.cobranca.criada" />
 
       <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
         <Stat label="A vencer" value={brl(summary.open_cents)} hint={`${summary.open_count} ${pluralize(summary.open_count, "cobrança", "cobranças")}`} tone="text-blue-700" />

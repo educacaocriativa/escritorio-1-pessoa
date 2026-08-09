@@ -43,6 +43,7 @@ import ProdutosPage from "../features/produtos/ProdutosPage";
 import PageBuilderPage from "../features/sites/PageBuilderPage";
 import PublicPage from "../features/sites/PublicPage";
 import SitesPage from "../features/sites/SitesPage";
+import NucleoPage from "../features/dna/NucleoPage";
 import BriefingPage from "../features/vima/BriefingPage";
 import EntradaDoDia from "../features/vima/EntradaDoDia";
 import IdleWarningModal from "../components/IdleWarningModal";
@@ -125,6 +126,9 @@ export default function App() {
             largura que o polegar já disputa. A saída fica na própria tela.
           */}
           <Route path="/vima" element={<BriefingPage />} />
+          {/* O núcleo do DNA mora aqui pelo mesmo motivo do briefing: é porta de entrada, não
+              uma página do produto — sem shell, sem menu, desenhado para 360px. */}
+          <Route path="/dna/nucleo" element={<NucleoPage />} />
           <Route path="/compartilhar" element={<CompartilharPage />} />
           <Route path="/comprovante/:id" element={<ComprovantePage />} />
         </Route>

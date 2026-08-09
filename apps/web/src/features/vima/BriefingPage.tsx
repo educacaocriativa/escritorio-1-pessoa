@@ -4,6 +4,7 @@ import { Link } from "react-router-dom";
 import { api, apiErrorMessage } from "../../lib/api";
 import { formatTime } from "../../lib/datetime";
 import { useFuso } from "../../store/auth";
+import GanchoDaVima from "../dna/GanchoDaVima";
 import PreferenciasSection from "./PreferenciasSection";
 
 /**
@@ -141,6 +142,11 @@ const TITULO_DA_SECAO: Record<string, string> = {
 // ação; número por último, porque é contexto e não notícia.
 const ORDEM = ["PENDENTE", "ACONTECEU", "NÚMEROS"];
 
+/** O `kind` da primeira pendência com um — é nele que a pergunta de calibração se ancora. */
+function primeiroKind(linhas: BriefingLinha[]): string | null {
+  return linhas.find((l) => l.secao === "PENDENTE" && l.kind)?.kind ?? null;
+}
+
 function Secoes({ linhas, excedente }: { linhas: BriefingLinha[]; excedente: number }) {
   const presentes = ORDEM.filter((s) => linhas.some((l) => l.secao === s));
   if (presentes.length === 0) return null;
@@ -163,6 +169,13 @@ function Secoes({ linhas, excedente }: { linhas: BriefingLinha[]; excedente: num
                 </li>
               ))}
           </ul>
+          {/* A pergunta de calibração vem colada à PRIMEIRA pendência da seção, e só ali: é o
+              único instante em que "esse é o tempo certo para você?" é óbvia. O componente
+              decide sozinho se aparece — a cadência mora no servidor. Linhas gravadas antes do
+              V2 não têm `kind`, e sem ele não há gancho. */}
+          {secao === "PENDENTE" && primeiroKind(linhas) && (
+            <GanchoDaVima gancho={`briefing.ausencia.${primeiroKind(linhas)}`} />
+          )}
         </section>
       ))}
       {excedente > 0 && (

@@ -5,6 +5,7 @@ import { Link } from "react-router-dom";
 import Attachments from "../../components/Attachments";
 import Modal, { Field } from "../../components/Modal";
 import { api, apiErrorMessage } from "../../lib/api";
+import GanchoDaVima from "../dna/GanchoDaVima";
 import { usePrimaryAction } from "../../store/pageActions";
 import ChartAccountSelect from "../financeiro/ChartAccountSelect";
 import type { CostCenter } from "../financeiro/costCenters";
@@ -164,6 +165,8 @@ export default function PagarPage() {
         <p className="text-sm text-neutral-500">Página / Contas a Pagar</p>
         <h1 className="text-2xl font-bold text-neutral-800">Despesas</h1>
       </div>
+
+      <GanchoDaVima gancho="payables.conta.criada" />
 
       {inbox.length > 0 && (
         <Link

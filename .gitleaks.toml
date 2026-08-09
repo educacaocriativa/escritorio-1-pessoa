@@ -44,9 +44,23 @@ paths = [
 # nunca commitado). Conferido o diff inteiro do commit antes de allowlistar (só feature +
 # testes, sem chave/token real). A fixture foi trocada num commit seguinte por um valor de
 # baixa entropia, mas o achado permanece no histórico deste commit específico. Ver PR #32.
+#
+# b5bac25: docs do plano do V2 da Vima (08/08) — o `generic-api-key` pegou uma senha de
+# FIXTURE ("senha-forte-123", entropia 3.64) dentro de um BLOCO DE CÓDIGO DE EXEMPLO no
+# plano de implementação, duas vezes. Nunca foi segredo, e nunca chegou a existir em código:
+# a fixture era INVENTADA — o payload real de `/auth/register` é outro, e o teste escrito a
+# partir dela devolvia 422. Conferido o diff inteiro antes de allowlistar: o commit toca
+# EXCLUSIVAMENTE dois arquivos de `docs/` (plano + spec), nenhum código, config ou
+# credencial. O plano foi corrigido para o payload real em 9d98647, mas o achado permanece
+# no histórico deste commit específico. Ver PR #101.
+#
+# ⚠️ Lição do achado, não do segredo: **fixture inventada em documento é dívida dupla** —
+# documenta um payload que não funciona E dispara o secret scan. Copie a fixture do teste
+# que já existe no repositório em vez de inventar uma.
 commits = [
     "b93bf6fe4e85de7e658e0eca381157623f0bdfff",
     "886f56ffcf770bf03315e12c9d9da6a8dbaaf8ba",
+    "b5bac25122f95e430ae84d301a0791a02d4c8d17",
 ]
 
 # --- Precedente documentado (NÃO ativo hoje) --------------------------------------
