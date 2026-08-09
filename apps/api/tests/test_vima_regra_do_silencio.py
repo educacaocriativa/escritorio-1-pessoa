@@ -52,8 +52,8 @@ def _um_dia(
     elas mudarem, edite só este helper — as asserções descrevem comportamento de produto e não
     devem mudar junto com a forma de chamar.
     """
-    ausencias = coletar(db, user=user, hoje=hoje, ja_reportadas=marcos)
-    payload = composer.compor(fatos=[], ausencias=ausencias, tendencias=[], valores={})
+    coleta = coletar(db, user=user, hoje=hoje, ja_reportadas=marcos)
+    payload = composer.compor(fatos=[], ausencias=coleta.ditas, tendencias=[], valores={})
     falou = any(linha.kind == KIND_CARD for linha in payload.linhas)
     return falou, payload.ausencias_ditas
 
@@ -109,3 +109,29 @@ def test_falou_no_vencimento_volta_no_primeiro_dia_de_atraso():
     from app.modules.vima.absences import _proximo_marco
 
     assert _proximo_marco(0) == 1
+
+
+# ── O contrato de `coletar` ─────────────────────────────────────────────────────────────
+
+
+def test_coletar_devolve_o_marco_anterior_de_quem_calou(db, usuario_owner, card_parado):
+    """A ausência calada precisa CHEGAR ao compositor de alguma forma, senão ele não tem como
+    carregar o marco dela adiante — e é exatamente isso que a faz voltar no dia seguinte."""
+    coleta = coletar(
+        db, user=usuario_owner, hoje=date(2026, 8, 7), ja_reportadas={CHAVE_CARD: 12}
+    )
+    assert not any(a.kind == KIND_CARD for a in coleta.ditas), "13 dias não é notícia"
+    assert coleta.marcos_anteriores[CHAVE_CARD] == 12
+
+
+def test_coletar_carrega_o_marco_de_quem_FALOU_tambem(db, usuario_owner, card_parado):
+    """`marcos_anteriores` não é "as caladas": é o marco de toda ausência viva que já tem um.
+
+    Quem foi dito e depois CORTADO pelo teto de 12 linhas também precisa preservar o marco —
+    ninguém leu aquela linha, então calá-la amanhã seria calar por algo que não foi lido.
+    """
+    coleta = coletar(
+        db, user=usuario_owner, hoje=date(2026, 8, 30), ja_reportadas={CHAVE_CARD: 12}
+    )
+    assert any(a.kind == KIND_CARD for a in coleta.ditas), "36 dias passou do marco 24"
+    assert coleta.marcos_anteriores[CHAVE_CARD] == 12

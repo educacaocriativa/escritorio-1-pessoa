@@ -56,15 +56,17 @@ def gerar_ou_ler(db: Session, *, user: CurrentUser, hoje: date | None = None) ->
     desde = _inicio_da_janela(db, user=user, agora=agora)
     fatos = _fatos_da_janela(db, user=user, desde=desde)
 
+    coleta = absences.coletar(
+        db, user=user, hoje=dia, agora=agora,
+        # O DNA da Empresa entra aqui, e só aqui. Sem resposta, o dicionário vem vazio e os
+        # defaults conservadores do V1 continuam valendo.
+        limiares=dna_resolver.limiares(db),
+        ja_reportadas=_ja_reportadas(db, user=user),
+    )
+
     payload = composer.compor(
         fatos=fatos,
-        ausencias=absences.coletar(
-            db, user=user, hoje=dia, agora=agora,
-            # O DNA da Empresa entra aqui, e só aqui. Sem resposta, o dicionário vem vazio e os
-            # defaults conservadores do V1 continuam valendo.
-            limiares=dna_resolver.limiares(db),
-            ja_reportadas=_ja_reportadas(db, user=user),
-        ),
+        ausencias=coleta.ditas,
         tendencias=trends.coletar(db, user=user, hoje=dia),
         valores=_valores_da_origem(db, fatos),
         referencia=agora,

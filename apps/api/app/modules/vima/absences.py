@@ -70,6 +70,20 @@ class Ausencia:
     client_id: str | None = None
 
 
+@dataclass(frozen=True)
+class Coleta:
+    """O que o briefing pode dizer hoje, mais a memória de tudo que está vivo.
+
+    ⚠️ `marcos_anteriores` NÃO é "as caladas". É o marco de toda ausência que existe hoje e já
+    foi dita alguma vez — calada ou dita. A diferença aparece no teto: uma ausência dita e
+    CORTADA pelas 12 linhas também precisa preservar o marco, porque ninguém a leu. Quem
+    reduzir isto às caladas reintroduz a piscada por outro caminho.
+    """
+
+    ditas: list[Ausencia]
+    marcos_anteriores: dict[str, int]
+
+
 def _brl(cents: int) -> str:
     """Ausência lê o valor da ORIGEM no instante da leitura, então pode carregá-lo no título.
 
@@ -88,7 +102,7 @@ def coletar(
     limiares: dict[str, int] | None = None,
     ja_reportadas: dict[str, int] | None = None,
     agora: datetime | None = None,
-) -> list[Ausencia]:
+) -> Coleta:
     """Roda apenas as regras dos módulos que o usuário pode ver.
 
     `agora` existe porque um dos limiares é em HORAS ("ninguém respondeu o Carlos há 24h") e
@@ -115,7 +129,15 @@ def coletar(
         if lim.get("topo_sem_lead_dias") is not None:
             fora.extend(_topo_seco(db, hoje, lim))
 
-    return [a for a in fora if not _calada(a, ja_reportadas)]
+    marcos = ja_reportadas or {}
+    return Coleta(
+        ditas=[a for a in fora if not _calada(a, marcos)],
+        marcos_anteriores={
+            chave: marcos[chave]
+            for a in fora
+            if (chave := f"{a.kind}:{a.subject_id}") in marcos
+        },
+    )
 
 
 def _proximo_marco(anterior: int) -> int:
