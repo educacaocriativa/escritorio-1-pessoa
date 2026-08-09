@@ -22,7 +22,13 @@ export interface InvestmentAccount {
   name: string;
   kind: string;
   index_rate_label: string;
-  principal_cents: number;
+  /**
+   * Onda 2b-ii — CALCULADO dos movimentos da conta bancária vinculada, não mais digitado.
+   * `null` = inafirmável (sem vínculo, ou saldo de abertura declarado desconhecido — Story
+   * 8.21). **`null` não é zero:** zero seria a afirmação "você não tem nada aplicado".
+   * Pode ser NEGATIVO: resgate bruto que levou rendimento ainda não lançado junto.
+   */
+  principal_cents: number | null;
   accrued_yield_cents: number;
   opened_at: string;
   created_at: string;
@@ -37,7 +43,7 @@ export interface InvestmentAccount {
 
 export interface Rentability {
   account_id: string;
-  principal_cents: number;
+  principal_cents: number | null; // Onda 2b-ii — ver InvestmentAccount
   accrued_yield_cents: number;
   total_rentability_pct: number | null;
   period_rentability_pct: number | null;
@@ -84,4 +90,37 @@ export function contasDeAplicacao(contas: BankAccount[]): BankAccount[] {
 export function rotuloDoVinculo(account: InvestmentAccount, contas: BankAccount[]): string {
   const conta = contas.find((c) => c.id === account.bank_account_id);
   return conta ? conta.name : VINCULAR_LABEL;
+}
+
+// ── Onda 2b-ii: o principal é CALCULADO, e pode não ser afirmável ───────────────────────────
+
+/** O texto de não-saber do principal. Uma frase, um lugar — a tela nunca a escreve à mão. */
+export const PRINCIPAL_DESCONHECIDO = "Não informado";
+
+/**
+ * Formata o principal. `null` vira a frase de não-saber, **nunca "R$ 0,00"**.
+ *
+ * Zero seria uma afirmação ("você não tem nada aplicado"), falsa e indistinguível de um saldo
+ * genuinamente zerado — o mesmo princípio pelo qual a Projeção de Caixa cala o runway em vez de
+ * mostrar um número sem lastro (Story 8.21).
+ */
+export function formatPrincipal(cents: number | null): string {
+  if (cents === null || cents === undefined) return PRINCIPAL_DESCONHECIDO;
+  return formatBRL(cents);
+}
+
+/**
+ * O aviso do resgate que levou rendimento junto — `null` quando não há o que dizer.
+ *
+ * O banco credita o resgate BRUTO (principal + rendimento). Registrado como transferência contra um
+ * principal menor, o derivado fica negativo. O e1p **sabe** quanto falta e **não** lança sozinho: o
+ * valor certo do rendimento é fato do banco, não dedução nossa (Artigo IV — No Invention).
+ */
+export function avisoDeResgateExcedente(principalCents: number | null): string | null {
+  if (principalCents === null || principalCents === undefined || principalCents >= 0) return null;
+  return (
+    `Você resgatou ${formatBRL(-principalCents)} a mais do que aportou. Se essa diferença é ` +
+    "rendimento que ainda não foi lançado, registre o rendimento do período — o e1p não adivinha " +
+    "o valor."
+  );
 }

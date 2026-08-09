@@ -561,6 +561,7 @@ def _movements_sums(
     until: date | None = None,
     since: date | None = None,
     sign: int | None = None,
+    exclude_sources: frozenset[str] = frozenset(),
 ) -> dict[str, int]:
     """Σ dos movimentos de cada conta, em **UMA** query. `{bank_account_id: centavos}`.
 
@@ -577,6 +578,7 @@ def _movements_sums(
           AND (:until IS NULL OR posted_at <= :until)    -- `until` é DATE e INCLUSIVO
           AND (:since IS NULL OR posted_at >  :since)    -- `since` é DATE e EXCLUSIVO (8.14)
           AND (:sign  IS NULL OR sinal(amount_cents) = :sign)
+          AND (:exclude_sources vazio OR source NOT IN :exclude_sources)  -- Onda 2b-ii
           AND status <> 'ignored'                        -- AC5: ignorar TIRA do saldo
 
     ⚠️ **O filtro `status <> 'ignored'` mora AQUI, dentro do saldo** — é contrato para as Stories
@@ -598,6 +600,13 @@ def _movements_sums(
     `sign` é `+1` (só entradas), `-1` (só saídas) ou `None` (líquido, o comportamento do saldo).
     Nunca `0`: `_validate_amount` recusa movimento de valor zero, então esse conjunto é vazio por
     construção e aceitá-lo seria oferecer um filtro que nunca soma nada.
+
+    ⚠️ **[Onda 2b-ii] `exclude_sources` existe para que o principal derivado NÃO seja uma segunda
+    fórmula.** O principal de uma aplicação é a soma dos movimentos da conta dela **menos os de
+    rendimento** (que já são contados por `accrued_yield_cents`). Escrever essa soma noutro lugar
+    duplicaria o piso `posted_at > opening_date` e o `status <> 'ignored'`, e o dia em que um dos
+    dois fosse corrigido só de um lado o principal passaria a divergir do saldo por um motivo que
+    ninguém acharia. Default vazio: todo chamador anterior a esta onda segue idêntico.
 
     A cláusula de conta é um `OR` de pares `(conta, opening_date)` em vez de um `IN (...)` porque
     cada conta tem a **sua** data de corte. Ainda é uma query só — a alternativa (`GROUP BY` com
@@ -635,6 +644,8 @@ def _movements_sums(
             stmt = stmt.where(BankTransaction.amount_cents > 0)
         else:
             stmt = stmt.where(BankTransaction.amount_cents < 0)
+    if exclude_sources:
+        stmt = stmt.where(BankTransaction.source.notin_(exclude_sources))
     return {account_id: int(total or 0) for account_id, total in db.execute(stmt).all()}
 
 
@@ -645,6 +656,31 @@ def _movements_sum(db: Session, *, account: BankAccount, until: date | None = No
     a assinatura é privada e a 8.2 explicitamente autorizou mudá-la para evitar a releitura.
     """
     return _movements_sums(db, accounts=[account], until=until).get(account.id, 0)
+
+
+def movement_sums(
+    db: Session,
+    *,
+    accounts: Sequence[BankAccount],
+    until: date | None = None,
+    exclude_sources: frozenset[str] = frozenset(),
+) -> dict[str, int]:
+    """A porta PÚBLICA da soma de movimentos — `{bank_account_id: centavos}`.
+
+    Fina de propósito: delega para `_movements_sums`, que continua sendo a **única** implementação
+    da fórmula. Ela existe porque `investments` precisa da soma com `exclude_sources` (Onda 2b-ii) e
+    importar um símbolo `_` de outro módulo é o tipo de acesso que ninguém encontra depois — e que o
+    `dedup-checker` não consegue julgar.
+
+    `until=None` significa **hoje**, como em `derived_balance` (Story 8.10). Conta sem movimento não
+    aparece no dicionário; use `.get(id, 0)`.
+    """
+    return _movements_sums(
+        db,
+        accounts=accounts,
+        until=resolve_until(until, _today(db)),
+        exclude_sources=exclude_sources,
+    )
 
 
 def derived_balance(db: Session, *, bank_account_id: str, until: date | None = None) -> int:

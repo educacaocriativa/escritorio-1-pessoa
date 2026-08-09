@@ -45,12 +45,14 @@ A perna existe porque rendimento **move dinheiro numa conta real do dono** — e
 """
 from __future__ import annotations
 
+from collections.abc import Sequence
 from datetime import UTC, date, datetime
 
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.core import audit
+from app.core.money_planes import ORIGEM_INDISPONIVEL
 from app.modules.bank import origin as bank_origin
 from app.modules.bank import service as bank_service
 from app.modules.bank.models import KIND_INVESTMENT, SOURCE_YIELD
@@ -113,6 +115,36 @@ class ContaNaoVinculadaError(InvestmentError):
         self.detail = {"acao": ACAO_CADASTRAR_CONTA, "mensagem": SEM_CONTA_VINCULADA_MSG}
 
 
+_PRINCIPAL_DERIVADO_MSG = (
+    "O valor aplicado agora é calculado pelos movimentos da conta. Para mudar quanto está "
+    "aplicado, registre a transferência que você fez de verdade — da conta corrente para a "
+    "aplicação (aporte) ou da aplicação para a corrente (resgate)."
+)
+
+_PRINCIPAL_NO_CADASTRO_MSG = (
+    "No cadastro, o valor já aplicado é o saldo de abertura da conta bancária da aplicação — é "
+    "lá que ele é informado, uma vez."
+)
+
+
+class PrincipalNaoEditavelError(InvestmentError):
+    """O principal é derivado (Onda 2b-ii) e não se edita.
+
+    ⚠️ **`detail` fica em texto, sem `{"acao": ...}` — e a ausência é a decisão.** O 409 acionável
+    da 8.12/2b-i existe porque a tela reconhece a situação e oferece a saída ali mesmo. Este 409 é
+    **inalcançável pela tela** (o campo saiu do formulário): quem o recebe é uma integração antiga
+    ou um defeito. Um `acao` sem modal do outro lado seria um contrato com ninguém, e convidaria a
+    próxima pessoa a construir o modal que não deve existir.
+
+    A ação que a mensagem manda fazer **existe hoje**: `investment_in`/`investment_out` são
+    `TRANSFER_KINDS` desde a Onda 2, e a tela de transferência está em `ContasSaldosPage`. Recusar
+    apontando para uma ação inexistente é o defeito que esta classe existe para não cometer.
+    """
+
+    def __init__(self, mensagem: str) -> None:
+        super().__init__(mensagem, 409)
+
+
 def get_account(db: Session, account_id: str) -> InvestmentAccount:
     acc = db.get(InvestmentAccount, account_id)
     if acc is None:
@@ -124,6 +156,10 @@ def get_account(db: Session, account_id: str) -> InvestmentAccount:
 def create_account(
     db: Session, *, tenant_id: str, actor: str, data: InvestmentAccountCreate
 ) -> InvestmentAccount:
+    # Onda 2b-ii. `principal_cents` tem default `0` no schema, então a guarda é sobre o VALOR e não
+    # sobre a presença: `is not None` recusaria todo cadastro que simplesmente não manda o campo.
+    if data.principal_cents:
+        raise PrincipalNaoEditavelError(_PRINCIPAL_NO_CADASTRO_MSG)
     if data.bank_account_id:
         _validate_bank_account(db, data.bank_account_id)
     acc = InvestmentAccount(
@@ -131,7 +167,7 @@ def create_account(
         name=data.name,
         kind=data.kind,
         index_rate_label=data.index_rate_label,
-        principal_cents=data.principal_cents,
+        # `principal_cents` NÃO é escrito: a coluna está congelada e nasce no default `0` do model.
         accrued_yield_cents=0,
         opened_at=data.opened_at,
         bank_account_id=data.bank_account_id,
@@ -156,7 +192,10 @@ def update_account(
     if data.index_rate_label is not None:
         acc.index_rate_label = data.index_rate_label
     if data.principal_cents is not None:
-        acc.principal_cents = data.principal_cents
+        # Onda 2b-ii. Aqui `is not None` É a guarda certa: no `Update` o default é `None` e
+        # significa "não altera" — o oposto exato do `Create`, cujo default é `0`. A assimetria é
+        # deliberada, e cada metade tem o seu teste.
+        raise PrincipalNaoEditavelError(_PRINCIPAL_DERIVADO_MSG)
     if data.bank_account_id is not None:
         # Onda 2b-i: é por aqui que a aplicação LEGADA é vinculada — ato do dono, não backfill.
         _validate_bank_account(db, data.bank_account_id)
@@ -169,6 +208,80 @@ def update_account(
 
 def list_accounts(db: Session) -> list[InvestmentAccount]:
     return list(db.scalars(select(InvestmentAccount).order_by(InvestmentAccount.name)).all())
+
+
+# ── O principal DERIVADO (Onda 2b-ii) ─────────────────────────────────────────────────────────
+
+
+def principais_derivados(
+    db: Session, accs: Sequence[InvestmentAccount]
+) -> dict[str, int | None]:
+    """O principal CALCULADO de cada aplicação — `{investment_account_id: centavos | None}`.
+
+        principal = opening_balance_cents da conta de aplicação
+                  + Σ movimentos daquela conta com `source <> 'yield'`
+
+    Os três termos, e por que cada um está aqui:
+
+    **(a) O saldo de abertura entra.** É o dinheiro que já estava aplicado no dia do cadastro —
+    principal que nunca teve movimento. Somar só os movimentos daria R$ 0,00 numa conta com
+    R$ 10.000 aplicados: um número errado com aparência de fato.
+
+    **(b) `source <> 'yield'` impede a dupla contagem.** O rendimento já é contado por
+    `accrued_yield_cents` e, desde a Onda 2b-i, também gera `bank_transaction`. Sem o recorte, cada
+    rendimento entraria duas vezes no saldo da aplicação.
+
+    **(c) O piso `posted_at > opening_date` e o teto `<= hoje` não são escolha desta função** — vêm
+    de `_movements_sums`, a única soma de movimentos do repositório. Um aporte agendado para o mês
+    que vem não é principal aplicado hoje.
+
+    ⚠️ **`None` NÃO é zero, e a distinção é o ponto.** Devolvemos `None` em dois casos — aplicação
+    sem vínculo, e conta cujo saldo de abertura o dono declarou **não saber** (Story 8.21,
+    `origem_do_saldo_derivado`). Zero seria a afirmação *"você não tem nada aplicado"*, falsa e
+    indistinguível de um saldo genuinamente zerado. É o princípio da Onda 0 e da 8.21: suprimir a
+    afirmação, nunca o número.
+
+    ⚠️ **A procedência é lida de `bank_service.origem_do_saldo_derivado`, nunca recomparada aqui.**
+    A Story 8.21 pagou exatamente esse preço: a mesma decisão escrita duas vezes no `router.py`
+    fazia a mesma conta responder coisas diferentes por portas diferentes.
+
+    O principal **pode ser negativo** (resgate bruto que levou rendimento ainda não lançado junto).
+    Não é clampado: quem o nomeia é a tela, e clampar seria esconder.
+    """
+    vinculadas = {a.bank_account_id for a in accs if a.bank_account_id}
+    if not vinculadas:
+        return {a.id: None for a in accs}
+
+    # `include_archived=True`: uma aplicação encerrada continua tendo um principal histórico, e
+    # arquivar a conta não apaga o que passou por ela. Esconder aqui daria `None` (= "não sei")
+    # para algo que o sistema sabe perfeitamente.
+    contas = {
+        c.id: c
+        for c in bank_service.list_accounts(db, include_archived=True)
+        if c.id in vinculadas
+    }
+    somas = bank_service.movement_sums(
+        db, accounts=list(contas.values()), exclude_sources=frozenset({SOURCE_YIELD})
+    )
+
+    resultado: dict[str, int | None] = {}
+    for a in accs:
+        conta = contas.get(a.bank_account_id) if a.bank_account_id else None
+        if conta is None or bank_service.origem_do_saldo_derivado(conta) == ORIGEM_INDISPONIVEL:
+            resultado[a.id] = None
+            continue
+        resultado[a.id] = conta.opening_balance_cents + somas.get(conta.id, 0)
+    return resultado
+
+
+def principal_derivado(db: Session, acc: InvestmentAccount) -> int | None:
+    """O principal de UMA aplicação. Delega para `principais_derivados` — ver a fórmula lá.
+
+    Uma implementação, dois usos: duas cópias da fórmula divergiriam no dia em que uma delas
+    ganhasse uma condição, e o sintoma seria um principal que muda conforme a tela que o pede —
+    exatamente o que `_movements_sum`/`_movements_sums` já evitam um nível abaixo.
+    """
+    return principais_derivados(db, [acc])[acc.id]
 
 
 def _validate_financeiro_account(db: Session, chart_account_id: str) -> None:
@@ -330,9 +443,23 @@ def register_yield(
     return acc
 
 
-def _pct(numerator: int, principal_cents: int) -> float | None:
-    """Rentabilidade (fração) protegendo divisão por zero: principal 0 → None (AC3)."""
-    if principal_cents == 0:
+def _pct(numerator: int, principal_cents: int | None) -> float | None:
+    """Rentabilidade (fração), ou `None` quando a pergunta não tem sentido.
+
+    Três casos sem número, e o terceiro é o que a Onda 2b-ii acrescentou:
+
+    - **`None`** — o principal é inafirmável (sem vínculo, ou saldo de abertura desconhecido).
+      Dividir levantaria `TypeError`.
+    - **zero** — divisão por zero, protegida desde a 5.6 (AC3).
+    - **negativo** — resgate bruto que levou rendimento ainda não lançado junto. Dividir devolveria
+      um percentual de **sinal invertido**: plausível na tela, e errado. *"Quanto rendeu
+      percentualmente o que você não aplicou?"* não é uma pergunta com resposta menor — é uma
+      pergunta sem resposta.
+
+    O `None` já é renderizado como "—" pela tela desde a 5.6 (`investimentos.ts::formatPct`): a
+    superfície existe e não precisa ser inventada.
+    """
+    if principal_cents is None or principal_cents <= 0:
         return None
     return numerator / principal_cents
 
@@ -357,12 +484,15 @@ def rentability(
         stmt = stmt.where(Charge.competence_date <= end)
     period_yield = int(db.scalar(stmt) or 0)
 
+    # Onda 2b-ii: o principal vem dos MOVIMENTOS, nunca mais da coluna (que está congelada).
+    principal = principal_derivado(db, acc)
+
     return {
         "account_id": acc.id,
-        "principal_cents": acc.principal_cents,
+        "principal_cents": principal,
         "accrued_yield_cents": acc.accrued_yield_cents,
-        "total_rentability_pct": _pct(acc.accrued_yield_cents, acc.principal_cents),
-        "period_rentability_pct": _pct(period_yield, acc.principal_cents),
+        "total_rentability_pct": _pct(acc.accrued_yield_cents, principal),
+        "period_rentability_pct": _pct(period_yield, principal),
         "period_yield_cents": period_yield,
         "start": start,
         "end": end,

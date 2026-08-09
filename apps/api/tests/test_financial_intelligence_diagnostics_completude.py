@@ -372,10 +372,31 @@ def test_diagnostico_continua_emitindo_os_sinais_das_outras_origens(
 ) -> None:
     """A completude entrou SEM apagar as demais regras: o sinal 🟡 de investimento (5.6) continua
     lá, ao lado do de completude, e a narrativa continua sendo montada normalmente."""
+    # ⚠️ **Onda 2b-ii: o principal vem do SALDO DE ABERTURA da conta de aplicação**, e não mais de
+    # `principal_cents` no payload (que agora responde 409). O que este teste precisa continua
+    # sendo o mesmo — uma aplicação com principal > 0, sem a qual `period_rentability_pct` é `None`
+    # e a regra 4 do motor não avalia nada (`engine._investment_signals`). Mudou onde o valor é
+    # informado, que é a mudança inteira daquela onda.
+    conta_aplicacao = client.post(
+        "/bank/accounts",
+        json={
+            "name": "CDB Reserva (conta)",
+            "kind": "investment",
+            "opening_balance_cents": 100_000,
+            "opening_balance_is_known": True,
+            "opening_date": START.isoformat(),
+        },
+        headers=headers,
+    )
+    assert conta_aplicacao.status_code == 201, conta_aplicacao.text
+
     r = client.post(
         "/investments",
-        json={"name": "CDB Reserva", "principal_cents": 100_000,
-              "opened_at": START.isoformat()},
+        json={
+            "name": "CDB Reserva",
+            "opened_at": START.isoformat(),
+            "bank_account_id": conta_aplicacao.json()["id"],
+        },
         headers=headers,
     )
     assert r.status_code == 201, r.text

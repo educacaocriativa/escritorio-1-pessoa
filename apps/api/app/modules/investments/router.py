@@ -22,13 +22,18 @@ router = APIRouter(prefix="/investments", tags=["investments"])
 _guard = require_module("investments")
 
 
-def _out(a: InvestmentAccount) -> InvestmentAccountOut:
+def _out(a: InvestmentAccount, principal_cents: int | None) -> InvestmentAccountOut:
+    """O principal vem de FORA (Onda 2b-ii) — `a.principal_cents` está congelado.
+
+    O parâmetro é **obrigatório de propósito**: um default que lesse a coluna seria exatamente o
+    caminho por onde o valor digitado voltaria a vencer, e nada quebraria para avisar.
+    """
     return InvestmentAccountOut(
         id=a.id,
         name=a.name,
         kind=a.kind,
         index_rate_label=a.index_rate_label,
-        principal_cents=a.principal_cents,
+        principal_cents=principal_cents,
         accrued_yield_cents=a.accrued_yield_cents,
         opened_at=a.opened_at,
         bank_account_id=a.bank_account_id,
@@ -51,7 +56,11 @@ def list_accounts(
     _user: CurrentUser = Depends(_guard),
     db: Session = Depends(get_tenant_db),
 ) -> list[InvestmentAccountOut]:
-    return [_out(a) for a in service.list_accounts(db)]
+    contas = service.list_accounts(db)
+    # Lote de propósito: UMA query para N aplicações. `principal_derivado` num laço seria o
+    # N+1 que `_movements_sums` existe para evitar um nível abaixo.
+    principais = service.principais_derivados(db, contas)
+    return [_out(a, principais[a.id]) for a in contas]
 
 
 @router.post("", response_model=InvestmentAccountOut, status_code=201)
@@ -65,7 +74,7 @@ def create_account(
         acc = service.create_account(db, tenant_id=user.tenant_id, actor=user.user_id, data=data)
     except service.InvestmentError as e:
         raise _err(e) from e
-    return _out(acc)
+    return _out(acc, service.principal_derivado(db, acc))
 
 
 @router.patch("/{account_id}", response_model=InvestmentAccountOut)
@@ -81,7 +90,7 @@ def update_account(
         )
     except service.InvestmentError as e:
         raise _err(e) from e
-    return _out(acc)
+    return _out(acc, service.principal_derivado(db, acc))
 
 
 @router.post("/{account_id}/yield", response_model=InvestmentAccountOut)
@@ -103,7 +112,7 @@ def register_yield(
         )
     except service.InvestmentError as e:
         raise _err(e) from e
-    return _out(acc)
+    return _out(acc, service.principal_derivado(db, acc))
 
 
 @router.get("/{account_id}/rentability", response_model=RentabilityOut)

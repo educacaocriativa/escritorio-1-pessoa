@@ -4,11 +4,18 @@ import Modal, { Field } from "../../components/Modal";
 import { api, apiErrorMessage } from "../../lib/api";
 import { usePrimaryAction } from "../../store/pageActions";
 import { type ChartAccount } from "./planoContas";
-import type { BankAccount } from "./contas";
 import {
+  type BankAccount,
+  type BankTransaction,
+  formatDateBR,
+  ROTA_MOVIMENTOS,
+} from "./contas";
+import {
+  avisoDeResgateExcedente,
   contasDeAplicacao,
   formatBRL,
   formatPct,
+  formatPrincipal,
   type InvestmentAccount,
   type Rentability,
   rotuloDoVinculo,
@@ -127,7 +134,15 @@ export default function InvestimentosPage() {
                   value={rotuloDoVinculo(a, contas)}
                   tone={a.bank_account_id ? undefined : "text-amber-700"}
                 />
-                <Stat label="Principal" value={formatBRL(a.principal_cents)} />
+                <Stat
+                  label="Principal aplicado"
+                  value={formatPrincipal(a.principal_cents)}
+                  tone={
+                    a.principal_cents !== null && a.principal_cents < 0
+                      ? "text-amber-700"
+                      : undefined
+                  }
+                />
                 <Stat label="Rendimento acumulado" value={formatBRL(a.accrued_yield_cents)} />
                 <Stat
                   label="Rentabilidade total"
@@ -144,6 +159,18 @@ export default function InvestimentosPage() {
                   tone="text-primary-700"
                 />
               </div>
+
+              {/* O aviso fica COLADO no número que ele explica, e não numa seção de avisos no fim
+                  da tela: em ~360px um aviso distante do valor é um aviso que ninguém lê. É a lição
+                  dos PRs #56 e #58, onde o checkbox e a ação que o tornava efetivo viviam em blocos
+                  separados e uma conta real foi paga sem o dono ver. */}
+              {avisoDeResgateExcedente(a.principal_cents) && (
+                <p className="mt-3 rounded-lg bg-amber-50 px-3 py-2 text-sm text-amber-800">
+                  {avisoDeResgateExcedente(a.principal_cents)}
+                </p>
+              )}
+
+              {a.bank_account_id && <ExtratoDaAplicacao bankAccountId={a.bank_account_id} />}
             </div>
           );
         })}
@@ -162,6 +189,98 @@ export default function InvestimentosPage() {
         onError={setError}
         contas={contas}
       />
+    </div>
+  );
+}
+
+/**
+ * Extrato da aplicação — aportes, resgates e rendimentos (Onda 2b-ii, R3 do fundador).
+ *
+ * ⚠️ **Segunda superfície sobre o mesmo razão, de propósito** (decisão do fundador, 2026-08-08): a
+ * primeira é "Ver movimentos" em `ContasSaldosPage`, porque a conta de aplicação é uma
+ * `bank_account` como qualquer outra. A garantia contra as duas discordarem é **mecânica, não
+ * disciplina**: as duas chamam o MESMO endpoint, sem consulta própria e sem filtro reescrito. O que
+ * difere entre elas é apresentação. Se alguém der a esta um filtro próprio, o teste
+ * `o extrato da aplicação não é uma segunda fonte` (investimentos.test.ts) protesta.
+ */
+function ExtratoDaAplicacao({ bankAccountId }: { bankAccountId: string }) {
+  const [aberto, setAberto] = useState(false);
+  const [movimentos, setMovimentos] = useState<BankTransaction[] | null>(null);
+
+  useEffect(() => {
+    if (!aberto) return;
+    let vivo = true;
+    api
+      .get<BankTransaction[]>(ROTA_MOVIMENTOS, { params: { bank_account_id: bankAccountId } })
+      .then((r) => {
+        // `Array.isArray`, nunca `?? []`: com `data = []` o acesso a uma propriedade herdada de
+        // Array devolve FUNÇÃO, e um setter do React que recebe função a executa — foi assim que o
+        // ClientTimeline derrubou a página inteira de Conversas.
+        if (vivo) setMovimentos(Array.isArray(r.data) ? r.data : []);
+      })
+      .catch(() => {
+        // Um painel embutido nunca deve poder derrubar quem o hospeda.
+        if (vivo) setMovimentos([]);
+      });
+    return () => {
+      vivo = false;
+    };
+  }, [aberto, bankAccountId]);
+
+  return (
+    <div className="mt-4 border-t border-neutral-100 pt-3">
+      <button
+        onClick={() => setAberto((v) => !v)}
+        className="text-sm font-medium text-primary-700 hover:underline"
+      >
+        {aberto ? "Ocultar extrato" : "Ver extrato da aplicação"}
+      </button>
+      {aberto && (
+        <div className="mt-3">
+          {movimentos === null ? (
+            <p className="text-sm text-neutral-500">Carregando…</p>
+          ) : movimentos.length === 0 ? (
+            <p className="text-sm text-neutral-500">Nenhum movimento nesta aplicação ainda.</p>
+          ) : (
+            // ⚠️ **LISTA, não tabela — e a decisão foi medida, não escolhida.** A primeira versão
+            // era uma `<table>` de 3 colunas com `min-w-[20rem]` dentro de `overflow-x-auto`. Em
+            // 360px o aceite visual mostrou a coluna de VALOR nascendo fora da vista: "R$ 3." no
+            // lugar de "R$ 3.000,00". O `overflow-x-auto` fez o seu trabalho (rolava, em vez de
+            // cortar em silêncio como o `overflow-hidden` do PR #58) — mas num extrato o valor é
+            // *a* informação, e informação que exige rolagem lateral para existir é informação que
+            // o dono não lê.
+            //
+            // **A lição do PR #58 era "role, não corte". A daqui é mais funda: em 360px uma tabela
+            // de 3 colunas não cabe, e a saída não é fazer a rolagem funcionar melhor — é não
+            // precisar dela.** Data e descrição empilham à esquerda; o valor fica à direita,
+            // sempre visível, com `whitespace-nowrap`. O `min-w-0` é o que permite ao bloco da
+            // esquerda encolher: sem ele o flex usa a largura do conteúdo e o valor é empurrado
+            // para fora de novo — foi assim que a `FilaPagamentosPage` ficou quebrada por duas
+            // sessões com um teste de `flex-wrap` verde.
+            <ul className="text-sm">
+              {movimentos.map((m) => (
+                <li
+                  key={m.id}
+                  className="flex items-start justify-between gap-3 border-b border-neutral-50 py-2"
+                >
+                  <div className="min-w-0">
+                    <p className="text-xs text-neutral-500">{formatDateBR(m.posted_at)}</p>
+                    <p className="break-words text-neutral-700">{m.description}</p>
+                  </div>
+                  <p
+                    className={
+                      "whitespace-nowrap font-medium " +
+                      (m.amount_cents < 0 ? "text-neutral-700" : "text-accent-700")
+                    }
+                  >
+                    {formatBRL(m.amount_cents)}
+                  </p>
+                </li>
+              ))}
+            </ul>
+          )}
+        </div>
+      )}
     </div>
   );
 }
@@ -231,7 +350,6 @@ function NewAccountModal({
   const [name, setName] = useState("");
   const [kind, setKind] = useState<string>(SUGGESTED_KINDS[0]);
   const [indexLabel, setIndexLabel] = useState("");
-  const [principal, setPrincipal] = useState("");
   const [openedAt, setOpenedAt] = useState("");
   const [bankAccountId, setBankAccountId] = useState("");
   const [error, setError] = useState<string | null>(null);
@@ -245,7 +363,6 @@ function NewAccountModal({
         name,
         kind,
         index_rate_label: indexLabel,
-        principal_cents: Math.round(Number(principal.replace(",", ".")) * 100) || 0,
         opened_at: openedAt,
         // Onda 2b-i: a aplicação nasce vinculada. Sem isso o dono cadastra e leva um 409 no
         // primeiro rendimento — o beco que o 409 acionável existe justamente para evitar.
@@ -254,7 +371,6 @@ function NewAccountModal({
       onCreated();
       setName("");
       setIndexLabel("");
-      setPrincipal("");
       setOpenedAt("");
       setBankAccountId("");
       onClose();
@@ -289,13 +405,15 @@ function NewAccountModal({
           onChange={setIndexLabel}
           placeholder="Ex.: CDI 110%"
         />
-        <Field
-          label="Principal aplicado (R$)"
-          value={principal}
-          onChange={setPrincipal}
-          type="text"
-          placeholder="Ex.: 10000,00"
-        />
+        {/* Onda 2b-ii: o campo do principal SAIU — ele é calculado dos movimentos da conta.
+            A frase abaixo não é decoração: sem ela o campo apenas some e quem cadastra a aplicação
+            não descobre onde informar o que já tem aplicado. Recusar sem dizer onde é o beco que o
+            409 acionável da 2b-i existe para evitar. */}
+        <p className="text-xs text-neutral-500">
+          O valor já aplicado vem do <strong>saldo de abertura</strong> da conta bancária da
+          aplicação — informe-o ao cadastrar a conta. Depois disso, aporte e resgate são
+          transferências entre as suas contas.
+        </p>
         <Field label="Data de aplicação" value={openedAt} onChange={setOpenedAt} type="date" />
         <SeletorDeConta contas={contas} value={bankAccountId} onChange={setBankAccountId} />
         {error && <p className="rounded-lg bg-red-50 p-2 text-sm text-danger">{error}</p>}

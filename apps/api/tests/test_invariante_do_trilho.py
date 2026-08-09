@@ -179,7 +179,12 @@ def _cenario_completo(client: TestClient, headers, tenant_id: str, conta: dict) 
         json={
             "name": "CDB Itaú",
             "kind": "investment",
-            "opening_balance_cents": 0,
+            # Onda 2b-ii: o principal da aplicação é DERIVADO, e o valor já aplicado entra por
+            # aqui — o saldo de abertura da conta. O payload de `/investments` recusa
+            # `principal_cents` com 409 desde então. O que este arquivo prova (a Invariante do
+            # Trilho) não depende do número; ele fica em 1.000.000 só para o cenário continuar
+            # sendo o mesmo de antes, e não um caso degenerado com zero aplicado.
+            "opening_balance_cents": 1_000_000,
             "opening_balance_is_known": True,
             "opening_date": ABERTURA.isoformat(),
         },
@@ -191,7 +196,6 @@ def _cenario_completo(client: TestClient, headers, tenant_id: str, conta: dict) 
         json={
             "name": "CDB Banco X",
             "kind": "CDB",
-            "principal_cents": 1_000_000,
             "opened_at": ABERTURA.isoformat(),
             "bank_account_id": conta_aplicacao.json()["id"],
         },

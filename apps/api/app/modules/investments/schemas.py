@@ -79,7 +79,11 @@ class InvestmentAccountOut(BaseModel):
     name: str
     kind: str
     index_rate_label: str
-    principal_cents: int
+    # Onda 2b-ii: CALCULADO dos movimentos da conta bancária vinculada, não mais a coluna.
+    # `None` = inafirmável (sem vínculo, ou saldo de abertura declarado desconhecido — Story 8.21).
+    # **`None` não é zero:** zero seria a afirmação "você não tem nada aplicado". Pode ser NEGATIVO
+    # (resgate bruto que levou rendimento ainda não lançado junto) — e não é clampado.
+    principal_cents: int | None
     accrued_yield_cents: int
     opened_at: date
     bank_account_id: str | None
@@ -88,12 +92,13 @@ class InvestmentAccountOut(BaseModel):
 
 class RentabilityOut(BaseModel):
     account_id: str
-    principal_cents: int
+    principal_cents: int | None  # Onda 2b-ii — ver InvestmentAccountOut
     accrued_yield_cents: int
-    # Rentabilidade TOTAL (rendimento acumulado / principal). None se principal == 0 (evita ÷0).
+    # Rentabilidade TOTAL (rendimento acumulado / principal). `None` quando o principal é `None`,
+    # zero ou NEGATIVO — ver `service._pct`.
     total_rentability_pct: float | None
     # Rentabilidade do PERÍODO (soma dos rendimentos com competência no intervalo / principal).
-    # None se principal == 0. start/end None = período aberto (todo o histórico).
+    # Mesmas três condições de `None`. start/end None = período aberto (todo o histórico).
     period_rentability_pct: float | None
     period_yield_cents: int
     start: date | None
