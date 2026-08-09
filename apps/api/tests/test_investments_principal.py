@@ -268,3 +268,204 @@ def test_principais_derivados_resolve_em_lote(client, db, headers):
         a2["id"]: 2_000_00,
         a3["id"]: None,
     }
+
+
+# ── Os nove leitores da coluna (spec §4.2.1) ──────────────────────────────────────────────────
+
+
+def test_a_api_devolve_o_principal_derivado_e_ignora_a_coluna(client, db, headers):
+    """`GET /investments` responde o CALCULADO, não o que está gravado na coluna.
+
+    A coluna é semeada com um valor absurdo de propósito: se a API o devolvesse, o teste falharia
+    com um número reconhecível em vez de um zero ambíguo.
+    """
+    conta = _conta_bancaria(client, headers, opening_balance_cents=10_000_00)
+    app_ = _aplicacao(client, headers, bank_account_id=conta["id"])
+
+    acc = _acc(db, app_["id"])
+    acc.principal_cents = 777_77  # o valor congelado, que ninguém pode mais ler
+    db.commit()
+
+    r = client.get("/investments", headers=headers)
+    assert r.status_code == 200, r.text
+    assert r.json()[0]["principal_cents"] == 10_000_00
+
+
+def test_rentabilidade_e_None_com_principal_None_e_com_principal_negativo(client, db, headers):
+    """`_pct` protege os TRÊS casos sem número: `None`, zero e negativo.
+
+    `None` levantaria `TypeError` (divisão por `None`). **Negativo é o mais perigoso dos três**:
+    devolveria um percentual de sinal invertido — plausível na tela, e errado. Rentabilidade sobre
+    principal negativo não é um número menor: é uma pergunta sem sentido.
+    """
+    # (a) principal None — saldo de abertura desconhecido
+    c_desconhecida = _conta_bancaria(
+        client,
+        headers,
+        name="CDB sem lastro",
+        opening_balance_cents=0,
+        opening_balance_is_known=False,
+    )
+    a_none = _aplicacao(client, headers, bank_account_id=c_desconhecida["id"], name="Sem lastro")
+    r = client.get(f"/investments/{a_none['id']}/rentability", headers=headers)
+    assert r.status_code == 200, r.text
+    assert r.json()["principal_cents"] is None
+    assert r.json()["total_rentability_pct"] is None
+
+    # (b) principal negativo — resgate bruto
+    corrente = _conta_bancaria(client, headers, name="Itaú PJ", kind="checking")
+    aplic = _conta_bancaria(client, headers, name="CDB neg", opening_balance_cents=10_000_00)
+    a_neg = _aplicacao(client, headers, bank_account_id=aplic["id"], name="Resgatada")
+    _rendimento(client, headers, a_neg["id"], valor=500_00, quando="2026-02-28")
+    _transferencia(
+        client,
+        headers,
+        de=aplic["id"],
+        para=corrente["id"],
+        valor=10_500_00,
+        quando="2026-03-05",
+        kind="investment_out",
+    )
+    r = client.get(f"/investments/{a_neg['id']}/rentability", headers=headers)
+    assert r.status_code == 200, r.text
+    assert r.json()["principal_cents"] == -500_00, "o número aparece como é"
+    assert r.json()["total_rentability_pct"] is None, "a rentabilidade sobre ele, não"
+
+
+# ── Teste 7 da spec §5 — a recusa ─────────────────────────────────────────────────────────────
+
+
+def test_editar_o_principal_e_recusado_com_409(client, headers):
+    """`PATCH` com `principal_cents` → 409 apontando para a ação REAL (Onda 2b-ii).
+
+    ⚠️ **Este 409 é o OPOSTO do 409 da 2b-i.** Aquele era caminho normal — o dono batia nele ao
+    registrar rendimento, e por isso a tela oferecia a saída ali mesmo. Este é **inalcançável pela
+    tela** (o campo saiu do formulário): se disparar, é integração antiga ou defeito. É guarda de
+    contrato, não fluxo — e por isso **não** tem `detail["acao"]`: um `acao` sem modal do outro
+    lado seria um contrato com ninguém.
+
+    A asserção é sobre trechos ESPECÍFICOS da frase, não sobre uma palavra genérica: "aporte"
+    sozinho casaria com quase qualquer texto sobre aplicação. A manobra que a Onda 2 pegou foi
+    `"trilho" in detail` casando também *"fora do trilho"*.
+    """
+    conta = _conta_bancaria(client, headers)
+    app_ = _aplicacao(client, headers, bank_account_id=conta["id"])
+
+    r = client.patch(
+        f"/investments/{app_['id']}", json={"principal_cents": 5_000_00}, headers=headers
+    )
+    assert r.status_code == 409, r.text
+    detail = r.json()["detail"]
+    assert isinstance(detail, str), "guarda de contrato não é 409 acionável — sem detail['acao']"
+    assert "calculado pelos movimentos" in detail
+    assert "registre a transferência" in detail
+
+
+def test_criar_com_principal_diferente_de_zero_e_recusado(client, headers):
+    """No CADASTRO o caminho do valor já aplicado é o **saldo de abertura** da conta bancária.
+
+    Recusar sem dizer onde informar seria o beco sem saída que a Onda 2b-i pagou para evitar.
+    """
+    conta = _conta_bancaria(client, headers)
+    r = client.post(
+        "/investments",
+        json={
+            "name": "Reserva",
+            "opened_at": "2026-01-01",
+            "bank_account_id": conta["id"],
+            "principal_cents": 10_000_00,
+        },
+        headers=headers,
+    )
+    assert r.status_code == 409, r.text
+    assert "saldo de abertura" in r.json()["detail"]
+
+
+def test_criar_com_principal_zero_continua_passando(client, headers):
+    """O default do schema é `0`. Recusá-lo quebraria todo cliente que não manda o campo.
+
+    Sem este teste, a guarda mais óbvia (`if data.principal_cents is not None`) passaria verde e
+    quebraria o cadastro inteiro em produção — o campo tem default, então ele NUNCA é `None`.
+    """
+    conta = _conta_bancaria(client, headers)
+    r = client.post(
+        "/investments",
+        json={"name": "Reserva", "opened_at": "2026-01-01", "bank_account_id": conta["id"]},
+        headers=headers,
+    )
+    assert r.status_code == 201, r.text
+
+
+# ── Teste 9 da spec §5 — a auditoria ──────────────────────────────────────────────────────────
+
+
+def test_a_auditoria_reporta_a_divergencia_sem_corrigir(client, db, headers):
+    """O script REPORTA. Se ele corrigisse, o `UPDATE` que esta onda existe para não fazer voltaria
+    pela porta dos fundos — e alguém o rodaria no deploy sem ler a saída.
+    """
+    from app.scripts import investment_audit
+
+    conta = _conta_bancaria(client, headers, opening_balance_cents=10_000_00)
+    app_ = _aplicacao(client, headers, bank_account_id=conta["id"])
+
+    acc = _acc(db, app_["id"])
+    acc.principal_cents = 777_77
+    db.commit()
+
+    linhas = investment_audit.auditar(db)
+
+    assert linhas == [
+        {
+            "id": app_["id"],
+            "name": "Reserva",
+            "coluna_cents": 777_77,
+            "derivado_cents": 10_000_00,
+            "diverge": True,
+        }
+    ]
+    db.refresh(acc)
+    assert acc.principal_cents == 777_77, "a auditoria NÃO corrige — a coluna segue como estava"
+
+
+def test_a_auditoria_nao_marca_divergencia_quando_batem(client, db, headers):
+    """Controle negativo: sem ele, um `diverge: True` fixo passaria no teste acima."""
+    from app.scripts import investment_audit
+
+    conta = _conta_bancaria(client, headers, opening_balance_cents=10_000_00)
+    app_ = _aplicacao(client, headers, bank_account_id=conta["id"])
+    acc = _acc(db, app_["id"])
+    acc.principal_cents = 10_000_00
+    db.commit()
+
+    assert investment_audit.auditar(db)[0]["diverge"] is False
+
+
+def test_a_auditoria_nao_chama_de_divergencia_o_que_ela_nao_consegue_comparar(client, db, headers):
+    """Principal `None` (saldo de abertura desconhecido) não é divergência — é ausência de medida.
+
+    Marcá-lo mandaria o dono caçar um erro que não existe. É o modo de falha que o épico chama de
+    "pior do que ficar calado".
+    """
+    from app.scripts import investment_audit
+
+    conta = _conta_bancaria(
+        client, headers, opening_balance_cents=0, opening_balance_is_known=False
+    )
+    app_ = _aplicacao(client, headers, bank_account_id=conta["id"])
+    acc = _acc(db, app_["id"])
+    acc.principal_cents = 999_99
+    db.commit()
+
+    linha = investment_audit.auditar(db)[0]
+    assert linha["derivado_cents"] is None
+    assert linha["diverge"] is False
+
+
+def test_a_auditoria_formata_valor_negativo_e_desconhecido(client, headers):
+    """`_reais` é o que o dono lê na saída — negativo com sinal, `None` como "não sei"."""
+    from app.scripts.investment_audit import _reais
+
+    assert _reais(10_000_00) == "R$ 10.000,00"
+    assert _reais(-500_00) == "-R$ 500,00"
+    assert _reais(0) == "R$ 0,00"
+    assert _reais(None) == "não sei"

@@ -919,8 +919,123 @@ onda já fechada. O único teste que tocava a função afirmava que ela era `cal
   `register_yield`). Está na docstring para não parecer esquecimento na 2b-ii.
 - **Dívida:** **aceite visual em ~360px do campo de vínculo NÃO foi feito** — mesma dívida da 8.13
   AC9 e da 8.21. Bloqueia release, não bloqueia merge.
-- **Dívida:** a 2b-ii continua com o único backfill do épico, e ele continua sendo o item de maior
-  risco.
+- **Dívida:** ~~a 2b-ii continua com o único backfill do épico, e ele continua sendo o item de
+  maior risco.~~ **FECHADA na 2b-ii (2026-08-08): o backfill não foi mitigado, deixou de
+  existir.** Ver a seção da Onda 2b-ii, logo abaixo.
+
+### Onda 2b-ii — o principal deixa de ser digitado (e o backfill deixa de existir)
+
+> Spec: `docs/superpowers/specs/2026-08-08-onda-2b-ii-principal-derivado-design.md` ·
+> Plano: `docs/superpowers/plans/2026-08-08-onda-2b-ii-principal-derivado.md`
+
+**A onda que era "o item de maior risco do épico inteiro" NÃO TEM MIGRATION.** Todo documento
+anterior a ela a descrevia como a onda do backfill — o único `UPDATE` sobre dado existente do
+épico, sob a armadilha do `FORCE RLS` (`UPDATE` filtrado a zero linhas **em silêncio**, que o
+SQLite dos testes não pega). Duas coisas o dissolveram: a **2b-i já executou os passos 1-2 do
+design-mãe §6.2 por ato do dono** (coluna via DDL puro, vínculo pela tela), e
+`investment_accounts` está **vazia em produção** (confirmado pelo fundador). Os passos 3-4 não
+tinham sobre o que rodar.
+
+> **A regra que fica (reverberar): quando um backfill existe para reconstruir histórico que um
+> ATO DO DONO reconstrói melhor, o backfill é o caminho pior.** Ele escreve sem testemunha, num
+> regime onde o fracasso é silencioso. Trocar escrita retroativa por *auditoria + ato* foi a
+> manobra da 2b-i; esta é a segunda aplicação, e agora é padrão.
+
+- [x] **`principal = opening_balance_cents + Σ movimentos com `source <> 'yield'`.** O saldo de
+  abertura entra, e **isso não estava no design-mãe §6.2**: é o dinheiro que já estava aplicado no
+  dia do cadastro, principal que nunca teve movimento. Sem ele, uma conta cadastrada com R$ 10.000
+  mostraria principal **zero** — número errado com aparência de fato, a família que a Onda 0 existe
+  para não repetir. O recorte de `source` impede a dupla contagem: o rendimento já é
+  `accrued_yield_cents` e, desde a 2b-i, também é `bank_transaction`.
+- [x] **`exclude_sources` entrou em `_movements_sums`, não numa query nova.** A docstring dela já
+  dizia por quê: duas cópias da fórmula divergiriam, e o sintoma seria um saldo que muda conforme a
+  tela que o pede. `bank.service.movement_sums` é a porta pública fina — existe porque `investments`
+  precisava dela e importar um símbolo `_` de outro módulo é acesso que ninguém encontra depois.
+- [x] **Saldo de abertura desconhecido ⇒ principal `None`, nunca zero.** Reusa
+  `origem_do_saldo_derivado` (Story 8.21) em vez de recomparar `opening_balance_is_known` — foi
+  exatamente essa recomparação duplicada que a 8.21 pagou para eliminar. Zero seria a afirmação
+  *"você não tem nada aplicado"*, falsa e indistinguível de um saldo genuinamente zerado.
+- [x] **A coluna `principal_cents` está CONGELADA** — sem leitor, sem escritor, com gate AST e
+  **controle positivo**. Terceiro uso do padrão (`attachments.data`, `tenant_profiles.timezone`).
+  **Eram NOVE leitores**, levantados por `grep` **antes de a spec fechar** e não durante a
+  implementação — a lição da 0073, onde três consumidores não apareceram na investigação inicial.
+  Drop numa migration posterior.
+  - ⚠️ **O gate proíbe `<conta>.principal_cents` e PERMITE `data.principal_cents`**, e a assimetria
+    tem teste próprio: ler o campo do **request** é como a recusa 409 sabe que alguém tentou editar.
+    Quem "endurecer" o gate acrescentando `data` à lista torna a guarda inalcançável e devolve a
+    edição do principal — com o gate verde o tempo todo.
+- [x] **O DÉCIMO leitor não estava no inventário, e não era do módulo: o Diagnóstico.** A regra 4
+  do motor (`engine._investment_signals`, Story 5.6) só avalia quando `period_rentability_pct` não
+  é `None` — e essa fração agora depende do principal DERIVADO. Aplicação sem conta vinculada
+  deixou de produzir o sinal 🟡 "sem rendimento no período". O inventário do §4.2.1 da spec buscou
+  por `principal_cents` e o achou em nove lugares; este décimo **não menciona a coluna** — consome
+  a rentabilidade, dois saltos adiante. Quem o pegou foram dois testes de `financial_intelligence`,
+  não o grep.
+  - ⚠️ **Um deles era o `rls_e2e` do vazamento de PII cross-tenant**, e o modo de falha é o pior
+    possível: sem conta vinculada, nenhum sinal cita nome de aplicação, e o teste passaria **verde
+    por vacuidade** — sem exercitar o vetor que ele existe para exercitar. A fixture agora semeia a
+    `bank_account` junto e continua gravando a coluna congelada de propósito, provando que **não é
+    ela** que aparece.
+  - **Regra que fica: um grep pelo NOME do dado acha os leitores diretos, e para nos leitores que
+    o consomem transformado.** Quem congela uma coluna precisa perguntar também *"quem consome o
+    que se calcula a partir dela?"* — aqui a resposta estava a dois saltos e em outro módulo.
+- [x] **O leitor que quase passou: `_pct` DIVIDE pelo principal.** Com `None` levantaria
+  `TypeError`; com **negativo** devolveria um percentual de sinal invertido — plausível na tela, e
+  errado. Agora protege os três casos (`None`, zero, negativo). *"Quanto rendeu percentualmente o
+  que você não aplicou?"* não é pergunta com resposta menor: é pergunta sem resposta.
+- [x] **Editar o principal: 409, e ele é o OPOSTO do 409 da 2b-i.** Aquele era caminho normal e por
+  isso a tela oferecia a saída no próprio modal. Este é **inalcançável pela tela** (o campo saiu do
+  formulário): se disparar, é integração antiga ou defeito. Por isso **não** tem `detail["acao"]` —
+  um `acao` sem modal do outro lado é contrato com ninguém. A guarda do `create` é sobre o **valor**
+  (`if data.principal_cents:`) e a do `update` sobre a **presença** (`is not None`), porque o
+  default do schema é `0` num e `None` no outro; a assimetria é deliberada e cada metade tem teste.
+- [x] **REQ-25 cumprido na LEITURA, não na escrita — desvio declarado.** O resgate bruto (principal
+  + rendimento embutido, que é como o banco credita) deixa o principal negativo. Recusar o resgate
+  exigiria `bank/transfers.py` consultar `investments`, que o gate
+  `test_bank_transfers_nao_importa_investments` proíbe — e recusaria um fato que **já aconteceu no
+  banco**, o inverso do princípio da Onda 0. A tela nomeia a diferença e a ação, e **não adivinha o
+  valor** (Artigo IV): o sistema sabe que faltam R$ 500 e não os lança sozinho.
+- [x] **`app/scripts/investment_audit.py` — sem `--fix`, e a ausência é a decisão.** Com uma flag de
+  correção, alguém a rodaria no deploy sem ler a saída e o `UPDATE` voltaria pela porta dos fundos.
+  Imprime **quantos tenants varreu**: `0 aplicações em 0 tenants` e `0 em 7` são resultados
+  diferentes, e o primeiro é defeito do próprio script (a lição da sondagem de `phone_key`, onde a
+  RLS devolveu zero linhas sem erro e o silêncio quase virou aprovação). Principal `None` **não** é
+  divergência: é ausência de comparação, e marcá-la mandaria o dono caçar um erro que não existe.
+- [x] **O extrato da aplicação é a SEGUNDA superfície sobre o mesmo razão, de propósito** (decisão
+  do fundador). A primeira é "Ver movimentos" em Contas & Saldos — a conta de aplicação é uma
+  `bank_account` como qualquer outra. **A garantia contra divergência virou estrutural em vez de
+  documental:** `contas.ROTA_MOVIMENTOS` é uma constante com dois consumidores, e um gate por
+  `import.meta.glob` reprova a string literal em qualquer das duas telas (com controle positivo
+  próprio, senão um glob que deixasse de casar tornaria o gate vacuamente verde).
+
+- [x] **O aceite em ~360px FOI FEITO, com screenshot — e achou um defeito na primeira medição.**
+  Depois de três dívidas abertas na fila (8.13 AC9, 8.21, 2b-i) e três PRs de campo pagos (#56,
+  #58, #89), esta onda mediu antes de mergear. **O extrato nasceu como `<table>` de 3 colunas com
+  `min-w-[20rem]` dentro de `overflow-x-auto`, e em 360px a coluna de VALOR nascia fora da vista:
+  a tela mostrava `R$ 3.` no lugar de `R$ 3.000,00`.** Virou lista (`<ul>`): data e descrição
+  empilhadas à esquerda num bloco `min-w-0`, valor à direita com `whitespace-nowrap`.
+  > **A lição do PR #58 era "role, não corte" (`overflow-x-auto` em vez de `overflow-hidden`), e
+  > ela funcionou — não houve corte silencioso. A desta onda é mais funda: em 360px uma tabela de
+  > 3 colunas não cabe, e a saída não é fazer a rolagem funcionar melhor, é não precisar dela.**
+  > Num extrato o valor é *a* informação, e informação que exige rolagem lateral para existir é
+  > informação que o dono não lê. **Nenhuma asserção de classe CSS pegaria isto** — o `overflow-x`
+  > estava correto, o `flex-wrap` estava correto, e a tela estava errada.
+- ⚠️ **Achado PRÉ-EXISTENTE, fora do escopo desta onda e não corrigido aqui:** em 360px o
+  `document.scrollWidth` da tela de Investimentos é **375px** — a página inteira rola 15px na
+  horizontal. Medido idêntico **com e sem** o extrato (logo não é desta onda), e ausente em
+  Contas & Saldos (345px). O culpado é o `ChevronDown` do menu do usuário em
+  `app/AppShell.tsx:209`. Fica registrado com a medição, e **não** foi corrigido junto: misturar
+  correção de defeito existente com regra nova no mesmo diff tira do gate a capacidade de julgar
+  qual mudança quebrou o quê — mesmo argumento que manteve SIG-001 fora da 8.16 e separou 8.19
+  de 8.20.
+
+- **Dívida:** `packages/shared-types/src/generated.ts` tem `principal_cents` em quatro lugares e
+  segue defasado desde o PR #45, sem check de drift no CI. Dívida do épico, não desta onda.
+- **Dívida:** REQ-26 (cotização e liquidação em datas diferentes) segue não implementado —
+  declarado fora de escopo, não esquecido.
+- **Dívida:** o `DROP COLUMN principal_cents` é migration posterior, depois de um ciclo.
+- **Dívida:** o estouro horizontal de 15px do `AppShell` (acima) — vale para **todas** as telas,
+  não só esta.
 
 
 ## WhatsApp Evolution: em produção de verdade (deploy 2026-08-04)

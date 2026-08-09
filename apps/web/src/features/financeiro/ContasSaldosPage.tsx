@@ -37,6 +37,7 @@ import {
   naturezaParaEnvio,
   operationNatureLabel,
   OPERATION_NATURE_OUTRO,
+  ROTA_MOVIMENTOS,
   OPERATION_NATURE_TRANSFERENCIA,
   OPERATION_NATURES,
   origemLabel,
@@ -478,7 +479,7 @@ function AccountDetail({
     setError(null);
     try {
       const [t, c] = await Promise.all([
-        api.get<BankTransaction[]>("/bank/transactions", {
+        api.get<BankTransaction[]>(ROTA_MOVIMENTOS, {
           params: {
             bank_account_id: account.id,
             start: range.start,

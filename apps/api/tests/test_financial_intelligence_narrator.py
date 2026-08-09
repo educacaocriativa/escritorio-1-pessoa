@@ -163,9 +163,29 @@ def test_signals_identical_with_and_without_ai(
     """O CORAÇÃO da Story 5.8: os sinais determinísticos são idênticos byte-a-byte com e sem IA —
     a IA só troca o texto da NARRATIVA, jamais um número/sinal."""
     # Semeia uma aplicação com principal > 0 e sem rendimento → sinal 🟡 determinístico e estável.
+    #
+    # ⚠️ **Onda 2b-ii: o principal vem do SALDO DE ABERTURA da conta de aplicação.** Sem a conta,
+    # o principal derivado é `None`, `period_rentability_pct` é `None`, e a regra 4 do motor não
+    # avalia nada — o teste ficaria verde **sem o sinal que ele existe para comparar**.
+    conta = client.post(
+        "/bank/accounts",
+        json={
+            "name": "CDB Reserva (conta)",
+            "kind": "investment",
+            "opening_balance_cents": 100000,
+            "opening_balance_is_known": True,
+            "opening_date": "2026-06-01",
+        },
+        headers=headers,
+    )
+    assert conta.status_code == 201, conta.text
     r = client.post(
         "/investments",
-        json={"name": "CDB Reserva", "principal_cents": 100000, "opened_at": "2026-06-01"},
+        json={
+            "name": "CDB Reserva",
+            "opened_at": "2026-06-01",
+            "bank_account_id": conta.json()["id"],
+        },
         headers=headers,
     )
     assert r.status_code == 201, r.text

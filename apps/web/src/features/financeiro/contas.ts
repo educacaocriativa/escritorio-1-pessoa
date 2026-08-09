@@ -72,6 +72,17 @@ export interface BankAccount {
 }
 
 /** `BankTransactionOut` (Story 8.3). */
+/**
+ * A rota dos movimentos — **uma constante, dois consumidores** (Onda 2b-ii).
+ *
+ * `ContasSaldosPage` ("Ver movimentos") e `InvestimentosPage` (o extrato da aplicação) exibem o
+ * MESMO razão em superfícies diferentes. A duplicação de superfície foi uma decisão; a de
+ * CONSULTA não é: duas telas com filtros próprios sobre o mesmo dado divergem, e a que diverge é
+ * a que ninguém olha. A constante é o que torna isso estrutural em vez de disciplina, e o gate
+ * `nenhuma tela escreve a rota de movimentos à mão` (investimentos.test.ts) o mantém assim.
+ */
+export const ROTA_MOVIMENTOS = "/bank/transactions";
+
 export interface BankTransaction {
   id: string;
   bank_account_id: string;

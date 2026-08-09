@@ -58,7 +58,13 @@ def _account(client: TestClient, headers, grupo: str, categoria: str) -> str:
 
 
 def _conta_bancaria(
-    client: TestClient, headers, *, name="CDB Itaú", kind="investment", opening_date="2026-01-01"
+    client: TestClient,
+    headers,
+    *,
+    name="CDB Itaú",
+    kind="investment",
+    opening_date="2026-01-01",
+    opening_balance_cents=0,
 ) -> dict:
     """A `bank_account` ONDE O DINHEIRO DA APLICAÇÃO ESTÁ (Onda 2b-i).
 
@@ -71,7 +77,7 @@ def _conta_bancaria(
             "name": name,
             "kind": kind,
             "number": "",
-            "opening_balance_cents": 0,
+            "opening_balance_cents": opening_balance_cents,
             "opening_balance_is_known": True,
             "opening_date": opening_date,
         },
@@ -100,14 +106,19 @@ def _investment(
     Cada aplicação ganha a SUA conta: o índice único `(tenant_id, bank_account_id)` é 1:1.
     """
     if bank_account_id == "auto":
-        bank_account_id = _conta_bancaria(client, headers, name=f"Conta {name}")["id"]
+        # ⚠️ **Onda 2b-ii: `principal` vira o SALDO DE ABERTURA da conta bancária**, e não mais
+        # o campo `principal_cents` da aplicação — que agora é derivado e cuja edição é 409.
+        # A intenção de cada call site ("esta aplicação tem X aplicados") sobrevive intacta; o
+        # que mudou é ONDE o valor é informado, que é a mudança inteira desta onda.
+        bank_account_id = _conta_bancaria(
+            client, headers, name=f"Conta {name}", opening_balance_cents=principal
+        )["id"]
     r = client.post(
         "/investments",
         json={
             "name": name,
             "kind": "CDB",
             "index_rate_label": "CDI 110%",
-            "principal_cents": principal,
             "opened_at": opened,
             "bank_account_id": bank_account_id,
         },
@@ -133,16 +144,23 @@ def test_crud_investment_account(client: TestClient, headers):
     lst = client.get("/investments", headers=headers).json()
     assert [a["name"] for a in lst] == ["Tesouro Selic"]
 
-    # editar principal/indexador/tipo/nome
+    # editar indexador/tipo/nome
+    #
+    # ⚠️ **`principal_cents` SAIU deste PATCH, e a asserção mudou de propósito (Onda 2b-ii).**
+    # Antes desta onda o teste editava o principal para 700.000 e conferia o valor de volta. O
+    # principal agora é DERIVADO dos movimentos da conta bancária, e editá-lo responde **409** —
+    # coberto por `test_editar_o_principal_e_recusado_com_409`, logo abaixo. O que se prova aqui
+    # continua sendo o mesmo: os campos de PRODUTO (nome, indexador, tipo) são editáveis e a edição
+    # não encosta no rendimento acumulado.
     r = client.patch(
         f"/investments/{acc['id']}",
-        json={"name": "Tesouro IPCA", "index_rate_label": "IPCA+6%", "principal_cents": 700_000},
+        json={"name": "Tesouro IPCA", "index_rate_label": "IPCA+6%"},
         headers=headers,
     )
     assert r.status_code == 200, r.text
     assert r.json()["name"] == "Tesouro IPCA"
     assert r.json()["index_rate_label"] == "IPCA+6%"
-    assert r.json()["principal_cents"] == 700_000
+    assert r.json()["principal_cents"] == 500_000, "o principal não mudou — ele não vem daqui"
     # editar NÃO mexe no rendimento acumulado
     assert r.json()["accrued_yield_cents"] == 0
 

@@ -66,7 +66,17 @@ def _run_migrations_as_app(app_url: str) -> None:
 
 def _seed_investment(app_url: str, tenant_id: str, *, name: str, principal: int) -> None:
     """Uma aplicação com principal > 0 e sem rendimento → gera o sinal 🟡 'sem rendimento no
-    período', cuja explicação cita o NOME da aplicação (o vetor de vazamento que testamos)."""
+    período', cuja explicação cita o NOME da aplicação (o vetor de vazamento que testamos).
+
+    ⚠️ **Onda 2b-ii: o principal vem da CONTA BANCÁRIA vinculada**, então esta fixture semeia as
+    duas linhas — a `bank_account` `kind='investment'` com `opening_balance_cents = principal`, e a
+    `investment_accounts` apontando para ela. Semear só a segunda deixaria o principal derivado em
+    `None`, `period_rentability_pct` em `None`, e a regra 4 do motor não avaliaria nada: o teste
+    ficaria **verde por vacuidade**, sem nenhum sinal citando nome de aplicação — ou seja, sem o
+    vetor de vazamento que ele existe para exercitar. A coluna `principal_cents` continua sendo
+    escrita aqui **de propósito**: é o valor congelado, e o teste prova que ele NÃO é o que aparece.
+    """
+    from app.modules.bank.models import KIND_INVESTMENT, BankAccount
     from app.modules.investments.models import InvestmentAccount
 
     engine = create_engine(app_url, poolclass=NullPool)
@@ -80,10 +90,20 @@ def _seed_investment(app_url: str, tenant_id: str, *, name: str, principal: int)
             # só libera o savepoint — a txn externa (com o seed) é revertida no close. Mesmo
             # padrão da produção em app/db/session.py::tenant_session.
             session = Session(bind=conn)
+            conta = BankAccount(
+                tenant_id=tenant_id,
+                name=f"{name} (conta)",
+                kind=KIND_INVESTMENT,
+                opening_balance_cents=principal,
+                opening_balance_is_known=True,
+                opening_date=date(2026, 6, 1),
+            )
+            session.add(conta)
+            session.flush()  # o id tem default Python-side; sem isto o vínculo nasceria vazio
             session.add(
                 InvestmentAccount(
                     tenant_id=tenant_id, name=name, principal_cents=principal,
-                    opened_at=date(2026, 6, 1),
+                    opened_at=date(2026, 6, 1), bank_account_id=conta.id,
                 )
             )
             session.commit()
