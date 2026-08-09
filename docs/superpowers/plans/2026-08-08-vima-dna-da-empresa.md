@@ -27,7 +27,9 @@ Valem para **toda** tarefa deste plano.
 - **Só DDL, sem backfill.** Não existe resposta anterior a esta migration, então a armadilha da RLS no backfill (INSERT ... SELECT que grava zero linhas em silêncio) não se aplica.
 - **Idioma:** domínio, docstrings e comentários em PT-BR; identificadores em inglês quando já for a convenção do arquivo.
 - **Commits:** Conventional Commits. `main` é protegida — todo trabalho vai por PR.
-- **Rodar antes de considerar concluído:** `cd apps/api && pytest` e `pnpm --filter @e1p/web test`. Não confie em `scripts/check.sh` isoladamente — ele mascara falha de frontend com `|| true` no vitest (dívida registrada).
+- **Rodar antes de considerar concluído — os TRÊS:** `cd apps/api && ruff check .`, `cd apps/api && pytest` e `pnpm --filter @e1p/web test`.
+  - ⚠️ **O `ruff` é gate de CI** (`ci.yml:47` roda `ruff check . && pytest` dentro da imagem de produção) e é o mais fácil de esquecer, porque não é teste. Esquecê-lo custou uma rodada vermelha neste PR: imports dentro de função em `test_dna_briefing.py` deram `I001` + `F401`.
+  - Não confie em `scripts/check.sh` isoladamente — ele mascara falha de frontend com `|| true` no vitest (dívida registrada). **Mas note que é ele quem roda o `ruff` (linha 14):** desconfiar do script inteiro é o caminho direto para pular o lint.
 
 ---
 
