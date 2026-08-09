@@ -1,6 +1,13 @@
 """O DNA chegando ao briefing — a ponta que justifica a onda inteira."""
+from datetime import date
+
 import pytest
 from fastapi.testclient import TestClient
+
+from app.core.tenancy import CurrentUser
+from app.modules.dna import resolver
+from app.modules.vima import absences
+from app.modules.vima import service as vima_service
 
 REGISTER = {
     "legal_name": "Vima ME",
@@ -35,11 +42,6 @@ def test_o_tenant_novo_tem_topo_seco_e_o_dna_o_desliga(client: TestClient, heade
     Topo seco é a única Ausência que dispara sobre o VAZIO — um tenant recém-criado sempre a
     tem. É exatamente por isso que ela é a única com opção de desligamento.
     """
-    from app.modules.dna import resolver
-    from app.modules.vima import absences
-    from app.core.tenancy import CurrentUser
-    from datetime import date
-
     antes = client.get("/vima/briefing", headers=headers).json()
     pendentes = [linha for linha in antes["linhas"] if linha["secao"] == "PENDENTE"]
     assert pendentes, "o tenant novo deveria ter ao menos uma pendência"
@@ -80,11 +82,6 @@ def test_o_briefing_de_hoje_nao_e_regerado(client: TestClient, headers):
 
 def test_recalibrar_limpa_o_silencio_do_briefing_anterior(client: TestClient, headers, db):
     """Sem isso, apertar um limiar não muda nada visível e a configuração parece quebrada."""
-    from datetime import date
-
-    from app.modules.vima import service as vima_service
-    from app.core.tenancy import CurrentUser
-
     client.get("/vima/briefing", headers=headers)
     tenant_id = client.get("/auth/me", headers=headers).json()["user"]["tenant_id"]
     user_id = client.get("/auth/me", headers=headers).json()["user"]["id"]
@@ -105,9 +102,6 @@ def test_recalibrar_limpa_o_silencio_do_briefing_anterior(client: TestClient, he
 
 def test_responder_RETRATO_nao_limpa_o_silencio(client: TestClient, headers, db):
     """Retrato não muda comportamento — limpar o silêncio por causa dele seria repetição à toa."""
-    from app.modules.vima import service as vima_service
-    from app.core.tenancy import CurrentUser
-
     client.get("/vima/briefing", headers=headers)
     me = client.get("/auth/me", headers=headers).json()["user"]
     dono = CurrentUser(

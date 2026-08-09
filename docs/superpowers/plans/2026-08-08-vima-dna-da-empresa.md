@@ -1505,10 +1505,16 @@ from fastapi.testclient import TestClient
 
 from app.core.security import create_access_token
 
+# O payload real de `/auth/register` — copiado de `tests/test_vima_briefing.py`, não inventado.
+# Um payload adivinhado aqui devolve 422 e todas as fixtures do arquivo morrem com KeyError
+# em `["access_token"]`, longe da causa.
 REGISTER = {
-    "email": "dono@exemplo.com",
-    "password": "senha-forte-123",
-    "tenant_name": "Estúdio de Uma Pessoa",
+    "legal_name": "Vima ME",
+    "document": "11444777000161",
+    "slug": "vimame",
+    "email": "vima@example.com",
+    "name": "Flávio",
+    "password": "uma-senha-bem-grande",
 }
 
 
@@ -2062,10 +2068,16 @@ Expected: PASS (8 testes)
 import pytest
 from fastapi.testclient import TestClient
 
+# O payload real de `/auth/register` — copiado de `tests/test_vima_briefing.py`, não inventado.
+# Um payload adivinhado aqui devolve 422 e todas as fixtures do arquivo morrem com KeyError
+# em `["access_token"]`, longe da causa.
 REGISTER = {
-    "email": "dono@exemplo.com",
-    "password": "senha-forte-123",
-    "tenant_name": "Estúdio de Uma Pessoa",
+    "legal_name": "Vima ME",
+    "document": "11444777000161",
+    "slug": "vimame",
+    "email": "vima@example.com",
+    "name": "Flávio",
+    "password": "uma-senha-bem-grande",
 }
 
 
