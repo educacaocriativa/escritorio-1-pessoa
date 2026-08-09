@@ -1347,6 +1347,65 @@ O produto já gastava IA em produção e **não sabia quanto, nem por quem**: se
   ninguém e não tem como ser reconstruído. **Dívida:** `LegalDocument.input_tokens` continua
   guardando tokens na linha do documento, agora em paralelo ao ledger (não foi removido).
 
+## Vima V2: o DNA da Empresa (2026-08-08)
+
+> Spec: `docs/superpowers/specs/2026-08-08-vima-dna-da-empresa-design.md` ·
+> Plano: `docs/superpowers/plans/2026-08-08-vima-dna-da-empresa.md`
+
+O V1 entregou um briefing que fala com todo mundo do mesmo jeito: os cinco limiares de
+`absences.py` eram defaults escolhidos por nós. Um advogado que responde em dois dias e um social
+media que responde em duas horas recebiam o mesmo aviso na mesma hora.
+
+- [x] **Duas classes, e a classe é contrato mecânico, não etiqueta** (`dna/catalog.py`, 45
+  perguntas em código):
+  - **Calibração (6)** tem consumidor HOJE; responder muda o briefing de amanhã.
+  - **Retrato (39)** não tem, por definição; é guardado para o V4.
+  - ⚠️ **Duas guardas rodam no IMPORT do módulo**: Calibração exige `consome`, Retrato o proíbe;
+    e `consome` tem que apontar para chave real de `LIMIARES_PADRAO`. Sem a segunda, um typo em
+    `card_parado_dais` produz **silêncio perfeito** — grava, o `{**PADRAO, **override}` ignora a
+    chave estranha, e o dono responde para sempre sem efeito nenhum, sem erro nenhum.
+  - **São 6 de Calibração porque só existem 6 consumidores.** Qualquer número maior seria
+    invenção. `dinheiro.tolerancia_dias` parece Calibração (tem número, tem opções) e é Retrato:
+    não existe regra de Ausência sobre carência. A classe é definida pelo contrato, nunca pelo
+    formato.
+- [x] **`dinheiro_com_data_dias` separou duas regras que dividiam `prazo_vencendo_dias`** — prazo
+  da agenda e conta a pagar. Nasce com o mesmo valor `1`: refactor puro no dia do merge.
+- [x] **O núcleo do primeiro acesso NÃO é de Calibração** (é a inversão central do design).
+  *"Em quanto tempo eu te aviso que ninguém respondeu o Carlos?"* é irrespondível antes de ter
+  visto um briefing — a resposta seria um chute que vira comportamento errado com aparência de
+  configuração deliberada. Calibração vai toda por **gancho colado à ausência** que a motivou.
+- [x] **Uma pergunta por gancho por dia, no produto inteiro**, e pulada em quarentena de 7 dias
+  (`dna/cadencia.py`). O núcleo é a exceção declarada: sequência anunciada e interrupção não
+  anunciada não cansam igual.
+  - ⚠️ **A data do carimbo passa por `local_date`, não por `.date()`.** `answered_at` é
+    `timestamptz`: um dono em UTC−3 respondendo às 22h produz carimbo de 01h do dia seguinte em
+    UTC, a cota do dia não é reconhecida e ele é perguntado de novo às 22h05. Provado por
+    mutação. `app/modules/dna/` entra na varredura AST de `test_fuso_do_tenant.py`.
+- [x] **`dna/resolver.py` é a ÚNICA porta de leitura.** Nenhum outro módulo lê `dna_answers`
+  direto — é o que mantém Retrato honestamente sem consumidor até o V4, em vez de vazar por um
+  `select` esperto. Resposta órfã (opção que saiu do catálogo) cai no default em vez de derrubar
+  o briefing.
+- ⚠️ **`None` num limiar significa REGRA NÃO EXECUTADA**, não "limiar infinito" — mesma forma do
+  filtro de permissão do V1. Só `topo_sem_lead_dias` pode ser desligado, porque é a única
+  Ausência que dispara sobre o VAZIO: sem cards não há card parado, mas sem lead ela cutuca todo
+  dia, para sempre.
+- ⚠️ **`recalibrado_apos` compara `>=`, e o `>` estrito quebrava o recurso inteiro.** O caso
+  normal é o dono recalibrar HOJE, pelo gancho do briefing de hoje, cujo `reference_date` também
+  é hoje — com `>`, a limpeza do silêncio nunca acontecia no dia seguinte, que é justamente
+  quando ela precisa acontecer.
+- [x] **`Linha` do compositor ganhou `kind`** (default `""` — briefings gravados antes do V2 não
+  têm o campo, e lê-los sem default estouraria).
+- **O DNA é da EMPRESA:** `require_module("settings")` na rota inteira, o oposto do
+  `vima/router.py` (lá o recorte é por linha). É também o oposto das preferências de briefing do
+  V1, que foram para `users` por serem pessoais.
+- **O V2 não chama IA em ponto nenhum** — custo marginal zero por tenant.
+- **Dívidas:** as 45 perguntas nunca foram validadas com dono real; não há medição de ativação do
+  núcleo, então não se sabe se ele ajudou ou atrapalhou; a quarentena de 7 dias e o "uma por dia"
+  são números sem evidência; **cobrança a receber continua sem antecedência** (`_dinheiro_com_data`
+  dá aviso prévio a conta a pagar e nenhum a cobrança, que só aparece vencida — o dono é avisado
+  do que deve e surpreendido pelo que não recebeu); **validação manual em ~360px da tela do núcleo
+  e da aba não foi feita** (bloqueia release, não merge).
+
 ## 6.0 Correções importantes
 - **[CORRIGIDO 2026-08-05] O sistema inteiro passou a viver no fuso do tenant (era UTC).** O sintoma que o fundador viu foi a linha do tempo do Funil exibindo `Aguardando até 2026-08-05T11:11:32.812731+00:00` — formato de máquina e 3h adiantado. A investigação achou **três** defeitos com a mesma raiz: existia infra de fuso (`core/tz.py` + `tenant.timezone`, migration 0044) mas só 3 módulos a consumiam.
   1. **Texto para humano com UTC cru.** `funnels/engine.py` interpolava `resume_at.isoformat()` na mensagem; `contracts/service.py` montava a variável `{{DATA}}` com `datetime.now(UTC)` — um contrato criado às 22h saía datado do dia seguinte, e essa é a data que vale juridicamente.

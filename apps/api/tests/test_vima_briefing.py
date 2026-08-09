@@ -117,3 +117,11 @@ def test_dia_sem_nada_devolve_briefing_vazio_e_nao_falha(client: TestClient, hea
     corpo = client.get("/vima/briefing", headers=headers).json()
     assert corpo["vazio"] is True
     assert corpo["texto"]
+
+
+def test_a_linha_de_ausencia_carrega_o_kind(client: TestClient, headers):
+    """Sem o kind na linha, a pergunta de calibração do DNA não tem como se colar à ausência."""
+    corpo = client.get("/vima/briefing", headers=headers).json()
+    pendentes = [linha for linha in corpo["linhas"] if linha["secao"] == "PENDENTE"]
+    assert pendentes, "o tenant novo deveria ter ao menos uma pendência"
+    assert pendentes[0]["kind"], "a linha de pendência não trouxe o kind"

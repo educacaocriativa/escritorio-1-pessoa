@@ -52,6 +52,10 @@ LIMIARES_PADRAO: dict[str, int] = {
     "card_parado_dias": 10,
     "topo_sem_lead_dias": 5,
     "prazo_vencendo_dias": 1,
+    # Nasce com o MESMO valor de `prazo_vencendo_dias` porque hoje as duas regras dividem
+    # aquele número. Quem passa a lê-lo é `_dinheiro_com_data` — aqui a chave existe para que
+    # o catálogo do DNA possa apontar para ela.
+    "dinheiro_com_data_dias": 1,
 }
 
 
@@ -92,7 +96,7 @@ def coletar(
     compatível com a data de referência —, e o serviço passa o relógio real. Como todo o resto
     deste módulo, o relógio entra por parâmetro: nada aqui dentro chama `now()`.
     """
-    lim = {**LIMIARES_PADRAO, **(limiares or {})}
+    lim: dict[str, int | None] = {**LIMIARES_PADRAO, **(limiares or {})}
     instante = agora or datetime.combine(hoje, time.max, tzinfo=UTC)
     fora: list[Ausencia] = []
 
@@ -104,7 +108,12 @@ def coletar(
         fora.extend(_silencio_nosso(db, hoje, lim, instante))
         fora.extend(_contato_sumido(db, hoje, lim))
         fora.extend(_cards_parados(db, hoje, lim))
-        fora.extend(_topo_seco(db, hoje, lim))
+        # `None` significa REGRA NÃO EXECUTADA, não "limiar infinito" — mesma forma do filtro
+        # de permissão, que não roda a regra em vez de calcular e esconder. Só topo seco pode
+        # ser desligado, porque é a única que dispara sobre o VAZIO: sem cards não há card
+        # parado, mas sem lead nenhum ela cutuca todo dia, para sempre.
+        if lim.get("topo_sem_lead_dias") is not None:
+            fora.extend(_topo_seco(db, hoje, lim))
 
     return [a for a in fora if not _ja_dita(a, ja_reportadas)]
 
@@ -162,8 +171,17 @@ def _prazos_estourados(db: Session, hoje: date, lim: dict[str, int]) -> list[Aus
 
 
 def _dinheiro_com_data(db: Session, hoje: date, lim: dict[str, int]) -> list[Ausencia]:
-    """Conta a pagar e cobrança a receber que a data alcançou. Duas direções, uma regra."""
-    limite = hoje + timedelta(days=lim["prazo_vencendo_dias"])
+    """Conta a pagar e cobrança a receber que a data alcançou.
+
+    ⚠️ As duas direções NÃO seguem a mesma regra, apesar de morarem juntas: conta a pagar tem
+    antecedência (`due_date <= hoje + limiar`), cobrança a receber só aparece DEPOIS de vencida
+    (`due_date < hoje`, sem limiar). Um recebimento que vence amanhã não é dito por ninguém —
+    dívida registrada no spec do V2, e o motivo de a pergunta do DNA falar só de conta a pagar.
+
+    O limiar é `dinheiro_com_data_dias`, próprio, e não mais o `prazo_vencendo_dias` da agenda:
+    prazo de entrega se quer saber em cima, boleto se quer saber com folga para ter o dinheiro.
+    """
+    limite = hoje + timedelta(days=lim["dinheiro_com_data_dias"])
     fora: list[Ausencia] = []
 
     contas = db.scalars(

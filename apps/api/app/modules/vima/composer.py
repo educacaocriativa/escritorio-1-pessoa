@@ -55,6 +55,10 @@ class Linha:
     secao: str  # "ACONTECEU" | "PENDENTE" | "NÚMEROS"
     module: str
     texto: str
+    # Só ausência preenche. É o que permite ao V2 colar a pergunta de calibração na linha que a
+    # motivou. O default `""` não é cosmético: **briefings gravados antes do V2 não têm este
+    # campo no payload**, e lê-los sem default estouraria na desserialização.
+    kind: str = ""
 
 
 @dataclass(frozen=True)
@@ -91,6 +95,9 @@ class _Candidata:
     # Só ausência preenche: a chave e a intensidade que alimentam a regra do silêncio.
     chave: str | None = None
     dias: int = 0
+    # Só ausência preenche. Fica SEPARADO de `chave` de propósito: aquela é composta com o
+    # `subject_id`, e fatiá-la na tela acoplaria o front ao formato dela.
+    kind: str = ""
 
 
 def compor(
@@ -117,7 +124,9 @@ def compor(
     return Payload(
         referencia=referencia,
         desde=desde,
-        linhas=[Linha(secao=c.secao, module=c.module, texto=c.texto) for c in mantidas],
+        linhas=[
+            Linha(secao=c.secao, module=c.module, texto=c.texto, kind=c.kind) for c in mantidas
+        ],
         excedente=max(0, len(ordenadas) - len(mantidas)),
         ausencias_ditas={c.chave: c.dias for c in mantidas if c.chave},
     )
@@ -138,7 +147,7 @@ def _da_ausencia(a: Any) -> _Candidata:
     return _Candidata(
         secao=SECAO_PENDENTE, module=a.module, texto=a.title,
         peso=_peso(a.kind), quando=None,
-        chave=f"{a.kind}:{a.subject_id}", dias=a.dias,
+        chave=f"{a.kind}:{a.subject_id}", dias=a.dias, kind=a.kind,
     )
 
 

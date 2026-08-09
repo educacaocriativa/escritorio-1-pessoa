@@ -23,6 +23,7 @@ from fastapi.testclient import TestClient
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from app.core.tz import DEFAULT_TENANT_TIMEZONE, tenant_today
 from app.modules.agenda.models import AgendaEvent
 from app.modules.financial_intelligence import dre as dre_service
 from app.modules.receivables.models import STATUS_PAID, Charge
@@ -597,12 +598,17 @@ def test_o_rendimento_com_perna_SAI_do_termo_P3(client: TestClient, headers, db:
     segunda armadilha — a janela é aberta em ±1 dia porque `date.today()` é a data LOCAL da
     máquina enquanto `paid_at` é `now(UTC)`: às 22h em UTC−3 as duas já são dias diferentes, e uma
     janela de um dia só perderia o rendimento pela borda, silenciosamente.
+
+    ⚠️ **`hoje` é o do TENANT, não o da máquina** — e alargar a janela não bastava. O `POST` abaixo
+    manda `date=hoje`, e a API valida contra `hoje_do_tenant`: num runner em UTC, às 22h de São
+    Paulo, `date.today()` já é amanhã e o rendimento é recusado com 422 antes de a janela importar.
+    Foi assim que este teste ficou vermelho no CI de 01:02 UTC e verde no de 09:19.
     """
     from datetime import timedelta
 
     from app.modules.receivables.service import contar_rendimentos_sem_perna_bancaria
 
-    hoje = date.today()
+    hoje = tenant_today(DEFAULT_TENANT_TIMEZONE)
     de, ate = hoje - timedelta(days=1), hoje + timedelta(days=1)
     conta = _conta_bancaria(client, headers)
     acc = _investment(client, headers, bank_account_id=conta["id"])
@@ -678,7 +684,9 @@ def test_rendimento_de_HOJE_e_aceito(client: TestClient, headers):
 
     r = client.post(
         f"/investments/{acc['id']}/yield",
-        json={"amount_cents": 1_000, "date": date.today().isoformat()},
+        # O "hoje" do TENANT, não o da máquina: num runner em UTC, `date.today()` às 22h de São
+        # Paulo já é amanhã, e a guarda de data futura recusa com 422 o rendimento do próprio dia.
+        json={"amount_cents": 1_000, "date": tenant_today(DEFAULT_TENANT_TIMEZONE).isoformat()},
         headers=headers,
     )
     assert r.status_code == 200, r.text

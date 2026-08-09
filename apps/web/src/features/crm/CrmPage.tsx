@@ -5,6 +5,7 @@ import { useNavigate } from "react-router-dom";
 import Modal, { Field } from "../../components/Modal";
 import { api, apiErrorMessage } from "../../lib/api";
 import { formatDateShort } from "../../lib/datetime";
+import GanchoDaVima from "../dna/GanchoDaVima";
 import { usePrimaryAction } from "../../store/pageActions";
 import { useFuso } from "../../store/auth";
 
@@ -60,6 +61,8 @@ export default function CrmPage() {
         <h1 className="text-2xl font-bold text-neutral-800">Funil de clientes</h1>
         <p className="text-xs text-neutral-400">Arraste os cards entre as colunas.</p>
       </div>
+
+      <GanchoDaVima gancho="crm.cliente.criado" />
 
       {loading ? (
         <p className="text-sm text-neutral-400">Carregando...</p>

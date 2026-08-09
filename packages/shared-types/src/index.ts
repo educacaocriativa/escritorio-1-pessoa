@@ -1103,6 +1103,12 @@ export interface BriefingLinha {
   secao: "PENDENTE" | "ACONTECEU" | "NÚMEROS";
   module: string;
   texto: string;
+  /**
+   * O `kind` da ausência que gerou a linha — é o que permite colar a pergunta de calibração do
+   * DNA na linha que a motivou. Vazio em linhas que não são ausência e em briefings gravados
+   * ANTES do V2, cujo payload não tinha o campo.
+   */
+  kind: string;
 }
 
 export interface Briefing {
@@ -1118,6 +1124,28 @@ export interface Briefing {
   linhas: BriefingLinha[];
   read_at: string | null;
   created_at: string;
+}
+
+export interface DnaOpcao {
+  rotulo: string;
+  valor: string | number | null;
+}
+
+/**
+ * Uma pergunta do DNA da Empresa. Viaja INTEIRA do backend — o front não tem cópia do catálogo,
+ * porque duas cópias divergem no primeiro ajuste de texto e a errada é sempre a que o dono lê.
+ */
+export interface DnaPergunta {
+  key: string;
+  /**
+   * `calibracao` muda o briefing de amanhã; `retrato` é guardado para o V4. A tela DIZ isso —
+   * prometer efeito imediato ao Retrato seria o erro que as duas classes existem para impedir.
+   */
+  classe: "calibracao" | "retrato";
+  eixo: "oferta" | "cliente" | "ritmo" | "dinheiro" | "limites";
+  texto: string;
+  formato: "escolha" | "escolha_multipla" | "texto";
+  opcoes: DnaOpcao[];
 }
 
 /**
