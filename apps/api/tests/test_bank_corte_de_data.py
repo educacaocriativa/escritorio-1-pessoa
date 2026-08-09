@@ -46,6 +46,7 @@ from app.modules.bank.models import (
     KIND_CHECKING,
     KIND_INVESTMENT,
     SOURCE_MANUAL,
+    SOURCE_YIELD,
     STATUS_IGNORED,
     STATUS_UNMATCHED,
     BankTransaction,
@@ -114,6 +115,7 @@ def _plantar(
     amount_cents: int,
     posted_at: date,
     status: str = STATUS_UNMATCHED,
+    source: str = SOURCE_MANUAL,
 ) -> BankTransaction:
     """Monta o movimento **direto pelo model**, contornando `_validate_posted_at` de propósito.
 
@@ -130,8 +132,8 @@ def _plantar(
         amount_cents=amount_cents,
         raw_description="Agendado (plantado pelo teste, como a 8.14 fará)",
         user_description="",
-        dedup_hash=f"plantado-{account_id}-{posted_at.isoformat()}-{amount_cents}",
-        source=SOURCE_MANUAL,
+        dedup_hash=f"plantado-{account_id}-{posted_at.isoformat()}-{amount_cents}-{source}",
+        source=source,
         status=status,
     )
     db.add(tx)
@@ -656,3 +658,43 @@ def test_IV8_os_dois_totais_da_tela_nao_incluem_o_agendado(
     # "Total em contas" (soma de tudo) e "Disponível como caixa" (exclui aplicação), ambos limpos.
     assert sum(saldos.values()) == OPENING_CENTS + 900_00
     assert saldos["Corrente"] == OPENING_CENTS
+
+
+# ── Onda 2b-ii — o recorte por origem, de que o principal derivado depende ────────────────────
+
+
+def test_movement_sums_exclui_a_origem_pedida(
+    client: TestClient, db: Session, headers, tenant_id: str
+):
+    """`exclude_sources` tira uma origem da soma sem tocar nas outras (Onda 2b-ii).
+
+    É o recorte de que o principal derivado depende: o rendimento já é contado por
+    `accrued_yield_cents` e, desde a Onda 2b-i, também gera `bank_transaction` — sem este filtro
+    ele entraria DUAS vezes no saldo da aplicação.
+
+    ⚠️ **Dois `assert`, e é de propósito.** Com só o caso do rendimento excluído, ignorar
+    `exclude_sources` por completo ainda passaria: é o mutante `>` → `>=` da Onda 2, que sobreviveu
+    a 58 testes por faltar o caso do outro lado. O primeiro `assert` é o outro lado.
+    """
+    conta = _conta(client, headers, kind=KIND_INVESTMENT, opening_balance_cents=0)
+    hoje = _hoje()
+
+    _plantar(db, tenant_id=tenant_id, account_id=conta["id"], amount_cents=15_00, posted_at=hoje)
+    _plantar(
+        db,
+        tenant_id=tenant_id,
+        account_id=conta["id"],
+        amount_cents=100_00,
+        posted_at=hoje,
+        source=SOURCE_YIELD,
+    )
+
+    acc = service.get_account(db, conta["id"])
+
+    sem_recorte = service.movement_sums(db, accounts=[acc])
+    assert sem_recorte.get(acc.id) == 115_00, "sem recorte, os dois movimentos entram"
+
+    sem_rendimento = service.movement_sums(
+        db, accounts=[acc], exclude_sources=frozenset({SOURCE_YIELD})
+    )
+    assert sem_rendimento.get(acc.id) == 15_00, "o rendimento saiu; o manual FICOU"
