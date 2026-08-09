@@ -45,12 +45,14 @@ A perna existe porque rendimento **move dinheiro numa conta real do dono** — e
 """
 from __future__ import annotations
 
+from collections.abc import Sequence
 from datetime import UTC, date, datetime
 
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.core import audit
+from app.core.money_planes import ORIGEM_INDISPONIVEL
 from app.modules.bank import origin as bank_origin
 from app.modules.bank import service as bank_service
 from app.modules.bank.models import KIND_INVESTMENT, SOURCE_YIELD
@@ -169,6 +171,80 @@ def update_account(
 
 def list_accounts(db: Session) -> list[InvestmentAccount]:
     return list(db.scalars(select(InvestmentAccount).order_by(InvestmentAccount.name)).all())
+
+
+# ── O principal DERIVADO (Onda 2b-ii) ─────────────────────────────────────────────────────────
+
+
+def principais_derivados(
+    db: Session, accs: Sequence[InvestmentAccount]
+) -> dict[str, int | None]:
+    """O principal CALCULADO de cada aplicação — `{investment_account_id: centavos | None}`.
+
+        principal = opening_balance_cents da conta de aplicação
+                  + Σ movimentos daquela conta com `source <> 'yield'`
+
+    Os três termos, e por que cada um está aqui:
+
+    **(a) O saldo de abertura entra.** É o dinheiro que já estava aplicado no dia do cadastro —
+    principal que nunca teve movimento. Somar só os movimentos daria R$ 0,00 numa conta com
+    R$ 10.000 aplicados: um número errado com aparência de fato.
+
+    **(b) `source <> 'yield'` impede a dupla contagem.** O rendimento já é contado por
+    `accrued_yield_cents` e, desde a Onda 2b-i, também gera `bank_transaction`. Sem o recorte, cada
+    rendimento entraria duas vezes no saldo da aplicação.
+
+    **(c) O piso `posted_at > opening_date` e o teto `<= hoje` não são escolha desta função** — vêm
+    de `_movements_sums`, a única soma de movimentos do repositório. Um aporte agendado para o mês
+    que vem não é principal aplicado hoje.
+
+    ⚠️ **`None` NÃO é zero, e a distinção é o ponto.** Devolvemos `None` em dois casos — aplicação
+    sem vínculo, e conta cujo saldo de abertura o dono declarou **não saber** (Story 8.21,
+    `origem_do_saldo_derivado`). Zero seria a afirmação *"você não tem nada aplicado"*, falsa e
+    indistinguível de um saldo genuinamente zerado. É o princípio da Onda 0 e da 8.21: suprimir a
+    afirmação, nunca o número.
+
+    ⚠️ **A procedência é lida de `bank_service.origem_do_saldo_derivado`, nunca recomparada aqui.**
+    A Story 8.21 pagou exatamente esse preço: a mesma decisão escrita duas vezes no `router.py`
+    fazia a mesma conta responder coisas diferentes por portas diferentes.
+
+    O principal **pode ser negativo** (resgate bruto que levou rendimento ainda não lançado junto).
+    Não é clampado: quem o nomeia é a tela, e clampar seria esconder.
+    """
+    vinculadas = {a.bank_account_id for a in accs if a.bank_account_id}
+    if not vinculadas:
+        return {a.id: None for a in accs}
+
+    # `include_archived=True`: uma aplicação encerrada continua tendo um principal histórico, e
+    # arquivar a conta não apaga o que passou por ela. Esconder aqui daria `None` (= "não sei")
+    # para algo que o sistema sabe perfeitamente.
+    contas = {
+        c.id: c
+        for c in bank_service.list_accounts(db, include_archived=True)
+        if c.id in vinculadas
+    }
+    somas = bank_service.movement_sums(
+        db, accounts=list(contas.values()), exclude_sources=frozenset({SOURCE_YIELD})
+    )
+
+    resultado: dict[str, int | None] = {}
+    for a in accs:
+        conta = contas.get(a.bank_account_id) if a.bank_account_id else None
+        if conta is None or bank_service.origem_do_saldo_derivado(conta) == ORIGEM_INDISPONIVEL:
+            resultado[a.id] = None
+            continue
+        resultado[a.id] = conta.opening_balance_cents + somas.get(conta.id, 0)
+    return resultado
+
+
+def principal_derivado(db: Session, acc: InvestmentAccount) -> int | None:
+    """O principal de UMA aplicação. Delega para `principais_derivados` — ver a fórmula lá.
+
+    Uma implementação, dois usos: duas cópias da fórmula divergiriam no dia em que uma delas
+    ganhasse uma condição, e o sintoma seria um principal que muda conforme a tela que o pede —
+    exatamente o que `_movements_sum`/`_movements_sums` já evitam um nível abaixo.
+    """
+    return principais_derivados(db, [acc])[acc.id]
 
 
 def _validate_financeiro_account(db: Session, chart_account_id: str) -> None:

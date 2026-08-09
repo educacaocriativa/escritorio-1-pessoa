@@ -322,7 +322,7 @@ def _transferencia(client, headers, *, de: str, para: str, valor: int, quando: s
             "from_account_id": de,
             "to_account_id": para,
             "amount_cents": valor,
-            "transfer_date": quando,
+            "posted_at": quando,
             "kind": kind,
         },
         headers=headers,
