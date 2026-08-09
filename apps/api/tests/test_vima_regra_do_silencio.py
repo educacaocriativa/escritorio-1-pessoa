@@ -53,9 +53,12 @@ def _um_dia(
     devem mudar junto com a forma de chamar.
     """
     coleta = coletar(db, user=user, hoje=hoje, ja_reportadas=marcos)
-    payload = composer.compor(fatos=[], ausencias=coleta.ditas, tendencias=[], valores={})
+    payload = composer.compor(
+        fatos=[], ausencias=coleta.ditas, tendencias=[], valores={},
+        marcos_anteriores=coleta.marcos_anteriores,
+    )
     falou = any(linha.kind == KIND_CARD for linha in payload.linhas)
-    return falou, payload.ausencias_ditas
+    return falou, payload.marcos
 
 
 def test_ausencia_calada_continua_calada_no_dia_seguinte(db, usuario_owner, card_parado):
@@ -135,3 +138,37 @@ def test_coletar_carrega_o_marco_de_quem_FALOU_tambem(db, usuario_owner, card_pa
     )
     assert any(a.kind == KIND_CARD for a in coleta.ditas), "36 dias passou do marco 24"
     assert coleta.marcos_anteriores[CHAVE_CARD] == 12
+
+
+# ── O mapa gravado ──────────────────────────────────────────────────────────────────────
+
+
+def test_ausencia_cortada_pelo_teto_preserva_o_marco(db, usuario_owner, card_parado):
+    """Cortada pelo teto não foi dita a ninguém — não pode ser calada nem esquecida.
+
+    Hoje ela é esquecida: some do mapa e volta amanhã como novidade. O `Payload` já prometia o
+    contrário na própria docstring.
+    """
+    coleta = coletar(
+        db, user=usuario_owner, hoje=date(2026, 8, 30), ja_reportadas={CHAVE_CARD: 12}
+    )
+    payload = composer.compor(
+        fatos=[], ausencias=coleta.ditas, tendencias=[], valores={},
+        marcos_anteriores=coleta.marcos_anteriores, teto=0,
+    )
+    assert payload.linhas == [], "teto=0 não mostra nada"
+    assert payload.marcos[CHAVE_CARD] == 12, "o marco de quem ninguém leu tem de sobreviver"
+
+
+def test_briefing_gravado_antes_desta_mudanca_continua_calando():
+    """Os payloads em produção têm a chave antiga. Sem o fallback, todo o silêncio seria
+    perdido no dia do deploy e o briefing repetiria tudo de uma vez."""
+    import json
+
+    from app.modules.vima.service import _marcos_do_payload
+
+    antigo = json.dumps({"linhas": [], "ausencias_ditas": {CHAVE_CARD: 12}})
+    assert _marcos_do_payload(antigo) == {CHAVE_CARD: 12}
+
+    novo = json.dumps({"linhas": [], "marcos": {CHAVE_CARD: 12}})
+    assert _marcos_do_payload(novo) == {CHAVE_CARD: 12}

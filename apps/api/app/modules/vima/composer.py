@@ -67,10 +67,11 @@ class Payload:
     desde: datetime | None
     linhas: list[Linha]
     excedente: int
-    # `{kind}:{subject_id}` → `dias`, só das ausências que SOBREVIVERAM ao corte. Uma ausência
-    # cortada pelo teto não foi dita a ninguém; registrá-la aqui a calaria amanhã por algo que
-    # o dono nunca leu. É o insumo da regra do silêncio no briefing seguinte.
-    ausencias_ditas: dict[str, int] = field(default_factory=dict)
+    # `{kind}:{subject_id}` → o `dias` em que cada ausência VIVA parou. Não é "o que foi dito
+    # hoje": a calada preserva o marco anterior (senão amanhã ela volta como novidade) e a
+    # cortada pelo teto também (ninguém a leu). Some sozinho quando a ausência é resolvida,
+    # porque quem não aparece na coleta de hoje não é carregado adiante.
+    marcos: dict[str, int] = field(default_factory=dict)
 
     def sem_acontecimentos(self) -> bool:
         """"Nada aconteceu" — que NÃO é o mesmo que "não há linhas".
@@ -106,6 +107,7 @@ def compor(
     ausencias: list[Any],
     tendencias: list[Any],
     valores: dict[tuple[str, str], str],
+    marcos_anteriores: dict[str, int] | None = None,
     teto: int = 12,
     referencia: datetime | None = None,
     desde: datetime | None = None,
@@ -128,7 +130,10 @@ def compor(
             Linha(secao=c.secao, module=c.module, texto=c.texto, kind=c.kind) for c in mantidas
         ],
         excedente=max(0, len(ordenadas) - len(mantidas)),
-        ausencias_ditas={c.chave: c.dias for c in mantidas if c.chave},
+        marcos={
+            **(marcos_anteriores or {}),
+            **{c.chave: c.dias for c in mantidas if c.chave},
+        },
     )
 
 

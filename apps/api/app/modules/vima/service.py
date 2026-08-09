@@ -67,6 +67,7 @@ def gerar_ou_ler(db: Session, *, user: CurrentUser, hoje: date | None = None) ->
     payload = composer.compor(
         fatos=fatos,
         ausencias=coleta.ditas,
+        marcos_anteriores=coleta.marcos_anteriores,
         tendencias=trends.coletar(db, user=user, hoje=dia),
         valores=_valores_da_origem(db, fatos),
         referencia=agora,
@@ -158,11 +159,26 @@ def _ja_reportadas(db: Session, *, user: CurrentUser) -> dict[str, int]:
         return {}
     if dna_resolver.recalibrado_apos(db, anterior.reference_date):
         return {}
-    try:
-        dados = json.loads(anterior.payload)
-    except (TypeError, ValueError):  # payload corrompido não pode calar o briefing de hoje
+    return _marcos_do_payload(anterior.payload)
+
+
+def _marcos_do_payload(payload: str) -> dict[str, int]:
+    """Lê o mapa de marcos, aceitando o nome antigo.
+
+    ⚠️ O fallback para `ausencias_ditas` é PERMANENTE, não transitório: os briefings gravados
+    em produção têm a chave antiga, e removê-lo faria o produto perder todo o silêncio no dia
+    do deploy — o briefing repetiria de uma vez tudo o que já tinha dito. Mesma forma do
+    default `""` de `Linha.kind`. Tirá-lo exigiria migrar payload, o que custa mais do que a
+    linha custa.
+    """
+    try:  # payload corrompido não pode calar o briefing de hoje
+        dados = json.loads(payload)
+    except (TypeError, ValueError):
         return {}
-    return {str(k): int(v) for k, v in (dados.get("ausencias_ditas") or {}).items()}
+    bruto = dados.get("marcos")
+    if bruto is None:
+        bruto = dados.get("ausencias_ditas") or {}
+    return {str(k): int(v) for k, v in bruto.items()}
 
 
 # ── Valores lidos da origem (Invariante 2) ──────────────────────────────────────────────
@@ -206,15 +222,15 @@ def _valores_da_origem(db: Session, fatos: list[Fact]) -> dict[tuple[str, str], 
 def _serializar(payload: composer.Payload) -> dict:
     """A evidência do que a IA recebeu, mais o que precisa sobreviver até o briefing seguinte.
 
-    `ausencias_ditas` existe para a regra do silêncio: sem guardar quantos dias cada ausência
-    tinha quando foi reportada, amanhã não há como saber se ela escalou.
+    `marcos` existe para a regra do silêncio: sem guardar em que intensidade cada ausência
+    parou, amanhã não há como saber se ela escalou.
     """
     return {
         "referencia": payload.referencia.isoformat() if payload.referencia else None,
         "desde": payload.desde.isoformat() if payload.desde else None,
         "excedente": payload.excedente,
         "linhas": [asdict(linha) for linha in payload.linhas],
-        "ausencias_ditas": payload.ausencias_ditas,
+        "marcos": payload.marcos,
     }
 
 
