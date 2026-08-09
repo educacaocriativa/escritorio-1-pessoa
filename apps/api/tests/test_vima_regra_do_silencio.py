@@ -75,3 +75,37 @@ def test_ausencia_calada_continua_calada_no_dia_seguinte(db, usuario_owner, card
 
     falou_14, _ = _um_dia(db, usuario_owner, hoje=date(2026, 8, 8), marcos=marcos)
     assert not falou_14, "14 dias também não é: a regra vale além de um dia"
+
+
+# ── A função de escalada ────────────────────────────────────────────────────────────────
+
+
+def test_o_ramo_positivo_e_o_comportamento_de_hoje():
+    """É a identidade que torna seguro aplicar o conserto às cinco famílias de ausência.
+
+    Se este teste falhar, o conserto deixou de ser transparente para card parado, contato
+    sumido, ninguém respondeu, prazo e topo seco — e o raio da mudança passou a ser outro.
+    """
+    from app.modules.vima.absences import _proximo_marco
+
+    for anterior in (1, 2, 3, 10, 12, 30):
+        assert _proximo_marco(anterior) == anterior * 2
+
+
+def test_falou_antes_de_vencer_volta_no_vencimento():
+    """Marco negativo é "ainda não venceu". O próximo momento que é notícia é o vencimento.
+
+    Com `anterior * 2` puro, um marco de -3 pede -6 — um número que `dias` nunca mais alcança,
+    porque ele só cresce. A ausência deixaria de ser calada para sempre.
+    """
+    from app.modules.vima.absences import _proximo_marco
+
+    assert _proximo_marco(-3) == 0
+    assert _proximo_marco(-1) == 0
+
+
+def test_falou_no_vencimento_volta_no_primeiro_dia_de_atraso():
+    """Zero dobrado é zero: sem este ramo, a ausência falaria todo dia depois de vencer."""
+    from app.modules.vima.absences import _proximo_marco
+
+    assert _proximo_marco(0) == 1

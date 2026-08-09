@@ -115,22 +115,40 @@ def coletar(
         if lim.get("topo_sem_lead_dias") is not None:
             fora.extend(_topo_seco(db, hoje, lim))
 
-    return [a for a in fora if not _ja_dita(a, ja_reportadas)]
+    return [a for a in fora if not _calada(a, ja_reportadas)]
 
 
-def _ja_dita(ausencia: Ausencia, ja_reportadas: dict[str, int] | None) -> bool:
+def _proximo_marco(anterior: int) -> int:
+    """Em que intensidade esta ausência volta a ser notícia.
+
+    ⚠️ O ramo positivo é LITERALMENTE a expressão que existia aqui antes (`anterior * 2`), e
+    isso não é coincidência: é o que torna seguro aplicar o conserto às cinco famílias de uma
+    vez. Card parado dito no dia 10 continua voltando no dia 20, sem comportamento novo.
+
+    Os dois ramos de cima existem porque ausência com DATA tem intensidade negativa antes de
+    vencer, e dobrar um negativo aponta para o lado errado: um marco de -3 pediria -6, que
+    `dias` nunca mais alcança. A sequência que os três ramos produzem é
+    `cruzou o limiar → venceu → 1 → 2 → 4 → 8 → 16`.
+    """
+    if anterior < 0:
+        return 0
+    if anterior == 0:
+        return 1
+    return anterior * 2
+
+
+def _calada(ausencia: Ausencia, marcos: dict[str, int] | None) -> bool:
     """A regra do silêncio: reportada ao CRUZAR o limiar, não enquanto permanece cruzada.
 
-    Escalada é notícia nova — quando os dias DOBRAM desde a última vez que a ausência foi dita,
-    ela volta. O fator 2 é arbitrário e deliberadamente grosso: "parado há 3 dias" virando
-    "parado há 4" não é informação, virando "parado há 12" é.
+    Escalada é notícia nova. O fator 2 do ramo positivo é arbitrário e deliberadamente grosso:
+    "parado há 3 dias" virando "parado há 4" não é informação, virando "parado há 12" é.
     """
-    if not ja_reportadas:
+    if not marcos:
         return False
-    anterior = ja_reportadas.get(f"{ausencia.kind}:{ausencia.subject_id}")
+    anterior = marcos.get(f"{ausencia.kind}:{ausencia.subject_id}")
     if anterior is None:
         return False
-    return ausencia.dias < anterior * 2
+    return ausencia.dias < _proximo_marco(anterior)
 
 
 # ── Agenda ──────────────────────────────────────────────────────────────────────────────
