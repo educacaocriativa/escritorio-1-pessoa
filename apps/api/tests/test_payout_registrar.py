@@ -11,6 +11,7 @@ import pytest
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
+from app.modules.wallet import service as wallet_service
 from app.modules.wallet.models import Payout
 
 
@@ -48,3 +49,30 @@ def test_payout_persiste_completo(db: Session):
     db.add(p)
     db.flush()
     assert db.get(Payout, "pay-2").amount_cents == 500_00
+
+
+# ── O contrato do ponto de contato entre os planos (Onda 3) ───────────────────────────────────
+
+
+def test_registrador_comeca_nao_registrado(monkeypatch):
+    monkeypatch.setattr(wallet_service, "_payout_registrar", None)
+    assert wallet_service.payout_registrar_registrado() is False
+
+
+def test_register_payout_registrar_liga_o_registrador(monkeypatch):
+    monkeypatch.setattr(wallet_service, "_payout_registrar", None)
+
+    def _fake(db, **kwargs):
+        return wallet_service.DestinoDoPayout(
+            bank_account_id="acc-1", bank_transaction_id="btx-1"
+        )
+
+    wallet_service.register_payout_registrar(_fake)
+    assert wallet_service.payout_registrar_registrado() is True
+
+
+def test_destino_do_payout_carrega_recusa_sem_ids():
+    """A forma "não deu, e o motivo é um FATO do banco" — não uma frase de tela."""
+    d = wallet_service.DestinoDoPayout(recusa_detalhe="A data precisa ser posterior a 2026-07-01.")
+    assert d.bank_account_id is None
+    assert d.recusa_detalhe.startswith("A data")

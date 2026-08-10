@@ -1,7 +1,9 @@
 """Regras da Carteira & Split: cálculo do split, transações, saldos e ganhos da plataforma."""
 from __future__ import annotations
 
+from dataclasses import dataclass
 from datetime import date
+from typing import Protocol
 
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
@@ -21,6 +23,7 @@ from app.modules.wallet.models import (
     STATUS_PENDING,
     STATUS_REFUNDED,
     STATUS_WITHDRAWN,
+    Payout,
     PlatformEarning,
     PlatformSetting,
     Transaction,
@@ -223,6 +226,85 @@ def settle(db: Session, *, tx_id: str, tenant_id: str, actor: str) -> Transactio
     db.commit()
     db.refresh(tx)
     return tx
+
+
+# ── O ponto de contato entre o plano da PLATAFORMA e o plano do BANCO (Onda 3) ────────────────
+#
+# ⚠️ **Este é o ÚNICO write que atravessa a fronteira dos planos** (design-mãe §1.2), e ele é
+# declarado AQUI, do lado da Carteira, sendo implementado por `bank/payout.py` e ligado em
+# `app/main.py`. Mesmo padrão das duas travessias irmãs (guarda de contagem dupla, Story 8.17 AC6;
+# termos do gate, Story 8.16 AC7/AC8): **quem precisa do serviço declara o `Protocol`; quem
+# implementa não é importado por ninguém; a fiação mora na composição.**
+#
+# **O gate `test_wallet_nao_importa_bank` fica verde porque a dependência SUMIU, não porque foi
+# escondida.** Se o seu código parece precisar de importar o módulo do banco aqui, o que falta é um
+# parâmetro neste `Protocol`.
+#
+# ⚠️ E note que a frase acima **não escreve o caminho do módulo proibido**, nem em comentário: o
+# gate irmão (`..._tambem_por_texto_cru`) é um `grep` literal, e ele reprova a menção em qualquer
+# forma — inclusive esta. Isso é recurso, não bug. Um gate que abrisse exceção para comentários
+# precisaria distinguir comentário de código, e a primeira string evasiva montada em runtime
+# passaria por ele. Foi a mutação do re-gate da Onda 1 (TEST-001) que provou que os dois gates
+# precisam existir e que nenhum dos dois pode ser "esperto".
+#
+# ⚠️ **Por que NÃO é `core/events` (o design-mãe §6.6 mandava).** `events.emit` engole exceção de
+# assinante por contrato (*"o fato já aconteceu e foi commitado; reações são best-effort"*), e os
+# dois assinantes existentes recebem o evento DEPOIS do commit. A Regra da Origem (a) exige o
+# movimento na MESMA transação. Pelo barramento, um payout commitaria com a perna bancária
+# faltando **e sem erro em lugar nenhum** — a família de defeito que o Epic 8 existe para eliminar.
+# O §6.6 é anterior à Onda 2 e não sobrevive ao que ela estabeleceu.
+
+
+@dataclass(frozen=True)
+class DestinoDoPayout:
+    """Para onde o saque foi — ou o **fato** que impediu.
+
+    Três formas, e só três:
+
+    - **sucesso:** os dois ids preenchidos, `recusa_detalhe is None`;
+    - **sem conta principal:** o registrador devolve `None` (não esta dataclass). A frase é da
+      Carteira, porque não contém dado nenhum do banco;
+    - **o banco recusou o movimento** (hoje: data anterior à abertura da conta): `recusa_detalhe`
+      traz a mensagem do próprio módulo `bank`, que já nomeia a data. A Carteira decide o status
+      code e a moldura; o fato vem de quem o conhece.
+    """
+
+    bank_account_id: str | None = None
+    bank_transaction_id: str | None = None
+    recusa_detalhe: str | None = None
+
+
+class RegistradorDePayout(Protocol):
+    """Escreve a perna bancária do saque. Implementado por `bank/payout.py`. **NÃO commita.**
+
+    Devolve `None` quando não há conta principal ativa — e isso é **valor de retorno, não
+    exceção**, de propósito: assim o texto do 409 pertence à Carteira, que é quem tem o usuário na
+    frente, e o módulo `bank` não precisa conhecer o vocabulário da tela do outro plano.
+    """
+
+    def __call__(
+        self,
+        db: Session,
+        *,
+        tenant_id: str,
+        actor: str,
+        payout_id: str,
+        amount_cents: int,
+        posted_at: date,
+    ) -> DestinoDoPayout | None: ...
+
+
+_payout_registrar: RegistradorDePayout | None = None
+
+
+def register_payout_registrar(fn: RegistradorDePayout) -> None:
+    """Chamado UMA vez, por `app/main.py`. Ver `verifica_fiacao_do_payout` lá."""
+    global _payout_registrar
+    _payout_registrar = fn
+
+
+def payout_registrar_registrado() -> bool:
+    return _payout_registrar is not None
 
 
 def request_payout(db: Session, *, tenant_id: str, actor: str) -> dict:
