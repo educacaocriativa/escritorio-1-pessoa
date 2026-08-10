@@ -65,6 +65,43 @@ class Transaction(Base, TenantMixin, TimestampMixin):
     chart_account_id: Mapped[str | None] = mapped_column(String(36), nullable=True)
     cost_center_id: Mapped[str | None] = mapped_column(String(36), nullable=True)
 
+    # Onda 3 — a qual saque esta venda pertence. NULL = ainda não sacada, **ou** sacada antes da
+    # migration 0077 (não há backfill, e não pode haver: aqueles saques nunca foram registrados,
+    # então não existe linha a que pertencer — a mesma manobra da 2b-ii).
+    payout_id: Mapped[str | None] = mapped_column(String(36), nullable=True)
+
+
+class Payout(Base, TenantMixin, TimestampMixin):
+    """O saque da Carteira como **fato**, não como troca de status (Onda 3).
+
+    Antes desta onda, `request_payout` virava N `Transaction` para `withdrawn`, gravava
+    `audit.record(target=str(total))` — o VALOR, não um id — e não deixava linha nenhuma. O dono
+    via o saldo sumir e não conseguia listar o que sacou, quando, nem para onde.
+
+    Isso não era só lacuna de produto: `bank.origin.sync_origin_movement` exige `origin_id`
+    apontando para *"o lançamento que o gerou"*, sob índice único 1:1. **Sem entidade não havia
+    para onde apontar**, e o payout não podia virar movimento bancário como as outras quatro
+    origens já viraram.
+
+    ⚠️ **`bank_account_id` é SNAPSHOT, não referência viva.** A conta principal pode mudar depois;
+    o saque de agosto não pode passar a dizer que caiu na conta que virou principal em outubro.
+
+    ⚠️ **`bank_transaction_id` é `NOT NULL`, e a diferença para os irmãos é deliberada.** Em
+    `payable.bank_transaction_id` / `charge.bank_transaction_id` a coluna é nullable porque o
+    lançamento pode legitimamente ainda não estar liquidado. **Payout não liquidado não existe** —
+    o caminho de código não tem ramo que crie um sem destino (ver `wallet/service.request_payout`).
+    Não "harmonize" as três colunas: elas têm contratos diferentes.
+    """
+
+    __tablename__ = "payouts"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
+    amount_cents: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    paid_on: Mapped[date] = mapped_column(Date, nullable=False)
+    bank_account_id: Mapped[str] = mapped_column(String(36), nullable=False)
+    bank_transaction_id: Mapped[str] = mapped_column(String(36), nullable=False)
+    actor: Mapped[str] = mapped_column(String(36), nullable=False)
+
 
 SETTINGS_ID = "platform"  # singleton
 
