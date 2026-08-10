@@ -218,6 +218,25 @@ certo, e a tela estava errada. **Nenhum teste de `apps/web/e2e/` pode aferir cla
     `ProtectedBareLayout` (mesma proteção via `useAuthGate` compartilhado, sem sidebar/topbar).
     **Só o shell + as 2 telas do comprovante foram auditados — nenhuma outra tela do app foi
     verificada quanto ao mesmo padrão.** (PR #56)
+  - **[CORRIGIDO 2026-08-10] A sidebar ganhou breakpoint no #56; a TOPBAR não.** Ela era uma linha
+    flex única em que **todo filho tinha `flex-shrink: 1` sem `min-width`**: a ação primária
+    espremia os vizinhos e, quando não havia mais o que espremer, a linha estourava a viewport.
+    Efeitos medidos em 360px, em `/financeiro/investimentos`: página com `scrollWidth` **375px**
+    (rola 15px de lado), botão **"Abrir menu" com 16px de largura** — o único acesso à navegação
+    no celular, num alvo que o polegar não acerta — e o campo de busca reduzido a 52px, sem
+    placeholder legível. **O que decide é o COMPRIMENTO DO RÓTULO da ação primária**, não o
+    `ChevronDown` (largura mínima da linha: 216px sem ação · 326px com "Nova conta" · 375px com
+    "Nova conta de investimento").
+    - Agora: `flex-wrap` no `header` e `order-last w-full sm:w-auto` na ação, que **desce para uma
+      linha própria** abaixo de `sm` em vez de espremer — reflui, não corta (a lição do PR #58 no
+      eixo em que esta barra falhava). `shrink-0` + 44px no botão de menu, nos ícones e no avatar.
+      A busca (que **não tem handler nenhum** — é decoração) fica `hidden md:block` e devolve 152px
+      à linha.
+    - **Rótulo de ação novo e comprido não quebra mais a barra**; se quebrar,
+      `apps/web/e2e/shell-360.spec.ts` pega. `/vima` e `/dna/nucleo` vivem em
+      `ProtectedBareLayout` e nunca tiveram este problema.
+    - **Dívida:** o campo de busca continua sem handler — escondê-lo abaixo de `md` não o liga.
+      Ligar ou remover é decisão de produto.
   - **[CORRIGIDO pós-deploy, 2ª rodada de teste em campo]** Mesmo com o shell responsivo, o
     checkbox "marcar como paga" vivia num bloco SEPARADO do botão Anexar — quem selecionava a
     conta e tocava Anexar sem rolar nunca via o checkbox, e a baixa saía com o padrão (marcado)
@@ -1046,19 +1065,26 @@ tinham sobre o que rodar.
 - ⚠️ **Achado PRÉ-EXISTENTE, fora do escopo desta onda e não corrigido aqui:** em 360px o
   `document.scrollWidth` da tela de Investimentos é **375px** — a página inteira rola 15px na
   horizontal. Medido idêntico **com e sem** o extrato (logo não é desta onda), e ausente em
-  Contas & Saldos (345px). O culpado é o `ChevronDown` do menu do usuário em
-  `app/AppShell.tsx:209`. Fica registrado com a medição, e **não** foi corrigido junto: misturar
+  Contas & Saldos (345px). Fica registrado com a medição, e **não** foi corrigido junto: misturar
   correção de defeito existente com regra nova no mesmo diff tira do gate a capacidade de julgar
   qual mudança quebrou o quê — mesmo argumento que manteve SIG-001 fora da 8.16 e separou 8.19
   de 8.20.
+  - ⚠️ **CORRIGIDO em 2026-08-10, e a atribuição acima estava ERRADA.** Dizia que *"o culpado é o
+    `ChevronDown` do menu do usuário em `app/AppShell.tsx:209`"* — atribuição **geométrica, não
+    causal**: o chevron é o último elemento da fila, então é sempre ele que sobra para fora.
+    Medida a largura mínima da linha por rota: **216px** sem ação primária, **326px** com "Nova
+    conta", **375px** com "Nova conta de investimento". Quem decide se cabe é o **comprimento do
+    rótulo da ação**. Tirar o chevron compraria 24px e mascararia a classe até o próximo rótulo
+    longo. Ver a correção completa abaixo.
 
 - **Dívida:** `packages/shared-types/src/generated.ts` tem `principal_cents` em quatro lugares e
   segue defasado desde o PR #45, sem check de drift no CI. Dívida do épico, não desta onda.
 - **Dívida:** REQ-26 (cotização e liquidação em datas diferentes) segue não implementado —
   declarado fora de escopo, não esquecido.
 - **Dívida:** o `DROP COLUMN principal_cents` é migration posterior, depois de um ciclo.
-- **Dívida:** o estouro horizontal de 15px do `AppShell` (acima) — vale para **todas** as telas,
-  não só esta.
+- ~~**Dívida:** o estouro horizontal de 15px do `AppShell` (acima) — vale para todas as telas.~~
+  **FECHADA em 2026-08-10** — e a atribuição ao `ChevronDown` estava errada. Ver
+  "360px: a barra superior reflui" em §5.1 / na seção do shell abaixo.
 
 
 ## WhatsApp Evolution: em produção de verdade (deploy 2026-08-04)
