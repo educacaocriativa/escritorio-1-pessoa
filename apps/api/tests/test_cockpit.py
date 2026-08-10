@@ -159,3 +159,56 @@ def test_done_critical_not_in_alert(client: TestClient, headers):
     client.patch(f"/agenda/events/{created['id']}", json={"status": "done"}, headers=headers)
     body = client.get("/cockpit/summary", params={"day": DAY}, headers=headers).json()
     assert body["agenda"]["upcoming_critical"] == []  # prazo cumprido sai do alerta
+
+
+# ── Onda 3 — o Cockpit mostra os DOIS planos, lado a lado e nunca somados ─────────────────────
+
+
+def _conta(client, headers, **over):
+    payload = {
+        "name": "Itaú PJ",
+        "kind": "checking",
+        "opening_balance_cents": 700_00,
+        "opening_balance_is_known": True,
+        "opening_date": "2026-01-01",
+    }
+    payload.update(over)
+    resp = client.post("/bank/accounts", json=payload, headers=headers)
+    assert resp.status_code == 201, resp.text
+    return resp.json()
+
+
+def test_cockpit_expoe_saldo_em_conta_com_procedencia(client: TestClient, headers):
+    """§1.3c: todo campo de SALDO declara de qual plano vem.
+
+    ⚠️ **`net_revenue_cents` NÃO ganha `_origem`**, e a ausência é correta: ele é FATURAMENTO, não
+    saldo — o design-mãe §6.5 diz explicitamente que aquele número está certo e não muda. Pendurar
+    procedência nele aplicaria a regra fora do alvo e viraria ritual.
+    """
+    _conta(client, headers)
+
+    finance = client.get("/cockpit/summary", headers=headers).json()["finance"]
+    assert finance["saldo_em_conta_cents"] == 700_00
+    assert finance["saldo_em_conta_origem"] == "banco"
+    assert "net_revenue_origem" not in finance
+
+
+def test_sem_conta_o_saldo_em_conta_e_none_e_nao_zero(client: TestClient, headers):
+    """`None` ≠ zero. Zero afirmaria *"você não tem nada no banco"* — falso, e indistinguível de um
+    saldo genuinamente zerado. Mesmo princípio do principal `None` da Onda 2b-ii."""
+    finance = client.get("/cockpit/summary", headers=headers).json()["finance"]
+    assert finance["saldo_em_conta_cents"] is None
+    assert finance["saldo_em_conta_origem"] == "indisponivel"
+
+
+def test_saldo_de_abertura_desconhecido_derruba_a_procedencia(client: TestClient, headers):
+    """Story 8.21: o NÚMERO continua existindo; quem diz "não sei" é a procedência.
+
+    Basta UMA conta sem saldo de abertura declarado para o total deixar de ser afirmável — o total
+    não é mais confiável que a sua parcela mais frágil.
+    """
+    _conta(client, headers, opening_balance_cents=0, opening_balance_is_known=False)
+
+    finance = client.get("/cockpit/summary", headers=headers).json()["finance"]
+    assert finance["saldo_em_conta_cents"] == 0  # o número existe
+    assert finance["saldo_em_conta_origem"] == "indisponivel"  # a afirmação é suprimida

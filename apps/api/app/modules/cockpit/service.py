@@ -11,7 +11,9 @@ from datetime import datetime
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
+from app.core.money_planes import ORIGEM_BANCO, ORIGEM_INDISPONIVEL
 from app.modules.agenda import service as agenda_service
+from app.modules.bank import service as bank_service
 from app.modules.agenda.models import (
     PRIORITY_CRITICAL,
     STATUS_CANCELLED,
@@ -127,12 +129,35 @@ def overdue_charges(db: Session) -> list[dict]:
 
 
 def finance_summary(db: Session) -> dict:
-    """Faturamento líquido (Carteira) + custos do mês (Contas a Pagar)."""
+    """Faturamento líquido (Carteira, plano 1) + custos do mês + saldo em conta (banco, plano 3).
+
+    ⚠️ **Os dois planos convivem no mesmo schema e NUNCA no mesmo número.** A tela mostra as duas
+    parcelas rotuladas, lado a lado, sem total único (design-mãe §6.5, Regra dos Planos §1.3c).
+    Somar "na plataforma" com "em conta" num card só é a mistura que originou o Epic 8.
+    """
     w = wallet_service.wallet_summary(db)
     net_revenue = w["available_cents"] + w["pending_cents"] + w["withdrawn_cents"]
+
+    contas = bank_service.list_accounts(db)
+    if not contas:
+        saldo_em_conta, origem = None, ORIGEM_INDISPONIVEL
+    else:
+        # `derived_balances_as_of` com o default (= HOJE) é o consumidor legítimo aqui: tela de
+        # visão geral, data comum para todas as contas. É a MESMA função que "Contas & Saldos"
+        # usa, então os dois números não podem divergir.
+        saldo_em_conta = sum(bank_service.derived_balances_as_of(db).values())
+        # Basta UMA conta sem saldo de abertura declarado para o total deixar de ser afirmável
+        # (Story 8.21): um total não é mais confiável que a sua parcela mais frágil. O número
+        # continua exposto — *suprimir a afirmação, nunca o número* (princípio da Onda 0).
+        origem = (
+            ORIGEM_BANCO if all(c.opening_balance_is_known for c in contas) else ORIGEM_INDISPONIVEL
+        )
+
     return {
         "available": True,
         "net_revenue_cents": net_revenue,
         "monthly_costs_cents": payables_service.monthly_costs(db),
         "signed_contracts": None,  # módulo de Contratos (Fase 3)
+        "saldo_em_conta_cents": saldo_em_conta,
+        "saldo_em_conta_origem": origem,
     }

@@ -1,16 +1,24 @@
 import type { CockpitSummary } from "@e1p/shared-types";
-import { AlertTriangle, CalendarDays, FileSignature, ListChecks, Sparkles, Sun, TrendingUp, Wallet } from "lucide-react";
+import { AlertTriangle, CalendarDays, FileSignature, Landmark, ListChecks, Sparkles, Sun, TrendingUp, Wallet } from "lucide-react";
 import { type ReactNode, useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 import Modal from "../../components/Modal";
 import { api } from "../../lib/api";
 import { formatDay, today } from "../../lib/datetime";
 import { useAuth, useFuso } from "../../store/auth";
+import { TOTAL_EM_CONTAS_LABEL, origemLabel } from "../financeiro/contas";
 
 const EMPTY: CockpitSummary = {
   agenda: { today_count: 0, today_events: [], upcoming_critical: [] },
   crm: { total_clients: 0, won_count: 0, lost_count: 0, conversion_rate: 0, by_stage: [] },
-  finance: { available: false, net_revenue_cents: null, monthly_costs_cents: null, signed_contracts: null },
+  finance: {
+    available: false,
+    net_revenue_cents: null,
+    monthly_costs_cents: null,
+    signed_contracts: null,
+    saldo_em_conta_cents: null,
+    saldo_em_conta_origem: "indisponivel",
+  },
   overdue: [],
 };
 
@@ -51,6 +59,11 @@ export default function CockpitPage() {
   const faturamento = summary.finance?.net_revenue_cents != null
     ? brl(summary.finance.net_revenue_cents)
     : "R$ —";
+  // `null` = nenhuma conta cadastrada. Mostrar "R$ 0,00" aqui afirmaria "você não tem nada no
+  // banco" — falso, e indistinguível de um saldo genuinamente zerado (princípio da Onda 0).
+  const emConta = summary.finance?.saldo_em_conta_cents != null
+    ? brl(summary.finance.saldo_em_conta_cents)
+    : "R$ —";
 
   return (
     <div className="space-y-6">
@@ -85,8 +98,28 @@ export default function CockpitPage() {
         </div>
       </div>
 
-      <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
+      {/*
+        ⚠️ **Os dois PLANOS de dinheiro, lado a lado e NUNCA somados** (Regra dos Planos §1.3c,
+        design-mãe §6.5). "Faturamento Líquido" é o plano da plataforma; "Total em contas" é o
+        plano do banco. Um card único somando os dois é PROIBIDO — foi essa mistura que produziu o
+        bug que originou o Epic 8.
+
+        O rótulo vem da constante compartilhada com Contas & Saldos: inventar um sinônimo aqui
+        recriaria a colisão D-6/UX-001 numa terceira tela. E `"no banco"` continua proibido fora da
+        Projeção, onde nomeia outra coisa.
+
+        `grid-cols-5` no lg (era 4) para que o par fique na MESMA linha em todos os breakpoints —
+        duas parcelas que só significam juntas não podem ser separadas pela quebra da grade.
+      */}
+      <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-5">
         <StatCard label="Faturamento Líquido" value={faturamento} hint="carteira" tone="accent" icon={Wallet} />
+        <StatCard
+          label={TOTAL_EM_CONTAS_LABEL}
+          value={emConta}
+          hint={origemLabel(summary.finance?.saldo_em_conta_origem ?? "indisponivel")}
+          tone="info"
+          icon={Landmark}
+        />
         <StatCard label="Contratos Assinados" value="—" hint="Fase 2" tone="primary" icon={FileSignature} />
         <StatCard label="Taxa de Conversão" value={conv} hint="funil do CRM" tone="info" icon={TrendingUp} />
         <StatCard

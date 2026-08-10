@@ -296,6 +296,18 @@ export interface FinanceSummary {
   net_revenue_cents: number | null;
   monthly_costs_cents: number | null;
   signed_contracts: number | null;
+  /**
+   * Onda 3 — o saldo no BANCO (plano 3), ao lado do faturamento (plano 1).
+   *
+   * `null` = nenhuma conta cadastrada, e **não zero**: zero afirmaria "não há nada no banco",
+   * falso e indistinguível de um saldo genuinamente zerado.
+   *
+   * ⚠️ Os dois nunca são somados num único número (Regra dos Planos §1.3c). E `net_revenue_cents`
+   * NÃO tem irmão `_origem` porque é faturamento, não saldo — a regra é sobre saldo.
+   */
+  saldo_em_conta_cents: number | null;
+  /** `plataforma` | `banco` | `misto` | `indisponivel` — o plano de onde o saldo acima vem. */
+  saldo_em_conta_origem: string;
 }
 
 export interface OverdueCharge {
