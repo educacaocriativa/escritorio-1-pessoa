@@ -184,7 +184,7 @@ export default function ContasSaldosPage() {
             <button
               type="button"
               onClick={() => setTransferindoDe("")}
-              className="inline-flex items-center gap-1 rounded-pill border border-neutral-200 px-4 py-1.5 text-sm font-medium text-neutral-600 hover:border-primary-300 hover:text-primary-600"
+              className="inline-flex min-h-[44px] items-center gap-1 rounded-pill border border-neutral-200 px-4 py-1.5 text-sm font-medium text-neutral-600 hover:border-primary-300 hover:text-primary-600"
             >
               <ArrowLeftRight size={14} /> {TRANSFERIR_LABEL}
             </button>

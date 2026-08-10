@@ -74,6 +74,14 @@ test("as ações da conta são tocáveis com o polegar", async ({ page }) => {
   const caixaCheckbox = await page.getByText("Mostrar arquivadas").boundingBox();
   expect(caixaCheckbox!.height).toBeGreaterThanOrEqual(44);
 
+  // O "Transferir entre contas" do CABEÇALHO é outro botão, com outra classe — a medição final
+  // achou que ele tinha ficado em 34px depois de as ações do cartão irem para 44.
+  const cabecalho = await page
+    .getByRole("button", { name: "Transferir entre contas" })
+    .first()
+    .boundingBox();
+  expect(cabecalho!.height).toBeGreaterThanOrEqual(44);
+
   // O que já estava certo continua certo: a largura nunca precisou de rolagem lateral, e os
   // valores aparecem INTEIROS (`R$ 128.450,79`, não `R$ 128.` — o defeito da Onda 2b-ii).
   const { larguraDaPagina } = await medirPagina(page);
