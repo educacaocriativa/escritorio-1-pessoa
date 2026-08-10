@@ -3,6 +3,8 @@ import userEvent from "@testing-library/user-event";
 import { MemoryRouter } from "react-router-dom";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { api } from "../../lib/api";
+import { TOTAL_EM_CONTAS_LABEL } from "../financeiro/contas";
+import { ROTULO_BANCO } from "../financeiro/projecao";
 import CockpitPage from "./CockpitPage";
 
 // Story 7.15 — Task 3. Rede sempre mockada (IV2): nenhum teste bate em /cockpit real.
@@ -28,7 +30,14 @@ vi.mock("../../store/auth", () => ({
 const EMPTY = {
   agenda: { today_count: 0, today_events: [], upcoming_critical: [] },
   crm: { total_clients: 0, won_count: 0, lost_count: 0, conversion_rate: 0, by_stage: [] },
-  finance: { available: false, net_revenue_cents: null, monthly_costs_cents: null, signed_contracts: null },
+  finance: {
+    available: false,
+    net_revenue_cents: null,
+    monthly_costs_cents: null,
+    signed_contracts: null,
+    saldo_em_conta_cents: null,
+    saldo_em_conta_origem: "indisponivel",
+  },
   overdue: [],
 };
 
@@ -118,5 +127,47 @@ describe("CockpitPage — Cobrar com IA e resiliência (Story 7.15, Task 3)", ()
     expect(url).toBe("/cockpit/summary?day=2027-03-14"); // e NÃO ?day=2027-03-15 (o dia UTC)
 
     vi.useRealTimers();
+  });
+});
+
+describe("Onda 3 — os dois planos de dinheiro, lado a lado e nunca somados", () => {
+  function mockFinance(over: Record<string, unknown>) {
+    vi.mocked(api.get).mockImplementation((url: string) => {
+      if (url.startsWith("/cockpit/summary")) {
+        return Promise.resolve({
+          data: { ...EMPTY, finance: { ...EMPTY.finance, ...over } },
+        } as never);
+      }
+      return Promise.resolve({ data: [] } as never);
+    });
+  }
+
+  it("mostra o saldo em conta ao lado do faturamento, e NUNCA a soma dos dois", async () => {
+    // Faturamento R$ 300 (plano 1) + em conta R$ 700 (plano 3). A soma — R$ 1.000,00 — é
+    // proibida: um card único somando os planos é a mistura que produziu o bug do Epic 8.
+    mockFinance({ net_revenue_cents: 300_00, saldo_em_conta_cents: 700_00, saldo_em_conta_origem: "banco" });
+    renderPage();
+
+    expect(await screen.findByText("R$ 700,00")).toBeInTheDocument();
+    expect(screen.getByText("R$ 300,00")).toBeInTheDocument();
+    expect(screen.getByText(TOTAL_EM_CONTAS_LABEL)).toBeInTheDocument();
+    expect(screen.queryByText("R$ 1.000,00")).toBeNull();
+  });
+
+  it("sem conta cadastrada mostra travessão, não R$ 0,00", async () => {
+    // Zero afirmaria "você não tem nada no banco" — falso, e indistinguível de um saldo
+    // genuinamente zerado (princípio da Onda 0: suprimir a afirmação, nunca o número).
+    mockFinance({ saldo_em_conta_cents: null, saldo_em_conta_origem: "indisponivel" });
+    renderPage();
+
+    expect(await screen.findByText(TOTAL_EM_CONTAS_LABEL)).toBeInTheDocument();
+    expect(screen.queryByText("R$ 0,00")).toBeNull();
+  });
+
+  it("não usa o rótulo da Projeção ('no banco') — a colisão D-6/UX-001 não se repete aqui", async () => {
+    mockFinance({ saldo_em_conta_cents: 700_00, saldo_em_conta_origem: "banco" });
+    const { container } = renderPage();
+    await screen.findByText(TOTAL_EM_CONTAS_LABEL);
+    expect(container.textContent?.toLowerCase()).not.toContain(ROTULO_BANCO.toLowerCase());
   });
 });

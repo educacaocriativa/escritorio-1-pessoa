@@ -1038,6 +1038,127 @@ tinham sobre o que rodar.
   não só esta.
 
 
+### Onda 3 — o payout fecha o circuito (o termo P4 zera)
+
+> Spec: `docs/superpowers/specs/2026-08-09-onda-3-payout-circuito-design.md` ·
+> Plano: `docs/superpowers/plans/2026-08-09-onda-3-payout-circuito.md`
+
+**Os quatro termos da pré-condição do gate estão fechados.** P1 e P2 na Onda 2, P3 na 2b-i, P4
+aqui. A obstrução para ler `|divergencia_cents|` **deixou de ser de código** — passou a ser de
+dado (ver o aviso no fim desta seção).
+
+- [x] **O saque virou FATO.** `request_payout` marcava `withdrawn` e não deixava linha nenhuma:
+  o dono via o saldo sumir e não conseguia listar o que sacou, quando, nem para onde — o audit
+  guardava `target=str(total)`, o **valor**, não um id. Agora existe `payouts` (migration
+  **0077**, RLS `FORCE`) e `transactions.payout_id` liga cada venda ao saque que a levou.
+  Sem entidade, `sync_origin_movement` não tinha `origin_id` para apontar, e era isso que
+  impedia o payout de virar movimento como as outras quatro origens.
+- [x] **A migration NÃO tem `UPDATE`** — tabela nova + coluna nullable, só DDL. A armadilha do
+  `FORCE RLS` (0046/0066/0067/0068/0069/0073) **não a alcança**, e as `Transaction` sacadas antes
+  ficam com `payout_id NULL` para sempre: elas não têm saque a que pertencer, porque o saque nunca
+  foi registrado. Inventar um `Payout` retroativo seria escrever história sem testemunha.
+- [x] **O ponto de contato entre os planos NÃO é o barramento — e o §6.6 do design-mãe está
+  superado nisso.** `core/events.emit` **engole exceção de assinante por contrato** e os dois
+  assinantes existentes rodam **depois** do commit; a Regra da Origem (a) exige o movimento na
+  MESMA transação. Pelo barramento, um payout commitaria sem perna bancária **e sem erro em lugar
+  nenhum**. No lugar dele, o padrão que `main.py` já usava duas vezes (8.17 AC6, 8.16 AC7/AC8):
+  a **Carteira declara** `RegistradorDePayout` (`Protocol`), `bank/payout.py` **implementa**, e a
+  fiação mora na composição com **fail-closed no boot**. Direção final: `main → wallet`,
+  `main → bank`, e **nada** entre os dois.
+  - ⚠️ **Os dois gates da Regra dos Planos continuam apertados E SEM ALLOWLIST** — a dependência
+    **sumiu**, não foi escondida. `test_bank_nao_referencia_transaction` diz na docstring que quem
+    precisar do símbolo o atualize com justificativa: **esta onda não precisou**, e um gate que já
+    permite o que ninguém usa não avisa nada quando alguém começar a usar.
+  - ⚠️ **O gate por TEXTO CRU reprovou o comentário que explicava o gate.** Ele faz `grep` literal
+    e não distingue comentário de código — e isso é **recurso**: um gate "esperto" o bastante para
+    abrir exceção a comentário deixaria passar a primeira string montada em runtime (a mutação
+    TEST-001). Quem escrever aqui: não grafe o caminho do módulo proibido, nem em comentário.
+- [x] **`bank/payout.py` — o QUINTO chamador da Regra da Origem**, e o único que atravessa a
+  fronteira dos planos. Recebe `amount_cents` **pronto e positivo**; nunca vê `Transaction`. Tem
+  gate próprio (`test_bank_payout_nao_alcanca_o_plano_da_plataforma`) contra o atalho óbvio —
+  *"já que ele registra o saque, podia somar as transações sozinho"* —, que poria o cálculo do
+  saldo da Carteira dentro do módulo do banco: a mistura exata que originou o Epic 8.
+- [x] **O que cai no banco é o LÍQUIDO** (`net_cents`), nunca o bruto. Mandar o bruto criaria uma
+  divergência na conferência **causada pelo próprio e1p**, e a métrica que decide as Ondas 4 e 5
+  mediria um erro nosso. Tem teste dedicado.
+- ⚠️ **MUDANÇA OBSERVÁVEL DE COMPORTAMENTO (R-1): sacar sem conta principal agora RECUSA (409).**
+  Antes o saque sempre funcionava. Recusar é legítimo **aqui** porque quem ORIGINA o payout é o
+  e1p — ele ainda não aconteceu no banco; o resgate bruto da 2b-ii não podia ser recusado
+  justamente porque já tinha acontecido. E custa nada de real: o saque não move dinheiro (sem
+  integração bancária nem KYC). `test_payout_withdraws_available` ganhou o pré-requisito e um
+  não-membro explícito. **Não "conserte" removendo a conta do teste** — sem o pré-requisito, P4
+  reabre e a divergência volta a medir a própria incompletude do sistema.
+- [x] **`POST /bank/accounts/{id}/set-primary` — o pré-requisito que NÃO estava na spec e que a
+  revisão do plano contra o código achou.** `service.set_primary` existia desde a Story 8.7, com
+  docstring dizendo que foi escrito para o consumidor do payout, **sem rota, sem botão e sem um
+  único chamador**: a tela só exibia o selo. O dono **não conseguia** eleger conta principal. Sem
+  isso, o 409 acima mandaria o dono a uma tela onde a ação não existe e o saque ficaria travado
+  para sempre — a onda trocaria um problema silencioso por um barulhento. **Regra que fica: uma
+  frase de erro que manda o usuário agir é uma promessa; verifique que a ação existe antes de
+  fazê-la.**
+- [x] **A primeira conta bancária do tenant JÁ nasce principal** (`create_account`,
+  `is_primary=primary_account(db) is None`). Então *"tem contas e nenhuma principal"* só acontece
+  **depois de arquivar a principal** — arquivar não elege sucessora em silêncio (AC7). O caso é
+  mais raro do que a spec supunha, e o teste exercita o cenário que existe de verdade.
+- [x] **Histórico de saques** (`GET /wallet/payouts`) dentro da própria Carteira — **não** item de
+  menu (a Conferência já ensinou que tela nova no menu vira peso de ERP). É `<ul>`, nunca
+  `<table>`, com teste que **reprova a tabela**: a lição da 2b-ii é que em 360px uma tabela de 3
+  colunas não cabe e a saída não é rolar melhor, é não precisar. Data por `formatDay`
+  (`lib/datetime`) — `new Date("2026-08-09")` leria UTC e mostraria o saque do dia 9 como dia 8.
+  - ⚠️ **A ordenação ganhou desempate por `id`, e não é decoração:** `created_at`
+    (`server_default=now()`) tem resolução de **segundo** no SQLite, então dois saques no mesmo
+    segundo saíam em ordem arbitrária — que inclui **mudar entre duas chamadas idênticas**. O
+    teste SQLite afirma **estabilidade**; a ordem cronológica de verdade é afirmada no `rls_e2e`,
+    onde o Postgres tem microssegundo. Dentro do mesmo instante não existe "mais novo", e um teste
+    que o afirmasse estaria testando o acaso.
+- [x] **Cockpit: os dois planos lado a lado, e nunca somados.** `saldo_em_conta_cents` +
+  `saldo_em_conta_origem`, reusando `TOTAL_EM_CONTAS_LABEL` de Contas & Saldos (inventar sinônimo
+  recriaria a colisão D-6/UX-001 numa terceira tela) e com teste provando que `"no banco"` — o
+  rótulo da Projeção — não aparece aqui. `None` sem conta cadastrada, **não zero**. Basta UMA
+  conta sem saldo de abertura declarado para a procedência cair para `indisponivel`: um total não
+  é mais confiável que a sua parcela mais frágil.
+  - ⚠️ **`net_revenue_cents` NÃO ganhou `_origem`**, contra a leitura literal do §6.5: §1.3c é
+    sobre campo de **saldo**, e faturamento não é saldo. Aplicar a regra fora do alvo a
+    transformaria em ritual.
+  - ⚠️ **Quem pegou o card foi um gate escrito ANTES dele existir, e a lição é sobre como
+    atualizá-lo.** `test_projection_saldo_misto::test_cockpit_e_carteira_intactos` congelava o
+    **dict inteiro** de `finance_summary`, com a docstring dizendo *"o card 'Em conta' é Onda 6 e
+    está fora daqui"*. A onda chegou, `saldo_em_conta_cents` passou a mudar **de propósito**, e o
+    teste reprovou a funcionalidade **correta**. A correção óbvia — apagá-lo — levaria junto a
+    invariante real (o plano 1 não ser contaminado pelo plano 3). Ele foi **reescrito campo a
+    campo**: faturamento e custos imóveis, `saldo_em_conta_cents` **obrigado a mudar** (controle
+    positivo — senão passaria verde com o card devolvendo `None` para sempre). **Regra que fica:
+    um teste que congela um agregado inteiro reprova o dia em que o agregado ganha um membro
+    legítimo; congele os campos cujo valor é a invariante, e dê controle positivo ao que deve
+    mudar.**
+- [x] **O aceite em ~360px FOI MEDIDO, com screenshot** (`onda-3-payout-360px.png`,
+  `onda-3-payout-360px-recusa.png`), por Vite + `page.route` + `boundingBox`, sem backend.
+  Carteira: viewport 345, `scrollWidth` **350**; Cockpit: 345 / **345** (zero estouro). **Nenhum
+  valor cortado**, inclusive `R$ 12.345,00` na lista de saques. Os únicos elementos que cruzam a
+  borda na Carteira são o `button` do menu do usuário e seu `svg` — o `ChevronDown` do `AppShell`,
+  o defeito **pré-existente** já registrado na 2b-ii. Conta ausente vira "Conta removida", não
+  `undefined`.
+
+- **Dívida:** o estouro horizontal do `AppShell` (`app/AppShell.tsx:209`) segue aberto e vale para
+  **todas** as telas — deliberadamente fora desta onda, pelo mesmo motivo que a manteve fora da
+  2b-ii: misturar correção de defeito existente com regra nova tira do gate a capacidade de julgar
+  o que quebrou o quê.
+- **Dívida:** não existe **estorno de payout**, então o ramo *"origem desliquidada → apaga"* de
+  `sync_origin_movement` é **INALCANÇÁVEL** para `source='payout'` — declarado na allowlist, como a
+  2b-i declarou para o `yield`, em vez de fingir cobertura. Se um dia existir, ele reativa o ramo e
+  precisa responder o que acontece com as `Transaction` que voltam a `available`.
+- **Dívida:** `packages/shared-types/src/generated.ts` segue defasado desde o PR #45 e sem check de
+  drift no CI — `FinanceSummary` foi atualizada **à mão** em `index.ts`. Dívida do épico.
+- **Dívida:** a conta principal pode ser de `kind='investment'` (`set_primary` não restringe tipo),
+  então um saque pode cair numa aplicação. Estranho, mas não incoerente — e restringir aqui
+  inventaria regra que a Story 8.7 não tem. Se virar problema, a guarda mora em `set_primary`.
+- ⚠️ **O gate ainda NÃO pode ser lido, e agora o motivo é outro.** Com P1–P4 fechados, a obstrução
+  deixou de ser de código e passou a ser de **dado**: a produção foi zerada em 05/08 e o gate
+  precisa de um ciclo de uso real (conta cadastrada, contas pagas com conta informada, saldo
+  declarado). **Um número medido sobre base vazia não é gate** — foi esse erro que quase liberou a
+  Onda 4 em julho. O próximo passo natural **não é a Onda 4**: é instrumentar o ciclo mínimo que
+  faz `|divergencia_cents|` significar alguma coisa.
+
 ## WhatsApp Evolution: em produção de verdade (deploy 2026-08-04)
 
 O transporte Evolution (Onda 0-3, ver `[[e1p-whatsapp-evolution-merged]]` na memória / PR #62)

@@ -546,3 +546,42 @@ def test_saldos_dos_dois_planos_nao_ocupam_o_mesmo_campo(client: TestClient, hea
     assert account["saldo_derivado_origem"] in ORIGENS
     assert "available_cents" not in account
     assert "saldo_derivado_cents" not in client.get("/wallet/summary", headers=headers).json()
+
+
+# ── Onda 3 — o ponto de contato entre os planos, e a asserção que o mantém honesto ────────────
+
+
+def test_bank_payout_nao_alcanca_o_plano_da_plataforma():
+    """**Onda 3, a asserção que impede o atalho óbvio.**
+
+    O payout é o ponto de contato entre os planos 1 e 3, e §1.3b PERMITE `bank → wallet`. O atalho
+    tentador é concreto: *"já que `bank/payout.py` registra o saque, ele podia ler as transações
+    disponíveis e somar sozinho"*. Isso poria o cálculo do saldo da Carteira dentro do módulo do
+    banco — a mistura exata que produziu o bug que originou o Epic 8.
+
+    A onda foi construída para **não precisar**: o registrador recebe `amount_cents` pronto, e o
+    objeto que devolve é tipado do outro lado (duck typing). Esta asserção é o que mantém a decisão
+    depois que a memória de por que ela foi tomada se apagar.
+
+    ⚠️ **Por isso `test_bank_nao_referencia_transaction` continua apertado e SEM allowlist.** Ele
+    manda quem precisar do símbolo atualizá-lo com justificativa escrita; esta onda não precisou, e
+    um gate que já permite o que ninguém usa não avisa nada quando alguém começar a usar.
+    """
+    caminho = BANK_DIR / "payout.py"
+    assert caminho.exists(), "bank/payout.py sumiu — a Onda 3 foi revertida em silêncio?"
+
+    tree = ast.parse(caminho.read_text(encoding="utf-8"), filename=str(caminho))
+
+    offenders = [f"import {m}" for m in _imported_modules(caminho) if "wallet" in m]
+    offenders += [
+        "símbolo Transaction"
+        for node in ast.walk(tree)
+        if (isinstance(node, ast.Name) and node.id == "Transaction")
+        or (isinstance(node, ast.Attribute) and node.attr == "Transaction")
+    ]
+
+    assert not offenders, (
+        f"bank/payout.py passou a alcançar o plano da plataforma: {offenders}. O registrador "
+        "recebe `amount_cents` PRONTO — se você precisa somar transações da Carteira aqui, o que "
+        "falta é um parâmetro no `Protocol` declarado do lado dela, não um import."
+    )

@@ -287,6 +287,32 @@ def update_account(
         raise _err(e) from e
 
 
+@router.post("/accounts/{account_id}/set-primary", response_model=BankAccountOut)
+def set_primary(
+    account_id: str,
+    user: CurrentUser = Depends(_guard),
+    db: Session = Depends(get_tenant_db),
+) -> BankAccountOut:
+    """Elege a conta principal — o destino do payout da Carteira (Onda 3).
+
+    ⚠️ **O service existe desde a Story 8.7 e ficou sem porta até aqui.** Ele foi escrito
+    explicitamente para este consumidor (*"senão o consumidor da Onda 6 (payout) escolheria a conta
+    de destino no par ou ímpar"*, na docstring de `service.set_primary`), mas nenhuma rota o
+    alcançava: o dono via o selo "principal" na tela e não tinha como atribuí-lo. A Onda 3 é a
+    primeira que **depende** disso — o 409 do saque manda o dono definir a conta principal —, e por
+    isso é ela que abre a porta. Sem esta rota aquela frase apontaria para uma ação inexistente.
+    """
+    try:
+        acc = service.set_primary(
+            db, account_id=account_id, tenant_id=user.tenant_id, actor=user.user_id
+        )
+        return _out(
+            acc, service.derived_balance(db, bank_account_id=acc.id), _agendado_de(db, acc)
+        )
+    except service.BankError as e:
+        raise _err(e) from e
+
+
 @router.post("/accounts/{account_id}/archive", response_model=BankAccountOut)
 def archive_account(
     account_id: str,
