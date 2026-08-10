@@ -59,9 +59,14 @@ def test_pergunta_de_escolha_tem_ao_menos_duas_opcoes():
             assert len(p.opcoes) >= 2, f"{p.key} é escolha com {len(p.opcoes)} opção(ões)"
 
 
-def test_o_catalogo_tem_45_perguntas_sendo_6_de_calibracao():
-    assert len(PERGUNTAS) == 45
-    assert sum(1 for p in PERGUNTAS if p.classe == CALIBRACAO) == 6
+def test_o_catalogo_tem_46_perguntas_sendo_7_de_calibracao():
+    """São 7 de Calibração porque existem 7 consumidores — nem um a mais.
+
+    A sétima nasceu com o consumidor no mesmo passo (a antecedência da cobrança a receber).
+    Esse é o único caminho legítimo para este número subir.
+    """
+    assert len(PERGUNTAS) == 46
+    assert sum(1 for p in PERGUNTAS if p.classe == CALIBRACAO) == 7
 
 
 def test_nucleo_aponta_para_perguntas_que_existem_e_nenhuma_e_calibracao():
@@ -107,3 +112,25 @@ def test_a_guarda_recusa_consome_inexistente():
                 ),
             )
         )
+
+
+def test_todo_gancho_de_calibracao_aponta_para_um_kind_que_existe():
+    """O gancho é o que cola a pergunta à ausência que a motivou, e é string livre nos dois
+    lados. Renomear um `kind` sem renomear o gancho não quebra teste nenhum: a pergunta
+    simplesmente nunca mais aparece, e o dono nunca calibra aquela regra. Silêncio perfeito, do
+    mesmo feitio que a guarda de `consome` existe para impedir.
+    """
+    import re
+    from pathlib import Path
+
+    from app.modules.vima import absences
+
+    fonte = Path(absences.__file__).read_text(encoding="utf-8")
+    kinds = set(re.findall(r'kind="([^"]+)"', fonte))
+    assert kinds, "a varredura não achou kind nenhum — o gate ficaria verde por vacuidade"
+
+    for p in PERGUNTAS:
+        if p.classe != CALIBRACAO:
+            continue
+        alvo = p.gancho.removeprefix("briefing.ausencia.")
+        assert alvo in kinds, f"{p.key} aponta para o kind inexistente '{alvo}'"

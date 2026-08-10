@@ -195,6 +195,18 @@ _CALIBRACAO: tuple[Pergunta, ...] = (
         "dinheiro_com_data_dias",
         "briefing.ausencia.financeiro.conta.vencendo",
     ),
+    _cal(
+        "dinheiro.cobranca_antecedencia_dias", "dinheiro",
+        "E de uma cobrança que você tem a receber?",
+        (
+            Opcao("No próprio dia", 0),
+            Opcao("1 dia antes", 1),
+            Opcao("3 dias antes", 3),
+            Opcao("1 semana antes", 7),
+        ),
+        "cobranca_antecedencia_dias",
+        "briefing.ausencia.financeiro.cobranca.vencendo",
+    ),
 )
 
 # --- Retrato (39) ----------------------------------------------------------------------

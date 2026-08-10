@@ -56,6 +56,10 @@ LIMIARES_PADRAO: dict[str, int] = {
     # aquele número. Quem passa a lê-lo é `_dinheiro_com_data` — aqui a chave existe para que
     # o catálogo do DNA possa apontar para ela.
     "dinheiro_com_data_dias": 1,
+    # A cobrança a receber passou a ter antecedência própria, e o número NÃO é derivado do da
+    # conta a pagar: juntar dinheiro para pagar um boleto e cutucar um cliente antes de ele
+    # atrasar são intenções diferentes, com prazos diferentes. 3 é escolha do dono do produto.
+    "cobranca_antecedencia_dias": 3,
 }
 
 
@@ -68,6 +72,20 @@ class Ausencia:
     subject_type: str | None = None
     subject_id: str | None = None
     client_id: str | None = None
+
+
+@dataclass(frozen=True)
+class Coleta:
+    """O que o briefing pode dizer hoje, mais a memória de tudo que está vivo.
+
+    ⚠️ `marcos_anteriores` NÃO é "as caladas". É o marco de toda ausência que existe hoje e já
+    foi dita alguma vez — calada ou dita. A diferença aparece no teto: uma ausência dita e
+    CORTADA pelas 12 linhas também precisa preservar o marco, porque ninguém a leu. Quem
+    reduzir isto às caladas reintroduz a piscada por outro caminho.
+    """
+
+    ditas: list[Ausencia]
+    marcos_anteriores: dict[str, int]
 
 
 def _brl(cents: int) -> str:
@@ -88,7 +106,7 @@ def coletar(
     limiares: dict[str, int] | None = None,
     ja_reportadas: dict[str, int] | None = None,
     agora: datetime | None = None,
-) -> list[Ausencia]:
+) -> Coleta:
     """Roda apenas as regras dos módulos que o usuário pode ver.
 
     `agora` existe porque um dos limiares é em HORAS ("ninguém respondeu o Carlos há 24h") e
@@ -115,22 +133,48 @@ def coletar(
         if lim.get("topo_sem_lead_dias") is not None:
             fora.extend(_topo_seco(db, hoje, lim))
 
-    return [a for a in fora if not _ja_dita(a, ja_reportadas)]
+    marcos = ja_reportadas or {}
+    return Coleta(
+        ditas=[a for a in fora if not _calada(a, marcos)],
+        marcos_anteriores={
+            chave: marcos[chave]
+            for a in fora
+            if (chave := f"{a.kind}:{a.subject_id}") in marcos
+        },
+    )
 
 
-def _ja_dita(ausencia: Ausencia, ja_reportadas: dict[str, int] | None) -> bool:
+def _proximo_marco(anterior: int) -> int:
+    """Em que intensidade esta ausência volta a ser notícia.
+
+    ⚠️ O ramo positivo é LITERALMENTE a expressão que existia aqui antes (`anterior * 2`), e
+    isso não é coincidência: é o que torna seguro aplicar o conserto às cinco famílias de uma
+    vez. Card parado dito no dia 10 continua voltando no dia 20, sem comportamento novo.
+
+    Os dois ramos de cima existem porque ausência com DATA tem intensidade negativa antes de
+    vencer, e dobrar um negativo aponta para o lado errado: um marco de -3 pediria -6, que
+    `dias` nunca mais alcança. A sequência que os três ramos produzem é
+    `cruzou o limiar → venceu → 1 → 2 → 4 → 8 → 16`.
+    """
+    if anterior < 0:
+        return 0
+    if anterior == 0:
+        return 1
+    return anterior * 2
+
+
+def _calada(ausencia: Ausencia, marcos: dict[str, int] | None) -> bool:
     """A regra do silêncio: reportada ao CRUZAR o limiar, não enquanto permanece cruzada.
 
-    Escalada é notícia nova — quando os dias DOBRAM desde a última vez que a ausência foi dita,
-    ela volta. O fator 2 é arbitrário e deliberadamente grosso: "parado há 3 dias" virando
-    "parado há 4" não é informação, virando "parado há 12" é.
+    Escalada é notícia nova. O fator 2 do ramo positivo é arbitrário e deliberadamente grosso:
+    "parado há 3 dias" virando "parado há 4" não é informação, virando "parado há 12" é.
     """
-    if not ja_reportadas:
+    if not marcos:
         return False
-    anterior = ja_reportadas.get(f"{ausencia.kind}:{ausencia.subject_id}")
+    anterior = marcos.get(f"{ausencia.kind}:{ausencia.subject_id}")
     if anterior is None:
         return False
-    return ausencia.dias < anterior * 2
+    return ausencia.dias < _proximo_marco(anterior)
 
 
 # ── Agenda ──────────────────────────────────────────────────────────────────────────────
@@ -173,20 +217,21 @@ def _prazos_estourados(db: Session, hoje: date, lim: dict[str, int]) -> list[Aus
 def _dinheiro_com_data(db: Session, hoje: date, lim: dict[str, int]) -> list[Ausencia]:
     """Conta a pagar e cobrança a receber que a data alcançou.
 
-    ⚠️ As duas direções NÃO seguem a mesma regra, apesar de morarem juntas: conta a pagar tem
-    antecedência (`due_date <= hoje + limiar`), cobrança a receber só aparece DEPOIS de vencida
-    (`due_date < hoje`, sem limiar). Um recebimento que vence amanhã não é dito por ninguém —
-    dívida registrada no spec do V2, e o motivo de a pergunta do DNA falar só de conta a pagar.
+    As duas direções seguem a MESMA regra desde 2026-08-09 — cada uma com o seu limiar. Antes,
+    conta a pagar tinha antecedência e cobrança só aparecia depois de vencida: o dono era
+    avisado com folga do que devia e surpreendido pelo que não recebeu, que é o inverso do que
+    ajuda numa empresa de uma pessoa. O toque antes do vencimento só muda o resultado do lado
+    de quem recebe.
 
-    O limiar é `dinheiro_com_data_dias`, próprio, e não mais o `prazo_vencendo_dias` da agenda:
-    prazo de entrega se quer saber em cima, boleto se quer saber com folga para ter o dinheiro.
+    Os limiares são separados porque as intenções são: `dinheiro_com_data_dias` é "quanto tempo
+    preciso para ter o dinheiro", `cobranca_antecedencia_dias` é "quanto antes eu cutuco".
     """
-    limite = hoje + timedelta(days=lim["dinheiro_com_data_dias"])
+    limite_conta = hoje + timedelta(days=lim["dinheiro_com_data_dias"])
     fora: list[Ausencia] = []
 
     contas = db.scalars(
         select(Payable)
-        .where(Payable.status == PAYABLE_ABERTA, Payable.due_date <= limite)
+        .where(Payable.status == PAYABLE_ABERTA, Payable.due_date <= limite_conta)
         .order_by(Payable.due_date)
     ).all()
     for conta in contas:
@@ -202,18 +247,28 @@ def _dinheiro_com_data(db: Session, hoje: date, lim: dict[str, int]) -> list[Aus
             )
         )
 
+    limite_cobranca = hoje + timedelta(days=lim["cobranca_antecedencia_dias"])
     cobrancas = db.scalars(
         select(Charge)
-        .where(Charge.status == COBRANCA_ABERTA, Charge.due_date < hoje)
+        .where(Charge.status == COBRANCA_ABERTA, Charge.due_date <= limite_cobranca)
         .order_by(Charge.due_date)
     ).all()
     for cobranca in cobrancas:
         dias = (hoje - cobranca.due_date).days
+        alvo = cobranca.description or "Cobrança"
+        if dias > 0:
+            quando = f"venceu há {dias} dia(s) e não foi paga"
+        elif dias == 0:
+            quando = "vence hoje"
+        else:
+            quando = f"vence em {cobranca.due_date.strftime('%d/%m')}"
         fora.append(
             Ausencia(
-                module="financeiro", kind="financeiro.cobranca.vencida",
-                title=f"{cobranca.description or 'Cobrança'} — {_brl(cobranca.amount_cents)} "
-                      f"venceu há {dias} dia(s) e não foi paga",
+                # ⚠️ Era `financeiro.cobranca.vencida`, que virou mentira quando a linha passou
+                # a sair ANTES de vencer. O renome custa uma repetição no dia do deploy (as
+                # chaves gravadas usam o nome velho), e é barato: o comportamento mudou mesmo.
+                module="financeiro", kind="financeiro.cobranca.vencendo",
+                title=f"{alvo} — {_brl(cobranca.amount_cents)} {quando}",
                 dias=dias, subject_type="charge", subject_id=cobranca.id,
                 client_id=cobranca.client_id,
             )
