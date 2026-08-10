@@ -1250,3 +1250,37 @@ def test_valor_junto_de_NAO_SEI_no_mesmo_patch_e_422(client: TestClient, headers
         headers=headers,
     )
     assert r.status_code == 422, r.text
+
+
+# ── Onda 3 — a conta principal passa a poder ser ESCOLHIDA ────────────────────────────────────
+#
+# ⚠️ `service.set_primary` existe desde a Story 8.7, com docstring dizendo que foi escrito para o
+# consumidor do payout — e ficou sem rota, sem botão e sem um único chamador até aqui. A tela só
+# exibia o selo `is_primary`. A Onda 3 é a primeira que DEPENDE disso (o 409 do saque manda o dono
+# "definir sua conta principal"), então é ela que abre a porta. Sem esta rota, aquela frase apontaria
+# para uma ação que não existe e o saque ficaria travado para sempre.
+
+
+def test_definir_conta_principal(client: TestClient, headers):
+    a = _create(client, headers, name="Itaú")
+    # Agência/número diferentes: duas contas com o mesmo número são recusadas (409), porque
+    # produziriam divergência crônica na conferência.
+    b = _create(client, headers, name="Nubank", institution_code="260", branch="0001", number="9-9")
+
+    resp = client.post(f"/bank/accounts/{a['id']}/set-primary", headers=headers)
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["is_primary"] is True
+
+    # Trocar a principal desmarca a anterior — no MESMO commit (service.set_primary).
+    client.post(f"/bank/accounts/{b['id']}/set-primary", headers=headers)
+    contas = {c["id"]: c["is_primary"] for c in client.get("/bank/accounts", headers=headers).json()}
+    assert contas[b["id"]] is True
+    assert contas[a["id"]] is False
+
+
+def test_conta_arquivada_nao_vira_principal(client: TestClient, headers):
+    """Arquivar não elege sucessora em silêncio (AC7) — e arquivada não pode ser eleita."""
+    a = _create(client, headers)
+    client.post(f"/bank/accounts/{a['id']}/archive", headers=headers)
+    resp = client.post(f"/bank/accounts/{a['id']}/set-primary", headers=headers)
+    assert resp.status_code == 422
