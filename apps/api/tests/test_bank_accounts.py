@@ -1257,8 +1257,8 @@ def test_valor_junto_de_NAO_SEI_no_mesmo_patch_e_422(client: TestClient, headers
 # ⚠️ `service.set_primary` existe desde a Story 8.7, com docstring dizendo que foi escrito para o
 # consumidor do payout — e ficou sem rota, sem botão e sem um único chamador até aqui. A tela só
 # exibia o selo `is_primary`. A Onda 3 é a primeira que DEPENDE disso (o 409 do saque manda o dono
-# "definir sua conta principal"), então é ela que abre a porta. Sem esta rota, aquela frase apontaria
-# para uma ação que não existe e o saque ficaria travado para sempre.
+# "definir sua conta principal"), então é ela que abre a porta. Sem esta rota, aquela frase
+# apontaria para uma ação que não existe e o saque ficaria travado para sempre.
 
 
 def test_definir_conta_principal(client: TestClient, headers):
@@ -1273,7 +1273,8 @@ def test_definir_conta_principal(client: TestClient, headers):
 
     # Trocar a principal desmarca a anterior — no MESMO commit (service.set_primary).
     client.post(f"/bank/accounts/{b['id']}/set-primary", headers=headers)
-    contas = {c["id"]: c["is_primary"] for c in client.get("/bank/accounts", headers=headers).json()}
+    listadas = client.get("/bank/accounts", headers=headers).json()
+    contas = {c["id"]: c["is_primary"] for c in listadas}
     assert contas[b["id"]] is True
     assert contas[a["id"]] is False
 

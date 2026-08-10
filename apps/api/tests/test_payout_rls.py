@@ -11,7 +11,7 @@ Três coisas são validadas, e a terceira não cabe na suíte SQLite:
 2. **Isolamento do razão** — o crédito `source='payout'` de A não aparece no extrato de B;
 3. **A ordem cronológica de verdade** — `created_at` tem resolução de microssegundo no Postgres, e
    dois saques consecutivos ordenam corretamente. No SQLite a resolução é de segundo, então lá o
-   teste afirma apenas **estabilidade** (`test_historico_tem_ordem_ESTAVEL_entre_chamadas_identicas`).
+   teste irmão afirma apenas **estabilidade** entre chamadas idênticas.
 
 ⚠️ **Os DOIS tenants sacam de verdade**, e isso não é simetria decorativa: se só A sacasse, B não
 teria histórico nenhum para vazar e o teste passaria **verde por vacuidade** — sem exercitar o vetor
@@ -176,7 +176,8 @@ def test_payout_cross_tenant_isolation_e_ordem() -> None:
         tenant_a = str(uuid4())
         tenant_b = str(uuid4())
 
-        # Os DOIS têm conta e sacam — senão B não teria o que vazar e o teste passaria por vacuidade.
+        # Os DOIS têm conta e sacam — senão B não teria o que vazar e o teste passaria
+        # por vacuidade.
         _conta_principal(app_url, tenant_id=tenant_a, nome="Itaú de A")
         _conta_principal(app_url, tenant_id=tenant_b, nome="Nubank de B")
 
@@ -192,9 +193,9 @@ def test_payout_cross_tenant_isolation_e_ordem() -> None:
         hist_a = _historico(app_url, viewer_tenant_id=tenant_a)
         hist_b = _historico(app_url, viewer_tenant_id=tenant_b)
 
-        assert set(hist_a) == {payout_a1, payout_a2}, (
-            f"RLS falhou no histórico de saques: A enxergou {set(hist_a) - {payout_a1, payout_a2}}"
-        )
+        vazou_para_a = set(hist_a) - {payout_a1, payout_a2}
+        assert not vazou_para_a, f"RLS falhou no histórico de saques: A enxergou {vazou_para_a}"
+        assert len(hist_a) == 2
         assert set(hist_b) == {payout_b}, (
             f"RLS falhou no histórico de saques: B enxergou {set(hist_b) - {payout_b}}"
         )
@@ -209,5 +210,6 @@ def test_payout_cross_tenant_isolation_e_ordem() -> None:
 
         # ── Caso 3: o crédito no razão bancário também é isolado ─────────────────────────────
         # 30% de taxa: R$ 1.000 → R$ 700 e R$ 2.000 → R$ 1.400 em A; R$ 500 → R$ 350 em B.
-        assert sorted(_movimentos_de_payout(app_url, viewer_tenant_id=tenant_a)) == [700_00, 1400_00]
+        movs_a = sorted(_movimentos_de_payout(app_url, viewer_tenant_id=tenant_a))
+        assert movs_a == [700_00, 1400_00]
         assert _movimentos_de_payout(app_url, viewer_tenant_id=tenant_b) == [350_00]

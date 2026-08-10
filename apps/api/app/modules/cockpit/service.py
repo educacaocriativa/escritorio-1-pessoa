@@ -13,13 +13,13 @@ from sqlalchemy.orm import Session
 
 from app.core.money_planes import ORIGEM_BANCO, ORIGEM_INDISPONIVEL
 from app.modules.agenda import service as agenda_service
-from app.modules.bank import service as bank_service
 from app.modules.agenda.models import (
     PRIORITY_CRITICAL,
     STATUS_CANCELLED,
     STATUS_DONE,
     AgendaEvent,
 )
+from app.modules.bank import service as bank_service
 from app.modules.crm.models import Client, PipelineStage
 from app.modules.payables import service as payables_service
 from app.modules.receivables.models import STATUS_OPEN as CHARGE_OPEN
