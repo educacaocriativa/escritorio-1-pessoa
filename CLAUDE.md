@@ -1472,6 +1472,9 @@ cabeça. **`facts` é a memória narrativa do negócio inteiro**, e o briefing �
     cruzada — só volta quando os dias dobram. Sem isso o briefing vira papel de parede em duas
     semanas e o dono lê por cima, inclusive no dia em que aparece a quinta pendência. É a Regra
     7 do Epic 8 ("dentro da banda: verde e SILÊNCIO") em outro domínio.
+    - ⚠️ **Ela só passou a valer de FATO em 2026-08-09** — até lá o silêncio durava um dia e a
+      pendência voltava no seguinte, porque a ausência calada não entrava no mapa gravado. Ver
+      "A cobrança ganhou antecedência" na seção do V2.
   - **`vazio` significa "nada ACONTECEU", não "nenhuma linha".** Um tenant recém-criado sempre
     tem pendência e tendência (topo sem lead, o 🟡 de completude do Epic 8), então um flag que
     olhasse `linhas` nunca seria verdadeiro.
@@ -1592,15 +1595,16 @@ O V1 entregou um briefing que fala com todo mundo do mesmo jeito: os cinco limia
 `absences.py` eram defaults escolhidos por nós. Um advogado que responde em dois dias e um social
 media que responde em duas horas recebiam o mesmo aviso na mesma hora.
 
-- [x] **Duas classes, e a classe é contrato mecânico, não etiqueta** (`dna/catalog.py`, 45
-  perguntas em código):
-  - **Calibração (6)** tem consumidor HOJE; responder muda o briefing de amanhã.
+- [x] **Duas classes, e a classe é contrato mecânico, não etiqueta** (`dna/catalog.py`, 46
+  perguntas em código — eram 45 até a 7ª de Calibração nascer em 2026-08-09):
+  - **Calibração (7)** tem consumidor HOJE; responder muda o briefing de amanhã.
   - **Retrato (39)** não tem, por definição; é guardado para o V4.
   - ⚠️ **Duas guardas rodam no IMPORT do módulo**: Calibração exige `consome`, Retrato o proíbe;
     e `consome` tem que apontar para chave real de `LIMIARES_PADRAO`. Sem a segunda, um typo em
     `card_parado_dais` produz **silêncio perfeito** — grava, o `{**PADRAO, **override}` ignora a
     chave estranha, e o dono responde para sempre sem efeito nenhum, sem erro nenhum.
-  - **São 6 de Calibração porque só existem 6 consumidores.** Qualquer número maior seria
+  - **São 7 de Calibração porque só existem 7 consumidores** (eram 6; o 7º nasceu junto com a
+    pergunta dele, e é o único caminho legítimo para esse número subir). Qualquer número maior seria
     invenção. `dinheiro.tolerancia_dias` parece Calibração (tem número, tem opções) e é Retrato:
     não existe regra de Ausência sobre carência. A classe é definida pelo contrato, nunca pelo
     formato.
@@ -1635,12 +1639,71 @@ media que responde em duas horas recebiam o mesmo aviso na mesma hora.
   `vima/router.py` (lá o recorte é por linha). É também o oposto das preferências de briefing do
   V1, que foram para `users` por serem pessoais.
 - **O V2 não chama IA em ponto nenhum** — custo marginal zero por tenant.
-- **Dívidas:** as 45 perguntas nunca foram validadas com dono real; não há medição de ativação do
+- **Dívidas:** as 46 perguntas nunca foram validadas com dono real; não há medição de ativação do
   núcleo, então não se sabe se ele ajudou ou atrapalhou; a quarentena de 7 dias e o "uma por dia"
-  são números sem evidência; **cobrança a receber continua sem antecedência** (`_dinheiro_com_data`
-  dá aviso prévio a conta a pagar e nenhum a cobrança, que só aparece vencida — o dono é avisado
-  do que deve e surpreendido pelo que não recebeu); **validação manual em ~360px da tela do núcleo
+  são números sem evidência; **validação manual em ~360px da tela do núcleo
   e da aba não foi feita** (bloqueia release, não merge).
+
+### A cobrança ganhou antecedência, e a regra do silêncio passou a valer (2026-08-09)
+
+> Spec: `docs/superpowers/specs/2026-08-09-vima-cobranca-com-antecedencia-design.md` ·
+> Plano: `docs/superpowers/plans/2026-08-09-vima-cobranca-com-antecedencia.md`
+
+Investigar a dívida da cobrança revelou que **a regra do silêncio estava quebrada em dois
+lugares**, e um deles já sangrava: uma conta a pagar em aberto aparecia todo dia do
+vencimento−1 ao vencimento+2, e depois dia sim, dia não, para sempre.
+
+- [x] **`_proximo_marco` substituiu `anterior * 2`** — três ramos: negativo devolve `0` (falou
+  antes de vencer, volta no vencimento), zero devolve `1`, positivo devolve `anterior * 2`,
+  **literalmente a expressão de antes**. É essa identidade que tornou seguro aplicar o conserto
+  às cinco famílias de uma vez, e ela **foi provada por mutação**: trocar a função de volta pelo
+  dobro puro derruba 3 testes, todos de dinheiro ou da própria função — **nenhum comercial**.
+  - ⚠️ **O ramo `anterior == 0` é INERTE hoje, e isso está medido.** Removê-lo derruba só o teste
+    de unidade que o descreve, nunca a linha do tempo: como `dias` cresce de 1 em 1, `proximo(0)`
+    valendo `0` ou `1` produz a mesma sequência. Ele fica por correção semântica ("qual é o
+    PRÓXIMO marco" não pode responder o marco atual), não por comportamento — e quem for
+    simplificá-lo não vai quebrar nada, o que é exatamente o motivo de estar escrito aqui.
+- [x] **O mapa do payload deixou de ser "o que eu disse" e virou "em que ponto cada ausência
+  viva parou"** (`Payload.marcos`, chave JSON `marcos`). Antes ele era montado só com as linhas
+  `mantidas` e lido só do briefing anterior: a ausência calada não entrava nele, e no dia
+  seguinte "sem valor anterior" era indistinguível de "nunca falei disto". **O silêncio durava
+  exatamente um dia.** Os testes cobriam as duas transições de UM dia e passavam — o defeito só
+  aparece encadeando TRÊS.
+  - ⚠️ **`marcos_anteriores` de `absences.Coleta` NÃO é "as caladas"** — é o marco de toda
+    ausência viva que já tem um. A diferença aparece no teto: dita e CORTADA pelas 12 linhas
+    também preserva o marco, porque ninguém a leu. Reduzir isto às caladas reintroduz a piscada
+    por outro caminho.
+  - ⚠️ **`service._marcos_do_payload` lê `ausencias_ditas` como fallback, e isso é PERMANENTE.**
+    Os briefings gravados em produção têm a chave antiga; sem o fallback o produto perderia
+    todo o silêncio no dia do deploy e repetiria de uma vez tudo que já tinha dito.
+- [x] **A cobrança a receber avisa antes de vencer** (`cobranca_antecedencia_dias`, default
+  **3**, decidido pelo dono do produto e não derivado de outro número). As duas direções do
+  dinheiro passaram a seguir a mesma regra, com limiares separados porque as intenções são
+  diferentes: juntar dinheiro para pagar × cutucar o cliente antes de ele atrasar. A cadência é
+  *aviso → vencimento → 1 → 2 → 4 → 8 → 16*, fixada por um teste que percorre 21 dias.
+  - ⚠️ **`financeiro.cobranca.vencida` virou `financeiro.cobranca.vencendo`** — o nome antigo
+    passou a ser mentira quando a linha saiu antes de vencer. Custou uma repetição no dia do
+    deploy (as chaves gravadas usam o nome velho), e é o preço certo.
+- [x] **7ª pergunta de Calibração** (`dinheiro.cobranca_antecedencia_dias`), com o consumidor
+  nascido no mesmo passo — o único caminho legítimo para o número 6 subir. **Não entrou no
+  núcleo:** Calibração vai por gancho, colada à ausência que a motivou.
+  - ⚠️ **O limiar e a pergunta são o MESMO commit porque o repo já exigia isso.**
+    `test_todo_limiar_tem_pergunta` reprova limiar sem pergunta ("um número que ninguém pode
+    calibrar"); o plano previa dois commits e o gate estava certo. É o princípio "capacidade
+    nasce com o consumidor no mesmo passo" já mecanizado — quem acrescentar limiar sem pergunta
+    descobre na hora, não em produção.
+  - **Gate novo:** todo gancho de Calibração tem de apontar para um `kind` que existe em
+    `absences.py` (varredura da fonte, com controle positivo). Renomear um sem o outro não
+    quebrava teste nenhum — a pergunta só nunca mais apareceria, e o dono nunca calibraria
+    aquela regra. Silêncio perfeito, do mesmo feitio que a guarda de `consome` impede.
+- **Efeito visível no dia do deploy:** o briefing fica mais quieto em TODAS as seções, não só na
+  do dinheiro — pendências que apareciam dia sim, dia não passam a aparecer só nos marcos.
+- **Achado registrado e NÃO corrigido aqui:** `dna/resolver.recalibrado_apos` usa
+  `answered_at.date()` num `timestamptz`, a mesma forma que a `cadencia.py` documenta como
+  errada. Aqui ela erra sempre para o lado de LIMPAR o silêncio, que é o erro barato declarado
+  na própria docstring, e a varredura AST não a pega porque não é leitura de relógio.
+- **Dívida:** a validação em ~360px do V2 continua pendente, e a aba "A sua empresa" ganhou uma
+  linha a mais no eixo `dinheiro`.
 
 ## 6.0 Correções importantes
 - **[CORRIGIDO 2026-08-05] O sistema inteiro passou a viver no fuso do tenant (era UTC).** O sintoma que o fundador viu foi a linha do tempo do Funil exibindo `Aguardando até 2026-08-05T11:11:32.812731+00:00` — formato de máquina e 3h adiantado. A investigação achou **três** defeitos com a mesma raiz: existia infra de fuso (`core/tz.py` + `tenant.timezone`, migration 0044) mas só 3 módulos a consumiam.

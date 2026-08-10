@@ -101,10 +101,10 @@ def test_dia_de_silencio_devolve_nulo(client: TestClient, headers):
     assert corpo is None
 
 
-def test_catalogo_devolve_as_45(client: TestClient, headers):
+def test_catalogo_devolve_as_46(client: TestClient, headers):
     """A aba de configurações é a única superfície SEM cadência."""
     corpo = client.get("/dna/catalogo", headers=headers).json()
-    assert len(corpo) == 45
+    assert len(corpo) == 46
 
 
 def test_sub_usuario_sem_settings_nao_alcanca_o_dna(client: TestClient, headers_sub_crm):

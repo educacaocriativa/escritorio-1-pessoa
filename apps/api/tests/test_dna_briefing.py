@@ -61,7 +61,7 @@ def test_o_tenant_novo_tem_topo_seco_e_o_dna_o_desliga(client: TestClient, heade
     )
     ausencias = absences.coletar(
         db, user=dono, hoje=date(2026, 8, 8), limiares=resolver.limiares(db)
-    )
+    ).ditas
     assert not [a for a in ausencias if a.kind == "comercial.topo.sem_lead"]
 
 

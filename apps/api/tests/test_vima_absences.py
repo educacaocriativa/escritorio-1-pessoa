@@ -1,5 +1,5 @@
 """Ausência = estado em aberto + relógio. Não vem do log, então funciona no dia 1."""
-from datetime import UTC, date, datetime
+from datetime import UTC, date, datetime, timedelta
 
 import pytest
 from sqlalchemy.orm import Session
@@ -7,6 +7,8 @@ from sqlalchemy.orm import Session
 from app.core.tenancy import CurrentUser
 from app.modules.crm.models import Client, PipelineStage
 from app.modules.payables.models import STATUS_OPEN, Payable
+from app.modules.receivables.models import STATUS_OPEN as CHARGE_OPEN
+from app.modules.receivables.models import Charge
 from app.modules.vima.absences import LIMIARES_PADRAO, coletar
 from app.modules.whatsapp_inbox.models import (
     CHAT_KIND_DIRECT,
@@ -107,7 +109,7 @@ def briefing_de_ontem_com_o_card() -> dict[str, int]:
 
 
 def test_boleto_que_vence_amanha_aparece(db, usuario_owner, conta_vencendo_amanha):
-    ausencias = coletar(db, user=usuario_owner, hoje=HOJE)
+    ausencias = coletar(db, user=usuario_owner, hoje=HOJE).ditas
     kinds = [a.kind for a in ausencias]
     assert "financeiro.conta.vencendo" in kinds
 
@@ -116,13 +118,13 @@ def test_sub_usuario_de_crm_nao_recebe_ausencia_financeira(
     db, usuario_so_crm, conta_vencendo_amanha
 ):
     """A regra financeira NÃO RODA para ele — não é calculada e escondida."""
-    ausencias = coletar(db, user=usuario_so_crm, hoje=HOJE)
+    ausencias = coletar(db, user=usuario_so_crm, hoje=HOJE).ditas
     assert all(a.module != "financeiro" for a in ausencias)
 
 
 def test_contato_sem_resposta_nossa_aparece(db, usuario_owner, conversa_esperando_resposta):
     """A última mensagem é `in` e passaram mais horas que o limiar."""
-    ausencias = coletar(db, user=usuario_owner, hoje=HOJE)
+    ausencias = coletar(db, user=usuario_owner, hoje=HOJE).ditas
     assert any(a.kind == "comercial.contato.esperando_resposta" for a in ausencias)
 
 
@@ -132,19 +134,19 @@ def test_ignora_mensagens_anteriores_a_correcao_de_autoria(
     """As mensagens gravadas antes da correção entraram TODAS como `in` e não têm conserto
     retroativo — `fromMe` nunca foi persistido. Lê-las como direção real produziria ausência
     falsa em toda conversa antiga."""
-    ausencias = coletar(db, user=usuario_owner, hoje=HOJE)
+    ausencias = coletar(db, user=usuario_owner, hoje=HOJE).ditas
     assert not any(a.kind == "comercial.contato.esperando_resposta" for a in ausencias)
 
 
 def test_card_parado_usa_stage_entered_at(db, usuario_owner, card_parado_ha_12_dias):
     """Mesma coluna que ordena a fila do Kanban (0068), segundo propósito, campo nenhum novo."""
-    ausencias = coletar(db, user=usuario_owner, hoje=HOJE)
+    ausencias = coletar(db, user=usuario_owner, hoje=HOJE).ditas
     parado = next(a for a in ausencias if a.kind == "comercial.card.parado")
     assert parado.dias == 12
 
 
 def test_topo_seco_quando_nao_ha_formulario_na_janela(db, usuario_owner):
-    ausencias = coletar(db, user=usuario_owner, hoje=HOJE)
+    ausencias = coletar(db, user=usuario_owner, hoje=HOJE).ditas
     assert any(a.kind == "comercial.topo.sem_lead" for a in ausencias)
 
 
@@ -154,7 +156,7 @@ def test_limiares_sao_injetaveis(db, usuario_owner, card_parado_ha_12_dias):
     ausencias = coletar(
         db, user=usuario_owner, hoje=HOJE,
         limiares={**LIMIARES_PADRAO, "card_parado_dias": 30},
-    )
+    ).ditas
     assert not any(a.kind == "comercial.card.parado" for a in ausencias)
 
 
@@ -167,7 +169,7 @@ def test_ausencia_ja_reportada_nao_reincide(db, usuario_owner, card_parado_ha_12
     outro domínio: "dentro da banda: verde e SILÊNCIO".
     """
     ausencias = coletar(db, user=usuario_owner, hoje=HOJE,
-                        ja_reportadas=briefing_de_ontem_com_o_card)
+                        ja_reportadas=briefing_de_ontem_com_o_card).ditas
     assert not any(a.kind == "comercial.card.parado" for a in ausencias)
 
 
@@ -177,7 +179,7 @@ def test_ausencia_reincide_quando_escala(db, usuario_owner, card_parado_ha_12_di
     ausencias = coletar(
         db, user=usuario_owner, hoje=HOJE,
         ja_reportadas={**briefing_de_ontem_com_o_card, "comercial.card.parado:c1": 3},
-    )
+    ).ditas
     assert any(a.kind == "comercial.card.parado" for a in ausencias)
 
 
@@ -199,14 +201,14 @@ def test_conta_a_pagar_usa_o_limiar_proprio_e_nao_o_do_prazo(db: Session, usuari
     curto = coletar(
         db, user=usuario_owner, hoje=HOJE,
         limiares={"prazo_vencendo_dias": 7, "dinheiro_com_data_dias": 1},
-    )
+    ).ditas
     assert not [a for a in curto if a.kind == "financeiro.conta.vencendo"]
 
     # Antecedência longa: agora é.
     longo = coletar(
         db, user=usuario_owner, hoje=HOJE,
         limiares={"prazo_vencendo_dias": 0, "dinheiro_com_data_dias": 7},
-    )
+    ).ditas
     assert [a for a in longo if a.kind == "financeiro.conta.vencendo"]
 
 
@@ -218,10 +220,107 @@ def test_topo_seco_desligado_nao_roda_a_regra(db: Session, usuario_owner):
     que desligasse o aviso — e desligar é justamente o que a única pergunta com essa opção
     oferece.
     """
-    ligado = coletar(db, user=usuario_owner, hoje=HOJE)
+    ligado = coletar(db, user=usuario_owner, hoje=HOJE).ditas
     assert [a for a in ligado if a.kind == "comercial.topo.sem_lead"]
 
     desligado = coletar(
         db, user=usuario_owner, hoje=HOJE, limiares={"topo_sem_lead_dias": None}
-    )
+    ).ditas
     assert not [a for a in desligado if a.kind == "comercial.topo.sem_lead"]
+
+
+def _cobranca(db: Session, *, due: date, desc: str = "Mensalidade agosto") -> Charge:
+    cobranca = Charge(
+        tenant_id=TENANT, description=desc,
+        kind="service", method="pix", amount_cents=200_000,
+        due_date=due, status=CHARGE_OPEN,
+    )
+    db.add(cobranca)
+    db.commit()
+    return cobranca
+
+
+def test_cobranca_avisa_antes_de_vencer(db: Session, usuario_owner):
+    """A dívida que o V2 expôs: o dono era avisado do que DEVE e surpreendido pelo que não
+    recebeu. Numa empresa de uma pessoa, é o dinheiro que entra que um toque antes do
+    vencimento ainda salva."""
+    _cobranca(db, due=date(2026, 8, 9))  # vence em 3 dias
+
+    ausencias = coletar(db, user=usuario_owner, hoje=HOJE).ditas
+    cobrancas = [a for a in ausencias if a.kind == "financeiro.cobranca.vencendo"]
+    assert len(cobrancas) == 1
+    assert "vence em 09/08" in cobrancas[0].title
+    assert cobrancas[0].dias == -3
+
+
+def test_cobranca_que_vence_hoje_diz_hoje(db: Session, usuario_owner):
+    _cobranca(db, due=HOJE)
+
+    (cobranca,) = [
+        a
+        for a in coletar(db, user=usuario_owner, hoje=HOJE).ditas
+        if a.kind == "financeiro.cobranca.vencendo"
+    ]
+    assert "vence hoje" in cobranca.title
+    assert cobranca.dias == 0
+
+
+def test_cobranca_vencida_mantem_a_voz_de_vencida(db: Session, usuario_owner):
+    """"não foi paga" é o estado que muda o que o dono faz, e continua distinto de propósito."""
+    _cobranca(db, due=date(2026, 8, 3))
+
+    (cobranca,) = [
+        a
+        for a in coletar(db, user=usuario_owner, hoje=HOJE).ditas
+        if a.kind == "financeiro.cobranca.vencendo"
+    ]
+    assert "venceu há 3 dia(s) e não foi paga" in cobranca.title
+    assert cobranca.dias == 3
+
+
+def test_a_antecedencia_da_cobranca_tem_limiar_proprio(db: Session, usuario_owner):
+    """Cutucar cliente e juntar dinheiro para pagar um boleto são intenções diferentes, e o
+    dono responde as duas perguntas separadamente no DNA."""
+    _cobranca(db, due=date(2026, 8, 12))  # vence em 6 dias
+
+    curto = coletar(
+        db, user=usuario_owner, hoje=HOJE,
+        limiares={"cobranca_antecedencia_dias": 3, "dinheiro_com_data_dias": 7},
+    ).ditas
+    assert not [a for a in curto if a.kind == "financeiro.cobranca.vencendo"]
+
+    longo = coletar(
+        db, user=usuario_owner, hoje=HOJE,
+        limiares={"cobranca_antecedencia_dias": 7, "dinheiro_com_data_dias": 0},
+    ).ditas
+    assert [a for a in longo if a.kind == "financeiro.cobranca.vencendo"]
+
+
+def test_a_cadencia_inteira_de_uma_cobranca(db: Session, usuario_owner):
+    """Aviso, vencimento, e depois dobrando: -3 -> 0 -> 1 -> 2 -> 4 -> 8.
+
+    É a cadência que o dono do produto escolheu, e a prova de que os três ramos de
+    `_proximo_marco` se encadeiam sobre um caso real de dinheiro.
+    """
+    _cobranca(db, due=date(2026, 8, 20))
+    marcos: dict[str, int] = {}
+    falados: list[date] = []
+
+    for offset in range(-4, 17):
+        hoje = date(2026, 8, 20) + timedelta(days=offset)
+        coleta = coletar(db, user=usuario_owner, hoje=hoje, ja_reportadas=marcos)
+        ditas = [a for a in coleta.ditas if a.kind == "financeiro.cobranca.vencendo"]
+        marcos = dict(coleta.marcos_anteriores)
+        for a in ditas:
+            falados.append(hoje)
+            marcos[f"{a.kind}:{a.subject_id}"] = a.dias
+
+    assert falados == [
+        date(2026, 8, 17),  # cruzou a antecedência de 3 dias
+        date(2026, 8, 20),  # venceu
+        date(2026, 8, 21),  # 1 dia
+        date(2026, 8, 22),  # 2 dias
+        date(2026, 8, 24),  # 4 dias
+        date(2026, 8, 28),  # 8 dias
+        date(2026, 9, 5),   # 16 dias
+    ]
