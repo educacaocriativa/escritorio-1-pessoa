@@ -234,6 +234,14 @@ marcada como principal — arquivar a principal não elege sucessora em silênci
 docstring dela já dizia por quê: *"escolher a conta de destino do dinheiro do usuário sem ele pedir é
 o tipo de 'ajuda' que só se descobre quando o dinheiro já foi para o lugar errado."*
 
+> ⚠️ **PRÉ-REQUISITO ACHADO NA REVISÃO DO PLANO, e sem ele esta decisão vira um beco sem saída:**
+> `bank.service.set_primary` existe desde a Story 8.7, foi escrito explicitamente para este
+> consumidor — e **não tem rota, não tem botão e não tem um único chamador**. `ContasSaldosPage`
+> apenas exibe o selo `is_primary`. Hoje o dono **não consegue** eleger uma conta principal. A
+> frase *"defina sua conta principal em Contas & Saldos"* o mandaria a uma tela onde a ação não
+> existe, e o saque ficaria travado para sempre. Expor `POST /bank/accounts/{id}/set-primary` e o
+> botão é **Task 2b do plano** e é bloqueante para esta onda.
+
 O design-mãe §6.6 mandava **degradar graciosamente** (sem conta, o consumidor não faz nada). Esta
 spec **desvia disso, e o desvio é a decisão central da onda**: um payout sem perna bancária é P4 ≠ 0,
 e P4 ≠ 0 devolve a divergência ao estado de medir a própria incompletude do sistema — o erro de
