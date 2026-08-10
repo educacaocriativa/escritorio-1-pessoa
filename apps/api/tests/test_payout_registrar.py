@@ -8,9 +8,12 @@ from __future__ import annotations
 from datetime import date
 
 import pytest
+from fastapi.testclient import TestClient
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
+from app.modules.bank import payout as bank_payout
+from app.modules.bank.models import SOURCE_PAYOUT, STATUS_MATCHED, BankTransaction
 from app.modules.wallet import service as wallet_service
 from app.modules.wallet.models import Payout
 
@@ -76,3 +79,133 @@ def test_destino_do_payout_carrega_recusa_sem_ids():
     d = wallet_service.DestinoDoPayout(recusa_detalhe="A data precisa ser posterior a 2026-07-01.")
     assert d.bank_account_id is None
     assert d.recusa_detalhe.startswith("A data")
+
+
+# ── A implementação: `bank/payout.py` ─────────────────────────────────────────────────────────
+
+REGISTER_PAYOUT = {
+    "legal_name": "Payout ME",
+    "document": "11444777000161",
+    "slug": "payoutme",
+    "email": "payout@example.com",
+    "name": "Bruna",
+    "password": "uma-senha-bem-grande",
+}
+
+
+@pytest.fixture()
+def headers(client: TestClient) -> dict[str, str]:
+    token = client.post("/auth/register", json=REGISTER_PAYOUT).json()["access_token"]
+    return {"Authorization": f"Bearer {token}"}
+
+
+def _conta(client, headers, *, opening="2026-07-01", **over) -> dict:
+    """Cria uma conta. ⚠️ **A PRIMEIRA conta do tenant nasce principal** (`service.py:937`,
+    `is_primary=primary_account(db) is None`) — por isso não há parâmetro `principal=`: para
+    obter um tenant *com* contas e *sem* principal é preciso ARQUIVAR a principal (AC7)."""
+    payload = {
+        "name": "Itaú PJ",
+        "kind": "checking",
+        "opening_balance_cents": 0,
+        "opening_balance_is_known": True,
+        "opening_date": opening,
+    }
+    payload.update(over)
+    resp = client.post("/bank/accounts", json=payload, headers=headers)
+    assert resp.status_code == 201, resp.text
+    return resp.json()
+
+
+def _tenant_id(client, headers) -> str:
+    return client.get("/auth/me", headers=headers).json()["user"]["tenant_id"]
+
+
+def test_sem_conta_nenhuma_devolve_none(client: TestClient, headers, db: Session):
+    """**`None` = "não há para onde mandar"**, e é valor de retorno, não exceção."""
+    assert (
+        bank_payout.registra_payout(
+            db,
+            tenant_id=_tenant_id(client, headers),
+            actor="u1",
+            payout_id="pay-0",
+            amount_cents=500_00,
+            posted_at=date(2026, 8, 9),
+        )
+        is None
+    )
+
+
+def test_principal_arquivada_sem_sucessora_devolve_none(client: TestClient, headers, db: Session):
+    """O caso do **AC7**, e o único em que o tenant TEM contas e não tem principal.
+
+    A primeira conta nasce principal; arquivá-la **não elege sucessora em silêncio** — *"escolher a
+    conta de destino do dinheiro do usuário sem ele pedir é o tipo de 'ajuda' que só se descobre
+    quando o dinheiro já foi para o lugar errado"*. A segunda conta existe e continua não sendo
+    principal, então o saque não tem destino e o dono precisa escolher.
+    """
+    principal = _conta(client, headers)
+    _conta(client, headers, name="Nubank", institution_code="260", branch="0001", number="9-9")
+    client.post(f"/bank/accounts/{principal['id']}/archive", headers=headers)
+
+    assert (
+        bank_payout.registra_payout(
+            db,
+            tenant_id=_tenant_id(client, headers),
+            actor="u1",
+            payout_id="pay-1",
+            amount_cents=500_00,
+            posted_at=date(2026, 8, 9),
+        )
+        is None
+    )
+
+
+def test_escreve_movimento_positivo_conciliado(client: TestClient, headers, db: Session):
+    """O crédito **entra** na conta do dono: valor POSITIVO, `source='payout'`, nasce `matched`."""
+    acc = _conta(client, headers)  # primeira conta do tenant ⇒ nasce principal
+
+    destino = bank_payout.registra_payout(
+        db,
+        tenant_id=_tenant_id(client, headers),
+        actor="u1",
+        payout_id="pay-2",
+        amount_cents=500_00,
+        posted_at=date(2026, 8, 9),
+    )
+
+    assert destino.bank_account_id == acc["id"]
+    assert destino.recusa_detalhe is None
+    mov = db.get(BankTransaction, destino.bank_transaction_id)
+    assert mov.amount_cents == 500_00  # POSITIVO — é entrada
+    assert mov.source == SOURCE_PAYOUT
+    assert mov.origin_id == "pay-2"
+    assert mov.status == STATUS_MATCHED  # nasce conciliado: o e1p originou os dois lados
+
+
+def test_data_anterior_a_abertura_vira_recusa_com_o_fato(client: TestClient, headers, db: Session):
+    """O piso de data não explode: volta como FATO, para a Carteira moldurar.
+
+    Sem isto, um 422 sobre `opening_date` — vocabulário do plano do banco — vazaria cru num botão
+    do plano da plataforma.
+
+    ⚠️ **A borda real é "cadastrou a conta hoje e sacou hoje"**, e não uma data futura: a criação
+    já recusa `opening_date > hoje` (`_validate_opening_date`). O movimento exige
+    `posted_at > opening_date` — estritamente maior —, então conta aberta HOJE não aceita movimento
+    HOJE, e o dono que acabou de cadastrar a conta bate exatamente aqui.
+    """
+    from app.modules.settings.service import hoje_do_tenant
+
+    hoje = hoje_do_tenant(db)
+    _conta(client, headers, opening=hoje.isoformat())
+
+    destino = bank_payout.registra_payout(
+        db,
+        tenant_id=_tenant_id(client, headers),
+        actor="u1",
+        payout_id="pay-3",
+        amount_cents=500_00,
+        posted_at=hoje,
+    )
+
+    assert destino.bank_account_id is None
+    assert hoje.isoformat() in destino.recusa_detalhe
