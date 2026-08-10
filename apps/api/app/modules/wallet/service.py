@@ -9,6 +9,7 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.core import audit
+from app.db.base import _uuid
 from app.modules.chart_of_accounts import service as chart_service
 from app.modules.cost_centers import service as cost_centers_service
 from app.modules.settings.service import hoje_do_tenant
@@ -308,10 +309,26 @@ def payout_registrar_registrado() -> bool:
 
 
 def request_payout(db: Session, *, tenant_id: str, actor: str) -> dict:
-    """Saca todo o saldo disponível (marca como sacado). Integração bancária/KYC: pendente.
+    """Saca todo o saldo disponível **e escreve a perna bancária, na MESMA transação** (Onda 3).
 
-    FOR UPDATE trava as linhas para evitar saque em dobro em chamadas concorrentes
-    (no-op no SQLite dos testes; real no Postgres).
+    Antes desta onda isto marcava `withdrawn` e commitava — sem registro do saque e sem movimento
+    bancário. Era o termo **P4** da pré-condição do gate do Epic 8, e o último dos quatro aberto.
+
+    **A ordem — destino ANTES de qualquer escrita — não é exigência de correção** (tudo está na
+    mesma transação, e um `raise` desfaz o conjunto em qualquer ordem). É exigência de **leitura**:
+    o código deve deixar óbvio que nada na Carteira muda antes de o destino estar garantido. Ordem
+    que só está certa porque existe rollback é ordem que a próxima pessoa reordena sem perceber.
+
+    ⚠️ **O id é gerado em Python antes do `INSERT`**, e é isso que sustenta o `NOT NULL` de
+    `Payout.bank_transaction_id`. Funciona porque `bank_transactions.origin_id` **não é FK** — é
+    coluna genérica sob índice único parcial, compartilhada pelas cinco origens de sistema.
+
+    ⚠️ **O valor sacado é o LÍQUIDO** (`net_cents`), e é ele que vai para o banco. O split da
+    plataforma nunca chega à conta do dono; mandar o bruto criaria uma divergência na conferência
+    **causada pelo próprio e1p**.
+
+    FOR UPDATE trava as linhas contra saque em dobro concorrente (real no Postgres, no-op no
+    SQLite dos testes).
     """
     txs = list(
         db.scalars(
@@ -319,11 +336,54 @@ def request_payout(db: Session, *, tenant_id: str, actor: str) -> dict:
         ).all()
     )
     total = sum(t.net_cents for t in txs)
+    if total <= 0:
+        raise WalletError("Não há saldo disponível para saque.", 409)
+
+    if _payout_registrar is None:  # pragma: no cover — `verifica_fiacao_do_payout` barra no boot
+        raise WalletError("Saque indisponível: registrador não configurado.", 503)
+
+    payout_id = _uuid()
+    paid_on = hoje_do_tenant(db)
+
+    destino = _payout_registrar(
+        db,
+        tenant_id=tenant_id,
+        actor=actor,
+        payout_id=payout_id,
+        amount_cents=total,  # POSITIVO — é entrada na conta do dono
+        posted_at=paid_on,
+    )
+    if destino is None:
+        raise WalletError(
+            "Escolha para qual conta bancária o dinheiro vai antes de sacar. "
+            "Defina sua conta principal em Contas & Saldos.",
+            409,
+        )
+    if destino.recusa_detalhe is not None:
+        raise WalletError(
+            f"Não foi possível registrar o saque na sua conta bancária. {destino.recusa_detalhe}",
+            409,
+        )
+
+    payout = Payout(
+        id=payout_id,
+        tenant_id=tenant_id,
+        amount_cents=total,
+        paid_on=paid_on,
+        bank_account_id=destino.bank_account_id,
+        bank_transaction_id=destino.bank_transaction_id,
+        actor=actor,
+    )
+    db.add(payout)
+    db.flush()
+
     for t in txs:
         t.status = STATUS_WITHDRAWN
-    audit.record(db, tenant_id=tenant_id, actor=actor, action="wallet.payout", target=str(total))
+        t.payout_id = payout_id
+
+    audit.record(db, tenant_id=tenant_id, actor=actor, action="wallet.payout", target=payout_id)
     db.commit()
-    return {"amount_cents": total, "transactions": len(txs)}
+    return {"amount_cents": total, "transactions": len(txs), "payout_id": payout_id}
 
 
 # ── Visão do Master (global, sem RLS) ──────────────────

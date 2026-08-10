@@ -78,7 +78,14 @@ def payout(
     user: CurrentUser = Depends(_guard),
     db: Session = Depends(get_tenant_db),
 ) -> PayoutResult:
-    return PayoutResult(**service.request_payout(db, tenant_id=user.tenant_id, actor=user.user_id))
+    # ⚠️ O `try` é NOVO (Onda 3). Antes desta onda `request_payout` não levantava `WalletError`, e
+    # a rota não tratava nada — os dois 409 desta onda virariam **500** sem isto, e o dono veria
+    # "erro inesperado" no lugar de "escolha sua conta principal".
+    try:
+        result = service.request_payout(db, tenant_id=user.tenant_id, actor=user.user_id)
+    except service.WalletError as e:
+        raise HTTPException(status_code=e.status_code, detail=str(e)) from e
+    return PayoutResult(**result)
 
 
 # ── Master: ganhos da plataforma ───────────────────────

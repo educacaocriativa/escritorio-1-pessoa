@@ -69,6 +69,9 @@ class WalletSummary(BaseModel):
 class PayoutResult(BaseModel):
     amount_cents: int
     transactions: int
+    # Onda 3 — o saque agora É uma linha, e este é o id dela. Antes o resultado não referenciava
+    # nada: o dono via o saldo sumir e não tinha como voltar ao evento.
+    payout_id: str
 
 
 class SplitRates(BaseModel):
