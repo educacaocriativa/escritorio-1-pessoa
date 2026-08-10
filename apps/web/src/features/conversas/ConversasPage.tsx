@@ -1,7 +1,7 @@
 import type {
   ConversationSummary, TimelineEntry, WhatsappTemplate,
 } from "@e1p/shared-types";
-import { History, Paperclip, Send, Users, X } from "lucide-react";
+import { ChevronLeft, History, Paperclip, Send, Users, X } from "lucide-react";
 import { Fragment, useCallback, useEffect, useRef, useState } from "react";
 import { api, apiErrorMessage } from "../../lib/api";
 import { formatDate, formatTime } from "../../lib/datetime";
@@ -65,7 +65,17 @@ export default function ConversasPage() {
 
   return (
     <div className="flex h-[calc(100vh-8rem)] gap-4">
-      <div className="w-80 shrink-0 overflow-y-auto rounded-2xl bg-white shadow-sm">
+      {/* Abaixo de `lg` é UMA coisa por vez: a lista OU a conversa. Duas colunas de 320px num
+          aparelho de 360px não é layout apertado, é layout ausente — a segunda nasce em x=360 e
+          `main` (`overflow-x-hidden`) a corta sem deixar nem barra de rolagem, então o dono
+          tocava numa conversa e nada acontecia. Era o "corte" que o PR #58 proibiu, escondendo a
+          jornada inteira do contato. A gaveta do histórico (mais abaixo) já tratava o celular
+          assim desde sempre; a divisão principal é que nunca foi tratada. */}
+      <div
+        className={`w-full shrink-0 overflow-y-auto rounded-2xl bg-white shadow-sm lg:w-80 ${
+          selected ? "hidden lg:block" : "block"
+        }`}
+      >
         <div className="border-b border-neutral-100 p-4">
           <h1 className="font-semibold text-neutral-800">Conversas</h1>
         </div>
@@ -104,13 +114,18 @@ export default function ConversasPage() {
           ))
         )}
       </div>
-      <div className="flex-1 rounded-2xl bg-white shadow-sm">
+      <div
+        className={`min-w-0 flex-1 rounded-2xl bg-white shadow-sm ${
+          selected ? "block" : "hidden lg:block"
+        }`}
+      >
         {selected ? (
           <ConversationThread
             key={selected}
             chatId={selected}
             chat={conversations.find((c) => c.chat_id === selected) ?? null}
             onSent={loadConversations}
+            onVoltar={() => setSelected(null)}
           />
         ) : (
           <div className="flex h-full items-center justify-center text-sm text-neutral-400">
@@ -178,8 +193,14 @@ export default function ConversasPage() {
 }
 
 function ConversationThread({
-  chatId, chat, onSent,
-}: { chatId: string; chat: ConversationSummary | null; onSent: () => void }) {
+  chatId, chat, onSent, onVoltar,
+}: {
+  chatId: string;
+  chat: ConversationSummary | null;
+  onSent: () => void;
+  /** Só aparece abaixo de `lg`, onde a conversa OCUPA a tela e a lista some. */
+  onVoltar?: () => void;
+}) {
   const fuso = useFuso();
   const [timeline, setTimeline] = useState<TimelineEntry[]>([]);
   const [withinWindow, setWithinWindow] = useState(true);
@@ -279,14 +300,26 @@ function ConversationThread({
 
   return (
     <div className="flex h-full flex-col">
-      <div className="border-b border-neutral-100 px-4 py-3">
-        <p className="flex items-center gap-1.5 text-sm font-semibold text-neutral-800">
-          {chat?.kind === "group" && <Users size={14} className="text-neutral-400" />}
-          {chat?.title ?? "Conversa"}
-        </p>
-        <p className="text-xs text-neutral-400">
-          {chat?.kind === "group" ? "Grupo" : chat?.phone}
-        </p>
+      <div className="flex items-center gap-2 border-b border-neutral-100 px-4 py-3">
+        {onVoltar && (
+          <button
+            type="button"
+            onClick={onVoltar}
+            aria-label="Voltar para as conversas"
+            className="-ml-2 flex h-11 w-11 shrink-0 items-center justify-center rounded-pill text-neutral-500 hover:bg-neutral-50 lg:hidden"
+          >
+            <ChevronLeft size={20} />
+          </button>
+        )}
+        <div className="min-w-0">
+          <p className="flex items-center gap-1.5 truncate text-sm font-semibold text-neutral-800">
+            {chat?.kind === "group" && <Users size={14} className="shrink-0 text-neutral-400" />}
+            {chat?.title ?? "Conversa"}
+          </p>
+          <p className="truncate text-xs text-neutral-400">
+            {chat?.kind === "group" ? "Grupo" : chat?.phone}
+          </p>
+        </div>
       </div>
       <div className="flex-1 space-y-2 overflow-y-auto p-4">
         {timeline.map((entry, i) => {

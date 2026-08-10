@@ -66,6 +66,29 @@ Ao criar/alterar qualquer funcionalidade:
 > `story-dod-checklist` item 7 (antes de "Ready for Review", pelo @dev). Refactor puro não some com
 > o AC: satisfaz com uma linha explícita dizendo que nada mudou para o próximo leitor, e por quê.
 
+### 5.1 A régua de layout em 360px (`apps/web/e2e/`, desde 2026-08-10)
+
+**Layout só se prova MEDINDO.** `expect(linha.className).toContain("flex-wrap")` passou duas sessões
+com a `FilaPagamentosPage` quebrada em produção: o `overflow-x` estava certo, o `flex-wrap` estava
+certo, e a tela estava errada. **Nenhum teste de `apps/web/e2e/` pode aferir classe CSS** — só
+`scrollWidth`, `getBoundingClientRect()`, `toBeInViewport()` e o texto efetivamente visível.
+
+- **Como roda:** `pnpm --filter @e1p/web e2e`. Sobe **só o Vite** (porta **5273** — a 5173 colide
+  com outro projeto nas máquinas de dev) e intercepta a API com `page.route` (`e2e/support/api.ts`).
+  Sem backend, sem Docker, sem banco: foi por achar que medir custava caro que **seis telas** subiram
+  sem medição e **três PRs de correção em campo** foram pagos (#56, #58, #89).
+- **A régua** é `e2e/support/medidas.ts`: `medirPagina`, `alvosPequenos` (mínimo tocável **44px**) e
+  `textoForaDaTela` (o texto que só existe se o dono rolar de lado — o defeito que a Onda 2b-ii achou
+  na primeira medição, `R$ 3.` no lugar de `R$ 3.000,00`).
+- **As fixtures são de PIOR CASO PLAUSÍVEL** (nome longo de banco, valor de 6 dígitos, título de
+  grupo comprido), nas formas reais de `packages/shared-types`. Dado curto sempre cabe: medir com ele
+  é medir uma tela que não existe.
+- ⚠️ **O CI não tinha NENHUM job de frontend até esta data** — o `vitest` nunca rodou nele, e nenhuma
+  medição de tela era exigida em PR. O job `frontend` (typecheck + vitest + playwright) fecha isso.
+  **Dívida:** ele é **observável, não bloqueante**, até @devops o acrescentar em "Require status
+  checks to pass" (mesmo modelo de `secret-scan`/`sast-semgrep`). Enquanto isso, a régua **mede e não
+  barra** — e foi a ausência de barreira, não a de conhecimento, que deixou seis telas passarem.
+
 ## 6. Estado atual / roadmap
 - [x] Fundação do monorepo, docs, agentes de QA, CI local.
 - [x] Core do backend: tenancy (RLS) + anonimizador + camada de IA + auditoria.
@@ -1301,8 +1324,18 @@ setter do React que recebe função a trata como updater e a **executa**. O guar
 a correção vale daqui para frente) — quem for mesclá-los depois precisa juntar `facts`
 (ex-`client_events`), `charges`, `quotes`, `contracts` e `whatsapp_chats` do card absorvido, e não só apagar a linha.
 Não há ferramenta de mescla na tela. Também não há "ligar conversa não identificada a um
-contato" nem marcação de histórico como lido. **Validação manual em ~360px do painel de
-Conversas ainda não foi feita** — bloqueia release, não bloqueia merge.
+contato" nem marcação de histórico como lido.
+
+- [x] **360px: a Conversa é uma TELA, não uma coluna** (2026-08-10). Abaixo de `lg` a lista e a
+  conversa não dividem a largura — mostra-se uma por vez, com "Voltar para as conversas" no
+  cabeçalho da conversa. `w-80 shrink-0` + `flex-1` **sem breakpoint** faziam o painel da conversa
+  nascer em **x=360**, inteiro fora da viewport de 360px, e `main` (`overflow-x-hidden`) o cortava
+  sem deixar barra nem pan por toque: **o dono tocava numa conversa e nada acontecia** — 12
+  elementos fora da tela, incluindo toda mensagem e o campo de envio. Era o "corte" que o PR #58
+  proibiu, aplicado à jornada inteira do contato. A gaveta do histórico já tratava o celular assim
+  desde sempre; a divisão principal é que nunca foi tratada. Travado por
+  `apps/web/e2e/conversas-360.spec.ts` (mede `toBeInViewport` e `boundingBox`, não classe CSS).
+  **Fecha a dívida "validação manual em ~360px do painel de Conversas".**
 
 ## Vima: o Registro de Fatos e o briefing (PRs #85 e #90, 2026-08-06/07)
 
