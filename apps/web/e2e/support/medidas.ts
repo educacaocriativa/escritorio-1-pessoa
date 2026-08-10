@@ -39,9 +39,13 @@ export async function medirPagina(page: Page): Promise<Medidas> {
  *
  * 44px não é preciosismo: foi um checkbox pequeno demais, separado da ação que o tornava efetivo,
  * que fez uma conta real ser marcada como paga sem o dono conseguir ver (PR #56).
+ *
+ * `raiz` recorta a varredura a um seletor. **Use sempre que medir um modal:** sem ele a página
+ * inteira por trás entra na conta e o resultado mistura o que se quer medir com o que já estava
+ * lá — 62 elementos onde a pergunta era sobre 13.
  */
-export async function alvosPequenos(page: Page, min = 44): Promise<Alvo[]> {
-  return page.evaluate((limite) => {
+export async function alvosPequenos(page: Page, min = 44, raiz?: string): Promise<Alvo[]> {
+  return page.evaluate(({ limite, raizSel }) => {
     // As auxiliares são declaradas AQUI DENTRO de propósito: o corpo de um `page.evaluate` é
     // serializado e executado no navegador, e nada do escopo do Node viaja junto.
     const descrever = (el: Element): string => {
@@ -61,7 +65,8 @@ export async function alvosPequenos(page: Page, min = 44): Promise<Alvo[]> {
     const SEL =
       'button,a[href],input:not([type="hidden"]),select,textarea,' +
       '[role="button"],[role="checkbox"],summary';
-    return [...document.querySelectorAll(SEL)]
+    const escopo: ParentNode = raizSel ? (document.querySelector(raizSel) ?? document) : document;
+    return [...escopo.querySelectorAll(SEL)]
       .filter(visivel)
       .map((el) => {
         const r = el.getBoundingClientRect();
@@ -72,7 +77,7 @@ export async function alvosPequenos(page: Page, min = 44): Promise<Alvo[]> {
         };
       })
       .filter((a) => a.altura < limite || a.largura < limite);
-  }, min);
+  }, { limite: min, raizSel: raiz });
 }
 
 /**

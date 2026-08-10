@@ -875,8 +875,23 @@ desde a Onda 0 **sem gatilho nenhum**; esta story é o gatilho.
   foi um **spike de 20 minutos** do @dev, que confirmou os três e ainda revelou que o bloqueio de
   numeração de migration havia caído sozinho. **Regra: quando duas validações de documento seguidas
   falham pelo mesmo motivo, a terceira não deve ser de documento.**
-- **Dívida:** **aceite visual em ~360px NÃO foi feito** (a escolha é elemento novo) — mesma dívida do
-  AC9 da 8.13. E: conta `is_known=false` + recuo de data pede um saldo cujo campo está escondido no
+- [x] **O aceite em ~360px FOI MEDIDO (2026-08-10) — e a escolha da 8.21 estava a 467px do botão
+  que a efetiva.** Conteúdo de **1010px** numa caixa de **629px** (`max-h-[85vh]`): "Cadastrar
+  conta" nascia a 942px do topo do modal, ou seja **y=1043,5 — 303px ABAIXO da borda da tela**. O
+  dono escolhia *"Não sei o saldo agora"* (visível em y=528,5) e tinha de rolar 467px dentro do
+  modal para achar o botão que tornava aquilo real: **a forma exata do PR #56**, o controle e a
+  ação que o efetiva em lugares separados. Os rádios tinham **13×13px**.
+  - Agora: **`Modal` aceita `footer`** (`components/Modal.tsx`) — a ação primária vive numa barra
+    `sticky bottom-0` DENTRO da caixa que rola, e não sai da tela enquanto o dono preenche. Prop
+    **opcional**: modal que não a passa continua idêntico. **Formulário longo em modal DEVE usar
+    `footer`.** Alvo dos rádios e de "Conta principal": 44px na **linha inteira** do rótulo, não no
+    círculo. O erro continua no corpo — na barra ele empurraria o botão para fora justamente quando
+    o dono mais precisa dele. Travado por `apps/web/e2e/modal-conta-360.spec.ts`.
+  - **Dívida:** os campos de texto do `Field` têm **38px** de altura (mínimo tocável é 44). Não
+    foram engordados aqui porque `Field` é compartilhado por todos os modais do app e a mudança
+    sairia do escopo deste PR — o spec afirma sobre BOTÃO, com o recorte escrito no próprio teste
+    em vez de escondido num filtro.
+- **Dívida:** conta `is_known=false` + recuo de data pede um saldo cujo campo está escondido no
   formulário; tem saída (marcar *"sei o saldo"* revela o campo), mas a mensagem de erro pede algo que
   não está visível.
 
