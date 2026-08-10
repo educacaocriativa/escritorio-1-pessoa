@@ -56,6 +56,17 @@ import PeriodPicker from "./PeriodPicker";
 import { type PeriodRange, resolvePeriod } from "./periodRange";
 
 /**
+ * A classe das ações de uma conta. **Uma constante, sete consumidores.**
+ *
+ * `min-h-[44px]` não é estética: eram sete links de **16px** de altura, e "Arquivar" (destrutiva)
+ * ficava a 4px de "Editar" — a classe de defeito do PR #56, onde um controle pequeno demais fez
+ * uma conta real ser marcada como paga sem o dono ver. O padding cresce, a fonte não: o cartão
+ * fica mais alto e a rolagem vertical é nativa e gratuita; errar o alvo de "Arquivar" não é.
+ */
+const ACAO_DA_CONTA =
+  "inline-flex min-h-[44px] items-center gap-1 px-1 text-neutral-600 hover:text-primary-600";
+
+/**
  * **Contas & Saldos** (Story 8.7) — a tela onde o dono vê **onde está o dinheiro dele**.
  *
  * O rótulo é deliberado: o menu diz *onde está meu dinheiro*, não *tarefa contábil*. O item
@@ -178,9 +189,10 @@ export default function ContasSaldosPage() {
               <ArrowLeftRight size={14} /> {TRANSFERIR_LABEL}
             </button>
           )}
-          <label className="flex items-center gap-2 text-sm text-neutral-600">
+          <label className="flex min-h-[44px] items-center gap-3 text-sm text-neutral-600">
             <input
               type="checkbox"
+              className="h-5 w-5 shrink-0"
               checked={includeArchived}
               onChange={(e) => setIncludeArchived(e.target.checked)}
             />
@@ -391,20 +403,21 @@ function AccountCard({
         </div>
       </div>
 
-      <div className="mt-4 flex flex-wrap items-center gap-x-4 gap-y-2 border-t border-neutral-50 pt-3 text-xs font-medium">
+      {/* `gap-y` saiu: os 44px de `ACAO_DA_CONTA` já dão o respiro vertical entre as linhas. */}
+      <div className="mt-4 flex flex-wrap items-center gap-x-4 border-t border-neutral-50 pt-3 text-xs font-medium">
         {!arquivada && (
           <>
             <button
               type="button"
               onClick={onDeclare}
-              className="inline-flex items-center gap-1 text-neutral-600 hover:text-primary-600"
+              className={ACAO_DA_CONTA}
             >
               <Wallet size={14} /> Declarar saldo
             </button>
             <button
               type="button"
               onClick={onLaunch}
-              className="inline-flex items-center gap-1 text-neutral-600 hover:text-primary-600"
+              className={ACAO_DA_CONTA}
             >
               <ArrowLeftRight size={14} /> Lançar movimento
             </button>
@@ -412,7 +425,7 @@ function AccountCard({
               <button
                 type="button"
                 onClick={onTransfer}
-                className="inline-flex items-center gap-1 text-neutral-600 hover:text-primary-600"
+                className={ACAO_DA_CONTA}
               >
                 <ArrowLeftRight size={14} /> {TRANSFERIR_LABEL}
               </button>
@@ -421,14 +434,14 @@ function AccountCard({
         )}
         <Link
           to={`/financeiro/conferencia?account_id=${account.id}`}
-          className="inline-flex items-center gap-1 text-neutral-600 hover:text-primary-600"
+          className={ACAO_DA_CONTA}
         >
           <ScanSearch size={14} /> Conferir
         </Link>
         <button
           type="button"
           onClick={onToggle}
-          className="inline-flex items-center gap-1 text-neutral-600 hover:text-primary-600"
+          className={ACAO_DA_CONTA}
         >
           {selected ? "Ocultar movimentos" : "Ver movimentos"}
         </button>
@@ -437,14 +450,14 @@ function AccountCard({
             <button
               type="button"
               onClick={onEdit}
-              className="inline-flex items-center gap-1 text-neutral-600 hover:text-primary-600"
+              className={ACAO_DA_CONTA}
             >
               <Pencil size={14} /> Editar
             </button>
             <button
               type="button"
               onClick={onArchive}
-              className="inline-flex items-center gap-1 text-neutral-600 hover:text-danger"
+              className={`${ACAO_DA_CONTA} hover:text-danger`}
             >
               <Archive size={14} /> Arquivar
             </button>
