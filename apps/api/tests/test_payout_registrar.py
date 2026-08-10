@@ -5,6 +5,8 @@ O comportamento do saque vive em `test_wallet_payout.py`.
 """
 from __future__ import annotations
 
+import ast
+import pathlib
 from datetime import date
 
 import pytest
@@ -12,6 +14,7 @@ from fastapi.testclient import TestClient
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
+from app import main as app_main
 from app.modules.bank import payout as bank_payout
 from app.modules.bank.models import SOURCE_PAYOUT, STATUS_MATCHED, BankTransaction
 from app.modules.wallet import service as wallet_service
@@ -209,3 +212,41 @@ def test_data_anterior_a_abertura_vira_recusa_com_o_fato(client: TestClient, hea
 
     assert destino.bank_account_id is None
     assert hoje.isoformat() in destino.recusa_detalhe
+
+
+# ── A fiação, e o fail-closed no boot ─────────────────────────────────────────────────────────
+
+
+def test_app_nao_sobe_sem_o_registrador_de_payout(monkeypatch):
+    """**Um erro de fiação é condição de startup, não de request** (ratificação §C-5.2).
+
+    A alternativa — deixar o request seguir sem registrador — é a Onda 3 **desligada em produção
+    sem ninguém saber**: o payout volta ao comportamento pré-onda (marca `withdrawn` e pronto), o
+    termo P4 reabre, e a divergência cresce sem explicação, contaminando exatamente a métrica que
+    decide as Ondas 4 e 5.
+
+    Espelho de `test_bank_contagem_dupla.py::test_app_nao_sobe_sem_o_probe_de_contagem_dupla`.
+    """
+    monkeypatch.setattr(wallet_service, "_payout_registrar", None)
+    with pytest.raises(RuntimeError, match="registrador de payout"):
+        app_main.verifica_fiacao_do_payout()
+
+
+def test_a_verificacao_do_payout_e_chamada_no_nivel_do_modulo():
+    """Teste **ESTRUTURAL**: um fail-closed que ninguém invoca é um comentário.
+
+    Mutante a matar: apagar a chamada de `verifica_fiacao_do_payout()` do corpo de `app/main.py`.
+    Nenhum teste de comportamento pegaria — a app continuaria subindo e a guarda viraria função
+    morta. Mesmo par de `test_a_guarda_de_boot_e_chamada_no_nivel_do_modulo`.
+    """
+    fonte = pathlib.Path(app_main.__file__).read_text(encoding="utf-8")
+    tree = ast.parse(fonte)
+    chamadas = {
+        node.value.func.id
+        for node in tree.body
+        if isinstance(node, ast.Expr)
+        and isinstance(node.value, ast.Call)
+        and isinstance(node.value.func, ast.Name)
+    }
+    assert "verifica_fiacao_do_payout" in chamadas
+    assert "liga_o_registrador_de_payout" in chamadas
