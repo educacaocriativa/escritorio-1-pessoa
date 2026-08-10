@@ -144,3 +144,45 @@ def test_audit_aponta_para_o_payout_e_nao_para_o_valor(client: TestClient, heade
 
     log = db.scalars(select(AuditEntry).where(AuditEntry.action == "wallet.payout")).first()
     assert log.target == payout_id
+
+
+def test_historico_traz_todos_os_saques_com_perna_bancaria(client: TestClient, headers):
+    _conta_principal(client, headers)
+    _venda(client, headers, gross=1_000_00)
+    primeiro = client.post("/wallet/payout", headers=headers).json()["payout_id"]
+    _venda(client, headers, gross=2_000_00)
+    segundo = client.post("/wallet/payout", headers=headers).json()["payout_id"]
+
+    resp = client.get("/wallet/payouts", headers=headers)
+    assert resp.status_code == 200, resp.text
+    assert {p["id"] for p in resp.json()} == {primeiro, segundo}
+    # Todo saque tem perna bancária — a invariante da onda, vista pela porta de saída.
+    assert all(p["bank_transaction_id"] for p in resp.json())
+    assert [p["amount_cents"] for p in sorted(resp.json(), key=lambda p: p["amount_cents"])] == [
+        700_00,
+        1_400_00,
+    ]
+
+
+def test_historico_tem_ordem_ESTAVEL_entre_chamadas_identicas(client: TestClient, headers):
+    """⚠️ **Não afirma "mais novo primeiro" — afirma que a ordem não muda sozinha.**
+
+    Os dois saques caem no mesmo segundo, e `created_at` (`server_default=now()`) tem resolução de
+    segundo no SQLite: dentro do mesmo instante **não existe "mais novo"**, e um teste que
+    afirmasse a ordem cronológica aqui estaria testando o acaso — passaria ou falharia conforme o
+    plano de execução, e o próximo a vê-lo vermelho "consertaria" invertendo a asserção.
+
+    O que o produto precisa garantir é que a lista **não se reordena entre dois cliques**. A ordem
+    cronológica de verdade é exercitada no Postgres (`test_payout_rls.py`), onde `now()` tem
+    resolução de microssegundo.
+    """
+    _conta_principal(client, headers)
+    _venda(client, headers, gross=1_000_00)
+    client.post("/wallet/payout", headers=headers)
+    _venda(client, headers, gross=2_000_00)
+    client.post("/wallet/payout", headers=headers)
+
+    uma = [p["id"] for p in client.get("/wallet/payouts", headers=headers).json()]
+    outra = [p["id"] for p in client.get("/wallet/payouts", headers=headers).json()]
+    assert uma == outra
+    assert len(uma) == 2

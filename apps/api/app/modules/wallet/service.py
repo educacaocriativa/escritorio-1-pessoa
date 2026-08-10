@@ -386,6 +386,30 @@ def request_payout(db: Session, *, tenant_id: str, actor: str) -> dict:
     return {"amount_cents": total, "transactions": len(txs), "payout_id": payout_id}
 
 
+def list_payouts(db: Session, *, limit: int = 100, offset: int = 0) -> list[Payout]:
+    """Os saques do tenant, do mais novo para o mais velho. Mesmo teto de `list_transactions`.
+
+    ⚠️ **`id` é DESEMPATE, não critério** — e ele não é decoração. `created_at` tem
+    `server_default=now()`, cuja resolução é de segundo no SQLite da suíte: dois saques no mesmo
+    segundo saíam em ordem **arbitrária**, e "arbitrária" inclui mudar entre duas chamadas
+    idênticas. Uma lista que se reordena sozinha entre dois cliques é a classe de defeito que o
+    usuário não reporta porque não acredita no que viu.
+
+    O desempate por `id` (uuid) não é semanticamente "mais novo" — dentro do mesmo instante não
+    existe mais novo, e fingir que existe seria pior. O que ele garante é **estabilidade**: a mesma
+    consulta devolve sempre a mesma ordem. A ordenação por tempo de verdade acontece no Postgres,
+    onde `now()` tem resolução de microssegundo e dois requests distintos nunca colidem.
+    """
+    limit = max(1, min(limit, 500))
+    stmt = (
+        select(Payout)
+        .order_by(Payout.created_at.desc(), Payout.id.desc())
+        .limit(limit)
+        .offset(max(0, offset))
+    )
+    return list(db.scalars(stmt).all())
+
+
 # ── Visão do Master (global, sem RLS) ──────────────────
 
 
