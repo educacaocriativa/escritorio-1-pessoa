@@ -121,7 +121,33 @@ def test_settle_non_pending_rejected(client: TestClient, headers):
     assert r.status_code == 409
 
 
+def _conta_principal(client: TestClient, headers) -> dict:
+    """A PRIMEIRA conta bancária do tenant nasce principal (`bank.service.create_account`)."""
+    return client.post(
+        "/bank/accounts",
+        json={
+            "name": "Itaú PJ",
+            "kind": "checking",
+            "opening_balance_cents": 0,
+            "opening_balance_is_known": True,
+            "opening_date": "2026-01-01",
+        },
+        headers=headers,
+    ).json()
+
+
 def test_payout_withdraws_available(client: TestClient, headers):
+    """⚠️ **Este teste ganhou um pré-requisito na Onda 3, e a mudança é deliberada (R-1).**
+
+    Antes, sacar sempre funcionava — `request_payout` só marcava `withdrawn`. A partir da Onda 3 o
+    saque **escreve o movimento bancário na mesma transação**, então ele precisa saber PARA ONDE o
+    dinheiro vai: sem conta principal, recusa (ver `test_payout_sem_conta_bancaria_recusa` abaixo,
+    que é o não-membro deste).
+
+    Não "conserte" isto removendo a conta: sem o pré-requisito, o termo P4 da pré-condição do gate
+    do Epic 8 reabre, e a divergência volta a medir a própria incompletude do sistema.
+    """
+    _conta_principal(client, headers)
     client.post(
         "/wallet/transactions",
         json={"kind": "service", "method": "pix", "gross_cents": 10000},
@@ -132,6 +158,24 @@ def test_payout_withdraws_available(client: TestClient, headers):
     assert r.json()["transactions"] == 1
     # depois do saque, disponível zera
     assert client.get("/wallet/summary", headers=headers).json()["available_cents"] == 0
+
+
+def test_payout_sem_conta_bancaria_recusa(client: TestClient, headers):
+    """O **não-membro** do teste acima — a mudança de comportamento da Onda 3, explícita.
+
+    Recusar é legítimo porque quem ORIGINA o payout é o e1p: ele ainda não aconteceu no banco.
+    E custa nada de real — o saque não move dinheiro (sem integração bancária nem KYC).
+    """
+    client.post(
+        "/wallet/transactions",
+        json={"kind": "service", "method": "pix", "gross_cents": 10000},
+        headers=headers,
+    )
+    r = client.post("/wallet/payout", headers=headers)
+    assert r.status_code == 409
+    assert "conta" in r.json()["detail"].lower()
+    # E o saldo continua lá: recusar não é consumir.
+    assert client.get("/wallet/summary", headers=headers).json()["available_cents"] == 7000
 
 
 def test_requires_auth(client: TestClient):

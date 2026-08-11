@@ -7,6 +7,7 @@ from sqlalchemy.orm import Session
 
 from app.config import settings
 from app.modules import ALL_ROUTERS
+from app.modules.bank import payout as bank_payout
 from app.modules.bank import reconciliation as bank_reconciliation
 from app.modules.bank import service as bank_service
 from app.modules.funnels.automation import register as register_funnel_automation
@@ -14,6 +15,7 @@ from app.modules.notifications.service import register as register_notifications
 from app.modules.payables import service as payables_service
 from app.modules.payables.service import probe_pagamento_duplicado
 from app.modules.receivables import service as receivables_service
+from app.modules.wallet import service as wallet_service
 
 
 class PublicLeadsCORSMiddleware:
@@ -196,6 +198,48 @@ def verifica_fiacao_dos_termos_do_gate() -> None:
 
 liga_os_termos_do_gate()
 verifica_fiacao_dos_termos_do_gate()
+
+
+# ── A composição do ponto de contato entre os PLANOS de dinheiro (Epic 8, Onda 3) ─────────────
+#
+# ⚠️ **Terceira aplicação do mesmo padrão, e a primeira que atravessa a fronteira dos planos**
+# (design-mãe §1.2: o payout é o único write que a cruza). As duas irmãs acima ligam `bank` a
+# módulos de negócio; esta liga a Carteira ao banco — a direção em que o Epic 8 nasceu de um bug.
+#
+# Aqui a declaração é do lado da CARTEIRA (`wallet/service.RegistradorDePayout`) e a implementação
+# do lado do BANCO (`bank/payout.registra_payout`). Direção final: `main → wallet`, `main → bank`,
+# e **nada** entre os dois. Os dois gates (`test_wallet_nao_importa_bank`,
+# `test_bank_nao_referencia_transaction`) continuam apertados **e sem allowlist** — a dependência
+# não existe, em vez de existir com permissão.
+def liga_o_registrador_de_payout() -> None:
+    wallet_service.register_payout_registrar(bank_payout.registra_payout)
+
+
+def verifica_fiacao_do_payout() -> None:
+    """**FAIL-CLOSED NO BOOT: a aplicação não sobe sem o registrador de payout.**
+
+    *"Um erro de fiação é condição de startup, não de request."* Sem esta guarda o modo de falha é
+    silencioso e caro: o saque voltaria a ser troca de status sem perna bancária, o termo **P4** da
+    pré-condição do gate reabriria, e `|divergencia_cents|` — a métrica que decide se as Ondas 4
+    (import OFX) e 5 (matcher) valem o custo — voltaria a medir a própria incompletude do sistema
+    sem que ninguém percebesse.
+
+    ⚠️ **Não transforme isto num `warning`.** O par de testes que amarra o comportamento é
+    `test_payout_registrar.py::test_app_nao_sobe_sem_o_registrador_de_payout` **e** o teste
+    ESTRUTURAL que prova que esta função é chamada no nível do módulo — apagar a chamada abaixo
+    reprova, porque um fail-closed que ninguém invoca é um comentário.
+    """
+    if not wallet_service.payout_registrar_registrado():
+        raise RuntimeError(
+            "O registrador de payout não foi ligado: `wallet.service.register_payout_registrar` "
+            "não recebeu implementação. A aplicação NÃO sobe sem ele — sem essa ligação o saque da "
+            "Carteira volta a não escrever movimento bancário nenhum, reabrindo o termo P4 do gate "
+            "do Epic 8 em silêncio. Verifique `liga_o_registrador_de_payout` em app/main.py."
+        )
+
+
+liga_o_registrador_de_payout()
+verifica_fiacao_do_payout()
 
 
 @app.get("/health", tags=["infra"])

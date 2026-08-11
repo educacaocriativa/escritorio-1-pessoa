@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from datetime import date, datetime
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from app.modules.wallet.models import ALL_KINDS, ALL_METHODS
 
@@ -69,6 +69,30 @@ class WalletSummary(BaseModel):
 class PayoutResult(BaseModel):
     amount_cents: int
     transactions: int
+    # Onda 3 — o saque agora É uma linha, e este é o id dela. Antes o resultado não referenciava
+    # nada: o dono via o saldo sumir e não tinha como voltar ao evento.
+    payout_id: str
+
+
+class PayoutOut(BaseModel):
+    """Um saque, como o dono o vê.
+
+    ⚠️ **Sem `*_origem`, e a ausência é correta:** §1.3c exige procedência em todo campo de
+    **saldo**, e `amount_cents` aqui é o valor de um EVENTO (quanto saiu naquele dia), não um saldo.
+    Pendurar procedência aqui aplicaria a regra fora do alvo.
+
+    `bank_account_id` é o id da conta que recebeu; **o nome dela é resolvido no front**, que já
+    carrega a lista de contas. Resolver aqui exigiria a Carteira ler o módulo do banco — a direção
+    que a Regra dos Planos §1.3b proíbe.
+    """
+
+    model_config = ConfigDict(from_attributes=True)
+
+    id: str
+    amount_cents: int
+    paid_on: date
+    bank_account_id: str
+    bank_transaction_id: str
 
 
 class SplitRates(BaseModel):

@@ -38,6 +38,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.core.money_planes import (
+    ORIGEM_BANCO,
     ORIGEM_INDISPONIVEL,
     ORIGEM_MISTO,
     ORIGEM_PLATAFORMA,
@@ -760,17 +761,46 @@ def test_dre_e_lucratividade_nao_importam_o_modulo_bank(client: TestClient, head
 
 
 def test_cockpit_e_carteira_intactos(client: TestClient, headers, db: Session):
-    """**[IV2 / IV3]** `cockpit.finance_summary` (faturamento líquido) e `wallet_summary` devolvem
-    EXATAMENTE os mesmos números depois de existir saldo bancário. Esta story só LÊ a Carteira; o
-    card "Em conta" do Cockpit é Onda 6 e está fora daqui."""
+    """**[IV2 / IV3]** O saldo bancário não contamina NENHUM número do plano da plataforma.
+
+    ⚠️ **ATUALIZADO NA ONDA 3, e a atualização estava prevista aqui.** A versão anterior comparava
+    o **dict inteiro** de `finance_summary` (`== antes_cockpit`) e a própria docstring dizia por
+    quê: *"o card 'Em conta' do Cockpit é Onda 6 e está fora daqui"*. A Onda 3 trouxe o card, e
+    `saldo_em_conta_cents` **passou a mudar de propósito** quando aparece conta bancária — que é
+    exatamente o que ele existe para fazer.
+
+    Congelar o dict inteiro agora **inverteria o teste**: ele reprovaria a funcionalidade correta e
+    a "correção" óbvia seria apagá-lo, levando junto a invariante que ele protege de verdade.
+
+    O que continua sendo afirmado, campo a campo:
+
+    - **faturamento e custos NÃO se movem** — plano 1 e o mês de Contas a Pagar são cegos ao banco;
+    - **`saldo_em_conta_cents` SE MOVE** (controle positivo) — sem isso o teste passaria com o card
+      quebrado devolvendo `None` para sempre, verde por vacuidade;
+    - **`wallet_summary` não muda em 1 centavo.**
+    """
     _seed_movimento_financeiro(client, headers)
     antes_cockpit = cockpit_service.finance_summary(db)
     antes_wallet = wallet_service.wallet_summary(db)
 
+    # Sem conta bancária, o Cockpit não sabe o saldo — e diz `None`, não zero.
+    assert antes_cockpit["saldo_em_conta_cents"] is None
+    assert antes_cockpit["saldo_em_conta_origem"] == ORIGEM_INDISPONIVEL
+
     conta = _conta(client, headers, opening=5_000_000)
     _movimento(client, headers, conta["id"], cents=-777_000)
 
-    assert cockpit_service.finance_summary(db) == antes_cockpit
+    depois_cockpit = cockpit_service.finance_summary(db)
+    for campo in ("net_revenue_cents", "monthly_costs_cents", "signed_contracts"):
+        assert depois_cockpit[campo] == antes_cockpit[campo], (
+            f"campo do plano da PLATAFORMA contaminado pelo saldo bancário: {campo}. As duas "
+            "parcelas convivem no mesmo schema e NUNCA no mesmo número (Regra dos Planos §1.3c)."
+        )
+
+    # Controle positivo: a parcela do plano 3 mudou, e mudou para o valor derivado correto.
+    assert depois_cockpit["saldo_em_conta_cents"] == 5_000_000 - 777_000
+    assert depois_cockpit["saldo_em_conta_origem"] == ORIGEM_BANCO
+
     depois_wallet = wallet_service.wallet_summary(db)
     assert depois_wallet == antes_wallet
     for campo in (

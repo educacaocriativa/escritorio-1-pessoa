@@ -826,8 +826,18 @@ _CHAMADORES_PERMITIDOS: dict[str, str] = {
         "ponto de escrita das pernas, e `delete_transfer` reusa o mesmo sincronizador "
         "(`bank_account_id=None`) em vez de recopiar a guarda da linha puramente sintética."
     ),
+    "modules/bank/payout.py": (
+        "**Onda 3** — o payout da Carteira é o QUINTO chamador de produção da Regra da Origem, e "
+        "o único que atravessa a fronteira entre o plano da PLATAFORMA e o plano do BANCO "
+        "(design-mãe §1.2). Ele NÃO importa o módulo da Carteira: implementa um `Protocol` "
+        "declarado lá e é ligado em `app/main.py`, como as duas travessias irmãs (8.17 AC6, 8.16 "
+        "AC7/AC8). Escreve UMA perna, positiva (entrada), `origin_id = payout.id`, na MESMA "
+        "transação do `Payout`. ⚠️ O ramo *'origem desliquidada → apaga'* é INALCANÇÁVEL aqui: "
+        "não existe estorno de payout, e nenhum caminho leva `bank_account_id=None` para "
+        "`source='payout'`."
+    ),
     "modules/investments/service.py": (
-        "**Onda 2b-i** — o rendimento de aplicação é o QUARTO chamador de produção da Regra da "
+        "**Onda 2b-i** — o rendimento de aplicação é o QUARTO chamador de produção da Regra da"
         "Origem (`source='yield'`, `amount_cents` POSITIVO, perna única ⇒ `origin_id = charge.id` "
         "sem sufixo). `register_yield` chama o sincronizador na MESMA transação da `Charge` "
         "sintética, depois de um `db.flush()` — o id da Charge tem default Python-side e sem o "

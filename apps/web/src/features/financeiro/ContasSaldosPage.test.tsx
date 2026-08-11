@@ -1033,3 +1033,34 @@ describe("Story 8.18 (AC9) — a perna não é editável nem ignorável PELA TEL
     expect(screen.queryByRole("button", { name: "Desfazer transferência" })).toBeNull();
   });
 });
+
+describe("Onda 3 — a conta principal passa a poder ser escolhida", () => {
+  // ⚠️ `service.set_primary` existia desde a Story 8.7 e não tinha rota nem botão: a tela só
+  // exibia o selo. O 409 do saque manda o dono "definir sua conta principal" — sem esta ação a
+  // frase apontaria para lugar nenhum e o saque ficaria travado para sempre.
+
+  it("oferece 'Tornar principal' nas contas que ainda não são a principal", async () => {
+    mockApi([
+      conta({ id: "a", name: "Itaú PJ", is_primary: false }),
+      conta({ id: "b", name: "Nubank", is_primary: false }),
+    ]);
+    renderPage();
+    expect(await screen.findAllByText("Tornar principal")).toHaveLength(2);
+  });
+
+  it("NÃO oferece na conta que já é a principal — a ação seria sem efeito", async () => {
+    mockApi([conta({ id: "a", name: "Itaú PJ", is_primary: true })]);
+    renderPage();
+    expect(await screen.findByText("Itaú PJ")).toBeInTheDocument();
+    expect(screen.queryByText("Tornar principal")).toBeNull();
+  });
+
+  it("clicar chama a rota da eleição e recarrega a lista", async () => {
+    mockApi([conta({ id: "a", name: "Itaú PJ", is_primary: false })]);
+    renderPage();
+    fireEvent.click(await screen.findByText("Tornar principal"));
+    await waitFor(() =>
+      expect(api.post).toHaveBeenCalledWith("/bank/accounts/a/set-primary"),
+    );
+  });
+});

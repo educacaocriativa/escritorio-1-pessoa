@@ -13,6 +13,7 @@ from app.core.tenancy import (
 from app.db.session import get_db  # global (sem tenant): só rotas de Master abaixo (ver Story 1.2)
 from app.modules.wallet import service
 from app.modules.wallet.schemas import (
+    PayoutOut,
     PayoutResult,
     PlatformEarningsSummary,
     SplitRates,
@@ -78,7 +79,31 @@ def payout(
     user: CurrentUser = Depends(_guard),
     db: Session = Depends(get_tenant_db),
 ) -> PayoutResult:
-    return PayoutResult(**service.request_payout(db, tenant_id=user.tenant_id, actor=user.user_id))
+    # ⚠️ O `try` é NOVO (Onda 3). Antes desta onda `request_payout` não levantava `WalletError`, e
+    # a rota não tratava nada — os dois 409 desta onda virariam **500** sem isto, e o dono veria
+    # "erro inesperado" no lugar de "escolha sua conta principal".
+    try:
+        result = service.request_payout(db, tenant_id=user.tenant_id, actor=user.user_id)
+    except service.WalletError as e:
+        raise HTTPException(status_code=e.status_code, detail=str(e)) from e
+    return PayoutResult(**result)
+
+
+@router.get("/payouts", response_model=list[PayoutOut])
+def payouts(
+    limit: int = Query(100, ge=1, le=500),
+    offset: int = Query(0, ge=0),
+    _user: CurrentUser = Depends(_guard),
+    db: Session = Depends(get_tenant_db),
+) -> list[PayoutOut]:
+    """O histórico de saques — que antes da Onda 3 não existia em lugar nenhum.
+
+    O dono via o saldo sumir e só tinha o audit log (que guardava o VALOR, não um id). Agora cada
+    saque é uma linha, e o crédito correspondente aparece no extrato da conta principal.
+    """
+    return [
+        PayoutOut.model_validate(p) for p in service.list_payouts(db, limit=limit, offset=offset)
+    ]
 
 
 # ── Master: ganhos da plataforma ───────────────────────

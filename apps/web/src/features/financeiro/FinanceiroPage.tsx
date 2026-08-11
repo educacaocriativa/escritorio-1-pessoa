@@ -3,6 +3,8 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import Modal, { Field } from "../../components/Modal";
 import { api, apiErrorMessage } from "../../lib/api";
 import { usePrimaryAction } from "../../store/pageActions";
+import { Link } from "react-router-dom";
+import { PayoutHistory, type Payout } from "./PayoutHistory";
 import ChartAccountSelect from "./ChartAccountSelect";
 import type { CostCenter } from "./costCenters";
 import CostCenterSelect from "./CostCenterSelect";
@@ -45,6 +47,11 @@ export default function FinanceiroPage() {
   const [chartAccounts, setChartAccounts] = useState<ChartAccount[]>([]);
   const [costCenters, setCostCenters] = useState<CostCenter[]>([]);
   const [open, setOpen] = useState(false);
+  const [payouts, setPayouts] = useState<Payout[]>([]);
+  const [contas, setContas] = useState<{ id: string; name: string }[]>([]);
+  // O 409 da Onda 3 precisa de superficie: antes desta onda `request_payout` nunca recusava, e
+  // a chamada nao tinha `try` nenhum — o botao simplesmente nao faria nada.
+  const [payoutErro, setPayoutErro] = useState<string | null>(null);
 
   const load = useCallback(async () => {
     const [s, t] = await Promise.all([
@@ -55,12 +62,21 @@ export default function FinanceiroPage() {
     setTxs(t.data);
     // Rótulos são só um complemento de exibição — se o usuário não tiver acesso a esses módulos
     // (require_module), a lista de transações continua funcionando normalmente.
-    const [ca, cc] = await Promise.all([
+    const [ca, cc, po, bc] = await Promise.all([
       api.get<ChartAccount[]>("/chart-of-accounts").catch(() => ({ data: [] as ChartAccount[] })),
       api.get<CostCenter[]>("/cost-centers").catch(() => ({ data: [] as CostCenter[] })),
+      api.get<Payout[]>("/wallet/payouts").catch(() => ({ data: [] as Payout[] })),
+      // So para resolver o NOME da conta de destino. A Carteira nao pode ler o modulo do banco no
+      // backend (Regra dos Planos §1.3b), entao `PayoutOut` traz o id e o nome se resolve aqui —
+      // mesmo padrao de `accountLabel`/`costCenterLabel` logo abaixo.
+      api
+        .get<{ id: string; name: string }[]>("/bank/accounts")
+        .catch(() => ({ data: [] as { id: string; name: string }[] })),
     ]);
     setChartAccounts(ca.data);
     setCostCenters(cc.data);
+    setPayouts(po.data);
+    setContas(bc.data);
   }, []);
 
   useEffect(() => {
@@ -84,7 +100,16 @@ export default function FinanceiroPage() {
   }
   async function payout() {
     if (!confirm("Sacar todo o saldo disponível para sua conta bancária?")) return;
-    await api.post("/wallet/payout");
+    setPayoutErro(null);
+    try {
+      await api.post("/wallet/payout");
+    } catch (e) {
+      // ⚠️ Este `catch` é NOVO (Onda 3). Antes, `request_payout` nunca recusava e a chamada não
+      // tinha tratamento: os dois 409 da onda (sem conta principal; conta aberta depois da data
+      // do saque) cairiam numa promise rejeitada e o botão não faria NADA — sem erro, sem efeito.
+      setPayoutErro(apiErrorMessage(e));
+      return;
+    }
     load();
   }
 
@@ -109,6 +134,24 @@ export default function FinanceiroPage() {
         >
           Sacar {brl(summary.available_cents)}
         </button>
+      )}
+
+      {payoutErro && (
+        <div className="rounded-2xl bg-amber-50 p-4 text-sm text-amber-900">
+          <p>{payoutErro}</p>
+          {/*
+            O link é parte da recusa, não enfeite. A frase manda definir a conta principal, e até
+            a Onda 3 NÃO EXISTIA como fazer isso — o service `set_primary` estava lá desde a Story
+            8.7 sem rota nem botão. Mandar o dono a uma tela onde a ação não existe seria pior do
+            que não avisar.
+          */}
+          <Link
+            to="/financeiro/contas"
+            className="mt-2 inline-block font-semibold underline hover:text-amber-950"
+          >
+            Ir para Contas &amp; Saldos
+          </Link>
+        </div>
       )}
 
       <div className="overflow-hidden rounded-2xl bg-white shadow-sm">
@@ -172,6 +215,22 @@ export default function FinanceiroPage() {
             </tbody>
           </table>
         )}
+      </div>
+
+      {/*
+        O histórico de saques mora AQUI, dentro da Carteira — não vira item de menu. A Conferência
+        já estabeleceu a régua: tela nova no menu vira peso de ERP, e consultar saques passados é
+        episódico, não tarefa de rotina. O crédito correspondente também aparece no extrato da
+        conta principal, em Contas & Saldos: são duas superfícies sobre o mesmo fato, de propósito.
+      */}
+      <div className="overflow-hidden rounded-2xl bg-white shadow-sm">
+        <h2 className="border-b border-neutral-100 px-4 py-3 text-sm font-semibold text-neutral-700">
+          Saques
+        </h2>
+        <PayoutHistory
+          payouts={payouts}
+          accountNames={Object.fromEntries(contas.map((c) => [c.id, c.name]))}
+        />
       </div>
 
       <NewSaleModal open={open} onClose={() => setOpen(false)} onCreated={load} />

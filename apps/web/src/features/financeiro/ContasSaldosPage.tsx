@@ -165,6 +165,22 @@ export default function ContasSaldosPage() {
     }
   }
 
+  /**
+   * Elege a conta principal — o destino do saque da Carteira (Onda 3).
+   *
+   * ⚠️ Sem confirmação, de propósito: ao contrário de arquivar, isto é reversível num clique e não
+   * move dinheiro nenhum. O que ele decide é PARA ONDE o dinheiro vai quando o dono sacar — e a
+   * confirmação de verdade acontece lá, no botão de sacar.
+   */
+  async function tornarPrincipal(a: BankAccount) {
+    try {
+      await api.post(`/bank/accounts/${a.id}/set-primary`);
+      load();
+    } catch (err) {
+      setError(apiErrorMessage(err));
+    }
+  }
+
   return (
     <div className="space-y-6">
       <div className="flex flex-wrap items-end justify-between gap-3">
@@ -240,6 +256,7 @@ export default function ContasSaldosPage() {
                   contasAtivas(accounts).length >= 2 ? () => setTransferindoDe(a.id) : null
                 }
                 onArchive={() => arquivar(a)}
+                onSetPrimary={() => tornarPrincipal(a)}
               />
             ))}
           </ul>
@@ -335,6 +352,7 @@ function AccountCard({
   onLaunch,
   onTransfer,
   onArchive,
+  onSetPrimary,
 }: {
   account: BankAccount;
   checkpoint: BankBalanceCheckpoint | null;
@@ -346,6 +364,7 @@ function AccountCard({
   /** `null` = não há segunda conta ativa, então não há para onde transferir (Story 8.18). */
   onTransfer: (() => void) | null;
   onArchive: () => void;
+  onSetPrimary: () => void;
 }) {
   const arquivada = account.archived_at !== null;
   return (
@@ -454,6 +473,18 @@ function AccountCard({
             >
               <Pencil size={14} /> Editar
             </button>
+            {/* Onda 3 — a conta principal é o destino do saque da Carteira. Só aparece para quem
+                ainda NÃO é principal: oferecer "tornar principal" na conta que já é seria uma ação
+                sem efeito, e o selo ao lado do nome já diz qual é. */}
+            {!account.is_primary && (
+              <button
+                type="button"
+                onClick={onSetPrimary}
+                className="inline-flex items-center gap-1 text-neutral-600 hover:text-primary-600"
+              >
+                <Star size={14} /> Tornar principal
+              </button>
+            )}
             <button
               type="button"
               onClick={onArchive}
