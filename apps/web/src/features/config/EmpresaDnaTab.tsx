@@ -44,7 +44,7 @@ export default function EmpresaDnaTab() {
   const respondidas = catalogo.filter((p) => p.key in respostas).length;
 
   return (
-    <div className="space-y-8">
+    <div className="space-y-3">
       <p className="text-sm text-neutral-500">
         {respondidas} de {catalogo.length} respondidas. Não precisa responder tudo de uma vez — a
         Vima pergunta aos poucos, no momento em que cada resposta faz sentido.
@@ -53,39 +53,52 @@ export default function EmpresaDnaTab() {
       {EIXOS.map((eixo) => {
         const doEixo = catalogo.filter((p) => p.eixo === eixo.key);
         if (doEixo.length === 0) return null;
+        const respondidasDoEixo = doEixo.filter((p) => p.key in respostas).length;
         return (
-          <section key={eixo.key} className="space-y-3">
-            <div>
-              <h2 className="text-lg font-semibold text-neutral-800">{eixo.titulo}</h2>
-              <p className="text-xs text-neutral-500">{eixo.descricao}</p>
+          /* Recolhido por padrão, com `<details>` NATIVO — expandir/recolher acessível sem estado
+             em React. Aberta, esta aba tinha **16.495px em 360px (22,3 telas)**, e a pergunta que
+             o PR #103 acrescentou ao eixo `dinheiro` ficava a **14,6 telas** do topo. O texto de
+             abertura promete que "a Vima pergunta aos poucos"; despejar as 46 de uma vez é a tela
+             contradizendo a própria promessa. */
+          <details key={eixo.key} className="rounded-xl border border-neutral-200">
+            <summary className="flex min-h-[44px] cursor-pointer items-center justify-between gap-3 px-4 py-3 [&::-webkit-details-marker]:hidden">
+              <span>
+                <span className="block text-lg font-semibold text-neutral-800">{eixo.titulo}</span>
+                <span className="block text-xs text-neutral-500">{eixo.descricao}</span>
+              </span>
+              <span className="shrink-0 text-xs text-neutral-400">
+                {respondidasDoEixo}/{doEixo.length}
+              </span>
+            </summary>
+            <div className="space-y-3 border-t border-neutral-100 p-4">
+              {doEixo.map((p) => (
+                <div key={p.key}>
+                  {p.key in respostas && !reabertas.includes(p.key) ? (
+                    <div className="rounded-xl border border-neutral-200 bg-neutral-50 p-4">
+                      <p className="text-sm text-neutral-600">{p.texto}</p>
+                      <p className="mt-1 text-sm font-medium text-neutral-800">
+                        {rotulo(p, respostas[p.key])}
+                      </p>
+                      <button
+                        type="button"
+                        onClick={() => setReabertas([...reabertas, p.key])}
+                        className="mt-2 inline-flex min-h-[44px] items-center text-xs text-neutral-400 underline"
+                      >
+                        Mudar
+                      </button>
+                    </div>
+                  ) : (
+                    <PerguntaDaVima
+                      pergunta={p}
+                      source="config"
+                      onPronto={carregar}
+                      onPular={carregar}
+                    />
+                  )}
+                </div>
+              ))}
             </div>
-            {doEixo.map((p) => (
-              <div key={p.key}>
-                {p.key in respostas && !reabertas.includes(p.key) ? (
-                  <div className="rounded-xl border border-neutral-200 bg-neutral-50 p-4">
-                    <p className="text-sm text-neutral-600">{p.texto}</p>
-                    <p className="mt-1 text-sm font-medium text-neutral-800">
-                      {rotulo(p, respostas[p.key])}
-                    </p>
-                    <button
-                      type="button"
-                      onClick={() => setReabertas([...reabertas, p.key])}
-                      className="mt-2 text-xs text-neutral-400 underline"
-                    >
-                      Mudar
-                    </button>
-                  </div>
-                ) : (
-                  <PerguntaDaVima
-                    pergunta={p}
-                    source="config"
-                    onPronto={carregar}
-                    onPular={carregar}
-                  />
-                )}
-              </div>
-            ))}
-          </section>
+          </details>
         );
       })}
     </div>
