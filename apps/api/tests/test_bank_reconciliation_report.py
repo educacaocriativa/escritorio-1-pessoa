@@ -1639,7 +1639,9 @@ def test_volume_exclui_ignorados(client: TestClient, headers, db: Session):
     """
     acc = _account(client, headers)
     _lancar(client, headers, acc["id"], amount_cents=100_000, posted_at=date(2026, 7, 10))
-    ignorado = _lancar(client, headers, acc["id"], amount_cents=900_000, posted_at=date(2026, 7, 11))
+    ignorado = _lancar(
+        client, headers, acc["id"], amount_cents=900_000, posted_at=date(2026, 7, 11)
+    )
     assert (
         client.post(
             f"/bank/transactions/{ignorado['id']}/ignore",
