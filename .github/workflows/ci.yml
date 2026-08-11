@@ -174,9 +174,11 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # SEM `version:` de propósito. A raiz já declara `"packageManager": "pnpm@9.12.0"`, e
+      # `pnpm/action-setup@v4` FALHA quando as duas fontes existem ("Multiple versions of pnpm
+      # specified"). O `packageManager` é a fonte melhor: pina a versão exata e é a mesma que a
+      # máquina de quem desenvolve usa.
       - uses: pnpm/action-setup@v4
-        with:
-          version: 9
 
       - uses: actions/setup-node@v4
         with:
