@@ -154,3 +154,65 @@ jobs:
               --error \
               --metrics=off \
               apps/web
+
+  # Gate de LAYOUT do frontend (dívida de 360px, 2026-08-10). Este repositório NÃO tinha nenhum
+  # job de frontend: `vitest` nunca rodou no CI e nenhuma medição de tela era exigida em PR — foi
+  # assim que seis telas mergearam com "validação em ~360px não foi feita" e três PRs de correção
+  # em campo foram pagos (#56, #58, #89).
+  #
+  # Observável primeiro, bloqueante depois — MESMO modelo de `secret-scan`/`sast-semgrep` deste
+  # arquivo: o job aparece no PR e fica vermelho quando acha algo, mas só IMPEDE merge quando
+  # @devops o acrescentar em "Require status checks to pass" (GitHub → Settings → Branches).
+  # Sem esse passo a régua mede e não barra — e foi a ausência de barreira, não a de conhecimento,
+  # que deixou seis telas passarem. NÃO usamos `continue-on-error` (deixaria o check sempre verde
+  # e tornaria a promoção via branch protection um no-op).
+  frontend:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: apps/web
+    steps:
+      - uses: actions/checkout@v4
+
+      # SEM `version:` de propósito. A raiz já declara `"packageManager": "pnpm@9.12.0"`, e
+      # `pnpm/action-setup@v4` FALHA quando as duas fontes existem ("Multiple versions of pnpm
+      # specified"). O `packageManager` é a fonte melhor: pina a versão exata e é a mesma que a
+      # máquina de quem desenvolve usa.
+      - uses: pnpm/action-setup@v4
+
+      # ⚠️ NÃO baixe daqui sem medir. A raiz declara `"engines": {"node": ">=22"}` e este job
+      # nasceu pinado em 20 — abaixo do piso. O sintoma não foi um erro de engine: foi
+      # `shareInbox.test.ts` ficando VERMELHO só no CI e verde em toda máquina de dev. Aquele
+      # teste depende de `structuredClone` preservar `File` (ver o comentário no topo dele), e
+      # esse comportamento MUDA entre versões do Node. 24 é a versão que quem desenvolve usa e na
+      # qual o comportamento foi verificado.
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+          cache: pnpm
+
+      # Na raiz: é um workspace pnpm, o lockfile é de lá.
+      - name: Instalar dependências
+        run: pnpm install --frozen-lockfile
+        working-directory: .
+
+      - name: Typecheck
+        run: pnpm typecheck
+
+      - name: Testes de unidade (vitest)
+        run: pnpm test
+
+      # Só chromium: o gate mede geometria de layout, não compatibilidade entre motores.
+      # `--with-deps` instala as bibliotecas de sistema que o runner não traz.
+      - name: Instalar chromium do Playwright
+        run: pnpm exec playwright install --with-deps chromium
+
+      - name: Gate de layout em 360px
+        run: pnpm e2e
+
+      - if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-report
+          path: apps/web/playwright-report/
+          retention-days: 7

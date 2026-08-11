@@ -165,18 +165,27 @@ function Topbar({ onOpen, sidebarOpen }: { onOpen: () => void; sidebarOpen: bool
   const { action } = usePageActions();
 
   return (
-    <header className="flex items-center gap-4 border-b border-neutral-100 bg-white px-6 py-3">
+    // `flex-wrap` + `order-last` abaixo de `sm`: a ação primária desce para uma linha própria, de
+    // largura inteira, em vez de espremer os vizinhos até a linha estourar a viewport. Reflui, não
+    // corta — a mesma escolha do PR #58, aplicada ao eixo em que esta barra falhava.
+    <header className="flex flex-wrap items-center gap-3 border-b border-neutral-100 bg-white px-4 py-3 sm:px-6">
       {!sidebarOpen && (
         <button
           onClick={onOpen}
           aria-label="Abrir menu"
-          className="flex h-9 w-9 items-center justify-center rounded-pill bg-primary-50 text-primary-600"
+          // `shrink-0` é o que impede a espremida: sem ele este botão ia a 16px de largura em
+          // `/financeiro/investimentos`, e a navegação inteira do celular ficava atrás de um alvo
+          // que o polegar não acerta.
+          className="flex h-11 w-11 shrink-0 items-center justify-center rounded-pill bg-primary-50 text-primary-600"
         >
           <Search size={16} />
         </button>
       )}
 
-      <div className="relative max-w-md flex-1">
+      {/* A busca não tem handler nenhum — é decoração até alguém ligá-la. Abaixo de `md` ela sai da
+          frente e devolve 152px à linha, em vez de virar um bolo cinza de 52px sem placeholder
+          legível, que foi o que a medição encontrou. */}
+      <div className="relative hidden min-w-0 max-w-md flex-1 md:block">
         <Search size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-neutral-400" />
         <input
           placeholder="Buscar cliente, projeto ou processo"
@@ -184,30 +193,38 @@ function Topbar({ onOpen, sidebarOpen }: { onOpen: () => void; sidebarOpen: bool
         />
       </div>
 
+      {/* `min-h-[44px]`: com `py-2` puro a altura dava 40px e o teste desta task pegaria. */}
       {action && (
         <button
           onClick={action.onClick}
-          className="flex items-center gap-2 rounded-pill bg-accent-400 px-4 py-2 text-sm font-semibold text-white transition hover:bg-accent-500"
+          className="order-last flex min-h-[44px] w-full shrink-0 items-center justify-center gap-2 rounded-pill bg-accent-400 px-4 py-2 text-sm font-semibold text-white transition hover:bg-accent-500 sm:order-none sm:w-auto"
         >
-          <Plus size={16} />
+          <Plus size={16} className="shrink-0" />
           {action.label}
         </button>
       )}
 
-      <button className="text-neutral-500 hover:text-neutral-800" aria-label="Notificações">
-        <Bell size={20} />
-      </button>
+      {/* `ml-auto` mantém este grupo à direita mesmo quando a busca está escondida — sem ele os
+          ícones se amontoariam ao lado do menu. */}
+      <div className="ml-auto flex shrink-0 items-center gap-1">
+        <button
+          className="flex h-11 w-11 items-center justify-center rounded-pill text-neutral-500 hover:text-neutral-800"
+          aria-label="Notificações"
+        >
+          <Bell size={20} />
+        </button>
 
-      <button
-        onClick={logout}
-        className="flex items-center gap-2"
-        title={tenant ? `${tenant.legal_name} — sair` : "Sair"}
-      >
-        <div className="flex h-8 w-8 items-center justify-center rounded-full bg-primary-200 text-xs font-bold text-primary-700">
-          {(user?.name ?? "?").slice(0, 1).toUpperCase()}
-        </div>
-        <ChevronDown size={16} className="text-neutral-500" />
-      </button>
+        <button
+          onClick={logout}
+          className="flex h-11 items-center gap-1 rounded-pill px-1"
+          title={tenant ? `${tenant.legal_name} — sair` : "Sair"}
+        >
+          <div className="flex h-8 w-8 items-center justify-center rounded-full bg-primary-200 text-xs font-bold text-primary-700">
+            {(user?.name ?? "?").slice(0, 1).toUpperCase()}
+          </div>
+          <ChevronDown size={16} className="shrink-0 text-neutral-500" />
+        </button>
+      </div>
     </header>
   );
 }

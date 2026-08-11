@@ -66,6 +66,36 @@ Ao criar/alterar qualquer funcionalidade:
 > `story-dod-checklist` item 7 (antes de "Ready for Review", pelo @dev). Refactor puro não some com
 > o AC: satisfaz com uma linha explícita dizendo que nada mudou para o próximo leitor, e por quê.
 
+### 5.1 A régua de layout em 360px (`apps/web/e2e/`, desde 2026-08-10)
+
+**Layout só se prova MEDINDO.** `expect(linha.className).toContain("flex-wrap")` passou duas sessões
+com a `FilaPagamentosPage` quebrada em produção: o `overflow-x` estava certo, o `flex-wrap` estava
+certo, e a tela estava errada. **Nenhum teste de `apps/web/e2e/` pode aferir classe CSS** — só
+`scrollWidth`, `getBoundingClientRect()`, `toBeInViewport()` e o texto efetivamente visível.
+
+- **Como roda:** `pnpm --filter @e1p/web e2e`. Sobe **só o Vite** (porta **5273** — a 5173 colide
+  com outro projeto nas máquinas de dev) e intercepta a API com `page.route` (`e2e/support/api.ts`).
+  Sem backend, sem Docker, sem banco: foi por achar que medir custava caro que **seis telas** subiram
+  sem medição e **três PRs de correção em campo** foram pagos (#56, #58, #89).
+- **A régua** é `e2e/support/medidas.ts`: `medirPagina`, `alvosPequenos` (mínimo tocável **44px**) e
+  `textoForaDaTela` (o texto que só existe se o dono rolar de lado — o defeito que a Onda 2b-ii achou
+  na primeira medição, `R$ 3.` no lugar de `R$ 3.000,00`).
+- **As fixtures são de PIOR CASO PLAUSÍVEL** (nome longo de banco, valor de 6 dígitos, título de
+  grupo comprido), nas formas reais de `packages/shared-types`. Dado curto sempre cabe: medir com ele
+  é medir uma tela que não existe.
+- ⚠️ **O CI não tinha NENHUM job de frontend até esta data** — o `vitest` nunca rodou nele, e nenhuma
+  medição de tela era exigida em PR. O job `frontend` (typecheck + vitest + playwright) fecha isso.
+- ⚠️ **O job roda Node 24, e a versão NÃO é detalhe de infraestrutura.** A raiz declara
+  `"engines": {"node": ">=22"}`; o job nasceu pinado em **20** e o sintoma não foi erro de engine —
+  foi `src/lib/shareInbox.test.ts` **vermelho só no CI e verde em toda máquina de dev**. Aquele
+  teste depende de `structuredClone` preservar `File`, e esse comportamento **muda entre versões do
+  Node** (é a mesma lacuna que o comentário no topo dele descreve para o jsdom). **Dívida:** o teste
+  continua sensível à versão do Node, e o CI hoje exercita só a versão dos desenvolvedores — não o
+  piso `>=22` que o repositório promete suportar.
+  **Dívida:** ele é **observável, não bloqueante**, até @devops o acrescentar em "Require status
+  checks to pass" (mesmo modelo de `secret-scan`/`sast-semgrep`). Enquanto isso, a régua **mede e não
+  barra** — e foi a ausência de barreira, não a de conhecimento, que deixou seis telas passarem.
+
 ## 6. Estado atual / roadmap
 - [x] Fundação do monorepo, docs, agentes de QA, CI local.
 - [x] Core do backend: tenancy (RLS) + anonimizador + camada de IA + auditoria.
@@ -195,6 +225,25 @@ Ao criar/alterar qualquer funcionalidade:
     `ProtectedBareLayout` (mesma proteção via `useAuthGate` compartilhado, sem sidebar/topbar).
     **Só o shell + as 2 telas do comprovante foram auditados — nenhuma outra tela do app foi
     verificada quanto ao mesmo padrão.** (PR #56)
+  - **[CORRIGIDO 2026-08-10] A sidebar ganhou breakpoint no #56; a TOPBAR não.** Ela era uma linha
+    flex única em que **todo filho tinha `flex-shrink: 1` sem `min-width`**: a ação primária
+    espremia os vizinhos e, quando não havia mais o que espremer, a linha estourava a viewport.
+    Efeitos medidos em 360px, em `/financeiro/investimentos`: página com `scrollWidth` **375px**
+    (rola 15px de lado), botão **"Abrir menu" com 16px de largura** — o único acesso à navegação
+    no celular, num alvo que o polegar não acerta — e o campo de busca reduzido a 52px, sem
+    placeholder legível. **O que decide é o COMPRIMENTO DO RÓTULO da ação primária**, não o
+    `ChevronDown` (largura mínima da linha: 216px sem ação · 326px com "Nova conta" · 375px com
+    "Nova conta de investimento").
+    - Agora: `flex-wrap` no `header` e `order-last w-full sm:w-auto` na ação, que **desce para uma
+      linha própria** abaixo de `sm` em vez de espremer — reflui, não corta (a lição do PR #58 no
+      eixo em que esta barra falhava). `shrink-0` + 44px no botão de menu, nos ícones e no avatar.
+      A busca (que **não tem handler nenhum** — é decoração) fica `hidden md:block` e devolve 152px
+      à linha.
+    - **Rótulo de ação novo e comprido não quebra mais a barra**; se quebrar,
+      `apps/web/e2e/shell-360.spec.ts` pega. `/vima` e `/dna/nucleo` vivem em
+      `ProtectedBareLayout` e nunca tiveram este problema.
+    - **Dívida:** o campo de busca continua sem handler — escondê-lo abaixo de `md` não o liga.
+      Ligar ou remover é decisão de produto.
   - **[CORRIGIDO pós-deploy, 2ª rodada de teste em campo]** Mesmo com o shell responsivo, o
     checkbox "marcar como paga" vivia num bloco SEPARADO do botão Anexar — quem selecionava a
     conta e tocava Anexar sem rolar nunca via o checkbox, e a baixa saía com o padrão (marcado)
@@ -414,7 +463,7 @@ Custo de aplicar, medido nos quatro casos reais que teria pego: 2 a 5 segundos c
 
 **A Regra da Origem** (Onda 2, `docs/architecture/controle-bancario-onda2-design.md`): todo evento que o sistema já emite e que move dinheiro no banco **escreve o movimento bancário**; a porta manual e a importação existem para o **resíduo**, e só o resíduo justifica o custo delas. Antes de desenhar a porta de entrada de um plano de dados novo, enumere os eventos que o sistema já emite e ligue-os primeiro — foi não fazer isso que produziu o erro do gate acima.
 
-- **Dívida:** **validação visual em ~360px NÃO foi feita** na tela de Contas & Saldos — aceite manual pendente; bloqueia release, não bloqueia merge. Cinco pontos listados no artefato de QA.
+- [x] **A validação em ~360px de Contas & Saldos FOI FEITA (2026-08-10)** — ver "360px: alvo de toque é 44px" na seção da Onda 2, abaixo. Largura passou (`scrollWidth` 360, valores inteiros); o que estava quebrado era o **alvo de toque**.
 - **[CORRIGIDO — UX-001]** `"no banco"` nomeava sentidos **opostos** em duas telas: na Projeção é o saldo que o e1p **calculou**; na Conferência era o que o **banco atestou** — as duas pontas exatas da comparação, com a mesma palavra. **A correção foi do lado da Conferência** (decisão do fundador): as colunas viraram **"O que o banco diz"** × **"O que o e1p calculou"**, pareadas sob uma legenda comum e numa faixa visual compartilhada, e a frase da tela passou a usar o mesmo par. **`ROTULO_BANCO` da Projeção foi mantido de propósito:** ali o rótulo diz *onde está o dinheiro* (a parcela irmã é `ROTULO_PLATAFORMA`, outro **lugar**, não outra testemunha), e qualquer sinônimo locacional encostaria em `TOTAL_EM_CONTAS_LABEL`/`DISPONIVEL_CAIXA_LABEL` — trocando esta colisão por aquela que a divergência D-6 já pagou para separar. **A garantia é a invariante, não o nome:** `"no banco"` tem **um** consumidor (a parcela da Projeção), e agora tanto `ContasSaldosPage` quanto `ConferenciaPage` têm teste provando que não a reusam. Regra que fica: **nunca use "no banco" para nomear um saldo que o e1p não calculou** (checkpoint declarado, `<LEDGERBAL>` de OFX) — para esse lado o vocabulário é "o que o banco diz". Ver `docs/stories/8.7.story.md` (seção UX-001).
 - **Dívida:** a virada de mês apaga uma conferência recente e bem-sucedida — a janela do Diagnóstico é o mês da DRE, então um saldo declarado em 28/06 que bateu exato vira 🟡 em 01/07. O motor tem o número de dias e não o usa (SIG-001).
 - **Dívida:** `audit.record(target='')` em **17 call sites** — `acc.id` ainda é `None` quando `audit.record` roda logo após `db.add()`. O módulo `bank` faz `db.flush()` antes e está correto; `chart_of_accounts`, `cost_centers` e `crm` gravam trilha apontando para lugar nenhum (MNT-001).
@@ -714,9 +763,19 @@ três é decisão de Onda 2b/3 e **exige revisitar esta seção junto** — não
   cobertura, não a cobertura.
 - **Dívida:** **`operation_nature` não entrou em `BankTransactionUpdate`** — preencher a natureza de um
   movimento legado **pela tela de edição não é possível hoje**. Verificada aberta.
-- **Dívida:** ⚠️ a validação em ~360px da tela **Contas & Saldos** segue pendente (a dívida da Onda 1,
-  logo acima) **e o `TotaisCard` usa `flex-wrap` puro** — exatamente o padrão que a 8.13 provou
-  insuficiente sozinho. Não é só "não validada": está escrita com o padrão que dá falso verde.
+- [x] **360px: alvo de toque é 44px, e a suspeita sobre o `TotaisCard` NÃO se confirmou** (medido
+  em 2026-08-10). O `flex-wrap` puro **empilhou certo**: `scrollWidth` da página = **360**, zero
+  elementos fora, zero texto cortado, e `R$ 179.570,79` / `R$ 128.450,79` / `R$ 3.000,00` aparecem
+  INTEIROS. A preocupação herdada da 8.13 não se materializou aqui — com número.
+  - O que estava quebrado era outra coisa: **34 dos 35 controles tinham menos de 40px de altura**.
+    As sete ações por conta ("Declarar saldo", "Lançar movimento", "Transferir entre contas",
+    "Conferir", "Ver movimentos", "Editar", "Arquivar") eram links de texto de **16px**, com
+    "Arquivar" — destrutiva — a 4px de "Editar", e "Mostrar arquivadas" era um checkbox de 13×13.
+    É a classe do PR #56, no alvo que o polegar erra.
+  - Agora: `ACAO_DA_CONTA` (**uma constante, sete consumidores**) com `min-h-[44px]`, e 44px na
+    linha inteira do "Mostrar arquivadas". O padding cresce, a fonte não — o cartão fica mais alto
+    e rolar na vertical é nativo e gratuito; errar "Arquivar" não é. Travado por
+    `apps/web/e2e/toque-360.spec.ts`.
 - **Dívida:** `contas_sem_checkpoint` virou **nome impreciso** — passou a contar também as contas com
   checkpoint degenerado. O **texto** de todas as superfícies foi corrigido para *"não avaliada(s)"*; o
   **nome do campo de API** não. Decisão consciente: renomear campo de contrato por precisão semântica,
@@ -833,8 +892,23 @@ desde a Onda 0 **sem gatilho nenhum**; esta story é o gatilho.
   foi um **spike de 20 minutos** do @dev, que confirmou os três e ainda revelou que o bloqueio de
   numeração de migration havia caído sozinho. **Regra: quando duas validações de documento seguidas
   falham pelo mesmo motivo, a terceira não deve ser de documento.**
-- **Dívida:** **aceite visual em ~360px NÃO foi feito** (a escolha é elemento novo) — mesma dívida do
-  AC9 da 8.13. E: conta `is_known=false` + recuo de data pede um saldo cujo campo está escondido no
+- [x] **O aceite em ~360px FOI MEDIDO (2026-08-10) — e a escolha da 8.21 estava a 467px do botão
+  que a efetiva.** Conteúdo de **1010px** numa caixa de **629px** (`max-h-[85vh]`): "Cadastrar
+  conta" nascia a 942px do topo do modal, ou seja **y=1043,5 — 303px ABAIXO da borda da tela**. O
+  dono escolhia *"Não sei o saldo agora"* (visível em y=528,5) e tinha de rolar 467px dentro do
+  modal para achar o botão que tornava aquilo real: **a forma exata do PR #56**, o controle e a
+  ação que o efetiva em lugares separados. Os rádios tinham **13×13px**.
+  - Agora: **`Modal` aceita `footer`** (`components/Modal.tsx`) — a ação primária vive numa barra
+    `sticky bottom-0` DENTRO da caixa que rola, e não sai da tela enquanto o dono preenche. Prop
+    **opcional**: modal que não a passa continua idêntico. **Formulário longo em modal DEVE usar
+    `footer`.** Alvo dos rádios e de "Conta principal": 44px na **linha inteira** do rótulo, não no
+    círculo. O erro continua no corpo — na barra ele empurraria o botão para fora justamente quando
+    o dono mais precisa dele. Travado por `apps/web/e2e/modal-conta-360.spec.ts`.
+  - **Dívida:** os campos de texto do `Field` têm **38px** de altura (mínimo tocável é 44). Não
+    foram engordados aqui porque `Field` é compartilhado por todos os modais do app e a mudança
+    sairia do escopo deste PR — o spec afirma sobre BOTÃO, com o recorte escrito no próprio teste
+    em vez de escondido num filtro.
+- **Dívida:** conta `is_known=false` + recuo de data pede um saldo cujo campo está escondido no
   formulário; tem saída (marcar *"sei o saldo"* revela o campo), mas a mensagem de erro pede algo que
   não está visível.
 
@@ -917,8 +991,11 @@ onda já fechada. O único teste que tocava a função afirmava que ela era `cal
 - **Dívida:** o ramo *"origem desliquidada → apaga"* de `sync_origin_movement` é **inalcançável**
   para `source='yield'` (não existe estorno nem exclusão de rendimento; o router só expõe
   `register_yield`). Está na docstring para não parecer esquecimento na 2b-ii.
-- **Dívida:** **aceite visual em ~360px do campo de vínculo NÃO foi feito** — mesma dívida da 8.13
-  AC9 e da 8.21. Bloqueia release, não bloqueia merge.
+- [x] **O aceite em ~360px do campo de vínculo FOI MEDIDO (2026-08-10) e PASSOU.** Com o 409
+  acionável disparado, o modal de rendimento tem **596px numa viewport de 740** — cabe sem rolagem
+  interna, "Registrar rendimento" fica visível sem rolar, o seletor de conta renderiza e a largura
+  não passa de 360. Sem conserto necessário. (Os campos de `Field` têm 38px — dívida geral do
+  componente, registrada na 8.21.)
 - **Dívida:** ~~a 2b-ii continua com o único backfill do épico, e ele continua sendo o item de
   maior risco.~~ **FECHADA na 2b-ii (2026-08-08): o backfill não foi mitigado, deixou de
   existir.** Ver a seção da Onda 2b-ii, logo abaixo.
@@ -1023,19 +1100,26 @@ tinham sobre o que rodar.
 - ⚠️ **Achado PRÉ-EXISTENTE, fora do escopo desta onda e não corrigido aqui:** em 360px o
   `document.scrollWidth` da tela de Investimentos é **375px** — a página inteira rola 15px na
   horizontal. Medido idêntico **com e sem** o extrato (logo não é desta onda), e ausente em
-  Contas & Saldos (345px). O culpado é o `ChevronDown` do menu do usuário em
-  `app/AppShell.tsx:209`. Fica registrado com a medição, e **não** foi corrigido junto: misturar
+  Contas & Saldos (345px). Fica registrado com a medição, e **não** foi corrigido junto: misturar
   correção de defeito existente com regra nova no mesmo diff tira do gate a capacidade de julgar
   qual mudança quebrou o quê — mesmo argumento que manteve SIG-001 fora da 8.16 e separou 8.19
   de 8.20.
+  - ⚠️ **CORRIGIDO em 2026-08-10, e a atribuição acima estava ERRADA.** Dizia que *"o culpado é o
+    `ChevronDown` do menu do usuário em `app/AppShell.tsx:209`"* — atribuição **geométrica, não
+    causal**: o chevron é o último elemento da fila, então é sempre ele que sobra para fora.
+    Medida a largura mínima da linha por rota: **216px** sem ação primária, **326px** com "Nova
+    conta", **375px** com "Nova conta de investimento". Quem decide se cabe é o **comprimento do
+    rótulo da ação**. Tirar o chevron compraria 24px e mascararia a classe até o próximo rótulo
+    longo. Ver a correção completa abaixo.
 
 - **Dívida:** `packages/shared-types/src/generated.ts` tem `principal_cents` em quatro lugares e
   segue defasado desde o PR #45, sem check de drift no CI. Dívida do épico, não desta onda.
 - **Dívida:** REQ-26 (cotização e liquidação em datas diferentes) segue não implementado —
   declarado fora de escopo, não esquecido.
 - **Dívida:** o `DROP COLUMN principal_cents` é migration posterior, depois de um ciclo.
-- **Dívida:** o estouro horizontal de 15px do `AppShell` (acima) — vale para **todas** as telas,
-  não só esta.
+- ~~**Dívida:** o estouro horizontal de 15px do `AppShell` (acima) — vale para todas as telas.~~
+  **FECHADA em 2026-08-10** — e a atribuição ao `ChevronDown` estava errada. Ver
+  "360px: a barra superior reflui" em §5.1 / na seção do shell abaixo.
 
 
 ### Onda 3 — o payout fecha o circuito (o termo P4 zera)
@@ -1422,8 +1506,18 @@ setter do React que recebe função a trata como updater e a **executa**. O guar
 a correção vale daqui para frente) — quem for mesclá-los depois precisa juntar `facts`
 (ex-`client_events`), `charges`, `quotes`, `contracts` e `whatsapp_chats` do card absorvido, e não só apagar a linha.
 Não há ferramenta de mescla na tela. Também não há "ligar conversa não identificada a um
-contato" nem marcação de histórico como lido. **Validação manual em ~360px do painel de
-Conversas ainda não foi feita** — bloqueia release, não bloqueia merge.
+contato" nem marcação de histórico como lido.
+
+- [x] **360px: a Conversa é uma TELA, não uma coluna** (2026-08-10). Abaixo de `lg` a lista e a
+  conversa não dividem a largura — mostra-se uma por vez, com "Voltar para as conversas" no
+  cabeçalho da conversa. `w-80 shrink-0` + `flex-1` **sem breakpoint** faziam o painel da conversa
+  nascer em **x=360**, inteiro fora da viewport de 360px, e `main` (`overflow-x-hidden`) o cortava
+  sem deixar barra nem pan por toque: **o dono tocava numa conversa e nada acontecia** — 12
+  elementos fora da tela, incluindo toda mensagem e o campo de envio. Era o "corte" que o PR #58
+  proibiu, aplicado à jornada inteira do contato. A gaveta do histórico já tratava o celular assim
+  desde sempre; a divisão principal é que nunca foi tratada. Travado por
+  `apps/web/e2e/conversas-360.spec.ts` (mede `toBeInViewport` e `boundingBox`, não classe CSS).
+  **Fecha a dívida "validação manual em ~360px do painel de Conversas".**
 
 ## Vima: o Registro de Fatos e o briefing (PRs #85 e #90, 2026-08-06/07)
 
@@ -1539,8 +1633,10 @@ O dono passou a **ver o briefing na tela** e a **recebê-lo no WhatsApp**, nos d
   preferências **diz por quê** em vez de oferecer um switch que liga e não entrega nada
   (`vima/delivery.avaliar`, o mesmo veredito que o scheduler usa; divergirem faria a tela dizer
   "ligado" e o job não mandar nada).
-- **Dívida:** **validação manual em ~360px da tela do briefing ainda não foi feita** — bloqueia
-  release, não bloqueia merge; quem gera o briefing abrindo o app antes do próprio horário não
+- [x] **A validação em ~360px do briefing FOI FEITA (2026-08-10) e PASSOU, sem conserto.**
+  `scrollWidth` 360, 1145px de altura, nada fora da tela, nada cortado, um alvo por linha. Ela é
+  imune ao defeito da topbar porque roda em `ProtectedBareLayout` (sem shell).
+- **Dívida:** quem gera o briefing abrindo o app antes do próprio horário não
   recebe o WhatsApp daquele dia (a tela já marcou como lido — troca deliberada, ver a docstring
   de `scheduler.tick`).
 
@@ -1641,8 +1737,18 @@ media que responde em duas horas recebiam o mesmo aviso na mesma hora.
 - **O V2 não chama IA em ponto nenhum** — custo marginal zero por tenant.
 - **Dívidas:** as 46 perguntas nunca foram validadas com dono real; não há medição de ativação do
   núcleo, então não se sabe se ele ajudou ou atrapalhou; a quarentena de 7 dias e o "uma por dia"
-  são números sem evidência; **validação manual em ~360px da tela do núcleo
-  e da aba não foi feita** (bloqueia release, não merge).
+  são números sem evidência.
+- [x] **A validação em ~360px do núcleo e da aba FOI FEITA (2026-08-10).** **O núcleo passou sem
+  conserto** — `scrollWidth` 360, uma pergunta por tela, opções com 54px de altura, e também roda
+  em `ProtectedBareLayout`. **A aba "A sua empresa" não:** ela abria com **16.495px = 22,3 telas**
+  (Oferta 3096 · Cliente 3552 · Ritmo 3554 · Dinheiro 3366 · Limites 2434), com a pergunta que o
+  PR #103 acrescentou ao eixo `dinheiro` a **14,6 telas** do topo. Agora os cinco eixos abrem
+  RECOLHIDOS (`<details>` nativo, com contador respondidas/total no cabeçalho) — o texto da própria
+  aba diz que "a Vima pergunta aos poucos", e despejar as 46 de uma vez a contradizia. Travado por
+  `apps/web/e2e/toque-360.spec.ts`.
+  - A régua de abas do `/config` tem 641px de conteúdo em 312px visíveis e **rola**
+    (`overflow-x-auto`, obedece o PR #58); "A sua empresa" é a 2ª e está visível sem rolar a régua.
+    **Dívida:** as abas 3-5 não têm pista de que existem além de um ícone espiando na borda.
 
 ### A cobrança ganhou antecedência, e a regra do silêncio passou a valer (2026-08-09)
 
@@ -1702,8 +1808,8 @@ vencimento−1 ao vencimento+2, e depois dia sim, dia não, para sempre.
   `answered_at.date()` num `timestamptz`, a mesma forma que a `cadencia.py` documenta como
   errada. Aqui ela erra sempre para o lado de LIMPAR o silêncio, que é o erro barato declarado
   na própria docstring, e a varredura AST não a pega porque não é leitura de relógio.
-- **Dívida:** a validação em ~360px do V2 continua pendente, e a aba "A sua empresa" ganhou uma
-  linha a mais no eixo `dinheiro`.
+- [x] **A validação em ~360px do V2 foi feita em 2026-08-10**, e a linha nova do eixo `dinheiro`
+  renderiza correta (278px de largura). Ver a seção do V2, acima.
 
 ## 6.0 Correções importantes
 - **[CORRIGIDO 2026-08-05] O sistema inteiro passou a viver no fuso do tenant (era UTC).** O sintoma que o fundador viu foi a linha do tempo do Funil exibindo `Aguardando até 2026-08-05T11:11:32.812731+00:00` — formato de máquina e 3h adiantado. A investigação achou **três** defeitos com a mesma raiz: existia infra de fuso (`core/tz.py` + `tenant.timezone`, migration 0044) mas só 3 módulos a consumiam.

@@ -224,7 +224,24 @@ export default function AccountModal({
   }
 
   return (
-    <Modal title={editing ? "Editar conta" : "Nova conta"} open={open} onClose={onClose}>
+    <Modal
+      title={editing ? "Editar conta" : "Nova conta"}
+      open={open}
+      onClose={onClose}
+      // A ação vai para a barra fixa do `Modal`: em 360×740 este formulário tem 1010px numa caixa
+      // de 629px, e no corpo o botão nascia 303px abaixo da borda da tela — 467px abaixo da
+      // escolha "não sei o saldo" que ele efetiva (a forma do PR #56).
+      footer={
+        <button
+          type="button"
+          onClick={save}
+          disabled={saving || !name.trim() || (recuou && !saldoRedeclarado) || faltaDecidirSaldo}
+          className="w-full rounded-pill bg-accent-400 py-3 font-semibold text-white transition hover:bg-accent-500 disabled:opacity-60"
+        >
+          {saving ? "Salvando…" : editing ? "Salvar" : "Cadastrar conta"}
+        </button>
+      }
+    >
       <div className="space-y-3">
         <Field label="Nome da conta" value={name} onChange={setName} placeholder="Ex.: Itaú PJ" />
         <label className="block">
@@ -259,20 +276,23 @@ export default function AccountModal({
           <legend className="px-1 text-xs font-medium text-neutral-500">
             Você sabe o saldo desta conta na data de abertura?
           </legend>
-          <div className="flex flex-col gap-2 sm:flex-row sm:gap-4">
-            <label className="flex items-center gap-2 text-sm text-neutral-700">
+          {/* 44px de altura na LINHA INTEIRA: o alvo é o rótulo, não o círculo de 13px. */}
+          <div className="flex flex-col gap-1 sm:flex-row sm:gap-4">
+            <label className="flex min-h-[44px] flex-1 items-center gap-3 text-sm text-neutral-700">
               <input
                 type="radio"
                 name="saldo-conhecido"
+                className="h-5 w-5 shrink-0"
                 checked={saldoConhecido === true}
                 onChange={() => setSaldoConhecido(true)}
               />
               Sei o saldo
             </label>
-            <label className="flex items-center gap-2 text-sm text-neutral-700">
+            <label className="flex min-h-[44px] flex-1 items-center gap-3 text-sm text-neutral-700">
               <input
                 type="radio"
                 name="saldo-conhecido"
+                className="h-5 w-5 shrink-0"
                 checked={saldoConhecido === false}
                 onChange={() => setSaldoConhecido(false)}
               />
@@ -345,23 +365,18 @@ export default function AccountModal({
             confirmação, não reconstrução de histórico — você não precisa lançar o passado.
           </p>
         )}
-        <label className="flex items-center gap-2 text-sm text-neutral-600">
+        <label className="flex min-h-[44px] items-center gap-3 text-sm text-neutral-600">
           <input
             type="checkbox"
+            className="h-5 w-5 shrink-0"
             checked={isPrimary}
             onChange={(e) => setIsPrimary(e.target.checked)}
           />
           Conta principal
         </label>
+        {/* O erro fica no CORPO, não na barra de ação: é contexto do formulário, e na barra ele
+            empurraria o botão para fora justamente quando o dono mais precisa dele. */}
         {error && <p className="rounded-lg bg-red-50 p-2 text-sm text-danger">{error}</p>}
-        <button
-          type="button"
-          onClick={save}
-          disabled={saving || !name.trim() || (recuou && !saldoRedeclarado) || faltaDecidirSaldo}
-          className="w-full rounded-pill bg-accent-400 py-2.5 font-semibold text-white transition hover:bg-accent-500 disabled:opacity-60"
-        >
-          {saving ? "Salvando…" : editing ? "Salvar" : "Cadastrar conta"}
-        </button>
       </div>
     </Modal>
   );

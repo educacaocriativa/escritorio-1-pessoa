@@ -6,11 +6,23 @@ export default function Modal({
   open,
   onClose,
   children,
+  footer,
 }: {
   title: string;
   open: boolean;
   onClose: () => void;
   children: ReactNode;
+  /**
+   * Ação primária do modal. Vive numa barra `sticky bottom-0` DENTRO da caixa que rola, para que
+   * ela nunca saia da tela enquanto o dono preenche o formulário. **Opcional**: modal que não
+   * passa `footer` continua exatamente como era.
+   *
+   * ⚠️ Não é enfeite. Em 360×740 o formulário de conta bancária tem 1010px numa caixa de 629px —
+   * sem esta barra o botão que efetiva a escolha "não sei o saldo" nasce 303px abaixo da borda da
+   * tela e 467px abaixo da escolha, que é a forma do PR #56 (uma conta real foi marcada como paga
+   * sem o dono conseguir ver o controle que a confirmava).
+   */
+  footer?: ReactNode;
 }) {
   if (!open) return null;
   return (
@@ -24,11 +36,22 @@ export default function Modal({
       >
         <div className="mb-4 flex items-center justify-between">
           <h2 className="text-lg font-bold text-neutral-800">{title}</h2>
-          <button onClick={onClose} className="text-neutral-400 hover:text-neutral-700">
+          <button
+            onClick={onClose}
+            aria-label="Fechar"
+            className="-mr-2 flex h-11 w-11 items-center justify-center rounded-pill text-neutral-400 hover:text-neutral-700"
+          >
             <X size={20} />
           </button>
         </div>
         {children}
+        {footer && (
+          // `-mx-6 -mb-6` desfaz o `p-6` da caixa para a barra encostar nas bordas; o fundo opaco
+          // é o que impede o conteúdo de aparecer por baixo dela enquanto rola.
+          <div className="sticky bottom-0 -mx-6 -mb-6 mt-4 border-t border-neutral-100 bg-white px-6 py-4">
+            {footer}
+          </div>
+        )}
       </div>
     </div>
   );
