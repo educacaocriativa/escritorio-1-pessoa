@@ -29,6 +29,12 @@ from app.modules.agenda.models import (
     STATUS_DONE,
     AgendaEvent,
 )
+
+# ⚠️ O Vima lê o plano do BANCO, e isso é permitido: a Regra dos Planos proíbe `bank` alcançar o
+# plano da plataforma, não o contrário. `list_accounts` é REUSADA em vez de repetir o filtro
+# `archived_at IS NULL` — uma segunda definição de "conta ativa" divergiria na primeira manutenção.
+from app.modules.bank import service as bank_service
+from app.modules.bank.models import BankBalanceCheckpoint
 from app.modules.crm.models import Client, PipelineStage
 from app.modules.payables.models import STATUS_OPEN as PAYABLE_ABERTA
 from app.modules.payables.models import Payable
@@ -122,6 +128,8 @@ def coletar(
         fora.extend(_prazos_estourados(db, hoje, lim))
     if pode_ver(user, "financeiro"):
         fora.extend(_dinheiro_com_data(db, hoje, lim))
+        # Não recebe `lim`: esta regra é **sem limiar**, de propósito — ver a docstring dela.
+        fora.extend(_saldo_do_mes_nao_declarado(db, hoje))
     if pode_ver(user, "comercial"):
         fora.extend(_silencio_nosso(db, hoje, lim, instante))
         fora.extend(_contato_sumido(db, hoje, lim))
@@ -271,6 +279,76 @@ def _dinheiro_com_data(db: Session, hoje: date, lim: dict[str, int]) -> list[Aus
                 title=f"{alvo} — {_brl(cobranca.amount_cents)} {quando}",
                 dias=dias, subject_type="charge", subject_id=cobranca.id,
                 client_id=cobranca.client_id,
+            )
+        )
+    return fora
+
+
+def _saldo_do_mes_nao_declarado(db: Session, hoje: date) -> list[Ausencia]:
+    """O único ato recorrente que o **ciclo da conferência** (Epic 8) pede do dono.
+
+    Sem o saldo do mês declarado, o e1p não consegue conferir aquele mês por inteiro, e
+    `|divergencia_cents|` — a métrica que decide as Ondas 4 e 5 — continua sem significar nada. A
+    tela de Conferência mostra em que ponto do ciclo o dono está; esta regra é o que o leva até lá,
+    porque quando tudo está verde ele não tem motivo para abrir aquela tela.
+
+    ⚠️ **SEM LIMIAR, e isso é a decisão.** Um limiar exigiria a 8ª pergunta de Calibração
+    (`test_todo_limiar_tem_pergunta` reprova limiar sem pergunta) e ela seria um número sem
+    evidência — Artigo IV. E não precisa: a **declaração retroativa existe** (`reference_date`
+    aceita data passada, e redeclarar o mesmo dia corrige com 200, não 409), então avisar **depois**
+    do fechamento não perde nada — o dono abre o extrato e informa o saldo de 31/07 no dia 03/08.
+
+    `dias` = dias desde o fechamento do mês, e a cadência sai de graça de `_proximo_marco`:
+    `0 → 1 → 2 → 4 → 8 → 16`.
+
+    ⚠️ **O mês entra no `subject_id`, e não é decoração.** Com o id da conta sozinho, o marco do mês
+    anterior sobreviveria à virada, `dias` voltaria a zero e `_calada` engoliria o aviso do mês novo
+    — o silêncio permanente que a correção de 2026-08-09 acabou de desfazer no eixo do dinheiro.
+
+    **Uma por conta, nomeando só o ciclo fechado mais recente.** Lacunas mais antigas vivem na tela
+    de Conferência: o briefing pede **um ato por vez**, mesma filosofia do "uma pergunta por gancho
+    por dia" do DNA.
+
+    Membro: Itaú PJ ativo, aberto em junho, julho fechado sem saldo informado.
+    Não-membros: a conta **arquivada** (fora de `list_accounts` — cobrar dela seria pedir um ato que
+    o dono decidiu não fazer mais); a conta aberta em **02/08**, que não era do dono em julho; e o
+    Itaú PJ cujo saldo de 31/07 já foi declarado.
+    """
+    primeiro_do_mes = hoje.replace(day=1)
+    fim_do_anterior = primeiro_do_mes - timedelta(days=1)
+    inicio_do_anterior = fim_do_anterior.replace(day=1)
+    dias = (hoje - fim_do_anterior).days
+
+    fora: list[Ausencia] = []
+    for conta in bank_service.list_accounts(db):
+        # A conta precisa ter EXISTIDO no mês fechado — senão o e1p cobraria de uma conta nova o
+        # saldo de um mês em que ela não era do dono.
+        if conta.opening_date > fim_do_anterior:
+            continue
+        declarado = db.scalar(
+            select(func.count())
+            .select_from(BankBalanceCheckpoint)
+            .where(
+                BankBalanceCheckpoint.bank_account_id == conta.id,
+                BankBalanceCheckpoint.reference_date >= inicio_do_anterior,
+                BankBalanceCheckpoint.reference_date <= fim_do_anterior,
+            )
+        )
+        if declarado:
+            continue
+        fora.append(
+            Ausencia(
+                module="financeiro",
+                kind="financeiro.conferencia.saldo_do_mes",
+                title=(
+                    f"{conta.name} — o mês fechou sem o saldo informado; você ainda pode "
+                    f"informar o saldo de {fim_do_anterior.strftime('%d/%m')}"
+                ),
+                dias=dias,
+                subject_type="bank_account",
+                subject_id=(
+                    f"{conta.id}:{inicio_do_anterior.year:04d}-{inicio_do_anterior.month:02d}"
+                ),
             )
         )
     return fora

@@ -5,6 +5,12 @@ import pytest
 from sqlalchemy.orm import Session
 
 from app.core.tenancy import CurrentUser
+from app.modules.bank.models import (
+    KIND_CHECKING,
+    ORIGIN_MANUAL,
+    BankAccount,
+    BankBalanceCheckpoint,
+)
 from app.modules.crm.models import Client, PipelineStage
 from app.modules.payables.models import STATUS_OPEN, Payable
 from app.modules.receivables.models import STATUS_OPEN as CHARGE_OPEN
@@ -324,3 +330,134 @@ def test_a_cadencia_inteira_de_uma_cobranca(db: Session, usuario_owner):
         date(2026, 8, 28),  # 8 dias
         date(2026, 9, 5),   # 16 dias
     ]
+
+
+# ── O saldo do mês (o ciclo da conferência, Epic 8) ──────────────────────────────────────────
+
+
+def _conta_bancaria(
+    db: Session, *, nome: str = "Itaú PJ", abertura: date = date(2026, 6, 1), arquivada=None
+) -> BankAccount:
+    """Uma conta ativa aberta ANTES do mês fechado — senão ela não deve saldo daquele mês."""
+    conta = BankAccount(
+        tenant_id=TENANT, name=nome, kind=KIND_CHECKING,
+        opening_balance_cents=100_000, opening_balance_is_known=True,
+        opening_date=abertura, archived_at=arquivada,
+    )
+    db.add(conta)
+    db.commit()
+    return conta
+
+
+def _saldo_declarado(db: Session, conta: BankAccount, *, quando: date) -> None:
+    db.add(
+        BankBalanceCheckpoint(
+            tenant_id=TENANT, bank_account_id=conta.id,
+            reference_date=quando, balance_cents=100_000, created_by="u1",
+            origin=ORIGIN_MANUAL,
+        )
+    )
+    db.commit()
+
+
+def _kinds(db, usuario, *, hoje=HOJE, marcos=None) -> list[str]:
+    return [a.kind for a in coletar(db, user=usuario, hoje=hoje, ja_reportadas=marcos).ditas]
+
+
+def test_mes_fechado_sem_saldo_declarado_aparece(db, usuario_owner):
+    """MEMBRO: conta ativa aberta em junho, julho fechado, nenhum saldo informado em julho."""
+    _conta_bancaria(db)
+
+    assert "financeiro.conferencia.saldo_do_mes" in _kinds(db, usuario_owner)
+
+
+def test_nao_aparece_com_o_saldo_do_mes_declarado(db, usuario_owner):
+    """NÃO-MEMBRO: o saldo de 31/07 já foi informado."""
+    conta = _conta_bancaria(db)
+    _saldo_declarado(db, conta, quando=date(2026, 7, 31))
+
+    assert "financeiro.conferencia.saldo_do_mes" not in _kinds(db, usuario_owner)
+
+
+def test_nao_aparece_para_conta_aberta_depois_do_mes(db, usuario_owner):
+    """NÃO-MEMBRO: conta cadastrada em 02/08 não deve o saldo de julho — ela não era do dono."""
+    _conta_bancaria(db, abertura=date(2026, 8, 2))
+
+    assert "financeiro.conferencia.saldo_do_mes" not in _kinds(db, usuario_owner)
+
+
+def test_nao_aparece_para_conta_arquivada(db, usuario_owner):
+    """NÃO-MEMBRO: arquivada sai de `list_accounts`, e cobrar saldo dela seria pedir um ato que o
+    dono decidiu não fazer mais."""
+    _conta_bancaria(db, arquivada=datetime(2026, 8, 1, tzinfo=UTC))
+
+    assert "financeiro.conferencia.saldo_do_mes" not in _kinds(db, usuario_owner)
+
+
+def test_sub_usuario_de_crm_nao_recebe_o_saldo_do_mes(db, usuario_so_crm):
+    """O filtro decide quais REGRAS RODAM, não quais resultados aparecem."""
+    _conta_bancaria(db)
+
+    assert "financeiro.conferencia.saldo_do_mes" not in _kinds(db, usuario_so_crm)
+
+
+def test_o_mes_entra_no_sujeito_e_o_aviso_do_mes_novo_nao_e_calado(db, usuario_owner):
+    """⚠️ O ponto da chave composta.
+
+    Com o id da conta sozinho no `subject_id`, o marco de julho sobreviveria à virada, `dias`
+    voltaria a zero em agosto e `_calada` engoliria o aviso do mês novo — o silêncio permanente que
+    a correção de 2026-08-09 acabou de desfazer no eixo do dinheiro.
+    """
+    _conta_bancaria(db)
+
+    julho = [
+        a
+        for a in coletar(db, user=usuario_owner, hoje=HOJE).ditas
+        if a.kind == "financeiro.conferencia.saldo_do_mes"
+    ][0]
+    assert julho.subject_id.endswith(":2026-07")
+
+    # O mapa de marcos como o briefing o gravaria, e a virada para setembro (agosto fechado).
+    marcos = {f"{julho.kind}:{julho.subject_id}": 8}
+    agosto = [
+        a
+        for a in coletar(
+            db, user=usuario_owner, hoje=date(2026, 9, 3), ja_reportadas=marcos
+        ).ditas
+        if a.kind == "financeiro.conferencia.saldo_do_mes"
+    ]
+
+    assert agosto, "o mês novo é notícia nova — o marco do mês anterior não pode calá-lo"
+    assert agosto[0].subject_id.endswith(":2026-08")
+
+
+def test_a_regra_do_silencio_vale_dentro_do_mesmo_mes(db, usuario_owner):
+    """Dito no dia 6, não repete no dia 7: só volta quando os dias dobram (`_proximo_marco`)."""
+    conta = _conta_bancaria(db)
+    dito = [
+        a
+        for a in coletar(db, user=usuario_owner, hoje=HOJE).ditas
+        if a.kind == "financeiro.conferencia.saldo_do_mes"
+    ][0]
+    assert dito.dias == 6, "dias desde o fechamento de julho até 06/08"
+
+    marcos = {f"{dito.kind}:{dito.subject_id}": dito.dias}
+    assert "financeiro.conferencia.saldo_do_mes" not in _kinds(
+        db, usuario_owner, hoje=date(2026, 8, 7), marcos=marcos
+    )
+    # Controle positivo: quando dobra, volta a ser notícia.
+    assert "financeiro.conferencia.saldo_do_mes" in _kinds(
+        db, usuario_owner, hoje=date(2026, 8, 13), marcos=marcos
+    )
+    assert conta.id
+
+
+def test_nenhum_limiar_novo_foi_introduzido():
+    """A Ausência do saldo do mês é **sem limiar**, e isso é a decisão.
+
+    Um limiar exigiria a 8ª pergunta de Calibração (`test_todo_limiar_tem_pergunta` reprova limiar
+    sem pergunta) e ela seria um número sem evidência — Artigo IV. Não precisa: a declaração
+    retroativa existe, então avisar depois do fechamento não perde nada.
+    """
+    assert "saldo_do_mes_dias" not in LIMIARES_PADRAO
+    assert not [k for k in LIMIARES_PADRAO if "conferencia" in k or "saldo" in k]
