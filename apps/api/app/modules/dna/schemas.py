@@ -36,6 +36,18 @@ class PularIn(BaseModel):
     source: str
 
 
+class NucleoEventoIn(BaseModel):
+    """Corpo de `POST /dna/nucleo/{evento}`.
+
+    `exibidas` é o **denominador VISTO** e só faz sentido no `open` — o `abandon` manda `{}`. Por
+    isso o campo é opcional no schema e a obrigatoriedade é decidida por evento no router: um
+    `int` obrigatório aqui recusaria o `abandon`, e um default `0` gravaria "vi zero perguntas",
+    que é afirmação falsa em vez de campo ausente.
+    """
+
+    exibidas: int | None = None
+
+
 def to_out(pergunta: catalog.Pergunta) -> PerguntaOut:
     return PerguntaOut(
         key=pergunta.key,
