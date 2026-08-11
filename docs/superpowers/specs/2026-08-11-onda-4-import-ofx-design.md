@@ -78,7 +78,8 @@ Também **não** entrega:
 | **O número** | `\|divergencia_cents\|` do **bloco 1** de `GET /bank/reconciliation-report` |
 | **A granularidade** | **por conta bancária**, nunca o consolidado |
 | **A régua** | a banda fixa `max(R$ 50, 0,5%)`; a borda `==` é **dentro** |
-| **A janela** | **3 ciclos mensais** de conferência, contados a partir do **primeiro ciclo que satisfaz a pré-condição** (§1.2) — não de hoje, não do merge da Onda 3 |
+| **A janela** | **3 ciclos mensais LEGÍVEIS** (§1.2). Um ciclo é **um mês de calendário no fuso do tenant**, nunca uma janela livre |
+| **A autoridade** | `CicloDaConferencia` / `GET /bank/reconciliation-cycles` — **o código vence este documento** (§1.2.1) |
 | **Quem decide** | o fundador, com o número na mão |
 
 **Por que por conta, e não consolidado.** Três contas divergindo +R$ 1.200, −R$ 900 e +R$ 40 somam
@@ -93,7 +94,9 @@ compensou dia 13).
 
 **O que a janela de 3 ciclos é.** `[SUPOSIÇÃO DO @PM, herdada do epic §3.1.2]` — não vem do design nem
 da pesquisa. Ajustar quando houver mais tenants usando. Está marcada como suposição porque o número
-**parece** derivado e não é.
+**parece** derivado e não é. ⚠️ **E é por isso que o instrumento NÃO o codifica:** o endpoint devolve
+até **6** ciclos, e seis é teto de **exibição**, não regra. Contar até três é ato do fundador olhando os
+ciclos lado a lado — a tela não conta por ele, e não diz "gate" nem "Onda 4".
 
 ### 1.2 A pré-condição (normativa) — com membro e não-membro
 
@@ -106,7 +109,7 @@ correspondente.** Operacionalmente, quatro termos, todos fechados hoje:
 | **P1** | Baixa de Contas a Pagar sem conta informada | `Payable`, `status ∈ {paid, scheduled}`, `paid_at::date` na janela, `bank_account_id IS NULL` | Onda 2 (8.12) |
 | **P2** | Recebimento fora do trilho sem conta | `Charge`, `status ∈ {paid, scheduled}`, `paid_at::date` na janela, `transaction_id IS NULL`, `bank_account_id IS NULL`, **e** `_not_investment_yield()` | Onda 2 (8.15) |
 | **P3** | Rendimento de aplicação sem perna bancária | `Charge` com `external_ref LIKE 'investment:%'` sem `bank_transaction` | Onda 2b-i |
-| **P4** | Payout da Carteira liquidado sem perna bancária | payout com liquidação real na janela | Onda 3 |
+| **P4** | Payout da Carteira liquidado sem perna bancária | ⚠️ **não é predicado de janela** — ver §1.2.1 | Onda 3, **a partir do deploy** |
 
 > **Membro:** um `Payable` pago em 12/07 com `bank_account_id IS NULL` — cai em P1, e **o gate não
 > abre**.
@@ -126,11 +129,57 @@ população e o gate não abre para nenhum tenant que registre rendimento — e 
 como defeito: se anunciaria como *"a pré-condição ainda não foi satisfeita, continue corrigindo
 lançamentos"*, para sempre.
 
+### 1.2.1 ⚠️ CORREÇÃO — a §1.2 acima está INCOMPLETA, e o instrumento é a autoridade
+
+> **Escrita em 2026-08-11, horas depois do merge desta spec (PR #107), contra o código que a frente
+> paralela do gate mergeou no mesmo dia** (`bank/reconciliation.py`, `CicloDaConferencia`,
+> `GET /bank/reconciliation-cycles`). **Não apague a §1.2** — ela é a genealogia da regra; esta
+> subseção é o que vale.
+
+A §1.2 diz que a leitura é válida quando **P1–P4 = ∅** na janela. **Isso é necessário e não é
+suficiente**, e a lacuna é de um tipo que esta própria spec passa a §2 inteira denunciando.
+
+**As quatro condições que o código exige** (`legivel == True` **e** o ciclo fechado):
+
+| | Condição | Membro | Não-membro |
+|---|---|---|---|
+| **a** | há conta ativa | tenant com o Itaú PJ | tenant sem conta nenhuma |
+| **b** | toda conta avaliada | as 3 com saldo declarado no mês | a Poupança BB sem saldo naquele mês |
+| **c** | **P1+P2 e P3** zerados | mês em que toda baixa informou a conta | baixa legada sem conta |
+| **d** | `start >= PRIMEIRO_CICLO_MEDIVEL` (**`2026-09-01`**) | setembro/2026 | julho/2026 |
+
+**Os três erros da §1.2, nomeados:**
+
+1. **P4 não é predicado de janela, e tratá-lo como tal é o erro assinatura deste épico.** A população
+   de P4 é vazia **por construção nova** (409 sem conta principal + a perna bancária na mesma
+   transação) — mas **só a partir do deploy da Onda 3**. Numa janela anterior existem saques sem perna
+   **que ninguém conta**, e o relatório os reporta como zero **por omissão**. Um leitor da §1.2 sozinha
+   conferiria julho/2026, veria P4 = 0, e leria como fato o que é ausência de medição. **É o mesmo
+   defeito que a §2 desta spec denuncia, cometido pela §1 desta spec.** O código o resolve com um corte
+   de data, não com um contador.
+2. **Faltavam (a) e (b).** E **(a) não é redundante com (b)**: sem conta, `contas == []`,
+   `contas_sem_checkpoint == 0` e os contadores dão zero — **(b) e (c) passariam por vacuidade**. É a
+   família do 🟢 sobre razão bancário vazio que a Story 8.20 desfez, e a §1.2 a reintroduzia.
+3. **"3 ciclos" não é codificável**, e o instrumento acertou em não codificar (ver §1.1).
+
+⚠️ **`PRIMEIRO_CICLO_MEDIVEL` é o único valor do módulo que depende de um fato FORA do repositório** (a
+data do deploy), e **erra em silêncio para o lado caro**. Tem teste de piso contra a data do merge
+(2026-08-10), que é fato do repo — o deploy não é. **Ao mover a data, mova o piso junto**, e há item no
+`docs/HOSTINGER-DEPLOY.md`. Consequência prática para esta onda: **nenhum ciclo anterior a setembro/2026
+serve para decidir a Onda 4**, por mais limpo que o número pareça.
+
+> **A lição, e ela é sobre esta spec.** O bloco de abertura da §1 diz que critério de decisão é *"o
+> único artefato cujo consumidor é um humano num ciclo futuro"* e que por isso ninguém o contradiz.
+> A §1.2 foi escrita **sem** consumidor mecânico e ficou incompleta em três pontos. Horas depois
+> ganhou um — `CicloDaConferencia` —, e **ele discordou em três pontos**. A regra que fica:
+> **quando existir código que decide a mesma coisa que um documento, o documento aponta para o código
+> e para de repetir a regra.** A §1.2 vale como genealogia; `legivel` vale como verdade.
+
 ### 1.3 O que libera, e o que mata
 
 | Leitura, nos 3 ciclos | Decisão |
 |---|---|
-| **Qualquer** de P1–P4 não-vazio na janela | **O gate não abre.** Nenhuma onda é liberada nem morta com base neste ciclo. P1/P2 se corrigem com trabalho do dono e o ciclo seguinte já vale |
+| O ciclo **não é legível** (`legivel == False`, §1.2.1 — inclui P1–P4, mas não só) | **O gate não abre.** Nenhuma onda é liberada nem morta com base neste ciclo. P1/P2 se corrigem com trabalho do dono e o ciclo seguinte já vale; (d) não se corrige com trabalho nenhum |
 | Divergência **dentro** da banda e estável | **MATA a Onda 4 e a Onda 5.** Para depois da Onda 3. Desfecho **bom**, não fracasso |
 | Divergência **fora** da banda, recorrente, e o dono **não consegue explicar** de onde vem | **LIBERA a Onda 4** — o furo precisa ser *localizado*, não só quantificado. Sujeita também ao §1.4 |
 | Divergência fora da banda **explicada** por causa conhecida e pontual — inclusive agendamento que não saiu (termo 5) | Corrigir a causa. **Não** libera |
@@ -799,6 +848,10 @@ design-mãe não previa) e a **correção do §5.4** (que ele não via). **Menos
 | Afirmação desta spec | Fonte |
 |---|---|
 | O gate é `\|divergencia_cents\|` por conta vs. banda, 3 ciclos pós-pré-condição | `docs/prd/epic-8-controle-bancario.md` §3.1.2 |
+| As quatro condições de legibilidade e a precedência `(d)→(a)→(b)→(c)` | `apps/api/app/modules/bank/reconciliation.py` (`CicloDaConferencia`, docstring) |
+| `PRIMEIRO_CICLO_MEDIVEL = 2026-09-01`, e o piso contra a data do merge | `bank/reconciliation.py:131`; `docs/superpowers/specs/2026-08-11-ciclo-da-conferencia-design.md` |
+| Ciclo é mês de calendário no fuso do tenant; teto de 6 é exibição | `CLAUDE.md` §"O ciclo da conferência" |
+| A §1.2 estava incompleta em três pontos | **[CORREÇÃO desta spec, §1.2.1]**, contra o código mergeado em 2026-08-11 |
 | P1–P4, seus predicados e as ondas que os zeram | epic §3.1.2; `CLAUDE.md` (Ondas 2, 2b-i, 3) |
 | P1–P4 estão todos fechados | `CLAUDE.md` §Onda 3 (PR #104) |
 | A produção foi zerada em 05/08/2026 e o gate precisa de ciclo real | `CLAUDE.md` §Onda 3, aviso final |
