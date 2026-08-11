@@ -1360,6 +1360,23 @@ que a banda fixa da Regra 7 existe para impedir.
   corte (d) compra a honestidade sem cruzar a Regra dos Planos). E esta frente **não mede a
   divergência nem decide a Onda 4**: ela constrói o instrumento e para.
 
+**O que a Onda 4 já tem escrito, e por que ele aponta para cá.** A spec de design da importação de
+OFX existe desde 2026-08-11 (PR #107) e foi escrita **sob gate fechado, de propósito** — decisões
+tomadas, riscos nomeados, custo estimado, e o que a faria não valer a pena. Ela **não autoriza nada**.
+Ver `docs/superpowers/specs/2026-08-11-onda-4-import-ofx-design.md`, e comece pela **§1**.
+
+- ⚠️ **A §1.2 daquela spec nasceu incompleta, e esta frente é quem provou isso** — as duas foram
+  escritas no mesmo dia, sem uma ver a outra. Ela dizia que a leitura vale quando **P1–P4 = ∅**:
+  necessário, **não suficiente**. Faltavam **(a)** e **(b)**, e sem **(a)** as outras passariam **por
+  vacuidade** num tenant sem conta; e tratar **P4 como predicado de janela** manda conferir um mês
+  anterior ao deploy da Onda 3, onde saques sem perna são reportados como zero **por omissão** — o
+  erro assinatura do épico, cometido dentro da seção que existe para não cometê-lo. Corrigido na
+  **§1.2.1** daquela spec, que aponta para cá em vez de repetir a regra.
+- **A regra que fica:** **quando existir código que decide a mesma coisa que um documento, o documento
+  aponta para o código e para de repetir a regra.** `legivel` é a verdade; a prosa é genealogia. Foi
+  o §1 da spec da Onda 4 que se descreveu como *"o único artefato cujo consumidor é um humano"* —
+  ganhou um consumidor mecânico em horas, e ele discordou em três pontos.
+
 ## WhatsApp Evolution: em produção de verdade (deploy 2026-08-04)
 
 O transporte Evolution (Onda 0-3, ver `[[e1p-whatsapp-evolution-merged]]` na memória / PR #62)
