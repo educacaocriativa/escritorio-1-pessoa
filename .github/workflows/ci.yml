@@ -180,9 +180,15 @@ jobs:
       # máquina de quem desenvolve usa.
       - uses: pnpm/action-setup@v4
 
+      # ⚠️ NÃO baixe daqui sem medir. A raiz declara `"engines": {"node": ">=22"}` e este job
+      # nasceu pinado em 20 — abaixo do piso. O sintoma não foi um erro de engine: foi
+      # `shareInbox.test.ts` ficando VERMELHO só no CI e verde em toda máquina de dev. Aquele
+      # teste depende de `structuredClone` preservar `File` (ver o comentário no topo dele), e
+      # esse comportamento MUDA entre versões do Node. 24 é a versão que quem desenvolve usa e na
+      # qual o comportamento foi verificado.
       - uses: actions/setup-node@v4
         with:
-          node-version: "20"
+          node-version: "24"
           cache: pnpm
 
       # Na raiz: é um workspace pnpm, o lockfile é de lá.

@@ -85,6 +85,13 @@ certo, e a tela estava errada. **Nenhum teste de `apps/web/e2e/` pode aferir cla
   é medir uma tela que não existe.
 - ⚠️ **O CI não tinha NENHUM job de frontend até esta data** — o `vitest` nunca rodou nele, e nenhuma
   medição de tela era exigida em PR. O job `frontend` (typecheck + vitest + playwright) fecha isso.
+- ⚠️ **O job roda Node 24, e a versão NÃO é detalhe de infraestrutura.** A raiz declara
+  `"engines": {"node": ">=22"}`; o job nasceu pinado em **20** e o sintoma não foi erro de engine —
+  foi `src/lib/shareInbox.test.ts` **vermelho só no CI e verde em toda máquina de dev**. Aquele
+  teste depende de `structuredClone` preservar `File`, e esse comportamento **muda entre versões do
+  Node** (é a mesma lacuna que o comentário no topo dele descreve para o jsdom). **Dívida:** o teste
+  continua sensível à versão do Node, e o CI hoje exercita só a versão dos desenvolvedores — não o
+  piso `>=22` que o repositório promete suportar.
   **Dívida:** ele é **observável, não bloqueante**, até @devops o acrescentar em "Require status
   checks to pass" (mesmo modelo de `secret-scan`/`sast-semgrep`). Enquanto isso, a régua **mede e não
   barra** — e foi a ausência de barreira, não a de conhecimento, que deixou seis telas passarem.
