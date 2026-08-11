@@ -16,7 +16,7 @@ from typing import Any
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.modules.dna import catalog
+from app.modules.dna import catalog, eventos
 from app.modules.dna.models import DnaAnswer
 
 
@@ -39,7 +39,15 @@ def responder(
     """Grava a resposta, validando contra o catálogo. Commita."""
     pergunta = _pergunta(key)
     _validar(pergunta, valor)
-    return _gravar(db, tenant_id=tenant_id, key=key, valor=valor, user_id=user_id, source=source)
+    return _gravar(
+        db,
+        tenant_id=tenant_id,
+        key=key,
+        valor=valor,
+        user_id=user_id,
+        source=source,
+        acao=eventos.ACTION_SAVE,
+    )
 
 
 def pular(
@@ -47,7 +55,15 @@ def pular(
 ) -> DnaAnswer:
     """Registra que o dono viu e pulou. `value` nulo é o registro — não é linha ausente."""
     _pergunta(key)
-    return _gravar(db, tenant_id=tenant_id, key=key, valor=None, user_id=user_id, source=source)
+    return _gravar(
+        db,
+        tenant_id=tenant_id,
+        key=key,
+        valor=None,
+        user_id=user_id,
+        source=source,
+        acao=eventos.ACTION_SKIP,
+    )
 
 
 def respostas(db: Session) -> dict[str, Any]:
@@ -96,9 +112,29 @@ def _validar(pergunta: catalog.Pergunta, valor: Any) -> None:
 
 
 def _gravar(
-    db: Session, *, tenant_id: str, key: str, valor: Any, user_id: str | None, source: str
+    db: Session,
+    *,
+    tenant_id: str,
+    key: str,
+    valor: Any,
+    user_id: str | None,
+    source: str,
+    acao: str,
 ) -> DnaAnswer:
-    """Upsert por `(tenant, pergunta)` — a unique constraint da migration é o que o garante."""
+    """Upsert por `(tenant, pergunta)` — a unique constraint da migration é o que o garante.
+
+    A trilha em `audit_entries` é o que faz o upsert deixar de apagar história: a linha guarda o
+    estado ATUAL, e as passagens ficam no rastro append. É o `target` (`<source>:<pergunta>`) que
+    distingue "respondeu no núcleo" de "editou no `/config`".
+
+    ⚠️ **`db.flush()` ANTES de gravar a trilha, e a razão aqui NÃO é a do MNT-001.** O padrão do
+    repo (`bank.create_account`) existe porque o `target` costuma ser o `id` da linha, que tem
+    default Python-side e ainda é `None` antes do INSERT. Este `target` é `<source>:<pergunta>` e
+    não depende de `id` nenhum — mas o flush continua obrigatório pelo segundo motivo que
+    `bank.create_transaction` documenta: é nele que a unique constraint de `(tenant,
+    question_key)` fala. Sem ele, gravaríamos um rastro afirmando uma resposta que a constraint
+    ainda pode recusar — trilha que mente.
+    """
     linha = db.scalar(select(DnaAnswer).where(DnaAnswer.question_key == key))
     if linha is None:
         linha = DnaAnswer(tenant_id=tenant_id, question_key=key)
@@ -107,6 +143,14 @@ def _gravar(
     linha.answered_at = datetime.now(UTC)
     linha.answered_by = user_id
     linha.source = source
+    db.flush()
+    eventos.registrar(
+        db,
+        tenant_id=tenant_id,
+        actor=user_id or "",
+        action=acao,
+        target=eventos.alvo_da_resposta(source, key),
+    )
     db.commit()
     db.refresh(linha)
     return linha
