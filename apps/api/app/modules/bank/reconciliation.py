@@ -92,7 +92,7 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 from dataclasses import dataclass, field
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from typing import Protocol
 
 from sqlalchemy import func, select
@@ -346,6 +346,68 @@ class ConferenciaReport:
     # P3 — fecha na Onda 2b. Contador PRÓPRIO: ele tem outro prazo.
     rendimentos_sem_perna_bancaria: int = 0
     valor_rendimentos_sem_perna_cents: int = 0
+
+
+# Teto de EXIBIÇÃO do histórico, não regra de decisão. É o dobro da janela de observação que o PRD
+# sugere — e o PRD marca aquele "3 ciclos" como `[SUPOSIÇÃO DO @PM]`, explicitamente *"não vem do
+# design nem da pesquisa"*. Transformá-lo em constante de produto seria codificar suposição
+# (Artigo IV). Seis meses é o bastante para o dono enxergar estabilidade e decidir sozinho.
+MESES_DO_HISTORICO = 6
+
+
+@dataclass(frozen=True)
+class CicloDaConferencia:
+    """UM mês de conferência, e se o número dele **pode ser lido**.
+
+    **Um ciclo é um mês de calendário no fuso do tenant**, e não uma janela livre — embora
+    `reconciliation_report` aceite qualquer `start`/`end`. Fronteira escolhível permitiria
+    selecionar a janela que produz o número desejado: a régua andando junto com o que ela mede, que
+    é exatamente o que a banda fixa da Regra 7 existe para impedir.
+
+    `legivel` é `True` quando as quatro condições valem **e** o ciclo está fechado:
+
+    | | Condição | Membro | Não-membro |
+    |---|---|---|---|
+    | a | há conta ativa | tenant com o Itaú PJ | tenant sem conta nenhuma |
+    | b | toda conta avaliada | as 3 com saldo declarado no mês | a Poupança BB sem saldo no mês |
+    | c | P1+P2 e P3 zerados | mês em que toda baixa informou a conta | baixa legada sem conta |
+    | d | `start >= PRIMEIRO_CICLO_MEDIVEL` | setembro/2026 | julho/2026 |
+
+    ⚠️ **(a) não é redundante com (b).** Sem conta, `contas == []`, `contas_sem_checkpoint == 0` e os
+    contadores dão zero: (b) e (c) passariam **por vacuidade**. É a mesma família do 🟢 sobre razão
+    bancário vazio que a Story 8.20 desfez.
+
+    ⚠️ **O volume NÃO entra no predicado.** Um mínimo de N movimentos seria número inventado
+    (Artigo IV), e recusar a janela **esconde** o número dela em vez de qualificá-lo — o inverso do
+    princípio da Onda 0 (*suprimir a afirmação, nunca o número*). O ciclo dormente sai legível, com
+    denominador zero à vista, e o zero se lê sozinho.
+
+    `motivo_nao_legivel` traz **uma** frase, nunca uma lista: uma enumeração de motivos aqui
+    reconstruiria o ruído que a Regra 7 existe para evitar. A precedência é `(d) → (a) → (b) → (c)`,
+    por **acionabilidade** — (d) e (a) não têm ação possível naquele mês, e (b) é um ato por conta
+    enquanto (c) é um ato por lançamento.
+
+    **ANOTA, NUNCA SUBTRAI:** nada aqui altera a divergência. `total_divergencia_cents`,
+    `contas_avaliadas` e `contas_sem_checkpoint` são **copiados** do relatório daquele mês, sem
+    recálculo — há teste provando a identidade campo a campo.
+
+    ⚠️ **"Legível" é termo de DOMÍNIO e não aparece para o dono.** Na tela é frase. Não é
+    preciosismo: `completo` colidiria com a *completude* do Diagnóstico e `comparável` já está
+    tomado no nível da conta pela Story 8.20 (*"declarado, porém não comparável"*). A divergência
+    D-6/UX-001 já foi paga duas vezes para separar sentidos que dividiam uma palavra.
+    """
+
+    ano_mes: str  # "2026-09"
+    start: date
+    end: date
+    fechado: bool
+    legivel: bool
+    motivo_nao_legivel: str | None
+    total_divergencia_cents: int | None
+    contas_avaliadas: int
+    contas_sem_checkpoint: int
+    movimentos_no_periodo: int
+    valor_movimentado_cents: int
 
 
 # ── A porta de saída dos termos do gate (Story 8.16) ──────────────────────────────────────────
@@ -947,3 +1009,169 @@ def reconciliation_report(
         rendimentos_sem_perna_bancaria=termos.rendimentos_sem_perna_bancaria,
         valor_rendimentos_sem_perna_cents=termos.valor_rendimentos_sem_perna_cents,
     )
+
+
+# ── O ciclo da conferência ────────────────────────────────────────────────────────────────────
+#
+# O relatório acima responde *"está batendo?"*. Isto responde a outra pergunta, que ninguém fazia e
+# que decide as ondas seguintes: *"este número já vale?"*. Com P1–P4 fechados (Ondas 2, 2b-i e 3), a
+# obstrução para ler a divergência deixou de ser de código e passou a ser de **dado** — e o sinal de
+# "pode ler" era, até aqui, a AUSÊNCIA de notas: silêncio, indistinguível de "não medi".
+
+
+def _fim_do_mes(d: date) -> date:
+    """Último dia do mês de `d`. Sem `calendar.monthrange` para não importar por três linhas."""
+    proximo = (d.replace(day=28) + timedelta(days=4)).replace(day=1)
+    return proximo - timedelta(days=1)
+
+
+def _mes_anterior(primeiro_dia: date) -> date:
+    return (primeiro_dia - timedelta(days=1)).replace(day=1)
+
+
+def _motivo_nao_legivel(
+    contas_do_mes: Sequence[ConferenciaConta],
+    *,
+    report: ConferenciaReport,
+    start: date,
+    corte: date,
+) -> str | None:
+    """A frase ÚNICA, na precedência `(d) → (a) → (b) → (c)`. `None` significa legível.
+
+    Ver a tabela na docstring de `CicloDaConferencia`. A ordem é por **acionabilidade**: mandar o
+    dono declarar o saldo de um mês anterior ao corte é mandá-lo a um ato que **não resolve aquele
+    mês** — e uma frase de erro que manda o usuário agir é uma promessa (a regra que a Onda 3
+    escreveu ao descobrir o `set-primary` sem rota). (b) vem antes de (c) porque declarar saldo é um
+    ato **por conta** e corrigir lançamento legado é um ato **por lançamento**: a frase pede
+    primeiro o barato.
+
+    **Uma frase, nunca uma lista.** Enumerar motivos aqui reconstruiria o ruído que a Regra 7 existe
+    para evitar — a tela que grita por tudo treina o dono a não ler nada.
+
+    ⚠️ **`contas_do_mes` são as que EXISTIAM naquele mês, não as ativas de hoje** —
+    `service.list_accounts` devolve as ativas agora, e `reconciliation_report` as confere todas,
+    inclusive as abertas depois do fim da janela. Uma conta cadastrada em 02/08 aparece no relatório
+    de julho como *"sem saldo informado"* e, sem este recorte, **travaria a legibilidade de todos os
+    meses anteriores ao cadastro dela** — o e1p cobraria de uma conta o saldo de um mês em que ela
+    não era do dono. O recorte mora aqui, e não em `reconciliation_report`: aquele comportamento é
+    pré-existente e consertá-lo junto tiraria do gate a capacidade de julgar o que quebrou o quê.
+
+    ⚠️ Vocabulário do UX-001: esta frase fala do lado *"o que o banco diz"*. A string `"no banco"`
+    pertence à parcela da Projeção, com outro sentido, e **não entra aqui** — nem sinônimo
+    locacional.
+    """
+    if start < corte:
+        return (
+            "Neste período o saque da Carteira ainda não escrevia movimento bancário, então o e1p "
+            "não mediu esse pedaço — o número deste mês não serve para comparar."
+        )
+    if not contas_do_mes:
+        return "Você ainda não tinha conta bancária cadastrada neste período."
+    sem_saldo = [c.bank_account_name for c in contas_do_mes if c.divergencia_cents is None]
+    if sem_saldo:
+        artigo = "das contas" if len(sem_saldo) > 1 else "da conta"
+        return (
+            f"Faltou o saldo informado {artigo} {', '.join(sem_saldo)} neste mês — sem ele o e1p "
+            "não consegue conferir o mês inteiro."
+        )
+    if report.lancamentos_sem_conta_informada:
+        quantidade = report.lancamentos_sem_conta_informada
+        plural = "s" if quantidade > 1 else ""
+        return (
+            f"{quantidade} lançamento{plural} deste mês não "
+            f"diz{'em' if quantidade > 1 else ''} de qual conta saiu ou entrou."
+        )
+    if report.rendimentos_sem_perna_bancaria:
+        quantidade = report.rendimentos_sem_perna_bancaria
+        plural = "s" if quantidade > 1 else ""
+        return (
+            f"{quantidade} rendimento{plural} de aplicação deste mês ainda não "
+            f"gera{'m' if quantidade > 1 else ''} movimento bancário."
+        )
+    return None
+
+
+def ciclos_da_conferencia(
+    db: Session,
+    *,
+    today: date | None = None,
+    primeiro_ciclo_medivel: date = PRIMEIRO_CICLO_MEDIVEL,
+) -> list[CicloDaConferencia]:
+    """O histórico de ciclos, **derivado na leitura**. Read-only: sem migration, sem escrita.
+
+    Roda `reconciliation_report` uma vez por mês, do mês da conta ativa mais antiga até o mês
+    corrente, com teto de `MESES_DO_HISTORICO`, **do mais recente para o mais antigo**.
+
+    **A alternativa persistida foi rejeitada por motivo concreto, não por pureza:** um lançamento
+    retroativo muda **legitimamente** a leitura de um ciclo passado, e um valor congelado passaria a
+    discordar do recalculado — segunda verdade sobre a mesma divergência, a forma exata do bug que a
+    Onda 0 desfez. É também a Regra 3 do Epic 5 (*análise não escreve*).
+
+    **Sem conta ativa devolve `[]`**, e não um ciclo corrente de conteúdo nulo: um ciclo montado
+    sobre zero conta seria a condição (a) violada pela porta dos fundos, na camada de exibição.
+
+    `today` e `primeiro_ciclo_medivel` são injetáveis pela MESMA razão — um veredito que depende do
+    relógio da máquina não é testável, e o corte real (`2026-09-01`) está no futuro em relação ao
+    dado que a suíte consegue semear, então sem a injeção o ramo **legível** nasceria sem teste.
+    `tests/test_bank_ciclos.py::test_o_corte_padrao_e_a_constante` prende o default.
+
+    ⚠️ **Conta arquivada some do histórico** (`service.list_accounts` a esconde), então arquivar uma
+    conta hoje muda a leitura de um mês passado. É o preço aceito de não congelar um número que pode
+    legitimamente mudar, e está registrado como risco na spec.
+
+    **Custo:** um relatório por mês (≤ 6), cada um com 1 probe + 2 queries por conta + 2 em lote.
+    Ruído na escala de uma empresa de 1 pessoa; registrado para não virar surpresa.
+    """
+    hoje = today or _today(db)
+    accounts = service.list_accounts(db)
+    if not accounts:
+        return []
+
+    mes_da_conta_mais_antiga = min(a.opening_date for a in accounts).replace(day=1)
+    # Anda para trás a partir do mês corrente, no máximo `MESES_DO_HISTORICO`, e nunca antes do mês
+    # em que a primeira conta foi cadastrada — antes disso não havia o que conferir.
+    inicios: list[date] = []
+    cursor = hoje.replace(day=1)
+    while len(inicios) < MESES_DO_HISTORICO and cursor >= mes_da_conta_mais_antiga:
+        inicios.append(cursor)
+        cursor = _mes_anterior(cursor)
+
+    ciclos: list[CicloDaConferencia] = []
+    for start in inicios:
+        end = _fim_do_mes(start)
+        report = reconciliation_report(db, start=start, end=end, today=hoje)
+        # A conta precisa ter EXISTIDO no mês: `list_accounts` traz as ativas de HOJE, e o relatório
+        # confere todas — inclusive a aberta depois do fim desta janela. Sem este recorte, cadastrar
+        # uma conta nova tornaria ilegíveis, retroativamente, todos os meses anteriores ao cadastro.
+        # O total e o volume não mudam por causa dele: uma conta não pode ter checkpoint nem
+        # movimento antes da própria abertura (as guardas de `_validate_reference_date` e
+        # `_validate_posted_at`), então ela já contribuía com zero para os dois.
+        nascidas_ate_o_fim = {a.id for a in accounts if a.opening_date <= end}
+        contas_do_mes = [c for c in report.contas if c.bank_account_id in nascidas_ate_o_fim]
+        fechado = end < hoje
+        motivo = _motivo_nao_legivel(
+            contas_do_mes, report=report, start=start, corte=primeiro_ciclo_medivel
+        )
+        ciclos.append(
+            CicloDaConferencia(
+                ano_mes=f"{start.year:04d}-{start.month:02d}",
+                start=start,
+                end=end,
+                fechado=fechado,
+                # Ciclo em curso NUNCA é legível: um mês pela metade não tem o que declarar, e um
+                # `True` provisório que vira `False` amanhã é pior que um `False` honesto.
+                legivel=fechado and motivo is None,
+                motivo_nao_legivel=motivo,
+                # ANOTA, NUNCA SUBTRAI: copiado do relatório do mês, sem recálculo.
+                total_divergencia_cents=report.total_divergencia_cents,
+                # Estes dois são contados sobre `contas_do_mes` e não copiados, pelo mesmo motivo do
+                # recorte acima: dizer *"1 conta não avaliada"* num ciclo conferido, sobre uma conta
+                # que ainda não existia, seria mandar o dono caçar uma lacuna que não existe. A
+                # aritmética do dinheiro não muda — só a contagem de contas.
+                contas_avaliadas=sum(1 for c in contas_do_mes if c.divergencia_cents is not None),
+                contas_sem_checkpoint=sum(1 for c in contas_do_mes if c.divergencia_cents is None),
+                movimentos_no_periodo=sum(c.movimentos_no_periodo for c in contas_do_mes),
+                valor_movimentado_cents=sum(c.valor_movimentado_cents for c in contas_do_mes),
+            )
+        )
+    return ciclos
