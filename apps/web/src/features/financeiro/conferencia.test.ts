@@ -2,11 +2,13 @@ import { describe, expect, it } from "vitest";
 import {
   avisoTotalParcial,
   avisoUltimaConferencia,
+  type CicloDaConferencia,
   type ConferenciaConta,
   type ConferenciaReport,
   FONTE_LABEL,
   fonteLabel,
   fraseConferencia,
+  fraseDoCiclo,
   LADO_BANCO_LABEL,
   LADO_E1P_LABEL,
   LADOS_GRUPO_LABEL,
@@ -14,6 +16,7 @@ import {
   tomVisual,
 } from "./conferencia";
 import { DISPONIVEL_CAIXA_LABEL, TOTAL_EM_CONTAS_LABEL } from "./contas";
+import { formatBRL } from "./dre";
 import { ORIGEM_LABEL, ROTULO_BANCO } from "./projecao";
 
 function conta(over: Partial<ConferenciaConta> = {}): ConferenciaConta {
@@ -469,5 +472,108 @@ describe("Story 8.16 — as notas do bloco 4: a tela ANOTA, nunca recalcula", ()
     expect(limpo.notes).toEqual([]);
     expect(limpo.lancamentos_sem_conta_informada).toBe(0);
     expect(limpo.rendimentos_sem_perna_bancaria).toBe(0);
+  });
+});
+
+// ── O ciclo da conferência ───────────────────────────────────────────────────────────────────
+
+const CICLO_BASE: CicloDaConferencia = {
+  ano_mes: "2026-09",
+  start: "2026-09-01",
+  end: "2026-09-30",
+  fechado: true,
+  legivel: true,
+  motivo_nao_legivel: null,
+  total_divergencia_cents: 3_700,
+  contas_avaliadas: 3,
+  contas_sem_checkpoint: 0,
+  movimentos_no_periodo: 14,
+  valor_movimentado_cents: 1_840_200,
+};
+
+describe("fraseDoCiclo", () => {
+  it("ciclo em curso diz quando fecha, e não afirma nada sobre o mês", () => {
+    const f = fraseDoCiclo({ ...CICLO_BASE, fechado: false, legivel: false });
+    expect(f).toContain("30/09/2026");
+    expect(f).not.toContain("conferido");
+  });
+
+  it("ciclo conferido traz o volume junto do número", () => {
+    const f = fraseDoCiclo(CICLO_BASE);
+    expect(f).toContain("14 movimentos");
+    // Comparação contra `formatBRL`, e não contra o literal "R$ 18.402,00": o `toLocaleString`
+    // pt-BR separa o símbolo com espaço NÃO-QUEBRÁVEL, então o literal escrito à mão não casa.
+    // A asserção certa é esta de qualquer forma — ela prova que a frase usa o formatador canônico
+    // em vez de montar moeda à mão, que é como uma nona formatação de dinheiro nasceria no repo.
+    expect(f).toContain(formatBRL(1_840_200));
+  });
+
+  it("mês dormente mostra o zero POR EXTENSO, e não o omite", () => {
+    // O denominador zerado É a informação: um mês em que nada aconteceu dá divergência zero e não
+    // prova nada. Omiti-lo por ser zero apagaria exatamente o que ele existe para dizer.
+    const f = fraseDoCiclo({
+      ...CICLO_BASE,
+      movimentos_no_periodo: 0,
+      valor_movimentado_cents: 0,
+      total_divergencia_cents: 0,
+    });
+    expect(f).toContain("nenhum movimento");
+  });
+
+  it("ciclo não conferido repete o motivo do backend, sem reescrevê-lo", () => {
+    // Uma redação, um lugar. Reescrever aqui daria duas frases para o mesmo fato conforme o
+    // caminho — a lição que `_note_sem_checkpoint` e `_note_comparacao_degenerada` já pagaram.
+    const motivo =
+      "Faltou o saldo informado da conta Poupança BB neste mês — sem ele o e1p não consegue conferir o mês inteiro.";
+    const f = fraseDoCiclo({ ...CICLO_BASE, legivel: false, motivo_nao_legivel: motivo });
+    expect(f).toContain(motivo);
+  });
+
+  it("ciclo não conferido também carrega o volume", () => {
+    const f = fraseDoCiclo({
+      ...CICLO_BASE,
+      legivel: false,
+      motivo_nao_legivel: "Faltou o saldo informado da conta Itaú PJ neste mês.",
+    });
+    expect(f).toContain("14 movimentos");
+  });
+
+  it("nunca usa o rótulo da Projeção", () => {
+    // UX-001: "no banco" nomeia, na Projeção, o saldo que o e1p CALCULOU — a ponta oposta desta
+    // mesma subtração. A colisão já foi paga duas vezes; não se paga a terceira.
+    for (const c of [
+      CICLO_BASE,
+      { ...CICLO_BASE, fechado: false, legivel: false },
+      { ...CICLO_BASE, legivel: false, motivo_nao_legivel: "Faltou o saldo." },
+    ]) {
+      expect(fraseDoCiclo(c)).not.toContain(ROTULO_BANCO);
+    }
+  });
+
+  it("nunca usa o vocabulário do épico", () => {
+    // O dono não precisa entender o épico para saber onde está no ciclo.
+    for (const termo of ["legív", "gate", "Onda", "métrica", "P4"]) {
+      expect(fraseDoCiclo(CICLO_BASE)).not.toContain(termo);
+      expect(fraseDoCiclo({ ...CICLO_BASE, fechado: false, legivel: false })).not.toContain(termo);
+    }
+  });
+
+  it("o mês por extenso é textual e não passa por Date", () => {
+    // `new Date("2026-09")` leria UTC e, em UTC−3, viraria agosto. É a disciplina de `formatDay`
+    // em `lib/datetime.ts`, e a lição do saque do dia 9 aparecendo como dia 8 na Onda 3.
+    expect(fraseDoCiclo({ ...CICLO_BASE, ano_mes: "2026-01" })).toContain("Janeiro");
+    expect(fraseDoCiclo({ ...CICLO_BASE, ano_mes: "2026-12" })).toContain("Dezembro");
+  });
+
+  it("singular e plural do volume e das contas", () => {
+    const f = fraseDoCiclo({
+      ...CICLO_BASE,
+      contas_avaliadas: 1,
+      movimentos_no_periodo: 1,
+      valor_movimentado_cents: 5_000,
+    });
+    expect(f).toContain("1 conta");
+    expect(f).not.toContain("1 contas");
+    expect(f).toContain("1 movimento,");
   });
 });
