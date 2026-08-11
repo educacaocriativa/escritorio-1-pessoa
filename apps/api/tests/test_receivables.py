@@ -1,4 +1,6 @@
 """Testes de Contas a Receber — incluindo a baixa que alimenta a Carteira com split."""
+from datetime import UTC, datetime, timedelta
+
 import pytest
 from fastapi.testclient import TestClient
 
@@ -18,12 +20,29 @@ def headers(client: TestClient) -> dict[str, str]:
     return {"Authorization": f"Bearer {token}"}
 
 
+def _a_vencer(dias: int = 30) -> str:
+    """Uma data de vencimento FUTURA, derivada do relógio.
+
+    ⚠️ O default de `_charge` era `"2026-08-10"` escrito à mão, e
+    `test_create_charge_generates_code` afirma `is_overdue is False`. A partir de 11/08/2026 essa
+    data virou passado e o teste passou a falhar **para sempre**, sem que nada no diff de ninguém
+    tivesse mudado — a suíte quebra sozinha na virada de um dia.
+
+    É a segunda ocorrência da mesma classe em dois dias (a outra foi
+    `apps/web/src/features/cobrancas/CobrancasPage.test.tsx`). **Regra: data de vencimento em
+    fixture cuja asserção depende de "vencido ou não" NUNCA é literal — deriva do relógio.**
+    Os testes que dependem do dia 10/08 especificamente continuam passando `due_date=` explícito,
+    e não são afetados por este default.
+    """
+    return (datetime.now(UTC).date() + timedelta(days=dias)).isoformat()
+
+
 def _charge(**over):
     base = {
         "kind": "service",
         "method": "pix",
         "amount_cents": 10000,
-        "due_date": "2026-08-10",
+        "due_date": _a_vencer(),
         "description": "Mensalidade",
     }
     return {**base, **over}
