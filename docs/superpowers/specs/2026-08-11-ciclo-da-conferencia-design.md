@@ -199,9 +199,16 @@ como surpresa.
 
 ### 6.1 Conferência — a qualificação colada à frase
 
-Uma linha nova **imediatamente abaixo** de `fraseConferencia`, montada por uma função pura irmã
-`fraseDoCiclo`, testada, no padrão que `conferencia.ts` já estabelece (a frase não se monta dentro do
-`.tsx`).
+Um `CicloCard` **acima das frases por conta**, montado por uma função pura `fraseDoCiclo`, testada,
+no padrão que `conferencia.ts` já estabelece (a frase não se monta dentro do `.tsx`).
+
+⚠️ **Acima, e não abaixo — correção da leitura inicial, feita contra o código.** `fraseConferencia`
+é **por conta**, não do relatório: a tela renderiza um `FraseCard` por conta. E ela tem um
+`PeriodPicker` de intervalo livre (default `this_year`), enquanto o ciclo é ancorado no **mês** e
+independe do que o dono escolheu ali. Pendurar a qualificação embaixo das frases a faria parecer
+qualificar aquelas frases, que são de outro período — trocaria a co-localização certa por uma
+associação falsa. Acima, ela **enquadra** tudo que vem depois, que é a mesma disciplina de *"a frase
+vem antes da tabela"* um nível acima.
 
 - em curso: *"Este ciclo fecha em 30/09. Até lá, o e1p ainda não tem como conferir setembro por inteiro."*
 - fechado e legível: *"Setembro fechou conferido: 3 contas, 14 movimentos, R$ 18.402,00 movimentados."*
@@ -215,6 +222,14 @@ O **histórico** — o consult deliberado — fica **abaixo da tabela por conta*
 `<table>`, com teste que reprova a tabela**. A lição da 2b-ii: em 360px uma tabela de 3 colunas não
 cabe, e a saída não é rolar melhor, é não precisar de rolagem. O histórico de saques da Onda 3 já
 carrega esse teste; ele se repete aqui.
+
+⚠️ **O teste tem de ser ESCOPADO ao histórico, não à página.** `ConferenciaPage` já contém um
+`<table>` legítimo (`TabelaContas`), então um `queryByRole("table")).toBeNull()` sobre a página
+inteira **falharia no caminho normal** — e "consertá-lo" apagando a asserção mataria a guarda. A
+consulta corre dentro do contêiner do histórico (`within(...)`), com **controle positivo**: um teste
+que prove que a asserção enxerga uma `<table>` quando existe uma ali dentro. Sem o controle, um
+seletor que deixasse de casar tornaria o gate vacuamente verde — a lição do gate por
+`import.meta.glob` da 2b-ii.
 
 Cada linha: o mês, o veredito **em frase**, a divergência quando há, **e o volume sempre** —
 inclusive zero, com o mesmo peso visual do número, nunca como rodapé. Ciclo anterior a
