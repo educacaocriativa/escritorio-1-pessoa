@@ -1336,11 +1336,18 @@ que a banda fixa da Regra 7 existe para impedir.
   **semântica** (`ciclos.find(c => !c.fechado)`): o card mostra o em curso, o histórico os fechados,
   e os dois conjuntos são disjuntos por construção.
 
-- [x] **O aceite em ~360px FOI MEDIDO, com screenshot** (`onda-gate-ciclo-360px.png`), por Vite +
-  `page.route` + `boundingBox`, sem backend: viewport 360, `document.scrollWidth` **360** — zero
-  estouro de página. **Nenhum valor cortado** no histórico (`R$ 18.402,00` e `R$ 23.100,00`
-  inteiros), e o motivo longo quebra linha em vez de rolar. Os únicos elementos que cruzam a borda
-  vivem **dentro** da `TabelaContas`, que rola no próprio contêiner e é pré-existente.
+- [x] **O aceite em ~360px virou TESTE, não screenshot** — `apps/web/e2e/conferencia-ciclo-360.spec.ts`,
+  6 asserções na régua que o PR #105 acabou de trazer para o repositório. A medição ad-hoc desta
+  frente (Vite + `page.route` + `boundingBox`, num script de scratchpad) foi **descartada assim que
+  a régua chegou**: ela já era uma cópia pior — comparava só com a viewport, enquanto
+  `textoForaDaTela` acha o **ancestral que recorta**, que é o que pega o `R$ 3.` no lugar de
+  `R$ 3.000,00` da 2b-ii. Medido: `document.scrollWidth` **360**, nenhum texto do ciclo dependendo
+  de rolagem lateral, `R$ 18.402,00` e `R$ 23.100,00` inteiros, e o denominador zero por extenso.
+  O que rola de lado vive **dentro** da `TabelaContas`, pré-existente e no próprio contêiner.
+  - **Regra que fica:** quando um ativo do repositório aparece fazendo o que você fez à mão, a
+    resposta é **trocar**, não manter as duas — a segunda cópia é a que ninguém atualiza. Aqui a
+    troca ainda pagou juros: as asserções passaram a rodar no CI (job `frontend`, também do #105),
+    e a medição ad-hoc não rodaria nunca mais.
 - **Dívida:** `PRIMEIRO_CICLO_MEDIVEL` depende da data do deploy da Onda 3, que não é fato do
   repositório. O teste de piso elimina a classe barata (cravar no passado), não o erro.
 - **Dívida:** conta **arquivada** some do histórico (`list_accounts` a esconde), então arquivar uma
