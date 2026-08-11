@@ -4,6 +4,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { api } from "../../lib/api";
 import ConferenciaPage from "./ConferenciaPage";
 import {
+  type CicloDaConferencia,
   type ConferenciaConta,
   type ConferenciaReport,
   LADO_BANCO_LABEL,
@@ -595,5 +596,181 @@ describe("Story 8.16 — as notas do bloco 4 na tela: declaração de limite, n�
     await waitFor(() => expect(screen.getByRole("table")).toBeInTheDocument());
     expect(screen.queryByText(/não informam de qual conta/)).toBeNull();
     expect(screen.queryByText(/rendimentos de aplicação/)).toBeNull();
+  });
+});
+
+// ── O ciclo da conferência ───────────────────────────────────────────────────────────────────
+
+function ciclo(over: Partial<CicloDaConferencia> = {}): CicloDaConferencia {
+  return {
+    ano_mes: "2026-09",
+    start: "2026-09-01",
+    end: "2026-09-30",
+    fechado: true,
+    legivel: true,
+    motivo_nao_legivel: null,
+    total_divergencia_cents: 3_700,
+    contas_avaliadas: 1,
+    contas_sem_checkpoint: 0,
+    movimentos_no_periodo: 14,
+    valor_movimentado_cents: 1_840_200,
+    ...over,
+  };
+}
+
+/** Mock por ROTA: a tela passou a fazer duas chamadas independentes. */
+function mockApi(relatorio: ConferenciaReport, ciclos: CicloDaConferencia[]) {
+  vi.mocked(api.get).mockImplementation((url: string) =>
+    Promise.resolve({
+      data: url.includes("reconciliation-cycles") ? { ciclos } : relatorio,
+    } as never),
+  );
+}
+
+describe("o ciclo da conferência", () => {
+  it("a qualificação aparece ANTES das frases por conta", async () => {
+    mockApi(report([conta()]), [ciclo({ fechado: false, legivel: false })]);
+
+    renderPage();
+
+    const card = await screen.findByTestId("ciclo-card");
+    const primeiraFrase = screen.getAllByTestId("frase-conta")[0];
+    // A frase por conta vem DEPOIS do card — a qualificação enquadra, não é rodapé.
+    expect(
+      card.compareDocumentPosition(primeiraFrase) & Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
+  });
+
+  it("o histórico é lista, nunca tabela", async () => {
+    mockApi(report([conta()]), [ciclo(), ciclo({ ano_mes: "2026-08", start: "2026-08-01", end: "2026-08-31" })]);
+
+    renderPage();
+
+    const historico = await screen.findByTestId("historico-de-ciclos");
+    // ⚠️ ESCOPADO: a página tem um `<table>` legítimo (`TabelaContas`), e a asserção sobre a página
+    // inteira falharia no caminho normal — e "consertá-la" apagando a linha mataria a guarda.
+    expect(within(historico).queryByRole("table")).toBeNull();
+    expect(within(historico).getByRole("list")).toBeTruthy();
+  });
+
+  it("controle positivo: a asserção acima ENXERGA uma tabela quando existe uma ali dentro", () => {
+    // Sem isto, um seletor que deixasse de casar tornaria o gate vacuamente verde — a lição do
+    // gate por `import.meta.glob` da 2b-ii.
+    render(
+      <div data-testid="historico-de-ciclos">
+        <table>
+          <tbody>
+            <tr>
+              <td>x</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>,
+    );
+    expect(
+      within(screen.getByTestId("historico-de-ciclos")).queryByRole("table"),
+    ).not.toBeNull();
+  });
+
+  it("o volume aparece mesmo quando é zero", async () => {
+    mockApi(report([conta()]), [
+      ciclo({
+        fechado: true,
+        movimentos_no_periodo: 0,
+        valor_movimentado_cents: 0,
+        total_divergencia_cents: 0,
+      }),
+    ]);
+
+    renderPage();
+
+    // O denominador zerado É a informação: um mês em que nada aconteceu não prova completude.
+    expect(await screen.findByText(/nenhum movimento no período/)).toBeInTheDocument();
+  });
+
+  it("o ciclo em curso e o histórico são DISJUNTOS — a mesma frase não sai duas vezes", async () => {
+    // O card mostra o ciclo em curso; o histórico, os fechados. Escolher o card por `ciclos[0]`
+    // funcionaria hoje e duplicaria a linha no dia em que a ordem da lista mudasse.
+    mockApi(report([conta()]), [
+      ciclo({ ano_mes: "2026-10", start: "2026-10-01", end: "2026-10-31", fechado: false, legivel: false }),
+      ciclo({ fechado: true }),
+    ]);
+
+    renderPage();
+
+    await screen.findByTestId("ciclo-card");
+    expect(screen.getAllByText(/14 movimentos/)).toHaveLength(1);
+  });
+
+  it("sem conta cadastrada, não renderiza ciclo nenhum", async () => {
+    mockApi(report([]), []);
+
+    renderPage();
+
+    await waitFor(() =>
+      expect(screen.getByText(/ainda não tem conta bancária cadastrada/)).toBeInTheDocument(),
+    );
+    expect(screen.queryByTestId("ciclo-card")).toBeNull();
+  });
+
+  it("só o mês corrente: o histórico diz que nenhum fechou ainda", async () => {
+    mockApi(report([conta()]), [ciclo({ fechado: false, legivel: false })]);
+
+    renderPage();
+
+    const historico = await screen.findByTestId("historico-de-ciclos");
+    expect(historico).toHaveTextContent(/Nenhum mês fechado ainda/);
+  });
+
+  it("a rota dos ciclos é chamada sem parâmetro de período", async () => {
+    mockApi(report([conta()]), [ciclo({ fechado: false, legivel: false })]);
+
+    renderPage();
+
+    await screen.findByTestId("ciclo-card");
+    const chamada = vi
+      .mocked(api.get)
+      .mock.calls.find(([url]) => String(url).includes("reconciliation-cycles"));
+    // Fronteira escolhível permitiria selecionar a janela que produz o número desejado.
+    expect(chamada?.[1]).toBeUndefined();
+  });
+
+  it("resposta fora do formato não derruba a página", async () => {
+    vi.mocked(api.get).mockImplementation((url: string) =>
+      Promise.resolve({
+        data: url.includes("reconciliation-cycles") ? [] : report([conta()]),
+      } as never),
+    );
+
+    renderPage();
+
+    // `data = []` faz `data.ciclos` ser `undefined`; o guard é `Array.isArray`, não `?? []`.
+    await waitFor(() => expect(screen.getAllByTestId("frase-conta").length).toBeGreaterThan(0));
+    expect(screen.queryByTestId("ciclo-card")).toBeNull();
+  });
+
+  it("a tela não usa o rótulo da Projeção nem o vocabulário do épico", async () => {
+    // Os três estados na mesma tela: em curso, conferido e não conferido com motivo.
+    mockApi(report([conta()]), [
+      ciclo({ ano_mes: "2026-10", start: "2026-10-01", end: "2026-10-31", fechado: false, legivel: false }),
+      ciclo({ fechado: true }),
+      ciclo({
+        ano_mes: "2026-08",
+        start: "2026-08-01",
+        end: "2026-08-31",
+        fechado: true,
+        legivel: false,
+        motivo_nao_legivel: "Faltou o saldo informado da conta Itaú PJ neste mês.",
+      }),
+    ]);
+
+    const { container } = renderPage();
+
+    await screen.findByTestId("ciclo-card");
+    const texto = container.textContent ?? "";
+    expect(texto).not.toContain(ROTULO_BANCO);
+    for (const termo of ["legív", "gate", "Onda 4", "métrica"]) {
+      expect(texto).not.toContain(termo);
+    }
   });
 });

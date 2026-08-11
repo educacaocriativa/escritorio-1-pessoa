@@ -1610,3 +1610,100 @@ def test_sem_a_porta_registrada_o_relatorio_recusa_em_vez_de_zerar(
         _report(db)
     assert e.value.status_code == 500
     assert "não está ligada" in str(e.value)
+
+
+# ── O volume da janela — o denominador da divergência ────────────────────────────────────────
+
+
+def test_volume_conta_movimentos_e_soma_em_modulo(client: TestClient, headers, db: Session):
+    """R$ 5.000 entrando e R$ 5.000 saindo é um mês MOVIMENTADO, não um mês zerado.
+
+    A soma assinada diria `0`, e o denominador mentiria exatamente no mês em que ele mais precisa
+    dizer "aconteceu coisa aqui" — que é a razão de o volume existir.
+    """
+    acc = _account(client, headers)
+    _lancar(client, headers, acc["id"], amount_cents=500_000, posted_at=date(2026, 7, 10))
+    _lancar(client, headers, acc["id"], amount_cents=-500_000, posted_at=date(2026, 7, 12))
+
+    c = _so_conta(_report(db))
+
+    assert c.movimentos_no_periodo == 2
+    assert c.valor_movimentado_cents == 1_000_000
+
+
+def test_volume_exclui_ignorados(client: TestClient, headers, db: Session):
+    """Mesmo recorte do saldo derivado: o volume qualifica AQUELE saldo.
+
+    Um movimento ignorado está fora de `service._movements_sums`; contá-lo aqui diria que houve
+    movimento onde o saldo não viu nenhum.
+    """
+    acc = _account(client, headers)
+    _lancar(client, headers, acc["id"], amount_cents=100_000, posted_at=date(2026, 7, 10))
+    ignorado = _lancar(
+        client, headers, acc["id"], amount_cents=900_000, posted_at=date(2026, 7, 11)
+    )
+    assert (
+        client.post(
+            f"/bank/transactions/{ignorado['id']}/ignore",
+            json={"reason": "não é meu"},
+            headers=headers,
+        ).status_code
+        == 200
+    )
+
+    c = _so_conta(_report(db))
+
+    # Controle positivo do recorte: o movimento normal continua contado.
+    assert c.movimentos_no_periodo == 1
+    assert c.valor_movimentado_cents == 100_000
+
+
+def test_volume_zero_quando_nada_se_moveu(client: TestClient, headers, db: Session):
+    """Mês dormente: o ciclo NÃO é recusado — o denominador aparece zerado e se lê sozinho."""
+    _account(client, headers)
+
+    c = _so_conta(_report(db))
+
+    assert c.movimentos_no_periodo == 0
+    assert c.valor_movimentado_cents == 0
+
+
+def test_volume_aparece_tambem_na_conta_nao_avaliavel(client: TestClient, headers, db: Session):
+    """O mês sem saldo declarado mas com R$ 18.000 movimentados é DIFERENTE do mês em que nada
+    aconteceu. Zerar o volume no caminho não avaliável apagaria essa diferença."""
+    acc = _account(client, headers)
+    _lancar(client, headers, acc["id"], amount_cents=1_800_000, posted_at=date(2026, 7, 10))
+
+    c = _so_conta(_report(db))
+
+    assert c.divergencia_cents is None, "sem checkpoint, o bloco 1 é não avaliável"
+    assert c.movimentos_no_periodo == 1
+    assert c.valor_movimentado_cents == 1_800_000
+
+
+def test_volume_nao_altera_a_divergencia(client: TestClient, headers, db: Session):
+    """A Regra 5 mecanizada para esta frente.
+
+    Congela campo a campo o que NÃO pode mudar e dá controle positivo ao que DEVE — a lição do
+    `test_cockpit_e_carteira_intactos` da Onda 3, onde um teste que congelava o agregado inteiro
+    reprovou a funcionalidade correta, e a "correção óbvia" (apagá-lo) levaria junto a invariante.
+    """
+    acc = _account(client, headers, opening=1_000_000)
+    _lancar(client, headers, acc["id"], amount_cents=500_000, posted_at=date(2026, 7, 10))
+    _declarar(client, headers, acc["id"], balance_cents=2_000_000)
+
+    report = _report(db)
+    c = _so_conta(report)
+
+    # Congelados: o volume não entra em nenhum deles.
+    assert c.divergencia_cents == c.saldo_banco_cents - c.saldo_sistema_cents
+    assert c.tolerancia_cents == reconciliation.tolerance_cents(c.saldo_banco_cents)
+    assert c.dentro_da_tolerancia is (abs(c.divergencia_cents) <= c.tolerancia_cents)
+    assert report.total_divergencia_cents == c.divergencia_cents
+    assert [f.bank_account_id for f in report.contas_fora_da_banda] == (
+        [c.bank_account_id] if c.dentro_da_tolerancia is False else []
+    )
+
+    # Controle positivo: sem ele o teste passaria com o volume devolvendo zero para sempre.
+    assert c.movimentos_no_periodo == 1
+    assert c.valor_movimentado_cents == 500_000

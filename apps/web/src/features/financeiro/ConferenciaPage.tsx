@@ -5,10 +5,12 @@ import { api, apiErrorMessage } from "../../lib/api";
 import {
   avisoTotalParcial,
   avisoUltimaConferencia,
+  type CicloDaConferencia,
   type ConferenciaConta,
   type ConferenciaReport,
   fonteLabel,
   fraseConferencia,
+  fraseDoCiclo,
   LADO_BANCO_LABEL,
   LADO_E1P_LABEL,
   LADOS_GRUPO_LABEL,
@@ -50,6 +52,7 @@ export default function ConferenciaPage() {
   const accountId = params.get("account_id") ?? "";
   const [range, setRange] = useState<PeriodRange>(() => resolvePeriod("this_year"));
   const [report, setReport] = useState<ConferenciaReport | null>(null);
+  const [ciclos, setCiclos] = useState<CicloDaConferencia[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
 
@@ -76,8 +79,28 @@ export default function ConferenciaPage() {
     load();
   }, [load]);
 
+  // ⚠️ Efeito PRÓPRIO, sem `range` nem `accountId` nas dependências — e isso é a decisão, não
+  // economia. O ciclo é o **mês de calendário**, e a janela que o dono escolheu no `PeriodPicker`
+  // responde outra pergunta ("está batendo neste período?"). Amarrar os dois faria a qualificação
+  // do ciclo mudar quando o dono mexesse no seletor, sugerindo que ela fala daquele intervalo.
+  useEffect(() => {
+    api
+      .get<{ ciclos: CicloDaConferencia[] }>("/bank/reconciliation-cycles")
+      // `Array.isArray`, e não `?? []`: com `data = []`, `data.ciclos` é `undefined`, mas com
+      // `data` fora do formato um setter do React que recebesse função a executaria como updater.
+      // É a armadilha exata que derrubou a página de Conversas pelo `ClientTimeline`.
+      .then((res) => setCiclos(Array.isArray(res.data?.ciclos) ? res.data.ciclos : []))
+      // Um bloco de contexto nunca derruba quem o hospeda: degrada para vazio, sem estourar.
+      .catch(() => setCiclos([]));
+  }, []);
+
   const contas = useMemo(() => (report ? ordenarContas(report.contas) : []), [report]);
   const avisoParcial = useMemo(() => (report ? avisoTotalParcial(report) : null), [report]);
+  // ⚠️ **Por SEMÂNTICA, não por índice.** O card mostra o ciclo em curso e o histórico mostra os
+  // fechados: os dois conjuntos são disjuntos por construção, então a mesma frase não pode sair
+  // duas vezes na tela. `ciclos[0]` funcionaria hoje (o primeiro é sempre o mês corrente) e
+  // duplicaria a linha no dia em que a lista mudasse de ordem — foi o que um teste pegou.
+  const cicloEmCurso = useMemo(() => ciclos.find((c) => !c.fechado), [ciclos]);
 
   return (
     <div className="space-y-6">
@@ -125,6 +148,12 @@ export default function ConferenciaPage() {
 
       {report && report.contas.length > 0 && (
         <>
+          {/* 0) A QUALIFICAÇÃO — "este número já vale?", ACIMA das frases que ela enquadra.
+              Acima, e não abaixo: `fraseConferencia` é por CONTA e o `PeriodPicker` é de intervalo
+              livre, então pendurar isto embaixo faria parecer que qualifica aquelas frases, que são
+              de outro período. É "a frase vem antes da tabela" um nível acima. */}
+          {cicloEmCurso && <CicloCard ciclo={cicloEmCurso} />}
+
           {/* 1) AS FRASES — uma por conta, antes de qualquer tabela. */}
           <ul className="space-y-3">
             {contas.map((c) => (
@@ -137,6 +166,9 @@ export default function ConferenciaPage() {
 
           {/* 3) O detalhamento. */}
           <TabelaContas contas={contas} />
+
+          {/* 4) O histórico — o consult deliberado, não o caminho principal. */}
+          <HistoricoDeCiclos ciclos={ciclos} />
 
           {report.notes.length > 0 && (
             <ul className="space-y-1 text-xs text-neutral-400">
@@ -161,7 +193,7 @@ function FraseCard({ conta }: { conta: ConferenciaConta }) {
   const v = tomVisual(frase.tom);
   const abandono = avisoUltimaConferencia(conta);
   return (
-    <li className={`flex items-start gap-3 rounded-2xl p-4 ${v.cardClass}`}>
+    <li data-testid="frase-conta" className={`flex items-start gap-3 rounded-2xl p-4 ${v.cardClass}`}>
       <span className="text-xl leading-none" aria-hidden="true">
         {v.emoji}
       </span>
@@ -192,6 +224,66 @@ function FraseCard({ conta }: { conta: ConferenciaConta }) {
         />
       )}
     </li>
+  );
+}
+
+/**
+ * A qualificação do número — *"este número já vale?"*, que é outra pergunta que *"está batendo?"*.
+ *
+ * ⚠️ **Vive ACIMA das frases por conta.** `fraseConferencia` é por conta e o `PeriodPicker` é de
+ * intervalo livre; embaixo, isto pareceria qualificar aquelas frases, que são de outro período.
+ * Acima, ele **enquadra** o que vem depois — a mesma disciplina de *"a frase vem antes da tabela"*,
+ * um nível acima. Elemento separado da afirmação que ele qualifica é elemento que não é lido: o
+ * épico pagou dois PRs de campo (#56, #58) por essa exata classe.
+ *
+ * Sem emoji, sem cor de alerta e sem ícone: ele **não** é um sinal de saúde financeira — é contexto
+ * sobre o que a tela consegue afirmar. Vesti-lo de alerta competiria com o AC5 (dentro da banda:
+ * verde e SILÊNCIO), que é a regra que este épico mais defende.
+ */
+function CicloCard({ ciclo }: { ciclo: CicloDaConferencia }) {
+  return (
+    <div data-testid="ciclo-card" className="rounded-2xl bg-white p-4 shadow-sm">
+      <p className="text-sm text-neutral-700">{fraseDoCiclo(ciclo)}</p>
+    </div>
+  );
+}
+
+/**
+ * Os ciclos fechados, um por linha — o consult deliberado.
+ *
+ * ⚠️ **`<ul>`, nunca `<table>`.** Em 360px uma tabela de 3 colunas não cabe, e a saída não é fazer a
+ * rolagem funcionar melhor: é não precisar dela (lição da 2b-ii, onde o extrato mostrava `R$ 3.` no
+ * lugar de `R$ 3.000,00` com o `overflow-x` correto). O teste que reprova a tabela é **escopado a
+ * este contêiner**, porque a página tem um `<table>` legítimo logo acima.
+ *
+ * O volume sai em toda linha, **inclusive zero**: um mês em que nada aconteceu tem divergência zero
+ * e não prova nada, e é o volume que diz isso.
+ */
+function HistoricoDeCiclos({ ciclos }: { ciclos: CicloDaConferencia[] }) {
+  const fechados = ciclos.filter((c) => c.fechado);
+  if (fechados.length === 0) {
+    return (
+      <p data-testid="historico-de-ciclos" className="text-xs text-neutral-400">
+        Nenhum mês fechado ainda — o primeiro fecha no fim deste mês.
+      </p>
+    );
+  }
+  return (
+    <div data-testid="historico-de-ciclos" className="space-y-2">
+      <h2 className="text-sm font-semibold text-neutral-700">Mês a mês</h2>
+      <ul className="space-y-2">
+        {fechados.map((c) => (
+          <li key={c.ano_mes} className="rounded-xl bg-white p-3 text-sm shadow-sm">
+            <p className="min-w-0 text-neutral-700">{fraseDoCiclo(c)}</p>
+            {c.legivel && c.total_divergencia_cents !== null && (
+              <p className="mt-1 whitespace-nowrap text-neutral-500">
+                Diferença de {formatBRL(Math.abs(c.total_divergencia_cents))}
+              </p>
+            )}
+          </li>
+        ))}
+      </ul>
+    </div>
   );
 }
 

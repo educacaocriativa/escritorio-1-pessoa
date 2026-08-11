@@ -151,9 +151,13 @@ verifica_fiacao_da_guarda()
 #
 # **Esta função é a ÚNICA que soma P1 com P2**, e a soma é deliberada: os dois termos fecham na
 # MESMA onda (a 2) e pedem a MESMA ação do dono, então uma frase só os cobre. **P3 continua
-# separado** porque fecha na Onda 2b — outro prazo, outra frase. **P4 não é contado**: a população é
-# vazia por construção (o payout ainda não move dinheiro de conta real) e alcançá-la exigiria cruzar
-# o plano da plataforma com o plano do banco, que é a mistura que produziu o bug de origem.
+# separado** porque fecha na Onda 2b — outro prazo, outra frase. **P4 não é contado**: desde a
+# Onda 3 a população é vazia por construção — `request_payout` recusa sem conta principal (409) e
+# `bank/payout.py` escreve a perna bancária na mesma transação —, e alcançá-la exigiria cruzar o
+# plano da plataforma com o plano do banco, que é a mistura que produziu o bug de origem.
+# ⚠️ A frase anterior aqui era *"o payout ainda não move dinheiro de conta real"*, e ela descrevia o
+# `request_payout` de ANTES da Onda 3: ficou falsa no merge dela. A vacuidade de P4 vale **só a
+# partir do deploy** — quem decide isso é `bank.reconciliation.PRIMEIRO_CICLO_MEDIVEL`.
 def probe_termos_do_gate(
     db: Session, *, start: date, end: date
 ) -> bank_reconciliation.TermosDoGate:

@@ -104,6 +104,21 @@ function hoje(): string {
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
 }
 
+/**
+ * Uma data de calendário local a N dias de hoje.
+ *
+ * ⚠️ O vencimento da fixture PRECISA ser derivado do relógio, não escrito à mão. Ele era
+ * `"2026-08-10"` fixo, e o teste "o dia default é HOJE (não o vencimento)" afirma justamente que
+ * os dois DIFEREM — então em 10/08/2026, e só nesse dia, a suíte ficava vermelha por coincidência
+ * de calendário. Bomba-relógio de um dia: não quebra em nenhuma execução antes, não quebra em
+ * nenhuma depois, e quem a encontra está sempre depurando outra coisa.
+ */
+function daquiADias(n: number): string {
+  const d = new Date();
+  d.setDate(d.getDate() + n);
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+}
+
 const CONTA_BANCARIA = {
   id: "acc-1",
   name: "Itaú PJ",
@@ -125,8 +140,9 @@ const COBRANCA_ABERTA = {
   kind: "service",
   method: "pix",
   amount_cents: 100000,
-  due_date: "2026-08-10",
-  competence_date: "2026-08-10",
+  // A vencer, nunca hoje — ver `daquiADias`. `is_overdue: false` abaixo continua coerente.
+  due_date: daquiADias(30),
+  competence_date: daquiADias(30),
   paid_at: null,
   chart_account_id: null,
   contract_id: null,

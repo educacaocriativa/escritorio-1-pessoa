@@ -350,3 +350,110 @@ export function avisoUltimaConferencia(c: ConferenciaConta): string | null {
   if (dias <= 0) return null;
   return `Saldo não confirmado há ${dias} ${dias === 1 ? "dia" : "dias"}.`;
 }
+
+// ── O ciclo da conferência ───────────────────────────────────────────────────────────────────
+
+/**
+ * UM mês de conferência — espelho de `CicloDaConferenciaOut` (`bank/schemas.py`).
+ *
+ * A `ConferenciaReport` responde *"está batendo?"*. Isto responde a outra pergunta: **"este número
+ * já vale?"**. `motivo_nao_legivel` vem **pronto do backend** — uma redação, um lugar: reescrevê-lo
+ * aqui daria duas frases para o mesmo fato conforme o caminho.
+ *
+ * ⚠️ `movimentos_no_periodo` e `valor_movimentado_cents` são o **DENOMINADOR**, e a tela não pode
+ * exibir `total_divergencia_cents` sem eles: um mês com divergência zero e volume zero não prova
+ * nada, e é o volume que diz isso em voz alta.
+ */
+export interface CicloDaConferencia {
+  ano_mes: string;
+  start: string;
+  end: string;
+  fechado: boolean;
+  legivel: boolean;
+  motivo_nao_legivel: string | null;
+  total_divergencia_cents: number | null;
+  contas_avaliadas: number;
+  contas_sem_checkpoint: number;
+  movimentos_no_periodo: number;
+  valor_movimentado_cents: number;
+}
+
+const MESES = [
+  "janeiro",
+  "fevereiro",
+  "março",
+  "abril",
+  "maio",
+  "junho",
+  "julho",
+  "agosto",
+  "setembro",
+  "outubro",
+  "novembro",
+  "dezembro",
+];
+
+/**
+ * `"2026-09"` → `"setembro"`. **Puramente textual — nunca constrói `Date`.**
+ *
+ * `new Date("2026-09")` leria UTC e, em UTC−3, um mês de calendário viraria o anterior na virada.
+ * É a disciplina de `formatDay` em `lib/datetime.ts`, e a lição do saque do dia 9 aparecendo como
+ * dia 8 na Onda 3.
+ */
+function mesPorExtenso(anoMes: string): string {
+  const mm = Number(anoMes.split("-")[1]);
+  return MESES[mm - 1] ?? anoMes;
+}
+
+function capitalizar(texto: string): string {
+  return texto.charAt(0).toUpperCase() + texto.slice(1);
+}
+
+/**
+ * O volume da janela, em texto. **Sai SEMPRE, inclusive zero.**
+ *
+ * Omiti-lo quando é zero apagaria exatamente a informação que ele existe para dar: um mês em que
+ * nada aconteceu tem divergência zero e não prova que os lançamentos estão completos.
+ */
+function volumeEmTexto(c: CicloDaConferencia): string {
+  if (c.movimentos_no_periodo === 0) return "nenhum movimento no período";
+  const plural = c.movimentos_no_periodo > 1 ? "s" : "";
+  return `${c.movimentos_no_periodo} movimento${plural}, ${formatBRL(
+    c.valor_movimentado_cents,
+  )} movimentados`;
+}
+
+/**
+ * A frase que ENQUADRA tudo o que vem depois dela na tela. PURA e testada.
+ *
+ * ⚠️ **A palavra "legível" não aparece aqui, nem nenhum vocabulário do épico.** "Legível" é termo de
+ * domínio (código, docstrings, `CLAUDE.md`); na tela é frase, e o dono não precisa entender o épico
+ * para saber onde está no ciclo. Não é preciosismo: `completo` colidiria com a *completude* do
+ * Diagnóstico e `comparável` já está tomado no nível da conta pela Story 8.20 (*"declarado, porém
+ * não comparável"*). A divergência D-6/UX-001 já foi paga duas vezes para separar sentidos que
+ * dividiam uma palavra — não se paga a terceira.
+ *
+ * ⚠️ E `ROTULO_BANCO` (`"no banco"`, de `projecao.ts`) **não entra**: lá ele nomeia o saldo que o
+ * e1p CALCULOU, que é a ponta oposta desta mesma subtração.
+ */
+export function fraseDoCiclo(c: CicloDaConferencia): string {
+  const mes = mesPorExtenso(c.ano_mes);
+  if (!c.fechado) {
+    return (
+      `Este ciclo fecha em ${formatDateBR(c.end)}. ` +
+      `Até lá, o e1p ainda não tem como conferir ${mes} por inteiro.`
+    );
+  }
+  if (!c.legivel) {
+    const motivo = c.motivo_nao_legivel ? ` ${c.motivo_nao_legivel}` : "";
+    return (
+      `${capitalizar(mes)} fechou sem o e1p conseguir conferir o mês inteiro.${motivo} ` +
+      `(${volumeEmTexto(c)})`
+    );
+  }
+  const plural = c.contas_avaliadas > 1 ? "s" : "";
+  return (
+    `${capitalizar(mes)} fechou conferido: ${c.contas_avaliadas} conta${plural}, ` +
+    `${volumeEmTexto(c)}.`
+  );
+}

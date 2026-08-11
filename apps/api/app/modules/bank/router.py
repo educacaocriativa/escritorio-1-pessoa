@@ -41,6 +41,8 @@ from app.modules.bank.schemas import (
     BankTransferOut,
     CheckpointCreate,
     CheckpointOut,
+    CicloDaConferenciaOut,
+    CiclosDaConferenciaOut,
     ConferenciaContaOut,
     ConferenciaReportOut,
     ContaForaDaBandaOut,
@@ -720,6 +722,8 @@ def _conferencia_conta_out(c: reconciliation.ConferenciaConta) -> ConferenciaCon
         tolerancia_cents=c.tolerancia_cents,
         dias_desde_ultima_conferencia=c.dias_desde_ultima_conferencia,
         movimentos_ignorados=c.movimentos_ignorados,
+        movimentos_no_periodo=c.movimentos_no_periodo,
+        valor_movimentado_cents=c.valor_movimentado_cents,
         notes=c.notes,
     )
 
@@ -811,3 +815,47 @@ def reconciliation_report(
     except service.BankError as e:
         raise _err(e) from e
     return _conferencia_out(report)
+
+
+@router.get("/reconciliation-cycles", response_model=CiclosDaConferenciaOut)
+def reconciliation_cycles(
+    _user: CurrentUser = Depends(_guard),
+    db: Session = Depends(get_tenant_db),
+) -> CiclosDaConferenciaOut:
+    """*"Este número já vale?"* — um mês por linha, com o volume que produziu cada um. READ-ONLY.
+
+    A rota acima responde *"está batendo?"*. Esta responde a outra pergunta, que decide as ondas
+    seguintes do épico: se o número daquele mês pode ser **lido** como medida do furo, ou se ele
+    ainda mede a própria incompletude do sistema.
+
+    **Sem parâmetro de período, de propósito.** O ciclo é o mês de calendário no fuso do tenant, e
+    fronteira escolhível permitiria selecionar a janela que produz o número desejado — a régua
+    andando junto com o que ela mede, que é o que a banda fixa da Regra 7 existe para impedir.
+
+    **Derivado na leitura, nunca gravado.** Roda o relatório de conferência uma vez por mês. Um
+    lançamento retroativo muda **legitimamente** a leitura de um ciclo passado; um valor congelado
+    passaria a discordar do recalculado, e seriam duas verdades sobre a mesma divergência.
+
+    **Sem conta bancária cadastrada, `ciclos` vem vazio** — não com um ciclo corrente de conteúdo
+    nulo, que seria a condição (a) da legibilidade violada pela porta dos fundos.
+
+    ⚠️ **ANOTA, NUNCA SUBTRAI:** nada aqui recalcula divergência, tolerância ou banda.
+    """
+    return CiclosDaConferenciaOut(
+        ciclos=[
+            CicloDaConferenciaOut(
+                ano_mes=c.ano_mes,
+                start=c.start,
+                end=c.end,
+                fechado=c.fechado,
+                legivel=c.legivel,
+                motivo_nao_legivel=c.motivo_nao_legivel,
+                total_divergencia_cents=c.total_divergencia_cents,
+                contas_avaliadas=c.contas_avaliadas,
+                contas_sem_checkpoint=c.contas_sem_checkpoint,
+                movimentos_no_periodo=c.movimentos_no_periodo,
+                valor_movimentado_cents=c.valor_movimentado_cents,
+            )
+            for c in reconciliation.ciclos_da_conferencia(db)
+        ]
+    )

@@ -541,6 +541,11 @@ class ConferenciaContaOut(BaseModel):
     # `None` = esta conta NUNCA teve saldo informado (diferente de `0` = informado hoje).
     dias_desde_ultima_conferencia: int | None
     movimentos_ignorados: int
+    # Quanto se moveu NESTA janela, NESTA conta — o denominador da divergência. Existe para que o
+    # número nunca seja lido sem o volume que o produziu: um mês em que nada aconteceu dá
+    # divergência zero e não prova nada, e o zero aqui é o que diz isso em voz alta.
+    movimentos_no_periodo: int = 0
+    valor_movimentado_cents: int = 0
     notes: list[str]
 
 
@@ -587,3 +592,43 @@ class ConferenciaReportOut(BaseModel):
     # não nesta: achatá-lo dentro do par acima prometeria na tela um prazo falso.
     rendimentos_sem_perna_bancaria: int = 0
     valor_rendimentos_sem_perna_cents: int = 0
+
+
+class CicloDaConferenciaOut(BaseModel):
+    """UM mês de conferência, e se o número dele **pode ser lido**. Ver `CicloDaConferencia`.
+
+    `legivel` é `False` para todo ciclo em curso, sem exceção — um mês pela metade não tem o que
+    declarar. `motivo_nao_legivel` traz **uma** frase pronta, do backend: uma redação, um lugar.
+    Duas redações do mesmo fato viram duas frases diferentes na tela conforme o caminho, que é a
+    lição que este módulo já pagou em `_note_sem_checkpoint` e `_note_comparacao_degenerada`.
+
+    ⚠️ `movimentos_no_periodo` e `valor_movimentado_cents` são o **DENOMINADOR**: a tela não pode
+    exibir `total_divergencia_cents` sem eles. Um mês com divergência zero e volume zero não prova
+    nada, e é o volume que diz isso em voz alta.
+
+    ⚠️ **"Legível" é termo de domínio e não aparece para o dono.** Na tela é frase — `completo`
+    colidiria com a *completude* do Diagnóstico e `comparável` já está tomado no nível da conta pela
+    Story 8.20.
+    """
+
+    ano_mes: str
+    start: date
+    end: date
+    fechado: bool
+    legivel: bool
+    motivo_nao_legivel: str | None
+    total_divergencia_cents: int | None
+    contas_avaliadas: int
+    contas_sem_checkpoint: int
+    movimentos_no_periodo: int
+    valor_movimentado_cents: int
+
+
+class CiclosDaConferenciaOut(BaseModel):
+    """Resposta de `GET /bank/reconciliation-cycles`. Do mais recente para o mais antigo.
+
+    Envelope com um campo em vez de lista nua: uma lista no topo do corpo não tem para onde crescer
+    sem virar mudança quebradora de contrato.
+    """
+
+    ciclos: list[CicloDaConferenciaOut]
