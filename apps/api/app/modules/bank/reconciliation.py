@@ -110,6 +110,26 @@ from app.modules.bank.models import STATUS_IGNORED, BankAccount, BankTransaction
 TOLERANCE_FLOOR_CENTS = 5_000  # R$ 50,00 — o piso, que domina em conta pequena
 TOLERANCE_PCT = 0.005  # 0,5% — o componente que domina em conta grande
 
+# ── O corte do termo P4 ───────────────────────────────────────────────────────────────────────
+#
+# `TermosDoGate` conta P1+P2 e P3 e **não conta P4**. Até a Onda 3 a justificativa era que a
+# população é vazia por construção — verdade por um mecanismo que **não existe mais**:
+# `request_payout` marcava a solicitação como sacada sem tocar em conta real. Hoje ela continua
+# vazia por outro mecanismo (409 sem conta principal, e a perna bancária escrita na MESMA transação
+# por `bank/payout.py`) e **só a partir do deploy da Onda 3**.
+#
+# Numa janela anterior existem saques sem perna bancária que ninguém conta, e o relatório os reporta
+# como zero **por omissão**. *"Zero por ausência de medição não é zero"* é a frase que o próprio
+# `_probe_termos_do_gate` usa para se RECUSAR a devolver zeros; um ciclo declarado conferido sobre
+# uma janela dessas seria a mesma leitura errada que já custou uma decisão de produto neste épico.
+#
+# ⚠️ **É o único valor deste arquivo que depende de um fato FORA do repositório** — a data em que a
+# Onda 3 subiu para produção — e ele erra em silêncio, para o lado caro. Mesma forma de
+# `CORTE_AUTORIA` (`vima/absences.py`): data cravada, motivo escrito ao lado, e um teste de piso
+# contra a data do **merge** (2026-08-10, commit 54bb1d4), que é um fato do repositório. **Ao mover
+# esta data, mova o piso junto** e escreva por quê.
+PRIMEIRO_CICLO_MEDIVEL = date(2026, 9, 1)
+
 
 def tolerance_cents(
     saldo_cents: int,
@@ -287,10 +307,17 @@ class ConferenciaReport:
     porque **não fecha nesta onda** — achatá-lo dentro de P1/P2 prometeria na tela um prazo falso,
     que é a mesma classe de afirmação sem lastro que a Onda 0 removeu da Projeção.
 
-    **P4 é declarado e NÃO é contado**, de propósito: a população é **vazia por construção** hoje
-    (o payout só marca a solicitação como sacada — nenhum dinheiro sai de conta real), e contá-la
-    exigiria uma dependência deste módulo para o plano da plataforma, proibida pela Regra dos
+    **P4 é declarado e NÃO é contado**, e a razão MUDOU com a Onda 3. Até ela, a população era
+    vazia porque o payout só marcava a solicitação como sacada — nenhum dinheiro saía de conta real.
+    Agora ela é vazia por **construção nova**: `wallet.request_payout` recusa sem conta principal
+    (409) e `bank/payout.py` escreve a perna bancária na MESMA transação. Contá-la aqui continua
+    exigindo uma dependência deste módulo para o plano da plataforma, proibida pela Regra dos
     Planos, em troca de um contador cosmético sobre conjunto vazio.
+
+    ⚠️ **A vacuidade só vale a partir do deploy da Onda 3.** Numa janela anterior existem saques sem
+    perna bancária que ninguém conta, e este relatório os reporta como zero **por omissão**. Quem
+    decide se uma janela é medível é `PRIMEIRO_CICLO_MEDIVEL`, no topo deste módulo — **não presuma
+    zero fora dele.**
 
     ⚠️ **Os contadores são do RELATÓRIO, e não por conta — e isso é uma DECISÃO, não um esquecimento
     (desvio registrado da redação do AC7).** P1 e P2 são definidos por *"não informa de qual conta
@@ -351,8 +378,10 @@ class TermosDoGate:
 
     `lancamentos_sem_conta_informada` = **P1 + P2** (as duas fecham na Onda 2);
     `rendimentos_sem_perna_bancaria` = **P3** (fecha na Onda 2b — outro prazo, contador próprio).
-    P4 **não** entra: população vazia por construção hoje, e contá-la exigiria alcançar o plano da
-    plataforma a partir daqui. Ver a docstring de `ConferenciaReport`.
+    P4 **não** entra: desde a Onda 3 a população é vazia por construção (o payout recusa sem conta
+    principal e escreve a perna bancária na mesma transação), e contá-la exigiria alcançar o plano
+    da plataforma a partir daqui. ⚠️ A vacuidade vale **só depois do deploy** da Onda 3 — ver
+    `PRIMEIRO_CICLO_MEDIVEL` e a docstring de `ConferenciaReport`.
     """
 
     lancamentos_sem_conta_informada: int
