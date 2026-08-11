@@ -8,6 +8,20 @@ import PerguntaDaVima from "./PerguntaDaVima";
 export const CHAVE_NUCLEO = "e1p_dna_nucleo";
 
 /**
+ * Telemetria: **dispara e esquece.**
+ *
+ * O beacon NUNCA pode trancar a entrada. Esta página já tinha a covardia certa para o 403 e para
+ * rede ruim (cai em `sair()`); a instrumentação tem de ter a mesma. Sem `await`, sem `.then` que
+ * navegue, e com o `catch` engolindo tudo: uma medição que derruba o produto que ela mede não é
+ * medição, é regressão.
+ */
+function avisar(evento: "open" | "abandon", corpo: Record<string, number> = {}) {
+  void api.post(`/dna/nucleo/${evento}`, corpo).catch(() => {
+    // De propósito: a medição é secundária ao produto.
+  });
+}
+
+/**
  * As seis perguntas do primeiro acesso.
  *
  * **Nenhuma é de Calibração, e essa é a inversão central do design.** "Em quanto tempo eu te
@@ -29,7 +43,13 @@ export default function NucleoPage() {
     api
       .get<DnaPergunta[]>("/dna/faltantes", { params: { gancho: "nucleo" } })
       .then(({ data }) => {
-        if (vivo) setPerguntas(data ?? []);
+        const lista = data ?? [];
+        if (!vivo) return;
+        setPerguntas(lista);
+        // `open` só DEPOIS do sucesso e só quando havia o que ver: é isso que faz "ausência de
+        // `open` ⇒ a pessoa nunca entrou" ser verdade, sem inventar um terceiro evento. Com a
+        // lista vazia a página redireciona sem exibir nada — não houve abertura.
+        if (lista.length > 0) avisar("open", { exibidas: lista.length });
       })
       .catch(() => {
         // 403 (sub-usuário sem `settings`) ou rede ruim: o núcleo não pode trancar a entrada.
@@ -48,6 +68,20 @@ export default function NucleoPage() {
       // Sem a marca, a entrada volta a perguntar ao servidor — mais lento, correto.
     }
     navegar("/", { replace: true });
+  }
+
+  /**
+   * "Pular por enquanto" — o ÚNICO caminho que é abandono.
+   *
+   * `sair()` também é chamado pelo 403/rede ruim, pelo núcleo vazio e pelo fim da sequência.
+   * Nenhum dos três é abandono — gravar `abandon` no caminho de erro seria mentira, e no fim da
+   * sequência seria reportar abandono de quem concluiu. Por isso o beacon mora aqui e não lá
+   * dentro. A ordem importa menos do que a ausência de `await`: o aviso é disparado e a saída
+   * **não o aguarda**.
+   */
+  function abandonar() {
+    avisar("abandon");
+    sair();
   }
 
   function avancar() {
@@ -85,7 +119,7 @@ export default function NucleoPage() {
 
       <button
         type="button"
-        onClick={sair}
+        onClick={abandonar}
         className="w-full text-center text-xs text-neutral-400 underline"
       >
         Pular por enquanto

@@ -1,8 +1,19 @@
 """A resposta do DNA — estado atual, não história.
 
 **É upsert, não append — o oposto de `core/facts.py`, e de propósito.** Fato é história; DNA é
-estado atual. Guardar versões faria toda leitura ter que decidir qual resposta vale, e o
-histórico de quem mudou o quê já é trabalho de `core/audit.py`.
+estado atual. Guardar versões faria toda leitura ter que decidir qual resposta vale.
+
+**O histórico de quem mudou o quê é trabalho de `core/audit.py`, e desde 2026-08-11 isso é
+verdade.** Até essa data a frase acima estava escrita aqui e não tinha código atrás: `audit`
+aparecia UMA vez no módulo inteiro, dentro dela, com zero chamadas. Era a classe de defeito nº 1
+do Epic 8 — o documento que afirma sobre a camada de baixo e desliga quem viria conferir —, e aqui
+mais grave, porque **sustentava uma decisão de modelagem**: o upsert foi aceito em troca de uma
+rede que ninguém tinha tecido.
+
+Quem grava, hoje (verificável por `grep -rn "eventos.registrar" apps/api/app/modules/dna/`):
+`service._gravar` → `dna.answer.save` / `dna.answer.skip`, com `target=<source>:<pergunta>`;
+`router.nucleo_evento` → `dna.nucleo.open` / `dna.nucleo.abandon`. **Se esta lista divergir do
+grep, é ela que está errada.**
 
 `value` nulo NÃO é ausência de linha: é "o dono viu a pergunta e pulou". A distinção sustenta a
 quarentena de 7 dias em `cadencia.py` sem tabela nova.

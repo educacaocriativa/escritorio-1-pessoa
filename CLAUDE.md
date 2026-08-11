@@ -1869,9 +1869,11 @@ media que responde em duas horas recebiam o mesmo aviso na mesma hora.
   `vima/router.py` (lá o recorte é por linha). É também o oposto das preferências de briefing do
   V1, que foram para `users` por serem pessoais.
 - **O V2 não chama IA em ponto nenhum** — custo marginal zero por tenant.
-- **Dívidas:** as 46 perguntas nunca foram validadas com dono real; não há medição de ativação do
-  núcleo, então não se sabe se ele ajudou ou atrapalhou; a quarentena de 7 dias e o "uma por dia"
-  são números sem evidência.
+- **Dívidas:** as 46 perguntas nunca foram validadas com dono real (**não é instrumentável — é
+  conversa com dono**); ~~não há medição de ativação do núcleo~~ **FECHADA em 2026-08-11**, ver "A
+  ativação do núcleo deixou de ser invisível" abaixo; a quarentena de 7 dias e o "uma por dia"
+  continuam sendo números sem evidência, mas **agora existe evidência sendo acumulada** — ler 2
+  tenants não confirma número nenhum.
 - [x] **A validação em ~360px do núcleo e da aba FOI FEITA (2026-08-10).** **O núcleo passou sem
   conserto** — `scrollWidth` 360, uma pergunta por tela, opções com 54px de altura, e também roda
   em `ProtectedBareLayout`. **A aba "A sua empresa" não:** ela abria com **16.495px = 22,3 telas**
@@ -1944,6 +1946,115 @@ vencimento−1 ao vencimento+2, e depois dia sim, dia não, para sempre.
   na própria docstring, e a varredura AST não a pega porque não é leitura de relógio.
 - [x] **A validação em ~360px do V2 foi feita em 2026-08-10**, e a linha nova do eixo `dinheiro`
   renderiza correta (278px de largura). Ver a seção do V2, acima.
+
+### A ativação do núcleo deixou de ser invisível (2026-08-11)
+
+> Spec: `docs/superpowers/specs/2026-08-11-vima-v2-medicao-de-ativacao-design.md` ·
+> Plano: `docs/superpowers/plans/2026-08-11-vima-v2-medicao-de-ativacao.md`
+
+A dívida escrita dizia *"não há medição de ativação do núcleo"*. Verificado no código, o estado era
+**pior**, e em dois pontos era **destruição de dado acontecendo agora**. Esta onda é
+**instrumentar, não analisar**: nenhuma tela, nenhum endpoint de leitura, nenhum limiar, nenhuma
+migration.
+
+- [x] **A docstring de `dna/models.py` parou de ser falsa.** Ela defendia o upsert dizendo que *"o
+  histórico de quem mudou o quê já é trabalho de `core/audit.py`"* — e `audit` aparecia **UMA** vez
+  no módulo inteiro, **dentro dessa frase**, com zero chamadas. É a classe de defeito nº 1 do Epic
+  8 (o documento que afirma sobre a camada de baixo e desliga quem viria conferir), e aqui mais
+  grave que nas quatro instâncias de lá porque **sustentava uma decisão de modelagem**: o upsert foi
+  aceito em troca de uma rede que ninguém tinha tecido. A escolha foi **tecer a rede**, não corrigir
+  a frase para menos.
+- [x] **Quatro `action`s, e o `source` mora no `target`.** `dna.answer.save` · `dna.answer.skip` ·
+  `dna.nucleo.open` · `dna.nucleo.abandon`, com `target=<source>:<pergunta>` nas duas primeiras e
+  `str(n)` no `open`. ⚠️ **Quatro actions × três sources (`nucleo｜gancho｜config`) seriam DOZE
+  strings**, e é assim que 117 actions distintas viram 200 — o repo já tem `account_deleted`, sem
+  pontos e fora do padrão, provando que a convenção sozinha não segura o vocabulário.
+- [x] **`dna/eventos.py` é a porta única, com guarda mecânica.** `facts.record` valida o `kind`
+  contra o `module`; `audit.record` **não valida nada**. `eventos.registrar` recusa toda action
+  fora de `ACTIONS`, e um gate AST (`test_dna_vocabulario_gate.py`) garante que ninguém mais no
+  módulo chama `audit.record` — allowlist de **um** membro, no padrão de `sync_origin_movement`.
+  **Com controle positivo em cada asserção**, inclusive um do próprio scanner: sem ele, um glob que
+  deixasse de casar aprovaria o módulo inteiro em silêncio.
+- [x] **O teste que prova a dívida fechada:** responder `oferta.ticket_tipico` no núcleo, editar a
+  mesma pergunta no `/config`, e asserir **duas** entradas de audit com **uma** linha em
+  `dna_answers`. É a diferença entre o upsert apagar história e o upsert ser só estado atual.
+- ⚠️ **`db.flush()` antes de gravar a trilha, e a razão aqui NÃO é a do MNT-001.** O padrão do repo
+  (`bank.create_account`) existe porque o `target` costuma ser o `id` da linha, que tem default
+  Python-side e é `None` antes do INSERT. Aqui o `target` é `<source>:<pergunta>` e **não depende de
+  `id` nenhum** — o flush fica pelo segundo motivo que `bank.create_transaction` documenta: é nele
+  que a unique constraint de `(tenant, question_key)` fala, e um rastro escrito antes dela afirmaria
+  uma resposta que ainda pode ser recusada. **Copiar para cá a justificativa do MNT-001 seria
+  cometer, dentro desta onda, a classe de defeito que ela veio fechar.** Os outros 17 call sites
+  continuam abertos.
+- [x] **`POST /dna/nucleo/{evento}` — UMA rota, evento no caminho**, validado contra tupla
+  declarada, 204, e **o front ignora a resposta**.
+- ⚠️ **O caminho de erro grava NADA, e é isso que o torna distinguível.** `open` é emitido só
+  **depois** de `GET /dna/faltantes` ter sucesso **e só quando havia pergunta para ver** — então
+  **ausência de `open` ⇒ a pessoa nunca entrou**, verdade derivada sem inventar um terceiro evento
+  (`dna.nucleo.unavailable` seria categoria que ninguém pediu, com consumidor inexistente). Um
+  sub-usuário sem o módulo `settings` toma 403 e **não é contado como abandono**.
+- ⚠️ **`sair()` do `NucleoPage` tem QUATRO chamadores e só UM é abandono.** 403/rede ruim, núcleo
+  vazio e fim da sequência **não são** abandono; só o botão "Pular por enquanto" é. Por isso o
+  beacon **não** entrou dentro de `sair()` — lá dentro ele reportaria abandono de quem concluiu o
+  núcleo, e gravar `abandon` no caminho de erro seria mentira.
+- ⚠️ **A covardia da telemetria é MECANIZADA, não prometida.** O teste clica em "Pular por
+  enquanto" com o `POST` rejeitando e verifica `localStorage` e navegação **sem nenhum `await` entre
+  o clique e a asserção**: se alguém escrever `await api.post(...)` antes do `sair()`, a marca só
+  existiria num microtask seguinte e o teste morre. É a forma executável de *"o abandon é disparado
+  e a saída não o aguarda"*.
+- [x] **O denominador é GRAVADO; o progresso é DERIVADO.** `faltantes` devolve só as não
+  respondidas (na 2ª visita a pessoa vê 4, não 6), e `catalog.NUCLEO` pode crescer — o eixo de
+  Calibração já cresceu de 6 para 7 em 2026-08-09 —, o que viraria todo "k de 6" histórico em "k de
+  7" **retroativamente**. O número exibido é evidência do que a pessoa viu, no princípio do
+  `raw_description` de `bank_transactions`: imutável porque é prova.
+- [x] **`python -m app.scripts.nucleo_activation` — sem `--fix`, imprimindo quantos tenants
+  varreu.** `0 passagens em 0 tenants` e `0 em 7` são resultados diferentes, e o primeiro é defeito
+  do script.
+  - ⚠️ **Ele NÃO roda sob `e1p_root`, e a spec pedia isso.** O perigo que ela nomeia é real (uma
+    consulta a tabela com RLS por sessão **sem** tenant devolve zero linhas sem erro — a sondagem
+    de `phone_key`), mas as duas saídas se **excluem**: sob um papel que faz bypass a policy não se
+    aplica, e como nenhuma query deste repositório filtra tenant à mão (Regra de Ouro nº 1), cada
+    tenant reportaria os eventos de **todos os outros**. O script segue o molde que a própria spec
+    nomeia (`investment_audit.py`): itera a tabela global `tenants` e abre `tenant_session` por
+    tenant. **Regra que fica: "rode sob o papel de bypass" e "abra sessão por tenant" são duas
+    respostas à MESMA armadilha, e escolher uma proíbe a outra — quem migrar este script para
+    `e1p_root` precisa acrescentar `WHERE tenant_id` no mesmo commit.**
+- [x] **A instrumentação NÃO é escopada ao núcleo, e isso saiu de graça.** `responder`/`pular` já
+  recebiam `source`, então a mesma chamada cobre `gancho` e `config` — é essa contagem por origem
+  que vira a evidência sobre a quarentena de 7 dias e o "uma por dia" (a meia dívida acima).
+- ⚠️ **O empate de `created_at` no SQLite não é teórico, e apareceu na primeira execução.**
+  `AuditEntry.created_at` é `server_default=func.now()`, que no SQLite tem resolução de **segundo**:
+  duas chamadas HTTP seguidas saem com o mesmo carimbo e a ordem cai no desempate por `id`, que é um
+  uuid — arbitrário. O teste que semeava pela rota e afirmava ORDEM estava testando o acaso, e
+  falhou de cara. Agora ele afirma o **recorte** (por conjunto), e a ordem é exercitada só onde pode
+  ser fixada: nos testes de `derivar`, com `created_at` explícito. É a mesma distinção do histórico
+  de saques da Onda 3 — **dentro do mesmo instante não existe "mais novo"**, e um teste que o
+  afirmasse mediria o acaso.
+- **Consequência aceita: a marca `localStorage` (`e1p_dna_nucleo`) CONTINUA sendo a autoridade
+  sobre reexibir o núcleo.** Movê-la para o servidor seria mudança de comportamento embutida numa
+  onda de medição, e misturar as duas tira do gate a capacidade de julgar o que quebrou o quê (o
+  argumento que manteve SIG-001 fora da 8.16 e separou 8.19 de 8.20). Um dono que abandonou no
+  celular e abriu no desktop **verá o núcleo de novo**, e o rastro mostrará **dois `open`** — isso é
+  verdade sobre aparelhos, e o script não os reporta como duas passagens do mesmo dono.
+- **LGPD:** `audit_entries` é purgado com o tenant pelo `delete_account` (descoberta dinâmica de
+  subclasses de `TenantMixin`). Tenant que sai leva a ativação dele, e é o comportamento correto;
+  `platform_audit_entries` **não** é usada aqui — aquela existe para operação destrutiva do Master,
+  não para telemetria de produto.
+- **A população é 2, e é ela que decidiu o desenho.** Os tenants reais que passarão pelo núcleo nos
+  próximos ~3 meses são **dois** (o fundador e o sócio — a produção foi zerada em 05/08 para o sócio
+  começar do zero). Funil com N=2 é ilusão estatística: *1 de 2 pulando o núcleo* é "50% de
+  abandono" e **não significa nada** — a família de erro que o Epic 8 documenta três vezes. O que
+  justifica esta onda **não é estatística, é irreconstrutibilidade**, o mesmo argumento do
+  `ai_usage` (*"o consumo passado não foi guardado por ninguém e não tem como ser reconstruído"*).
+  **Enquanto forem 2, a resposta à pergunta da dívida vem de conversar com as duas pessoas.**
+- **Dívida:** `audit_entries` cresce — quatro eventos por tenant por passagem, mais um por resposta
+  de gancho. Dezenas por tenant por ano; irrelevante hoje, anotado para não ser descoberto como
+  surpresa.
+- **Dívida:** o script não tem teste `rls_e2e` (o `investment_audit.py` tem). A leitura por tenant é
+  coberta contra o SQLite dos testes, e o isolamento real depende do mesmo `tenant_session` que os
+  outros três scripts já usam em produção.
+- **Dívida (a que NÃO fecha):** as 46 perguntas seguem nunca validadas com dono real. Não é
+  instrumentável; é conversa com dono.
 
 ## 6.0 Correções importantes
 - **[CORRIGIDO 2026-08-05] O sistema inteiro passou a viver no fuso do tenant (era UTC).** O sintoma que o fundador viu foi a linha do tempo do Funil exibindo `Aguardando até 2026-08-05T11:11:32.812731+00:00` — formato de máquina e 3h adiantado. A investigação achou **três** defeitos com a mesma raiz: existia infra de fuso (`core/tz.py` + `tenant.timezone`, migration 0044) mas só 3 módulos a consumiam.
