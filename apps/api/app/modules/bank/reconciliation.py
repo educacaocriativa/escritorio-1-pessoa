@@ -223,6 +223,25 @@ class ConferenciaConta:
     # Movimentos que o usuário mandou não contar, no período. Eles JÁ estão fora do saldo derivado
     # (o filtro mora em `service._movements_sums`); esta contagem é transparência, não recálculo.
     movimentos_ignorados: int
+
+    # ── o DENOMINADOR do bloco 1 ──────────────────────────────────────────────────────────────
+    # Quanto se moveu NESTA janela, NESTA conta. Existe para que `divergencia_cents` nunca seja
+    # lida sem o volume que a produziu: um mês em que nada aconteceu dá divergência zero e não
+    # prova nada, e o zero aqui é o que diz isso em voz alta. O sistema não distingue *conta
+    # dormente* de *tudo aconteceu e nada foi registrado* — o volume não faz essa distinção
+    # tampouco; ele apenas impede que o número seja lido sem ela.
+    #
+    # **Por conta, e não só no consolidado**, pela razão F3: três contas, duas movimentadas e uma
+    # parada, dão volume total saudável e escondem a conta dormente — o mesmo vício do consolidado
+    # sem decomposição.
+    #
+    # ⚠️ **Sem default, de propósito.** São dois sites de construção (os dois `return` de
+    # `_conferir_conta`), e um terceiro que esquecesse de passá-los gravaria "não se moveu nada"
+    # em silêncio — justamente a afirmação que o campo existe para impedir. Falhar alto é o
+    # comportamento certo aqui.
+    movimentos_no_periodo: int
+    valor_movimentado_cents: int
+
     notes: list[str] = field(default_factory=list)
 
 
@@ -571,6 +590,49 @@ def _ignored_counts(
     return {account_id: int(total or 0) for account_id, total in db.execute(stmt).all()}
 
 
+def _volume_counts(
+    db: Session, *, accounts: Sequence[BankAccount], start: date, end: date
+) -> dict[str, tuple[int, int]]:
+    """`{bank_account_id: (nº de movimentos, Σ|amount_cents|)}` em `[start, end]`, em UMA query.
+
+    **O denominador da divergência.** `divergencia_cents` sozinha não distingue *"nada aconteceu"*
+    de *"tudo aconteceu e nada foi registrado"*. O volume não faz essa distinção tampouco — ele
+    **impede que o número seja lido sem ela**, que é uma coisa diferente e a única honesta.
+
+    **`func.abs` porque o volume é MOVIMENTAÇÃO, não resultado.** R$ 5.000 entrando e R$ 5.000
+    saindo é um mês movimentado; a soma assinada diria `0` e o denominador mentiria exatamente no
+    mês em que ele mais precisa dizer que aconteceu coisa ali.
+
+    **`status <> 'ignored'` — o MESMO recorte de `service._movements_sums`**, e não uma escolha
+    nova: o volume qualifica aquele saldo derivado, e contar aqui um movimento que o saldo não viu
+    diria que houve movimento onde não houve.
+
+    Contagem em lote pelo mesmo motivo de `_ignored_counts`, logo acima: a janela é a mesma para
+    todas as contas — é o período do relatório, não a data de referência de cada checkpoint. Nada
+    aqui é comparado com nada, então o AC4b não está em jogo.
+    """
+    if not accounts:
+        return {}
+    stmt = (
+        select(
+            BankTransaction.bank_account_id,
+            func.count(),
+            func.coalesce(func.sum(func.abs(BankTransaction.amount_cents)), 0),
+        )
+        .where(
+            BankTransaction.bank_account_id.in_([a.id for a in accounts]),
+            BankTransaction.status != STATUS_IGNORED,
+            BankTransaction.posted_at >= start,
+            BankTransaction.posted_at <= end,
+        )
+        .group_by(BankTransaction.bank_account_id)
+    )
+    return {
+        account_id: (int(n or 0), int(total or 0))
+        for account_id, n, total in db.execute(stmt).all()
+    }
+
+
 # ── O relatório ───────────────────────────────────────────────────────────────────────────────
 
 
@@ -582,6 +644,7 @@ def _conferir_conta(
     end: date,
     today: date,
     movimentos_ignorados: int,
+    volume: tuple[int, int],
 ) -> ConferenciaConta:
     """A conferência de UMA conta. Ver os itens (1) a (3) da docstring do módulo.
 
@@ -688,6 +751,12 @@ def _conferir_conta(
             # erro de fundo que esta correção existe para desfazer.
             dias_desde_ultima_conferencia=dias_desde_ultima_conferencia,
             movimentos_ignorados=movimentos_ignorados,
+            # ⚠️ O volume sai TAMBÉM no caminho não avaliável, e é decisão: o mês sem saldo
+            # declarado mas com R$ 18.000 movimentados é diferente do mês em que nada aconteceu, e
+            # zerar aqui apagaria essa diferença justo onde o dono precisa dela para saber se vale
+            # a pena declarar o saldo.
+            movimentos_no_periodo=volume[0],
+            valor_movimentado_cents=volume[1],
             notes=[
                 _note_comparacao_degenerada(na_janela.reference_date)
                 if na_janela is not None
@@ -723,6 +792,8 @@ def _conferir_conta(
         tolerancia_cents=tolerancia,
         dias_desde_ultima_conferencia=dias_desde_ultima_conferencia,
         movimentos_ignorados=movimentos_ignorados,
+        movimentos_no_periodo=volume[0],
+        valor_movimentado_cents=volume[1],
         # Dentro da banda: NENHUMA nota. Silêncio é o comportamento correto, não omissão — quem
         # grita por R$ 3,50 num mês de R$ 25.000 treina o usuário a ignorar o alerta.
         notes=[],
@@ -788,6 +859,7 @@ def reconciliation_report(
         else service.list_accounts(db)
     )
     ignorados = _ignored_counts(db, accounts=accounts, start=start, end=end)
+    volumes = _volume_counts(db, accounts=accounts, start=start, end=end)
 
     contas = [
         _conferir_conta(
@@ -797,6 +869,7 @@ def reconciliation_report(
             end=end,
             today=hoje,
             movimentos_ignorados=ignorados.get(account.id, 0),
+            volume=volumes.get(account.id, (0, 0)),
         )
         for account in accounts
     ]
