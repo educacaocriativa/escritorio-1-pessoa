@@ -1240,8 +1240,125 @@ dado (ver o aviso no fim desta seção).
   deixou de ser de código e passou a ser de **dado**: a produção foi zerada em 05/08 e o gate
   precisa de um ciclo de uso real (conta cadastrada, contas pagas com conta informada, saldo
   declarado). **Um número medido sobre base vazia não é gate** — foi esse erro que quase liberou a
-  Onda 4 em julho. O próximo passo natural **não é a Onda 4**: é instrumentar o ciclo mínimo que
-  faz `|divergencia_cents|` significar alguma coisa.
+  Onda 4 em julho. ~~O próximo passo natural **não é a Onda 4**: é instrumentar o ciclo mínimo.~~
+  **O instrumento existe desde 2026-08-11** — ver a seção do ciclo, logo abaixo. O próximo passo
+  agora é **rodar o ciclo**, não construir mais nada.
+
+### O ciclo da conferência — o instrumento que torna `|divergencia_cents|` legível (2026-08-11)
+
+> Spec: `docs/superpowers/specs/2026-08-11-ciclo-da-conferencia-design.md` ·
+> Plano: `docs/superpowers/plans/2026-08-11-ciclo-da-conferencia.md`
+
+Até aqui o sinal de *"a pré-condição está satisfeita"* era a **ausência de notas** no relatório de
+conferência — zero termo não-zero ⇒ zero nota. Silêncio, e silêncio é indistinguível de *"não
+medi"*. É a mesma forma do erro de 2026-07-30, uma camada acima: o critério de decisão é o único
+artefato cujo consumidor é um humano num ciclo futuro, e humano não levanta `TypeError`.
+
+**Um ciclo é um mês de calendário no fuso do tenant**, e não uma janela livre — embora
+`reconciliation_report` aceite qualquer `start`/`end`. Fronteira escolhível permitiria selecionar a
+janela que produz o número desejado: a régua andando junto com o que ela mede, que é exatamente o
+que a banda fixa da Regra 7 existe para impedir.
+
+- [x] **O número nunca mais aparece sem o volume que o produziu.** `movimentos_no_periodo` e
+  `valor_movimentado_cents` **por conta** (`_volume_counts`, query em lote, com o **mesmo** recorte
+  `status <> 'ignored'` do saldo derivado — contar aqui um movimento que o saldo não viu diria que
+  houve movimento onde não houve). `func.abs` porque volume é **movimentação**, não resultado:
+  R$ 5.000 entrando e R$ 5.000 saindo é um mês movimentado, e a soma assinada diria zero.
+  - **A armadilha desta frente é a VACUIDADE da janela, irmã simétrica do erro de julho.** Lá o
+    número media a incompletude do sistema; aqui, um mês em que o dono não pagou nada tem P1–P4
+    zerados, todas as contas avaliadas e divergência R$ 0,00. O sistema **não distingue** *conta
+    dormente* de *tudo aconteceu e nada foi registrado* (§4 da Onda 2), e o volume não faz essa
+    distinção tampouco — ele **impede que o número seja lido sem ela**, que é coisa diferente.
+  - **Volume mínimo como predicado foi REJEITADO:** N seria número inventado (Artigo IV), e recusar
+    a janela **esconde** o número dela em vez de qualificá-lo — o inverso do princípio da Onda 0.
+    O ciclo dormente sai legível, com denominador zero à vista, e o zero se lê sozinho.
+- [x] **As quatro condições da legibilidade**, cada uma com membro e não-membro escritos
+  (`CicloDaConferencia`): **(a)** há conta ativa · **(b)** toda conta avaliada · **(c)** P1+P2 e P3
+  zerados · **(d)** a janela começa em ou depois de `PRIMEIRO_CICLO_MEDIVEL`.
+  - ⚠️ **(a) não é redundante com (b).** Sem conta, `contas == []`, `contas_sem_checkpoint == 0` e os
+    contadores dão zero: (b) e (c) passariam **por vacuidade**. Mesma família do 🟢 sobre razão
+    vazio que a Story 8.20 desfez.
+  - **`motivo_nao_legivel` é UMA frase**, na precedência `(d) → (a) → (b) → (c)`, por
+    **acionabilidade**: mandar o dono declarar o saldo de um mês anterior ao corte é mandá-lo a um
+    ato que não resolve aquele mês. Enumerar motivos reconstruiria o ruído que a Regra 7 evita.
+- [x] **`PRIMEIRO_CICLO_MEDIVEL` (`2026-09-01`) — o corte de P4, e a frase que o justificava estava
+  VENCIDA.** `ConferenciaReport` e `main.py` diziam que a população de P4 é vazia *"porque o payout
+  só marca a solicitação como sacada"*: isso descrevia o `request_payout` de **antes da Onda 3** e
+  ficou falso no merge dela — a classe §1 da Onda 2 (o documento que afirma sobre a camada de baixo
+  e desliga quem viria conferir). A população continua vazia, por **construção nova** (409 sem conta
+  principal + a perna bancária na mesma transação), e **só a partir do deploy**. Numa janela
+  anterior existem saques sem perna que ninguém conta, e o relatório os reporta como zero **por
+  omissão**.
+  - ⚠️ **É o único valor do módulo que depende de um fato FORA do repositório, e erra em silêncio
+    para o lado caro.** Mesma forma de `CORTE_AUTORIA`: data cravada, motivo ao lado, e um teste de
+    piso contra a data do **merge** (2026-08-10), que é um fato do repo — o deploy não é. **Ao mover
+    a data, mova o piso junto.** Item no `docs/HOSTINGER-DEPLOY.md`.
+- [x] **`GET /bank/reconciliation-cycles` — derivado na leitura, sem migration e sem escrita.**
+  Roda o relatório uma vez por mês, teto de 6 (**exibição**, não regra: o PRD marca os "3 ciclos"
+  como `[SUPOSIÇÃO DO @PM]`, e codificá-los seria inventar). Persistir foi rejeitado por motivo
+  concreto: um lançamento retroativo muda **legitimamente** a leitura de um ciclo passado, e um
+  valor congelado passaria a discordar do recalculado — segunda verdade sobre a mesma divergência.
+- [x] **ANOTA, NUNCA SUBTRAI, mecanizado.** `test_volume_nao_altera_a_divergencia` congela campo a
+  campo o que não pode mudar e dá **controle positivo** ao volume — a lição do
+  `test_cockpit_e_carteira_intactos` da Onda 3, onde congelar o agregado inteiro reprovou a
+  funcionalidade correta e apagá-lo teria levado junto a invariante.
+- [x] **A tela: `CicloCard` ACIMA das frases por conta, histórico abaixo da tabela.** Acima porque
+  `fraseConferencia` é **por conta** e o `PeriodPicker` é de intervalo livre — embaixo, a
+  qualificação pareceria falar daquelas frases, que são de outro período. **Nenhum substantivo novo
+  na tela:** "legível" é termo de domínio e não aparece para o dono; `completo` colidiria com a
+  *completude* do Diagnóstico e `comparável` já está tomado no nível da conta pela 8.20. A tela não
+  diz "gate", "Onda 4" nem conta até três — **a decisão continua sendo do dono, com os ciclos lado
+  a lado.**
+  - Histórico é `<ul>`, nunca `<table>` (lição da 2b-ii), e o gate é **escopado** por `within(...)`:
+    a página tem um `<table>` legítimo, e a asserção sobre a página inteira falharia no caminho
+    normal — "consertá-la" apagando a linha mataria a guarda. Tem controle positivo próprio.
+- [x] **O Vima cutuca: `financeiro.conferencia.saldo_do_mes`, SEM limiar novo.** Um limiar exigiria
+  a 8ª pergunta de Calibração (`test_todo_limiar_tem_pergunta`) e ela seria um número sem evidência
+  (Artigo IV). Não precisa: a **declaração retroativa existe**, então avisar depois do fechamento
+  não perde nada. `dias` desde o fechamento ⇒ a cadência `0 → 1 → 2 → 4 → 8 → 16` sai de graça do
+  `_proximo_marco`.
+  - ⚠️ **O mês entra no `subject_id`** (`{account_id}:{YYYY-MM}`): com o id da conta sozinho, o marco
+    do mês anterior sobreviveria à virada, `dias` voltaria a zero e `_calada` engoliria o aviso do
+    mês novo — o silêncio permanente que a correção de 2026-08-09 desfez no eixo do dinheiro.
+  - Existe porque **quando tudo está verde o dono não abre a Conferência** — e é aí que o contador
+    de ciclos importa. Superfície alcançada só por alerta fica invisível justamente no sucesso.
+
+**Duas coisas que só apareceram implementando, e as duas foram achadas por testes:**
+
+- **`list_accounts` traz as ativas de HOJE, e o relatório confere todas** — inclusive a conta aberta
+  DEPOIS do fim da janela. Sem recorte, cadastrar uma conta nova tornaria **retroativamente
+  ilegíveis** todos os meses anteriores ao cadastro dela, e a tela cobraria de uma conta o saldo de
+  um mês em que ela não era do dono. O recorte por `opening_date` mora no **ciclo**, não no
+  relatório: aquele comportamento é pré-existente, e consertá-lo junto tiraria do gate a capacidade
+  de julgar o que quebrou o quê.
+- **Escolher o card do ciclo por `ciclos[0]` duplicava a frase na tela.** Funcionava hoje (o
+  primeiro é sempre o mês corrente) e duplicaria no dia em que a ordem mudasse. Passou a ser por
+  **semântica** (`ciclos.find(c => !c.fechado)`): o card mostra o em curso, o histórico os fechados,
+  e os dois conjuntos são disjuntos por construção.
+
+- [x] **O aceite em ~360px virou TESTE, não screenshot** — `apps/web/e2e/conferencia-ciclo-360.spec.ts`,
+  6 asserções na régua que o PR #105 acabou de trazer para o repositório. A medição ad-hoc desta
+  frente (Vite + `page.route` + `boundingBox`, num script de scratchpad) foi **descartada assim que
+  a régua chegou**: ela já era uma cópia pior — comparava só com a viewport, enquanto
+  `textoForaDaTela` acha o **ancestral que recorta**, que é o que pega o `R$ 3.` no lugar de
+  `R$ 3.000,00` da 2b-ii. Medido: `document.scrollWidth` **360**, nenhum texto do ciclo dependendo
+  de rolagem lateral, `R$ 18.402,00` e `R$ 23.100,00` inteiros, e o denominador zero por extenso.
+  O que rola de lado vive **dentro** da `TabelaContas`, pré-existente e no próprio contêiner.
+  - **Regra que fica:** quando um ativo do repositório aparece fazendo o que você fez à mão, a
+    resposta é **trocar**, não manter as duas — a segunda cópia é a que ninguém atualiza. Aqui a
+    troca ainda pagou juros: as asserções passaram a rodar no CI (job `frontend`, também do #105),
+    e a medição ad-hoc não rodaria nunca mais.
+- **Dívida:** `PRIMEIRO_CICLO_MEDIVEL` depende da data do deploy da Onda 3, que não é fato do
+  repositório. O teste de piso elimina a classe barata (cravar no passado), não o erro.
+- **Dívida:** conta **arquivada** some do histórico (`list_accounts` a esconde), então arquivar uma
+  conta hoje muda a leitura de um mês passado. Preço aceito de não congelar um número que pode
+  legitimamente mudar.
+- **Dívida:** `packages/shared-types/src/generated.ts` segue defasado e sem check de drift — os dois
+  schemas novos entram nessa mesma dívida do épico.
+- **Fora de escopo, declarado:** SIG-001, o estouro de 15px do `AppShell`, o índice irmão de
+  `charges.bank_account_id`, a unicidade de `bank_accounts.name`, e **contar P4 de verdade** (o
+  corte (d) compra a honestidade sem cruzar a Regra dos Planos). E esta frente **não mede a
+  divergência nem decide a Onda 4**: ela constrói o instrumento e para.
 
 ## WhatsApp Evolution: em produção de verdade (deploy 2026-08-04)
 

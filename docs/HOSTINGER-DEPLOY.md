@@ -140,6 +140,18 @@ docker compose -f docker-compose.prod.yml up -d --build
 # Traefik compartilhado (VPS real):
 docker compose --env-file .env.prod -f docker-compose.traefik.yml up -d --build
 ```
+> ⚠️ **Ao subir uma mudança do Epic 8, confira `bank.reconciliation.PRIMEIRO_CICLO_MEDIVEL`.**
+> Ele é o primeiro dia do primeiro mês **inteiramente posterior** ao deploy da Onda 3 (o payout),
+> e é o corte que impede o e1p de declarar conferido um mês cujo termo **P4 nunca foi medido** —
+> numa janela anterior existem saques sem perna bancária que ninguém conta, e o relatório os
+> reporta como zero **por omissão**. Cravado cedo demais, o erro é **silencioso** e devolve um
+> número com cara de fato, que é a leitura que já custou uma decisão de produto neste épico.
+>
+> O teste de piso (`tests/test_bank_ciclos.py::test_primeiro_ciclo_medivel_nao_antecede_a_onda_3`)
+> só reprova datas anteriores ao **merge** da Onda 3 — a data do **deploy** não é um fato do
+> repositório e nenhum teste consegue sabê-la. Se a Onda 3 subir depois de 01/09/2026, **mova a
+> constante e o piso juntos**, com o motivo escrito.
+
 Migrations rodam automaticamente no start do container `api` (mesmo comando do dev).
 Não passe `--remove-orphans` sem checar antes: o mesmo project name do Compose pode ser
 compartilhado com `docker-compose.monitoring.yml` (Uptime Kuma) — a flag mataria o monitoramento.
