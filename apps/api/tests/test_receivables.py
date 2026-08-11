@@ -1,4 +1,6 @@
 """Testes de Contas a Receber — incluindo a baixa que alimenta a Carteira com split."""
+from datetime import date, timedelta
+
 import pytest
 from fastapi.testclient import TestClient
 
@@ -101,7 +103,21 @@ def test_cannot_edit_paid_charge(client: TestClient, headers):
 
 
 def test_create_charge_generates_code(client: TestClient, headers):
-    resp = client.post("/receivables/charges", json=_charge(), headers=headers)
+    """⚠️ **Vencimento RELATIVO a hoje, e é isso que consertou este teste.**
+
+    Ele usava o `due_date` fixo do `_charge()` (`2026-08-10`) e afirmava `is_overdue is False`. As
+    duas coisas foram verdade até **2026-08-10**; em 11/08 a data virou passado, a cobrança nasceu
+    vencida e o teste quebrou sozinho, sem ninguém ter mexido em `receivables` — uma bomba-relógio,
+    não uma regressão. É a mesma família de "a suíte quebra de noite" que este repositório já
+    pagou por fuso: **teste que afirma sobre "hoje" não pode ancorar numa data literal.**
+
+    O `_charge()` compartilhado fica como está de propósito: outros testes dependem daquela data
+    (a janela de agosto do evento de agenda, por exemplo), e mexer no default arrastaria todos.
+    """
+    futuro = date.today() + timedelta(days=30)
+    resp = client.post(
+        "/receivables/charges", json=_charge(due_date=futuro.isoformat()), headers=headers
+    )
     assert resp.status_code == 201, resp.text
     c = resp.json()
     assert c["status"] == "open"
