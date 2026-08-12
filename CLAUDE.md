@@ -277,6 +277,62 @@ certo, e a tela estava errada. **Nenhum teste de `apps/web/e2e/` pode aferir cla
 - [x] **Estornar conta paga (só Contas a Pagar)** (botão "Estornar" por linha, só em "Pago"): `POST /payables/bills/{id}/reverse` volta o status para `open`/`paid_at=None`, reabrindo a edição completa (dados + anexos) e devolvendo o evento da Agenda de "concluído" para pendente. Confirmação via `confirm()` do navegador. Contas a Pagar nunca move dinheiro (não passa pela Carteira), então o estorno é uma troca de status simples e segura.
   - **Decisão de escopo:** a mesma capacidade foi implementada e revisada para Contas a Receber, mas **descartada antes do merge**: pagar → estornar → pagar de novo (o fluxo principal do estorno) duplicaria o `PlatformEarning` da venda no painel do Master (GMV/taxas globais), porque esse ledger não guarda vínculo de volta à `Transaction`/`Charge` de origem — reverter e repagar 3x uma cobrança de R$100 reportaria R$400 de GMV. Corrigir isso direito exige uma migration ligando `platform_earnings` à transação de origem; decisão do usuário foi não introduzir esse efeito colateral agora. Se o estorno de cobranças for retomado, resolver esse vínculo é pré-requisito (ver `docs/superpowers/specs/2026-07-27-estornar-conta-paga-design.md`).
 
+## Financeiro: duplicar conta a pagar
+
+> Spec: `docs/superpowers/specs/2026-08-12-duplicar-conta-a-pagar-design.md` ·
+> Plano: `docs/superpowers/plans/2026-08-12-duplicar-conta-a-pagar.md`
+
+Boa parte das despesas do dono **se repete sem ser recorrente**: aluguel de sala, viagens do mesmo
+trecho, ferramentas em dólar (o valor muda todo mês). A recorrência já existia e não resolve esse
+caso — ela exige saber de antemão quantas vezes vai repetir e supõe valor fixo.
+
+- [x] **"Duplicar esta conta" abre o cadastro PREENCHIDO, não grava direto.** O gesto termina no
+  mesmo `POST /payables/bills` de sempre: **zero backend, zero migration, zero campo novo**.
+- [x] **O botão vive dentro do modal "Boleto/Pix", NÃO no grid** (decisão do fundador). A coluna de
+  ações já carrega até cinco elementos e a tabela já rola lateralmente em 360px — uma sexta ação em
+  toda linha pagaria largura em todas as telas para servir um gesto ocasional. Como o modal só é
+  alcançável em linha não cancelada, **a restrição de status vem de graça**: não há regra própria a
+  manter.
+- [x] **`pagar/duplicar.ts`** — `camposDaCopia` + `proximoVencimento`, puras, 13 testes sem DOM
+  (mesmo recorte de `baixa.ts`). ⚠️ **O vencimento avança um mês por fatiamento de string**, com
+  trava de fim de mês (`31/01 → 28/02`, bissexto incluído, `2100` não é bissexto).
+  `new Date("2026-07-31")` é meia-noite **UTC** e devolveria dia 30 em UTC−3 — a cópia nasceria um
+  dia antes, em silêncio e só para quem está a oeste de Greenwich (regra §6.0). Quem "simplificar"
+  com `Date` reintroduz isso. Data ilegível devolve `""`, e o botão de gravar fica desabilitado:
+  pedir a data é melhor que inventá-la.
+- [x] **A cópia leva** descrição, fornecedor, categoria, centro de custo, valor, contrato e o código
+  Pix/boleto. **Não leva** anexos nem a recorrência.
+  - **Recorrência nasce em "Não repete", sempre.** Duplicar É a alternativa manual a ela; copiar
+    `"Mensal × 12"` faria um gesto de repetir UMA vez gerar doze contas e doze eventos na Agenda.
+  - ⚠️ **O código Pix/boleto é copiado por decisão do fundador, com o risco aceito e registrado:**
+    um código do mês anterior fica na linha nova com cara de válido, e o ícone "Copiar código"
+    entrega um código vencido. A recomendação era não copiar; ele optou por copiar porque os
+    fornecedores dele usam chave Pix fixa. **Tem teste fixando o comportamento** — para ninguém
+    "corrigir" de volta lendo só a recomendação. Reverter é uma linha em `camposDaCopia`.
+  - **Anexos ficam fora** porque copiá-los exigiria duplicação de arquivo no backend e o
+    **comprovante** da conta antiga ficaria pendurado numa conta ainda não paga: evidência de um
+    pagamento colada em outro.
+- ⚠️ **`NewBillModal` é remontado por `key`, e isso não é estilo.** Ele fica montado o tempo todo, e
+  `useState(inicial)` só lê o prop na MONTAGEM — sem a `key`, a segunda duplicação mostraria os
+  dados da primeira. O defeito passa despercebido em teste manual apressado, porque **a primeira
+  duplicação de cada sessão funciona**. Tem teste dedicado.
+- ⚠️ **`duplicando` é zerado em DOIS lugares** — no `onClose` do formulário e na ação primária
+  "Nova conta". Só o primeiro cobre o caminho normal e deixa vivo o caminho `duplicar → fechar →
+  Nova conta`, que abriria o cadastro preenchido com uma despesa que o dono não pediu. Também tem
+  teste próprio.
+- **Sem dívida de aceite em ~360px**, ao contrário das últimas entregas: nada entrou no grid e o
+  botão segue a largura total dos que já estavam no modal.
+- **Dívida:** duplicar cobrança em **Contas a Receber** não existe (a simetria é tentadora e o
+  módulo é outro); não há duplicação em lote nem template de despesa.
+- ⚠️ **Achados PRÉ-EXISTENTES em `main`, fora do escopo desta mudança e NÃO corrigidos aqui:**
+  `pnpm typecheck` e `pnpm lint` **já falhavam** antes deste diff. O `typecheck` reprova todo o
+  `e2e/` e o `playwright.config.ts` porque **`@playwright/test` não está instalado** neste checkout
+  (0 erros em `src/`); o `lint` reprova `financeiro/investimentos.test.ts:68` por
+  `no-irregular-whitespace`, introduzido no PR #102. Enquanto não forem consertados, o gate honesto
+  é `pnpm typecheck | grep "^src/"` (vazio) e `pnpm exec eslint src/features/<pasta>`. Misturar os
+  dois consertos aqui tiraria do revisor a capacidade de julgar qual mudança quebrou o quê — mesmo
+  argumento que separou 8.19 de 8.20.
+
 ## Financeiro: Inteligência Financeira (Epic 5 — Stories 5.1–5.9 ✅ em produção desde 2026-07-11)
 > Docs: `docs/prd/epic-5-inteligencia-financeira.md` · stories `docs/stories/5.1`–`5.9` · a DRE em
 > matriz e a tela de Lucratividade vieram **fora do fluxo de story** (PRs #46–#52, 2026-07-23/24) e
