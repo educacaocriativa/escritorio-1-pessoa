@@ -12,6 +12,7 @@ import type { CostCenter } from "../financeiro/costCenters";
 import CostCenterSelect from "../financeiro/CostCenterSelect";
 import { type ChartAccount, GRUPOS_DRE } from "../financeiro/planoContas";
 import { DialogDeBaixa } from "./EscolhaDaBaixa";
+import { camposDaCopia, type CamposDaConta } from "./duplicar";
 import { formatDay } from "../../lib/datetime";
 
 /** Grupos DRE cabíveis numa DESPESA (Contas a Pagar nunca lança em Receita). */
@@ -92,6 +93,8 @@ export default function PagarPage() {
   const [open, setOpen] = useState(false);
   const [attach, setAttach] = useState<Payable | null>(null);
   const [edit, setEdit] = useState<Payable | null>(null);
+  // A conta que está sendo duplicada. `null` = o formulário de "Nova conta" nasce em branco.
+  const [duplicando, setDuplicando] = useState<Payable | null>(null);
   // A conta cuja baixa está sendo confirmada (Story 8.13): "Marcar paga" deixou de ser um clique
   // que comete a ação e passou a abrir a escolha de conta bancária + dia.
   const [pagando, setPagando] = useState<Payable | null>(null);
@@ -134,7 +137,15 @@ export default function PagarPage() {
     [costCenters],
   );
 
-  usePrimaryAction("Nova conta", useCallback(() => setOpen(true), []));
+  // ⚠️ `setDuplicando(null)` aqui não é redundante com o `onClose`: sem ele, duplicar → fechar →
+  // "Nova conta" abriria o cadastro preenchido com uma despesa que o dono não pediu.
+  usePrimaryAction(
+    "Nova conta",
+    useCallback(() => {
+      setDuplicando(null);
+      setOpen(true);
+    }, []),
+  );
 
   async function cancel(id: string) {
     if (!confirm("Cancelar esta conta?")) return;
@@ -313,7 +324,18 @@ export default function PagarPage() {
         />
       )}
 
-      <NewBillModal open={open} onClose={() => setOpen(false)} onCreated={load} />
+      <NewBillModal
+        // A `key` remonta o formulário quando a conta de origem muda — é o que faz os valores
+        // iniciais valerem na segunda duplicação (ver a docstring de `inicial`).
+        key={duplicando?.id ?? "nova"}
+        open={open}
+        inicial={duplicando ? camposDaCopia(duplicando) : undefined}
+        onClose={() => {
+          setOpen(false);
+          setDuplicando(null);
+        }}
+        onCreated={load}
+      />
       {edit && (
         <EditBillModal
           bill={edit}
@@ -327,6 +349,11 @@ export default function PagarPage() {
       {attach && (
         <AttachModal
           bill={attach}
+          onDuplicar={() => {
+            setDuplicando(attach);
+            setAttach(null);
+            setOpen(true);
+          }}
           onClose={() => setAttach(null)}
           onSaved={() => {
             setAttach(null);
@@ -422,10 +449,13 @@ function AttachModal({
   bill,
   onClose,
   onSaved,
+  onDuplicar,
 }: {
   bill: Payable;
   onClose: () => void;
   onSaved: () => void;
+  /** Avisa que o dono quer repetir esta despesa. O modal não sabe o que isso significa. */
+  onDuplicar: () => void;
 }) {
   const [paymentCode, setPaymentCode] = useState(bill.payment_code);
   const [error, setError] = useState<string | null>(null);
@@ -476,6 +506,22 @@ function AttachModal({
         >
           {saving ? "Salvando..." : "Salvar código"}
         </button>
+
+        {/* Duplicar mora aqui, e não no grid: a coluna de ações da tabela já carrega até cinco
+            elementos e rola lateralmente em 360px. Este modal já é alcançável em toda linha não
+            cancelada, então a restrição de status vem de graça, pela porta que já existia. */}
+        <div className="border-t border-neutral-100 pt-4">
+          <button
+            onClick={onDuplicar}
+            className="w-full rounded-pill border border-neutral-200 py-2.5 font-semibold text-neutral-600 hover:border-primary-300 hover:text-primary-600"
+          >
+            Duplicar esta conta
+          </button>
+          <p className="mt-2 text-xs text-neutral-400">
+            Abre o cadastro preenchido com os dados desta conta e vencimento no mês seguinte. Os
+            anexos não são copiados.
+          </p>
+        </div>
       </div>
     </Modal>
   );
@@ -494,21 +540,30 @@ function NewBillModal({
   open,
   onClose,
   onCreated,
+  inicial,
 }: {
   open: boolean;
   onClose: () => void;
   onCreated: () => void;
+  /**
+   * Valores de partida quando o formulário nasce de uma duplicação.
+   *
+   * ⚠️ Lido **só na montagem** — `useState(x)` ignora mudanças de `x` depois disso. Quem monta
+   * este componente (`PagarPage`) passa uma `key` derivada da conta duplicada justamente para
+   * forçar a remontagem; sem ela, a segunda duplicação mostraria os dados da primeira.
+   */
+  inicial?: CamposDaConta;
 }) {
-  const [description, setDescription] = useState("");
-  const [chartAccountId, setChartAccountId] = useState("");
-  const [costCenterId, setCostCenterId] = useState("");
-  const [supplier, setSupplier] = useState("");
-  const [value, setValue] = useState("");
-  const [dueDate, setDueDate] = useState("");
-  const [recurrence, setRecurrence] = useState("none");
-  const [recurrenceCount, setRecurrenceCount] = useState("12");
-  const [paymentCode, setPaymentCode] = useState("");
-  const [contractId, setContractId] = useState("");
+  const [description, setDescription] = useState(inicial?.description ?? "");
+  const [chartAccountId, setChartAccountId] = useState(inicial?.chartAccountId ?? "");
+  const [costCenterId, setCostCenterId] = useState(inicial?.costCenterId ?? "");
+  const [supplier, setSupplier] = useState(inicial?.supplier ?? "");
+  const [value, setValue] = useState(inicial?.value ?? "");
+  const [dueDate, setDueDate] = useState(inicial?.dueDate ?? "");
+  const [recurrence, setRecurrence] = useState(inicial?.recurrence ?? "none");
+  const [recurrenceCount, setRecurrenceCount] = useState(inicial?.recurrenceCount ?? "12");
+  const [paymentCode, setPaymentCode] = useState(inicial?.paymentCode ?? "");
+  const [contractId, setContractId] = useState(inicial?.contractId ?? "");
   const [error, setError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
 

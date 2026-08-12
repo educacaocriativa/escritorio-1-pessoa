@@ -488,3 +488,131 @@ describe("Story 8.14 — a conta agendada tem rótulo próprio e gesto próprio"
     expect(screen.queryByRole("button", { name: /^cancelar$/i })).toBeNull();
   });
 });
+
+/**
+ * **Duplicar conta a pagar.**
+ *
+ * O botão NÃO vive no grid (a coluna de ações já carrega até cinco elementos e a tabela já rola
+ * lateralmente em 360px) — vive dentro do modal "Boleto/Pix", que já é alcançável em toda linha
+ * não cancelada.
+ */
+describe("PagarPage — duplicar conta a pagar", () => {
+  const CONTA_PAGA = {
+    ...CONTA_ABERTA,
+    id: "b-9",
+    description: "Aluguel Sala gravacao",
+    supplier: "WorkPlace Palhano",
+    amount_cents: 20000,
+    due_date: "2026-07-31",
+    status: "paid",
+    paid_at: "2026-07-31T00:00:00Z",
+    recurrence: "monthly",
+    recurrence_count: 12,
+    payment_code: "00020126580014BR.GOV.BCB.PIX",
+    contract_id: "ct-1",
+  };
+
+  const OUTRA_CONTA = {
+    ...CONTA_ABERTA,
+    id: "b-10",
+    description: "Curso Marketing",
+    supplier: "Mafer",
+    amount_cents: 547611,
+    due_date: "2026-07-04",
+  };
+
+  function mockBills(bills: unknown[]) {
+    vi.mocked(api.get).mockImplementation((url: string) => {
+      if (url === "/payables/summary") return Promise.resolve({ data: emptySummary } as never);
+      if (url === "/payables/bills") return Promise.resolve({ data: bills } as never);
+      return Promise.resolve({ data: [] } as never);
+    });
+  }
+
+  /** Abre o modal Boleto/Pix da linha `indice` e clica em "Duplicar esta conta". */
+  async function duplicar(user: ReturnType<typeof userEvent.setup>, indice = 0) {
+    const botoes = await screen.findAllByRole("button", { name: "Boleto/Pix" });
+    await user.click(botoes[indice]);
+    await user.click(await screen.findByRole("button", { name: "Duplicar esta conta" }));
+  }
+
+  it("abre o cadastro preenchido, com o vencimento no mês seguinte e sem recorrência", async () => {
+    const user = userEvent.setup();
+    mockBills([CONTA_PAGA]);
+    renderPage();
+
+    await duplicar(user);
+
+    // O modal de anexos saiu de cena e o de cadastro entrou.
+    expect(screen.queryByText("Boleto / Contrato / Pix")).toBeNull();
+    expect(screen.getByText("Nova conta a pagar")).toBeInTheDocument();
+
+    expect(screen.getByLabelText("Descrição")).toHaveValue("Aluguel Sala gravacao");
+    expect(screen.getByLabelText("Fornecedor")).toHaveValue("WorkPlace Palhano");
+    expect(screen.getByLabelText("Valor (R$)")).toHaveValue("200,00");
+    // 31/07 → 31/08: o dia existe em agosto e é preservado.
+    expect(screen.getByLabelText("Vencimento")).toHaveValue("2026-08-31");
+    // A origem é "monthly ×12"; a cópia nasce sem recorrência, senão um clique geraria 12 contas.
+    expect(screen.getByLabelText("Recorrência")).toHaveValue("none");
+  });
+
+  it("gravar dispara um POST de conta NOVA, sem id, com os campos copiados", async () => {
+    const user = userEvent.setup();
+    vi.mocked(api.post).mockResolvedValue({ data: {} } as never);
+    mockBills([CONTA_PAGA]);
+    renderPage();
+
+    await duplicar(user);
+    await user.click(screen.getByRole("button", { name: "Adicionar conta" }));
+
+    await waitFor(() => expect(vi.mocked(api.post)).toHaveBeenCalled());
+    const [url, body] = vi.mocked(api.post).mock.calls[0] as [string, Record<string, unknown>];
+    expect(url).toBe("/payables/bills");
+    expect(body).toMatchObject({
+      description: "Aluguel Sala gravacao",
+      supplier: "WorkPlace Palhano",
+      amount_cents: 20000,
+      due_date: "2026-08-31",
+      recurrence: "none",
+      recurrence_count: 1,
+      payment_code: "00020126580014BR.GOV.BCB.PIX",
+      contract_id: "ct-1",
+    });
+    // É uma conta NOVA, não um PATCH disfarçado na origem.
+    expect(body).not.toHaveProperty("id");
+  });
+
+  // ⚠️ O teste que mata o bug de `key`: `useState(inicial)` só lê o prop na MONTAGEM, e o modal
+  // fica montado o tempo todo. Sem remontar, a segunda duplicação mostraria a primeira conta —
+  // e o defeito passa despercebido, porque a primeira duplicação de cada sessão funciona.
+  it("duplicar uma segunda conta mostra a SEGUNDA, não a primeira", async () => {
+    const user = userEvent.setup();
+    mockBills([CONTA_PAGA, OUTRA_CONTA]);
+    renderPage();
+
+    await duplicar(user, 0);
+    await user.click(screen.getByRole("button", { name: "Fechar" }));
+
+    await duplicar(user, 1);
+    expect(screen.getByLabelText("Descrição")).toHaveValue("Curso Marketing");
+    expect(screen.getByLabelText("Valor (R$)")).toHaveValue("5476,11");
+    expect(screen.getByLabelText("Vencimento")).toHaveValue("2026-08-04");
+  });
+
+  // ⚠️ O segundo ponto de limpeza: sem ele, "Nova conta" abriria o cadastro já preenchido com uma
+  // despesa que o dono não pediu — a forma mais direta de gravar uma conta que não existe.
+  it("depois de duplicar e fechar, 'Nova conta' abre um formulário EM BRANCO", async () => {
+    const user = userEvent.setup();
+    mockBills([CONTA_PAGA]);
+    renderPage();
+
+    await duplicar(user);
+    await user.click(screen.getByRole("button", { name: "Fechar" }));
+
+    await user.click(await screen.findByRole("button", { name: "Nova conta" }));
+    expect(screen.getByLabelText("Descrição")).toHaveValue("");
+    expect(screen.getByLabelText("Fornecedor")).toHaveValue("");
+    expect(screen.getByLabelText("Valor (R$)")).toHaveValue("");
+    expect(screen.getByLabelText("Vencimento")).toHaveValue("");
+  });
+});
