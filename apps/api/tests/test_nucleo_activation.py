@@ -120,6 +120,30 @@ def test_respostas_por_origem_separa_as_tres_portas():
     assert contagem == {"nucleo": 1, "gancho": 1, "config": 2}
 
 
+def test_o_fim_da_passagem_e_dito_por_extenso():
+    """A saída não pode largar uma data solta e esperar que o leitor adivinhe o que ela é.
+
+    Achado lendo o primeiro relatório real com o fundador (2026-08-13): a linha do abandono saía
+    como `respondidas 0 · puladas 0 · 12/08/2026 08:47`, e só dava para deduzir o significado
+    comparando com a linha que dizia "sem abandono registrado". É a classe de erro que este
+    projeto mais documenta — o artefato cujo consumidor é um humano num ciclo futuro.
+
+    Membro e não-membro escritos, no mesmo teste.
+    """
+    abandonada = na.Passagem(
+        abertura=datetime(2026, 8, 12, 11, 47, tzinfo=UTC),
+        exibidas=6,
+        fim=datetime(2026, 8, 12, 11, 47, tzinfo=UTC),
+    )
+    concluida = na.Passagem(abertura=datetime(2026, 8, 13, 19, 14, tzinfo=UTC), exibidas=6)
+
+    frase = na.situacao_do_fim(abandonada, "America/Sao_Paulo")
+
+    # A data continua lá, e agora vem NOMEADA — e no fuso do tenant (11:47Z == 08:47 em SP).
+    assert frase == "abandonou em 12/08/2026 08:47"
+    assert na.situacao_do_fim(concluida, "America/Sao_Paulo") == "sem abandono registrado"
+
+
 def test_o_rodape_diz_QUANTOS_TENANTS_foram_varridos():
     """A lição literal do `investment_audit.py`.
 

@@ -153,6 +153,24 @@ def respostas_por_origem(entradas: Sequence[AuditEntry]) -> dict[str, int]:
     return contagem
 
 
+def situacao_do_fim(p: Passagem, fuso: str | None) -> str:
+    """Como a passagem terminou, **dita por extenso**. Pura.
+
+    ⚠️ A primeira versão imprimia a data crua (`12/08/2026 08:47`) quando havia abandono, ao lado
+    de `sem abandono registrado` quando não havia. Quem lesse o relatório meses depois não tinha
+    como saber o que aquela data solta significava — só descobria comparando as duas linhas.
+    **É a classe de erro que este projeto mais paga: o artefato cujo consumidor é um humano num
+    ciclo futuro, e humano não levanta `TypeError`.** Achado no primeiro uso real em produção
+    (2026-08-13), lendo a saída com o fundador.
+
+    Existe como função separada por isso: é a única frase do script que um humano tem de
+    interpretar, e agora ela tem consumidor mecânico.
+    """
+    if p.fim is None:
+        return "sem abandono registrado"
+    return f"abandonou em {format_datetime_br(p.fim, fuso)}"
+
+
 def rodape(*, passagens: int, tenants: int, abandonos: int) -> str:
     return (
         f"{passagens} passagem(ns) pelo núcleo em {tenants} tenant(s); "
@@ -189,7 +207,7 @@ def main() -> int:
             logger.info("")
             logger.info("  %s (tenant %s) — fuso %s", slug, tenant_id, fuso)
             for n, p in enumerate(passagens, start=1):
-                fim = format_datetime_br(p.fim, fuso) if p.fim else "sem abandono registrado"
+                fim = situacao_do_fim(p, fuso)
                 logger.info(
                     "    passagem %d: abriu %s com %d pergunta(s) à vista",
                     n,
