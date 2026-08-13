@@ -65,7 +65,11 @@ describe("formatPrincipal (Onda 2b-ii)", () => {
     // O NBSP (U+00A0) do `Intl.NumberFormat` é normalizado aqui de propósito: comparar contra
     // `formatBRL` seria tautológico (ele É a implementação), e comparar contra o literal com
     // espaço comum falha por um caractere invisível — que foi o que aconteceu ao escrever isto.
-    expect(formatPrincipal(1_000_000).replace(/ /g, " ")).toBe("R$ 10.000,00");
+    // ⚠️ Ele vai como o escape `\u00a0`, NUNCA como o caractere literal. O literal faz
+    // exatamente o que este teste descreve — some no diff — e reprova o `no-irregular-whitespace`
+    // do `eslint`: foi assim que este arquivo deixou `pnpm lint` vermelho em `main` desde o
+    // PR #102. O escape é visível para quem lê e para o linter, e o valor comparado é o mesmo.
+    expect(formatPrincipal(1_000_000).replace(/\u00a0/g, " ")).toBe("R$ 10.000,00");
   });
 
   it("negativo é mostrado como é — clampar em zero seria esconder", () => {

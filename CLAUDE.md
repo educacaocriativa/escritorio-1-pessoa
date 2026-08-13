@@ -324,14 +324,42 @@ caso — ela exige saber de antemão quantas vezes vai repetir e supõe valor fi
   botão segue a largura total dos que já estavam no modal.
 - **Dívida:** duplicar cobrança em **Contas a Receber** não existe (a simetria é tentadora e o
   módulo é outro); não há duplicação em lote nem template de despesa.
-- ⚠️ **Achados PRÉ-EXISTENTES em `main`, fora do escopo desta mudança e NÃO corrigidos aqui:**
-  `pnpm typecheck` e `pnpm lint` **já falhavam** antes deste diff. O `typecheck` reprova todo o
-  `e2e/` e o `playwright.config.ts` porque **`@playwright/test` não está instalado** neste checkout
-  (0 erros em `src/`); o `lint` reprova `financeiro/investimentos.test.ts:68` por
-  `no-irregular-whitespace`, introduzido no PR #102. Enquanto não forem consertados, o gate honesto
-  é `pnpm typecheck | grep "^src/"` (vazio) e `pnpm exec eslint src/features/<pasta>`. Misturar os
-  dois consertos aqui tiraria do revisor a capacidade de julgar qual mudança quebrou o quê — mesmo
-  argumento que separou 8.19 de 8.20.
+- ~~⚠️ **Achados PRÉ-EXISTENTES em `main`, fora do escopo desta mudança e NÃO corrigidos aqui:**
+  `pnpm typecheck` e `pnpm lint` já falhavam antes deste diff.~~ **FECHADOS em 2026-08-12**, num PR
+  separado só disso — e **só UM dos dois era defeito do repositório.** Ver a seção logo abaixo.
+
+## Os dois gates herdados de `main` — e a diferença entre "vermelho aqui" e "vermelho num clone novo"
+
+O parágrafo acima registrava `pnpm lint` e `pnpm typecheck` como duas dívidas irmãs de `main`.
+Medidos num **clone novo** (worktree limpa, `pnpm install`, nada mais), eram coisas diferentes:
+
+- [x] **`pnpm lint` era defeito real do repositório** — `financeiro/investimentos.test.ts:68`
+  reprovava por `no-irregular-whitespace`: um **NBSP (U+00A0) LITERAL dentro da regex** de
+  `.replace(/ /g, " ")`. A normalização é intencional e continua (o `Intl.NumberFormat` produz
+  NBSP, e comparar contra `formatBRL` seria tautológico), então o conserto **não** foi apagar o
+  caractere: foi trocá-lo pelo **escape `\u00a0`**. Mesmo valor comparado, e agora o caractere é
+  visível para quem lê o diff **e** para o linter. Os 13 testes do arquivo seguem verdes.
+  - O comentário no teste diz que o NBSP vai como escape e **por quê** — o literal faz exatamente
+    o que o próprio teste descreve (some no diff), e foi assim que ele entrou no PR #102.
+- [x] **`pnpm typecheck` NUNCA foi defeito do repositório.** `@playwright/test` está declarado em
+  `apps/web/package.json` e travado no `pnpm-lock.yaml` **desde o PR #105** (o que trouxe a régua
+  de 360px). O que faltava era o `pnpm install`: o checkout de dev tinha `node_modules` de antes
+  do #105. Em clone novo, `pnpm install && pnpm typecheck` passa **sem tocar em nada** — e o job
+  `frontend` do CI sempre foi verde nisso, porque ele roda `pnpm install --frozen-lockfile` antes.
+  - ⚠️ **A receita `pnpm typecheck | grep "^src/"` está REVOGADA.** Ela filtrava justamente os
+    erros de `e2e/` e do `playwright.config.ts` — os arquivos DA RÉGUA, que o CI executa. Quem vir
+    esses erros deve rodar `pnpm install`, nunca filtrar a saída.
+- [x] **`pnpm lint` não rodava em NENHUM job do CI**, e é essa a explicação de por que o NBSP
+  sobreviveu do #102 até aqui: `ci.yml` tinha typecheck, vitest e o gate de 360px, e nada de
+  `eslint`. O job `frontend` ganhou a etapa **Lint** (antes do typecheck, que é a mais rápida das
+  quatro). Ela é **observável, não bloqueante**, como o resto do job — a dívida de tornar
+  `frontend` um required check segue com @devops (§5.1).
+
+> **A regra que fica:** gate vermelho no SEU checkout não é, por si, dívida do repositório.
+> *"Vermelho aqui"* e *"vermelho num clone novo"* são afirmações diferentes, e distinguir as duas
+> custa **um `pnpm install`**. Registrar a primeira como se fosse a segunda transforma um passo de
+> setup esquecido em folclore com receita de contorno — e a receita de contorno é pior que o
+> problema, porque ela silencia arquivos que o CI cobra. Metade dessa dívida nunca existiu.
 
 ## Financeiro: Inteligência Financeira (Epic 5 — Stories 5.1–5.9 ✅ em produção desde 2026-07-11)
 > Docs: `docs/prd/epic-5-inteligencia-financeira.md` · stories `docs/stories/5.1`–`5.9` · a DRE em
