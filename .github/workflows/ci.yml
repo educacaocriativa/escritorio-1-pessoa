@@ -196,6 +196,12 @@ jobs:
         run: pnpm install --frozen-lockfile
         working-directory: .
 
+      # O `eslint` não rodava em NENHUM job, e foi por essa fresta que um NBSP literal em
+      # `investimentos.test.ts` deixou `pnpm lint` vermelho em `main` do PR #102 até 12/08 sem
+      # nada protestar. Vem antes do typecheck de propósito: é a etapa mais rápida das quatro.
+      - name: Lint
+        run: pnpm lint
+
       - name: Typecheck
         run: pnpm typecheck
 
