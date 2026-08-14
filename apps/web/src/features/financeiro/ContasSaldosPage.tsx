@@ -8,7 +8,7 @@ import {
   Trash2,
   Wallet,
 } from "lucide-react";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { type ReactNode, useCallback, useEffect, useMemo, useState } from "react";
 import { Link } from "react-router-dom";
 import Modal, { Field } from "../../components/Modal";
 import { api, apiErrorMessage } from "../../lib/api";
@@ -145,7 +145,6 @@ export default function ContasSaldosPage() {
   );
 
   const resumo = useMemo(() => resumoSaldos(accounts), [accounts]);
-  const selecionada = accounts.find((a) => a.id === selectedId) ?? null;
 
   async function arquivar(a: BankAccount) {
     if (
@@ -257,19 +256,25 @@ export default function ContasSaldosPage() {
                 }
                 onArchive={() => arquivar(a)}
                 onSetPrimary={() => tornarPrincipal(a)}
-              />
+              >
+                {/* ⚠️ Os movimentos moram DENTRO do cartão da conta, e não no fim da página.
+                    Enquanto o painel era irmão desta lista, abrir a 1ª conta o jogava DEPOIS de
+                    todas as outras — e no caminho de volta até ele havia N rodapés "Lançar
+                    movimento" de contas diferentes. Em 13/08/2026 o dono clicou no que estava mais
+                    perto do painel que estava lendo, e o dinheiro entrou na conta errada. Aqui o
+                    único "Lançar movimento" vizinho do painel é o da conta do painel. */}
+                {selectedId === a.id && (
+                  <AccountDetail
+                    account={a}
+                    onChanged={load}
+                    onDeclare={() => setDeclarando(a)}
+                    onLaunch={() => setLancando(a)}
+                  />
+                )}
+              </AccountCard>
             ))}
           </ul>
         </section>
-      )}
-
-      {selecionada && (
-        <AccountDetail
-          account={selecionada}
-          onChanged={load}
-          onDeclare={() => setDeclarando(selecionada)}
-          onLaunch={() => setLancando(selecionada)}
-        />
       )}
 
       <AccountModal
@@ -353,6 +358,7 @@ function AccountCard({
   onTransfer,
   onArchive,
   onSetPrimary,
+  children,
 }: {
   account: BankAccount;
   checkpoint: BankBalanceCheckpoint | null;
@@ -365,6 +371,8 @@ function AccountCard({
   onTransfer: (() => void) | null;
   onArchive: () => void;
   onSetPrimary: () => void;
+  /** O painel de movimentos da conta, quando ela está aberta — renderizado DENTRO deste cartão. */
+  children?: ReactNode;
 }) {
   const arquivada = account.archived_at !== null;
   return (
@@ -495,6 +503,7 @@ function AccountCard({
           </>
         )}
       </div>
+      {children}
     </li>
   );
 }
@@ -637,7 +646,9 @@ function AccountDetail({
   }
 
   return (
-    <section className="space-y-4 rounded-2xl bg-white p-5 shadow-sm">
+    // Sem `bg-white`/`shadow-sm`/`rounded-2xl`: isto não é mais um cartão solto no fim da página —
+    // é uma seção do cartão da conta, separada das ações dela por uma borda.
+    <section className="mt-4 space-y-4 border-t border-neutral-100 pt-4">
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div>
           <h2 className="font-semibold text-neutral-800">Movimentos — {account.name}</h2>
