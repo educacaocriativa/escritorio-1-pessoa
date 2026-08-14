@@ -258,6 +258,48 @@ describe("AC1/AC2/AC3 — as portas e as ações por conta", () => {
   });
 });
 
+describe("⚠️ Os movimentos abrem DENTRO do cartão da conta, não no fim da página", () => {
+  /**
+   * Reportado pelo dono em 13/08/2026, com dinheiro lançado na conta errada.
+   *
+   * O painel era irmão da lista inteira: abrir a 1ª conta o colocava DEPOIS de todas as outras. No
+   * caminho de volta até ele havia N rodapés "Lançar movimento" de contas diferentes, e o dono
+   * clicou no que estava mais perto do painel que estava lendo — que era de outra conta.
+   *
+   * Por isso a asserção é de **containment de DOM**, e não de presença de texto: antes da correção
+   * o texto "Movimentos — Nubank PJ" também aparecia na tela. O que estava errado era ONDE.
+   */
+  const duasContas = [
+    conta({ id: "acc-1", name: "Itaú PJ", institution: "Itaú" }),
+    conta({ id: "acc-2", name: "Nubank PJ", institution: "Nubank", is_primary: false }),
+  ];
+  const cartaoDe = (nome: string) => screen.getByText(nome).closest("li") as HTMLElement;
+
+  it("o painel da conta aberta é filho do cartão dela", async () => {
+    mockApi(duasContas);
+    renderPage();
+    await screen.findByText("Nubank PJ");
+
+    await userEvent.click(within(cartaoDe("Nubank PJ")).getByRole("button", { name: "Ver movimentos" }));
+
+    const painel = await screen.findByText(/Movimentos — Nubank PJ/);
+    expect(cartaoDe("Nubank PJ")).toContainElement(painel);
+  });
+
+  it("nenhum outro cartão fica entre a conta aberta e os movimentos dela", async () => {
+    mockApi(duasContas);
+    renderPage();
+    await screen.findByText("Itaú PJ");
+
+    await userEvent.click(within(cartaoDe("Itaú PJ")).getByRole("button", { name: "Ver movimentos" }));
+    await screen.findByText(/Movimentos — Itaú PJ/);
+
+    // O cartão da outra conta não hospeda painel nenhum — e, principalmente, o "Lançar movimento"
+    // dele deixa de estar no caminho entre o painel aberto e os olhos do dono.
+    expect(within(cartaoDe("Nubank PJ")).queryByText(/Movimentos —/)).toBeNull();
+  });
+});
+
 describe("REL-001 — as ações que mexem no saldo não podem falhar em silêncio", () => {
   /**
    * ⚠️ `ignorar`, `desfazerIgnorar` e `removerDeclaracao` chamavam a API **sem `try/catch`**: numa
