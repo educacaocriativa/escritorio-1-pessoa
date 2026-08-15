@@ -6,6 +6,7 @@ import Modal, { Field } from "../../components/Modal";
 import { api, apiErrorMessage } from "../../lib/api";
 import { formatDateShort } from "../../lib/datetime";
 import GanchoDaVima from "../dna/GanchoDaVima";
+import { rotuloDaOrigem } from "./origem";
 import { usePrimaryAction } from "../../store/pageActions";
 import { useFuso } from "../../store/auth";
 
@@ -199,15 +200,23 @@ function Card({ client, stageId }: { client: BoardClient; stageId: string }) {
       <GripVertical size={16} className="mt-0.5 shrink-0 text-neutral-300" />
       <div className="min-w-0 flex-1">
         <p className="font-medium text-neutral-800">{client.name}</p>
-        {client.tags.length > 0 && (
-          <div className="mt-1 flex flex-wrap gap-1">
-            {client.tags.map((t) => (
-              <span key={t} className="rounded-pill bg-primary-50 px-2 text-[10px] text-primary-700">
-                {t}
-              </span>
-            ))}
-          </div>
-        )}
+        {/* Origem e tags dividem a mesma linha e NÃO podem se parecer: a origem é fato do
+            sistema (cinza), a tag é marcação do dono (roxo). Confundir as duas foi o que fez o
+            `vindo-do-site` — uma tag digitada — passar por "de onde veio" enquanto todo card de
+            WhatsApp não dizia nada. `source` nunca é nulo, então o selo aparece em todo card. */}
+        <div className="mt-1 flex flex-wrap gap-1">
+          <span
+            title="De onde este contato veio"
+            className="rounded-pill bg-neutral-100 px-2 text-[10px] text-neutral-600"
+          >
+            {rotuloDaOrigem(client.source)}
+          </span>
+          {client.tags.map((t) => (
+            <span key={t} className="rounded-pill bg-primary-50 px-2 text-[10px] text-primary-700">
+              {t}
+            </span>
+          ))}
+        </div>
         {/* As duas datas dizem coisas diferentes: a primeira explica a POSIÇÃO do card na
             fila (a coluna é ordenada por ela), a segunda, o quão fria está a conversa. */}
         <p className="mt-1 text-[10px] text-neutral-400">

@@ -82,7 +82,10 @@ describe("CrmPage — Novo cliente (Story 7.15, Task 1)", () => {
 });
 
 /** Board com um card só, para exercitar a linha da última interação. */
-function boardComCard(lastInteractionAt: string | null) {
+function boardComCard(
+  lastInteractionAt: string | null,
+  extra: { source?: string; tags?: string[] } = {},
+) {
   return {
     columns: [
       {
@@ -94,7 +97,7 @@ function boardComCard(lastInteractionAt: string | null) {
           {
             id: "c1", tenant_id: "t1", name: "Flavio Kato", email: null, phone: null,
             document: null, gender: "unspecified", birthdate: null, notes: "",
-            tags: [], source: "landing", stage_id: "s1",
+            tags: extra.tags ?? [], source: extra.source ?? "landing", stage_id: "s1",
             created_at: "2026-07-01T10:00:00Z",
             stage_entered_at: "2026-07-28T12:00:00Z",
             last_interaction_at: lastInteractionAt,
@@ -105,10 +108,13 @@ function boardComCard(lastInteractionAt: string | null) {
   };
 }
 
-function mockarBoard(lastInteractionAt: string | null) {
+function mockarBoard(
+  lastInteractionAt: string | null,
+  extra: { source?: string; tags?: string[] } = {},
+) {
   vi.mocked(api.get).mockImplementation((url: string) => {
     if (url === "/crm/board") {
-      return Promise.resolve({ data: boardComCard(lastInteractionAt) } as never);
+      return Promise.resolve({ data: boardComCard(lastInteractionAt, extra) } as never);
     }
     return Promise.resolve({ data: [] } as never);
   });
@@ -146,5 +152,41 @@ describe("CrmPage — a data que explica a posição na fila", () => {
 
     // `stage_entered_at` é coluna não-nula: todo card sempre sabe desde quando está ali.
     expect(await screen.findByText("na etapa desde: 28/07")).toBeInTheDocument();
+  });
+});
+
+describe("CrmPage — de onde o contato veio", () => {
+  // O card do WhatsApp não dizia NADA sobre a origem, enquanto os do site exibiam a tag
+  // `vindo-do-site` — e tag é marcação do dono, não origem. Quem olhava a Entrada não conseguia
+  // distinguir a oportunidade real da conversa avulsa que caiu no WhatsApp.
+  it("o card do WhatsApp diz que veio do WhatsApp", async () => {
+    mockarBoard(null, { source: "whatsapp" });
+    renderPage();
+
+    expect(await screen.findByTitle("De onde este contato veio")).toHaveTextContent("WhatsApp");
+  });
+
+  // `source` tem default "manual" no backend e nunca é nulo: NENHUM card fica sem origem.
+  it("card sem porta de entrada conhecida ainda diz de onde veio", async () => {
+    mockarBoard(null, { source: "manual" });
+    renderPage();
+
+    expect(await screen.findByTitle("De onde este contato veio")).toHaveTextContent("Manual");
+  });
+
+  it("a origem é um selo próprio, antes das tags — não mais uma tag no meio delas", async () => {
+    mockarBoard(null, { source: "landing", tags: ["vindo-do-site"] });
+    renderPage();
+
+    const origem = await screen.findByTitle("De onde este contato veio");
+    const tag = screen.getByText("vindo-do-site");
+
+    // Elementos DISTINTOS: a asserção não pode ser por texto solto, senão passaria com os dois
+    // pintados iguais — que é exatamente o defeito sendo corrigido.
+    expect(origem).not.toBe(tag);
+    expect(origem).toHaveTextContent("Site");
+    // E a origem vem ANTES na leitura do card. (A distinção VISUAL não é aferível em jsdom; ela
+    // é medida no navegador, em `e2e/crm-360.spec.ts`, comparando a cor computada das duas.)
+    expect(origem.compareDocumentPosition(tag)).toBe(Node.DOCUMENT_POSITION_FOLLOWING);
   });
 });

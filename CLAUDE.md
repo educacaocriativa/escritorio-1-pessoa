@@ -1737,6 +1737,52 @@ contato" nem marcação de histórico como lido.
   `apps/web/e2e/conversas-360.spec.ts` (mede `toBeInViewport` e `boundingBox`, não classe CSS).
   **Fecha a dívida "validação manual em ~360px do painel de Conversas".**
 
+### O card diz de onde o contato veio (2026-08-15)
+
+O fundador olhou a Entrada e perguntou por que uma conversa avulsa de WhatsApp vira lead. A
+investigação achou um defeito **anterior** a essa pergunta: os cards do site exibiam
+`vindo-do-site` e os do WhatsApp não exibiam nada, então a coluna parecia ter duas naturezas de
+contato quando na verdade tinha uma etiqueta a mais em alguns.
+
+- ⚠️ **`vindo-do-site` é TAG, não origem** — não é escrita por nenhum caminho de produção (só
+  aparece em `test_crm_merge.py` e na spec da jornada única). Chegou ali à mão ou por uma ação
+  `add_tag` de funil. **A regra que fica: `source` é a origem, fato do sistema; `tags` é marcação
+  do dono. As duas nunca se parecem na tela** — selo cinza × pílula roxa —, porque foi confundir
+  uma com a outra que produziu a pergunta.
+- [x] **Zero backend, zero migration, e vale retroativamente.** `BoardClient` herda de `ClientOut`,
+  então `source` **já chegava** no board; [`CrmPage.tsx`] apenas renderizava `client.tags` e o
+  ignorava. Como `source` tem default `"manual"` e nunca é nulo, **todo card ganhou origem de uma
+  vez**, inclusive os que já estavam na tela.
+- [x] **`features/crm/origem.ts` cobre os SEIS de `SOURCE_VALUES`, não os cinco de
+  `_ROTULO_DE_CHEGADA`** — o mapa do backend esquece o `ai`, que a validação aceita. Origem que o
+  backend grava e a tela não sabe nomear apareceria crua no card.
+  - ⚠️ **Ele NÃO é espelho do mapa do backend, e não deve virar um.** Lá a string é FRASE de linha
+    do tempo ("Chegou pelo WhatsApp"); aqui é SELO que divide largura com o nome e as tags em
+    360px. Superfícies diferentes, vocabulários diferentes — copiar a frase longa para o card
+    seria a duplicação ruim, não esta. O eixo a manter sincronizado é `SOURCE_VALUES`.
+  - Origem desconhecida cai no **próprio valor**, com teste do não-membro: sem ele o mapa passaria
+    vazio, e um backend mais novo que a tela devolveria o card a não ter origem nenhuma — o
+    defeito que este arquivo existe para corrigir, de volta pela porta dos fundos.
+- [x] **`textoForaDaTela` ganhou `raiz`** (`e2e/support/medidas.ts`), no mesmo padrão que
+  `alvosPequenos` já tinha. **O Kanban rola de lado por construção**: a página mede 360 (não é ela
+  que rola), mas as colunas seguintes ficam fora da viewport e apareciam como três cortes —
+  "Em contato", o contador dela e "Solte um card aqui" —, nenhum deles texto de card. Sem o
+  recorte, esses três afogariam qualquer corte real. Escopo que deixa de casar cai no documento
+  inteiro, **nunca em lista vazia**, e `crm-360.spec.ts` tem controle positivo com seletor podre
+  provando que o `[]` escopado é resultado e não vacuidade.
+- [x] **A distinção visual é medida por COR COMPUTADA, nunca por classe** (`crm-360.spec.ts`).
+  `toContain("bg-neutral-100")` ficaria verde com o Tailwind desligado, com a classe purgada do
+  build ou com um `bg-primary-50` vencendo na cascata — e os dois selos idênticos na tela, que é o
+  defeito de origem. O teste de jsdom afirma só o que jsdom sabe (elementos distintos, origem
+  antes das tags) e **diz no próprio comentário** que a cor é aferida no navegador.
+- **Dívida — e é a pergunta que abriu tudo:** a conversa avulsa **continua nascendo na Entrada**,
+  continua sem poder ser descartada (não existe `DELETE /crm/clients`, só mover para "Perda", que
+  grava negociação perdida sobre algo que nunca foi negociação), e `_cards_parados` vai cobrá-la
+  no briefing em 10 dias. Separar "o contato existe" de "está no funil" foi **adiado por decisão
+  do fundador**: primeiro ver a composição real da Entrada com a origem à vista. Quem retomar
+  começa por [`whatsapp_inbox/service.py`] (a porta que cria) e por `crm/service.py:229` (o
+  `stages[0]` que enfileira).
+
 ## Vima: o Registro de Fatos e o briefing (PRs #85 e #90, 2026-08-06/07)
 
 > Spec: `docs/superpowers/specs/2026-08-06-vima-registro-de-fatos-e-briefing-design.md` ·
