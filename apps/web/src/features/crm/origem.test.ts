@@ -20,4 +20,19 @@ describe("rotuloDaOrigem", () => {
   it("origem desconhecida aparece crua, nunca some", () => {
     expect(rotuloDaOrigem("instagram")).toBe("instagram");
   });
+
+  // `ROTULOS` é objeto literal, então a indexação alcança `Object.prototype`: sem guarda,
+  // `rotuloDaOrigem("constructor")` devolve a FUNÇÃO `Object` — e a assinatura `: string` mente.
+  // O React não quebra, mas loga "Functions are not valid as a React child" e o selo fica VAZIO:
+  // um card sem origem nenhuma, que é o defeito que este arquivo existe para corrigir.
+  //
+  // Hoje é inalcançável pela API (`ClientBase._source` recusa fora de `SOURCE_VALUES`, e a coluna
+  // é `nullable=False` desde a 0003). Fica travado assim mesmo: o custo é uma linha, e o dia em
+  // que um caminho de escrita novo contornar o schema não vem anunciado.
+  it.each(["constructor", "toString", "valueOf", "hasOwnProperty", "__proto__"])(
+    "%s é origem desconhecida como qualquer outra, não herança de Object",
+    (herdado) => {
+      expect(rotuloDaOrigem(herdado)).toBe(herdado);
+    },
+  );
 });

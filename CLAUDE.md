@@ -1775,6 +1775,25 @@ contato quando na verdade tinha uma etiqueta a mais em alguns.
   build ou com um `bg-primary-50` vencendo na cascata — e os dois selos idênticos na tela, que é o
   defeito de origem. O teste de jsdom afirma só o que jsdom sabe (elementos distintos, origem
   antes das tags) e **diz no próprio comentário** que a cor é aferida no navegador.
+  - ⚠️ **E a asserção é ABSOLUTA, porque a relativa não bastava — provado por mutação.** A primeira
+    versão comparava `expect(origem).not.toBe(tag)`, e o `bug-hunter` do §5 aplicou a mutação que
+    **TROCA as duas cores**: a diferença se preserva, o significado se inverte, e **os 16 testes
+    ficaram verdes** — com o comentário do `CrmPage` afirmando o oposto do que a tela mostrava.
+    Hoje o que se afirma é o **matiz**: origem acromática (croma ≤ 8), tag colorida (≥ 12). Os dois
+    limiares são **medidos** (`neutral-100` = 3, `primary-50` = 18), não escolhidos, e a mutação
+    agora morre (`Expected >= 12, Received 3`).
+    > **A regra que fica: comparação relativa entre dois papéis não prova papel nenhum.**
+    > `a !== b` sobrevive a trocar `a` com `b` — e trocar os dois é exatamente a forma que o
+    > defeito assume quando alguém "arruma as cores" sem ler o comentário. Se o teste existe para
+    > dizer QUAL é qual, ele tem de afirmar cada um por si.
+- [x] **`rotuloDaOrigem` usa `Object.hasOwn`, e o `?? source` ingênuo era bug** (achado do
+  `bug-hunter`). Indexar objeto literal alcança `Object.prototype`: `rotuloDaOrigem("constructor")`
+  devolvia a **função `Object`** — que o `??` não pega, porque função não é nula. A assinatura
+  `: string` mentia, e o React renderizava o selo **VAZIO** (com "Functions are not valid as a
+  React child" no console): card sem origem, o defeito que este módulo existe para corrigir.
+  Inalcançável hoje (`ClientBase._source` recusa fora de `SOURCE_VALUES`; a coluna é `NOT NULL`
+  desde a 0003) e travado assim mesmo, com os cinco herdados em `it.each` — o custo é uma linha, e
+  o dia em que um caminho de escrita novo contornar o schema não vem anunciado.
 - **Dívida — e é a pergunta que abriu tudo:** a conversa avulsa **continua nascendo na Entrada**,
   continua sem poder ser descartada (não existe `DELETE /crm/clients`, só mover para "Perda", que
   grava negociação perdida sobre algo que nunca foi negociação), e `_cards_parados` vai cobrá-la
@@ -1782,6 +1801,15 @@ contato quando na verdade tinha uma etiqueta a mais em alguns.
   do fundador**: primeiro ver a composição real da Entrada com a origem à vista. Quem retomar
   começa por [`whatsapp_inbox/service.py`] (a porta que cria) e por `crm/service.py:229` (o
   `stages[0]` que enfileira).
+- **Dívida (levantada pelo `dedup-checker` e pelo `regression-tester`, nenhuma introduzida aqui):**
+  `SOURCE_VALUES` é mantido por **três listas manuais sem vínculo mecânico** — o `set` Python, as
+  chaves de `_ROTULO_DE_CHEGADA` e as de `origem.ts`. Um sétimo `source` no backend faz o card
+  exibir o valor cru **em silêncio**; um `export type ClientSource` em `shared-types` trocaria isso
+  por erro de TypeScript. E o padrão `rounded-pill` inline já passou de **7 ocorrências**
+  (`Attachments.tsx:79` é quase idêntico ao selo novo) sem nunca virar um `<Pill>` — este diff
+  seguiu a convenção local, não a piorou. **Acessibilidade:** a distinção origem × tag é por cor e
+  posição; o texto difere e o selo tem `title`, então não é codificação puramente cromática, mas
+  não há forma nem ícone separando os dois.
 
 ## Vima: o Registro de Fatos e o briefing (PRs #85 e #90, 2026-08-06/07)
 

@@ -20,5 +20,10 @@ const ROTULOS: Record<string, string> = {
 };
 
 export function rotuloDaOrigem(source: string): string {
-  return ROTULOS[source] ?? source;
+  // `hasOwn`, e não `ROTULOS[source] ?? source`: a indexação de objeto literal alcança
+  // `Object.prototype`, então `"constructor"` devolvia a FUNÇÃO `Object` — o `??` não a pega,
+  // porque função não é nula. A assinatura `: string` mentia, e o React renderizava um selo
+  // VAZIO (com "Functions are not valid as a React child" no console): card sem origem, que é
+  // exatamente o defeito que este módulo existe para corrigir.
+  return Object.hasOwn(ROTULOS, source) ? ROTULOS[source] : source;
 }

@@ -60,15 +60,37 @@ test("a origem não se parece com a tag", async ({ page }) => {
   // COR COMPUTADA, não classe CSS. `toContain("bg-neutral-100")` ficaria verde com o Tailwind
   // desligado, com a classe purgada do build, ou com um `bg-primary-50` vindo depois na cascata —
   // e a tela estaria com os dois selos idênticos, que é o defeito de origem desta mudança.
-  const cor = (sel: ReturnType<typeof page.getByText>) =>
-    sel.evaluate((el) => getComputedStyle(el).backgroundColor);
+  //
+  // ⚠️ E a asserção é ABSOLUTA, não relativa. `expect(origem).not.toBe(tag)` — a primeira forma
+  // deste teste — sobrevivia à mutação que TROCA as duas cores: a diferença se preserva e o
+  // significado se inverte, com o comentário do `CrmPage` dizendo o contrário do que a tela
+  // mostra. Um caçador de bugs aplicou exatamente essa mutação e os 16 testes ficaram verdes.
+  //
+  // O que se afirma é o MATIZ, não o tom: a origem é acromática (cinza) e a tag é colorida (roxo).
+  // Assim o teste não quebra quando o design system reajustar a escala — só quando alguém trocar
+  // o papel das duas.
+  //
+  // Os limiares são MEDIDOS, não escolhidos: `neutral-100` (#ececef) dá croma **3** e `primary-50`
+  // dá **18** nesta build. 8 e 12 dividem essa faixa com folga dos dois lados. Se um dia
+  // encostarem, o design system aproximou as duas cores — e aí o teste está certo em reclamar,
+  // porque a tela terá deixado de distinguir origem de tag.
+  const croma = (sel: ReturnType<typeof page.getByText>) =>
+    sel.evaluate((el) => {
+      const [r, g, b] = (getComputedStyle(el).backgroundColor.match(/\d+/g) ?? []).map(Number);
+      if (r === undefined) return { croma: -1, opaco: false };
+      return {
+        croma: Math.max(r, g, b) - Math.min(r, g, b),
+        // Um selo sem fundo nenhum tem croma 0 e passaria como "cinza" — mas ele não existe na
+        // tela. `backgroundColor` transparente vem como `rgba(0, 0, 0, 0)`: 4 números.
+        opaco: !getComputedStyle(el).backgroundColor.startsWith("rgba(0, 0, 0, 0)"),
+      };
+    });
 
-  const daOrigem = await cor(page.getByTitle("De onde este contato veio").nth(1));
-  const daTag = await cor(page.getByText("vindo-do-site"));
+  const origem = await croma(page.getByTitle("De onde este contato veio").nth(1));
+  const tag = await croma(page.getByText("vindo-do-site"));
 
-  expect(daOrigem).not.toBe(daTag);
-  // Controle positivo: sem ele, dois elementos com fundo TRANSPARENTE passariam iguais no
-  // `not.toBe` acima jamais — mas um selo sem fundo nenhum é um selo que não existe.
-  expect(daOrigem).not.toBe("rgba(0, 0, 0, 0)");
-  expect(daTag).not.toBe("rgba(0, 0, 0, 0)");
+  expect(origem.opaco).toBe(true);
+  expect(tag.opaco).toBe(true);
+  expect(origem.croma).toBeLessThanOrEqual(8); // cinza (medido: 3)
+  expect(tag.croma).toBeGreaterThanOrEqual(12); // roxo (medido: 18)
 });
