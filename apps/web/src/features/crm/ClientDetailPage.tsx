@@ -7,7 +7,7 @@ import type {
   Quote,
 } from "@e1p/shared-types";
 import {
-  ArrowLeft, FileSignature, FileText, Gavel, History, Pencil, Receipt, Workflow,
+  ArrowLeft, FileSignature, FileText, Gavel, History, MessageCircle, Pencil, Receipt, Workflow,
 } from "lucide-react";
 import { useCallback, useEffect, useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
@@ -15,6 +15,7 @@ import { api, apiErrorMessage } from "../../lib/api";
 import { formatDate, formatDay } from "../../lib/datetime";
 import { useFuso } from "../../store/auth";
 import { rotaDaCobranca } from "../cobrancas/rota";
+import BlocoDaConversa from "./BlocoDaConversa";
 import ClientTimeline from "./ClientTimeline";
 import { hojeISO } from "../financeiro/contas";
 import { VOCAB_ENTRADA } from "../pagar/baixa";
@@ -115,6 +116,14 @@ export default function ClientDetailPage() {
           operacionais abaixo (Cobranças, Contratos, Orçamentos). */}
       <Section icon={<History size={16} />} title="Histórico">
         <ClientTimeline clientId={id} />
+      </Section>
+
+      {/* Conversa vem depois do Histórico e antes do financeiro: o Histórico conta O QUE
+          aconteceu, a Conversa mostra O QUE FOI DITO, e só então vêm as seções operacionais.
+          O bloco carrega sozinho — não entra no `load()` da página, para que uma falha do
+          WhatsApp não segure a ficha inteira. */}
+      <Section icon={<MessageCircle size={16} />} title="Conversa">
+        <BlocoDaConversa clientId={id} />
       </Section>
 
       {/* Cobranças */}
