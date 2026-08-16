@@ -46,6 +46,14 @@ function listStamp(iso: string | null, tz: string): string {
 export default function ConversasPage() {
   const fuso = useFuso();
   const [conversations, setConversations] = useState<ConversationSummary[]>([]);
+  // Distingue "a lista ainda não respondeu" de "a lista respondeu e está vazia" — as duas
+  // batiam no mesmo `conversations.length === 0` antes desta flag, e um tenant SEM nenhuma
+  // conversa não tinha como sair do primeiro caso: `naoEncontrada` (abaixo) exigia
+  // `conversations.length > 0`, que para esse tenant nunca vira verdade. Um `/conversas/:id`
+  // de um bookmark velho ficava preso para sempre — não um flash, um estado permanente (lista
+  // some no celular, painel travado em "Selecione uma conversa", botão de histórico apontando
+  // para nada). Setada uma vez, no `finally` do primeiro fetch que resolve.
+  const [listaCarregada, setListaCarregada] = useState(false);
   // A conversa aberta é a da URL, não estado local. Isso é o que permite a ficha 360° apontar
   // para uma conversa específica — e faz o botão voltar do navegador funcionar aqui.
   const { chatId } = useParams();
@@ -56,8 +64,17 @@ export default function ConversasPage() {
   const [historicoAberto, setHistoricoAberto] = useState(false);
 
   const loadConversations = useCallback(async () => {
-    const { data } = await api.get<ConversationSummary[]>("/whatsapp-conversations");
-    setConversations(data);
+    try {
+      const { data } = await api.get<ConversationSummary[]>("/whatsapp-conversations");
+      setConversations(data);
+    } finally {
+      // No `finally`, não no `try`: mesmo se a primeira chamada falhar, "ainda carregando"
+      // não pode durar para sempre — mas sucesso e falha são tratados como "resolveu", não
+      // como "resolveu com dado válido". Não há tela de erro dedicada aqui porque o polling
+      // de 7s já tenta de novo sozinho; um "carregando" perene em caso de erro seria pior que
+      // deixar a próxima rodada corrigir.
+      setListaCarregada(true);
+    }
   }, []);
 
   useEffect(() => {
@@ -68,10 +85,10 @@ export default function ConversasPage() {
 
   const conversaSelecionada = conversations.find((c) => c.chat_id === selected) ?? null;
   // Id que não existe (link velho, conversa apagada) não pode virar tela branca: a lista já
-  // carregou, então mostramos ela com um aviso. `conversations.length > 0` evita o falso aviso
-  // no primeiro render, antes de a lista chegar.
-  const naoEncontrada = selected !== null && conversaSelecionada === null
-    && conversations.length > 0;
+  // carregou (`listaCarregada`), então mostramos ela com um aviso. Antes disto resolver, não é
+  // "não encontrada" — é "ainda não sabemos", e o painel abaixo trata os dois casos de forma
+  // diferente (ver comentário lá).
+  const naoEncontrada = listaCarregada && selected !== null && conversaSelecionada === null;
 
   return (
     <div className="flex h-[calc(100vh-8rem)] gap-4">
@@ -82,6 +99,7 @@ export default function ConversasPage() {
           jornada inteira do contato. A gaveta do histórico (mais abaixo) já tratava o celular
           assim desde sempre; a divisão principal é que nunca foi tratada. */}
       <div
+        data-testid="lista-conversas"
         className={`w-full shrink-0 overflow-y-auto rounded-2xl bg-white shadow-sm lg:w-80 ${
           selected && !naoEncontrada ? "hidden lg:block" : "block"
         }`}
@@ -130,18 +148,24 @@ export default function ConversasPage() {
         )}
       </div>
       <div
+        data-testid="painel-conversa"
         className={`min-w-0 flex-1 rounded-2xl bg-white shadow-sm ${
           selected && !naoEncontrada ? "block" : "hidden lg:block"
         }`}
       >
-        {/* `conversaSelecionada` (não só `!naoEncontrada`) de propósito: no primeiro render, antes
-            da lista carregar, `naoEncontrada` ainda é `false` (ver o comentário acima) — sem esta
-            checagem extra o painel montava otimisticamente para QUALQUER id da URL, inclusive um
-            inventado, disparando `/timeline` e `/window` para uma conversa que não existe antes
-            de sabermos se ela existe. Exigir a conversa encontrada faz o painel esperar a lista
-            carregar antes de buscar qualquer coisa — para um id válido isso é imperceptível (a
-            lista já estava carregada quando o clique aconteceu); para um id inválido, o painel
-            simplesmente nunca chega a montar. */}
+        {/* `conversaSelecionada` (não só `!naoEncontrada`) de propósito: mesmo depois de
+            `listaCarregada` virar `true`, exigir a conversa encontrada é o que impede o painel
+            de montar otimisticamente para QUALQUER id da URL, inclusive um inventado, disparando
+            `/timeline` e `/window` para uma conversa que não existe antes de sabermos se ela
+            existe. Para um id válido isso é imperceptível (a lista já estava carregada quando o
+            clique aconteceu); para um id inválido, o painel simplesmente nunca chega a montar.
+
+            Três estados, não dois — é por isso que existe o ramo do meio: um id na URL cuja
+            lista AINDA não respondeu (`!listaCarregada`) não é a mesma coisa que "nenhum id
+            selecionado". Antes desta distinção os dois caíam no mesmo "Selecione uma conversa" —
+            uma mensagem ativamente ERRADA para quem acabou de clicar/colar um link e está
+            esperando a resposta chegar. O rótulo neutro de carregamento evita prometer uma ação
+            ("selecione") que o usuário já tomou. */}
         {selected && !naoEncontrada && conversaSelecionada ? (
           <ConversationThread
             key={selected}
@@ -150,6 +174,10 @@ export default function ConversasPage() {
             onSent={loadConversations}
             onVoltar={() => navigate("/conversas")}
           />
+        ) : selected && !listaCarregada ? (
+          <div className="flex h-full items-center justify-center text-sm text-neutral-400">
+            Carregando conversa...
+          </div>
         ) : (
           <div className="flex h-full items-center justify-center text-sm text-neutral-400">
             Selecione uma conversa

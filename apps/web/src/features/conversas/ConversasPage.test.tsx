@@ -465,3 +465,93 @@ describe("ConversasPage — a conversa tem URL própria", () => {
     expect(api.get).not.toHaveBeenCalledWith("/whatsapp-conversations/nao-existe/timeline");
   });
 });
+
+// ── "Ainda carregando" vs. "carregou e está vazia" ──────────────────────────
+//
+// Achado da revisão final: `naoEncontrada` exigia `conversations.length > 0`, então um tenant
+// SEM NENHUMA conversa nunca tornava essa condição verdadeira — um `/conversas/:id` de bookmark
+// velho ficava travado para sempre (não um flash: permanente). Os quatro testes abaixo cobrem os
+// estados que a distinção "carregou" vs. "não carregou ainda" precisa separar corretamente, e
+// verificam em cada um o invariante do celular: lista OU conversa, nunca as duas.
+
+/** No celular (jsdom não aplica CSS de verdade), a classe `hidden` é o que de fato esconde a
+ * coluna — checar direto na `className` em vez de `toBeVisible()`, que não enxerga Tailwind
+ * sem folha de estilo carregada. */
+function visivelNoCelular(el: HTMLElement): boolean {
+  return !el.className.split(/\s+/).includes("hidden");
+}
+
+describe("ConversasPage — carregando vs. vazia", () => {
+  it("chatId desconhecido num tenant SEM NENHUMA conversa mostra aviso, não fica travado", async () => {
+    vi.mocked(api.get).mockImplementation((url: string) => {
+      if (url === "/whatsapp-conversations") return Promise.resolve({ data: [] } as never);
+      return Promise.resolve({ data: [] } as never);
+    });
+    renderNaRota("/conversas/nao-existe");
+
+    expect(await screen.findByText(/conversa não encontrada/i)).toBeInTheDocument();
+    expect(screen.getByText(/nenhuma conversa ainda/i)).toBeInTheDocument();
+    // Lista visível (com o aviso), painel escondido — não os dois ao mesmo tempo no celular.
+    expect(visivelNoCelular(screen.getByTestId("lista-conversas"))).toBe(true);
+    expect(visivelNoCelular(screen.getByTestId("painel-conversa"))).toBe(false);
+  });
+
+  it("id válido ANTES da lista responder mostra um carregando neutro, nunca 'selecione uma conversa'", async () => {
+    // `/whatsapp-conversations` fica pendurada de propósito — simula o instante entre o mount e
+    // a resposta do fetch, que hoje (achado da revisão) mostrava "Selecione uma conversa" para
+    // um usuário que JÁ selecionou, via link ou bookmark.
+    let resolvePendente!: (v: unknown) => void;
+    const pendente = new Promise((resolve) => { resolvePendente = resolve; });
+    vi.mocked(api.get).mockImplementation((url: string) => {
+      if (url === "/whatsapp-conversations") return pendente as Promise<never>;
+      if (url === "/whatsapp-conversations/c1/timeline") return Promise.resolve({ data: [] } as never);
+      // Janela aberta de propósito: sem isto o fio (uma vez montado) trocaria o campo de texto
+      // pelo seletor de template, e a asserção de `/mensagem/i` do fim deste teste erraria por
+      // um motivo que nada tem a ver com o que ele está provando.
+      if (url === "/whatsapp-conversations/c1/window") {
+        return Promise.resolve({ data: { within_session_window: true } } as never);
+      }
+      return Promise.resolve({ data: [] } as never);
+    });
+    vi.mocked(api.post).mockResolvedValue({ data: {} } as never);
+
+    renderNaRota("/conversas/c1");
+
+    expect(await screen.findByText(/carregando conversa/i)).toBeInTheDocument();
+    expect(screen.queryByText(/^selecione uma conversa$/i)).not.toBeInTheDocument();
+    // Lista escondida, painel (com o carregando) visível — mesmo invariante do celular.
+    expect(visivelNoCelular(screen.getByTestId("lista-conversas"))).toBe(false);
+    expect(visivelNoCelular(screen.getByTestId("painel-conversa"))).toBe(true);
+
+    resolvePendente({
+      data: [{
+        chat_id: "c1", kind: "direct" as const, title: "Ju", phone: "5511999998888",
+        client_id: "cli-1", last_message_at: "2026-08-15T23:10:00Z",
+        last_message_preview: "Boa noite", unread: false,
+      }],
+    });
+    // Resolveu e achou a conversa: o carregando neutro dá lugar ao fio de verdade.
+    expect(await screen.findByPlaceholderText(/mensagem/i)).toBeInTheDocument();
+    expect(screen.queryByText(/carregando conversa/i)).not.toBeInTheDocument();
+  });
+
+  it("/conversas sem id mostra só a lista, painel escondido — sem carregando nem aviso", async () => {
+    mockarDuasConversas();
+    renderNaRota("/conversas");
+
+    expect(await screen.findByText("Doro Eventos")).toBeInTheDocument();
+    expect(screen.queryByText(/carregando conversa/i)).not.toBeInTheDocument();
+    expect(screen.queryByText(/conversa não encontrada/i)).not.toBeInTheDocument();
+    expect(visivelNoCelular(screen.getByTestId("lista-conversas"))).toBe(true);
+    expect(visivelNoCelular(screen.getByTestId("painel-conversa"))).toBe(false);
+  });
+
+  it("chatId válido, tenant COM conversas: lista some no celular, painel mostra o fio", async () => {
+    mockarDuasConversas();
+    renderNaRota("/conversas/c1");
+
+    expect(await screen.findByPlaceholderText(/mensagem/i)).toBeInTheDocument();
+    expect(visivelNoCelular(screen.getByTestId("lista-conversas"))).toBe(false);
+    expect(visivelNoCelular(screen.getByTestId("painel-conversa"))).toBe(true);
+  });
+});
