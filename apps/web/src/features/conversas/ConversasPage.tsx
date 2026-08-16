@@ -3,6 +3,7 @@ import type {
 } from "@e1p/shared-types";
 import { ChevronLeft, History, Paperclip, Send, Users, X } from "lucide-react";
 import { Fragment, useCallback, useEffect, useRef, useState } from "react";
+import { useNavigate, useParams } from "react-router-dom";
 import { api, apiErrorMessage } from "../../lib/api";
 import { formatDate, formatTime } from "../../lib/datetime";
 import { useFuso } from "../../store/auth";
@@ -45,7 +46,11 @@ function listStamp(iso: string | null, tz: string): string {
 export default function ConversasPage() {
   const fuso = useFuso();
   const [conversations, setConversations] = useState<ConversationSummary[]>([]);
-  const [selected, setSelected] = useState<string | null>(null);
+  // A conversa aberta é a da URL, não estado local. Isso é o que permite a ficha 360° apontar
+  // para uma conversa específica — e faz o botão voltar do navegador funcionar aqui.
+  const { chatId } = useParams();
+  const navigate = useNavigate();
+  const selected = chatId ?? null;
   // Abaixo de `lg` o painel de histórico é uma GAVETA, não uma coluna (ver o comentário no
   // <aside>). Este estado só governa a gaveta; em `lg+` a coluna aparece sempre.
   const [historicoAberto, setHistoricoAberto] = useState(false);
@@ -62,6 +67,11 @@ export default function ConversasPage() {
   }, [loadConversations]);
 
   const conversaSelecionada = conversations.find((c) => c.chat_id === selected) ?? null;
+  // Id que não existe (link velho, conversa apagada) não pode virar tela branca: a lista já
+  // carregou, então mostramos ela com um aviso. `conversations.length > 0` evita o falso aviso
+  // no primeiro render, antes de a lista chegar.
+  const naoEncontrada = selected !== null && conversaSelecionada === null
+    && conversations.length > 0;
 
   return (
     <div className="flex h-[calc(100vh-8rem)] gap-4">
@@ -73,12 +83,17 @@ export default function ConversasPage() {
           assim desde sempre; a divisão principal é que nunca foi tratada. */}
       <div
         className={`w-full shrink-0 overflow-y-auto rounded-2xl bg-white shadow-sm lg:w-80 ${
-          selected ? "hidden lg:block" : "block"
+          selected && !naoEncontrada ? "hidden lg:block" : "block"
         }`}
       >
         <div className="border-b border-neutral-100 p-4">
           <h1 className="font-semibold text-neutral-800">Conversas</h1>
         </div>
+        {naoEncontrada && (
+          <p className="border-b border-amber-100 bg-amber-50 p-3 text-xs text-amber-700">
+            Conversa não encontrada. Escolha uma da lista.
+          </p>
+        )}
         {conversations.length === 0 ? (
           <p className="p-4 text-sm text-neutral-400">Nenhuma conversa ainda.</p>
         ) : (
@@ -86,7 +101,7 @@ export default function ConversasPage() {
             <button
               key={c.chat_id}
               onClick={() => {
-                setSelected(c.chat_id);
+                navigate(`/conversas/${c.chat_id}`);
                 setHistoricoAberto(false);
               }}
               className={`block w-full border-b border-neutral-50 px-4 py-3 text-left hover:bg-neutral-50 ${
@@ -125,7 +140,7 @@ export default function ConversasPage() {
             chatId={selected}
             chat={conversations.find((c) => c.chat_id === selected) ?? null}
             onSent={loadConversations}
-            onVoltar={() => setSelected(null)}
+            onVoltar={() => navigate("/conversas")}
           />
         ) : (
           <div className="flex h-full items-center justify-center text-sm text-neutral-400">
