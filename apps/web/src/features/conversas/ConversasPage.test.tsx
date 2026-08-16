@@ -1,7 +1,7 @@
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter, Route, Routes } from "react-router-dom";
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { api } from "../../lib/api";
 import ConversasPage from "./ConversasPage";
 
@@ -9,6 +9,15 @@ vi.mock("../../lib/api", () => ({
   api: { get: vi.fn(), post: vi.fn() },
   apiErrorMessage: (e: unknown) => String(e),
 }));
+
+// Nenhum teste deste arquivo depende de chamadas de um teste anterior — cada um remonta seu
+// próprio `mockImplementation`. Sem isto, o HISTÓRICO de chamadas (não só o resultado) vaza de
+// um teste para o próximo, o que já quebrou uma asserção `not.toHaveBeenCalledWith` real (ver
+// describe "a conversa tem URL própria"). `clearAllMocks`, não `resetAllMocks`: reset apagaria
+// a implementação que cada teste instala antes do reset ter chance de rodar de novo.
+beforeEach(() => {
+  vi.clearAllMocks();
+});
 
 function renderNaRota(rota: string) {
   return render(
@@ -367,12 +376,6 @@ describe("ConversasPage — painel de histórico", () => {
 
 /** Duas conversas, para que "abriu a certa" seja uma afirmação com conteúdo. */
 function mockarDuasConversas() {
-  // Este arquivo não zera os mocks entre testes (só o DOM, em test-setup.ts). As asserções
-  // abaixo checam QUAIS urls foram chamadas (não só o resultado final), então o histórico de
-  // chamadas dos testes anteriores no arquivo vazaria para cá sem isto — inclusive um
-  // "/whatsapp-conversations/c1/timeline" de outro describe, que quebraria o `not.toHaveBeenCalledWith`.
-  vi.mocked(api.get).mockClear();
-  vi.mocked(api.post).mockClear();
   vi.mocked(api.get).mockImplementation((url: string) => {
     if (url === "/whatsapp-conversations") {
       return Promise.resolve({
@@ -436,6 +439,10 @@ describe("ConversasPage — a conversa tem URL própria", () => {
     renderNaRota("/conversas");
     await userEvent.click(await screen.findByText("Doro Eventos"));
     expect(await screen.findByPlaceholderText(/mensagem/i)).toBeInTheDocument();
+    // A prova de que a URL realmente mudou (não só que "alguma" conversa abriu): o componente lê
+    // o id da URL via `useParams`, então uma timeline buscada para c1 só acontece se a rota virou
+    // /conversas/c1 — mesmo raciocínio do primeiro teste deste describe.
+    expect(api.get).toHaveBeenCalledWith("/whatsapp-conversations/c1/timeline");
   });
 
   it("chatId que não existe cai na lista com aviso, e não em tela branca", async () => {
@@ -443,5 +450,18 @@ describe("ConversasPage — a conversa tem URL própria", () => {
     renderNaRota("/conversas/nao-existe");
     expect(await screen.findByText(/conversa não encontrada/i)).toBeInTheDocument();
     expect(screen.getByText("Doro Eventos")).toBeInTheDocument();
+  });
+
+  it("chatId que não existe NÃO monta o painel de conversa nem bate a API dele", async () => {
+    // Achado da revisão: `mockarDuasConversas` responde `/timeline` para QUALQUER id (inclusive
+    // um inventado), então uma checagem só de "a tela não quebrou" não pega o painel montando por
+    // engano — o mock "concorda" alegremente com o id errado. A prova real é dupla: o campo de
+    // digitar (só existe com uma conversa aberta de verdade) não aparece, E a API do painel nunca
+    // foi chamada para o id que não existe.
+    mockarDuasConversas();
+    renderNaRota("/conversas/nao-existe");
+    await screen.findByText(/conversa não encontrada/i);
+    expect(screen.queryByPlaceholderText(/mensagem/i)).not.toBeInTheDocument();
+    expect(api.get).not.toHaveBeenCalledWith("/whatsapp-conversations/nao-existe/timeline");
   });
 });

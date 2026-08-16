@@ -131,10 +131,18 @@ export default function ConversasPage() {
       </div>
       <div
         className={`min-w-0 flex-1 rounded-2xl bg-white shadow-sm ${
-          selected ? "block" : "hidden lg:block"
+          selected && !naoEncontrada ? "block" : "hidden lg:block"
         }`}
       >
-        {selected ? (
+        {/* `conversaSelecionada` (não só `!naoEncontrada`) de propósito: no primeiro render, antes
+            da lista carregar, `naoEncontrada` ainda é `false` (ver o comentário acima) — sem esta
+            checagem extra o painel montava otimisticamente para QUALQUER id da URL, inclusive um
+            inventado, disparando `/timeline` e `/window` para uma conversa que não existe antes
+            de sabermos se ela existe. Exigir a conversa encontrada faz o painel esperar a lista
+            carregar antes de buscar qualquer coisa — para um id válido isso é imperceptível (a
+            lista já estava carregada quando o clique aconteceu); para um id inválido, o painel
+            simplesmente nunca chega a montar. */}
+        {selected && !naoEncontrada && conversaSelecionada ? (
           <ConversationThread
             key={selected}
             chatId={selected}
