@@ -582,8 +582,20 @@ def list_conversations(
     # Segunda chave de ordenação (`id`) é o desempate: duas mensagens do mesmo chat podem cair
     # no mesmo instante (mesma transação de ingestão), e sem uma chave estável "a última
     # mensagem" mudaria de corrida para corrida. `unread_client_ids` usa o MESMO desempate
-    # (created_at, id) — é o contrato que mantém as duas funções de acordo em empate. Esta
-    # ordenação e o laço "última iteração vence" abaixo NÃO mudam com o filtro — só QUAIS
+    # (created_at, id) — é a REGRA que mantém as duas funções de acordo em empate.
+    #
+    # ⚠️ O que `test_unread_client_ids_concorda_com_list_conversations` PROVA: que a regra, como
+    # está escrita hoje dos dois lados, produz a mesma resposta. O que ele NÃO garante: que
+    # apagar a coluna `id` do `ORDER BY` de UM dos dois lados derrube o teste. Sem desempate
+    # explícito, a ordem de linhas empatadas fica a critério do motor (o padrão SQL não a
+    # especifica); sob SQLite (o motor dos testes) ela tende a seguir a ordem física de inserção
+    # — e, pela fixture atual, isso reproduz por acaso a resposta certa de um dos dois lados
+    # mesmo sem o `id`. Ou seja: a guarda pega quem MUDA a regra (ex.: inverte para "menor id
+    # vence" só aqui), mas não é rede de segurança confiável contra quem apenas REMOVE o `id` do
+    # `ORDER BY` — trate esta coluna como parte do contrato, não como algo que o teste denuncia
+    # sozinho se sumir.
+    #
+    # Esta ordenação e o laço "última iteração vence" abaixo NÃO mudam com o filtro — só QUAIS
     # linhas entram na consulta muda.
     for msg in db.scalars(consulta_msgs).all():
         if msg.chat_id is not None:
@@ -634,14 +646,16 @@ def unread_client_ids(db: Session) -> set[str]:
     A sessão já chega escopada por RLS (mesma convenção de `list_conversations`).
 
     O desempate de mensagens no mesmo instante TEM que ser o mesmo dos dois lados, ou as duas
-    funções divergem em silêncio no exato caso que a paridade deveria pegar (duas mensagens do
-    mesmo chat na mesma transação, uma `in` outra `out` — o board diria uma coisa, a caixa de
-    entrada diria outra). Por isso a query abaixo não pergunta "existe ALGUMA mensagem `in`
-    empatada no topo" — isso seria um teste existencial, não "qual é a última mensagem" — ela
-    elege exatamente UMA linha por chat via `row_number() OVER (... ORDER BY created_at DESC,
-    id DESC)`, o mesmo par `(created_at, id)` que `list_conversations` usa (lá em ordem
-    crescente, "a última iteração vence" — aqui em ordem decrescente, "a primeira linha vence";
-    os dois pegam a mesma mensagem).
+    funções podem divergir em silêncio (duas mensagens do mesmo chat na mesma transação, uma
+    `in` outra `out` — o board diria uma coisa, a caixa de entrada diria outra). Por isso a
+    query abaixo não pergunta "existe ALGUMA mensagem `in` empatada no topo" — isso seria um
+    teste existencial, não "qual é a última mensagem" — ela elege exatamente UMA linha por chat
+    via `row_number() OVER (... ORDER BY created_at DESC, id DESC)`, o mesmo par
+    `(created_at, id)` que `list_conversations` usa (lá em ordem crescente, "a última iteração
+    vence" — aqui em ordem decrescente, "a primeira linha vence"; os dois pegam a mesma
+    mensagem). Sobre o quanto o teste de paridade realmente PROVA isso — e o que ele deixa
+    passar se alguém só apagar o `id` do `ORDER BY` — ver o comentário no laço de
+    `list_conversations` acima, junto ao mesmo desempate.
     """
     ultima_por_chat = (
         select(
@@ -679,13 +693,21 @@ def get_chat(db: Session, *, chat_id: str) -> WhatsappChat:
     return chat
 
 
-def get_timeline(db: Session, *, chat_id: str) -> list[dict]:
+def get_timeline(db: Session, *, chat_id: str, limit: int | None = None) -> list[dict]:
     """Mescla WhatsappMessage (a conversa) + Notification(channel=whatsapp) do cliente vinculado
     (avisos automáticos já existentes: cobrança, contrato, etc.) — leitura combinada, SEM
     migrar nenhum dado antigo (ver design doc §2).
 
     Os avisos automáticos só entram quando a conversa tem cliente: eles são endereçados a um
-    contato do CRM, e grupo não tem um."""
+    contato do CRM, e grupo não tem um.
+
+    `limit`, quando informado, corta para as N entradas mais recentes do CONJUNTO MESCLADO — não
+    N de cada fonte (mensagem e notificação são ordenadas juntas antes do corte). "N de cada
+    fonte" devolveria um recorte errado: uma conversa com 3 notificações recentes e 200
+    mensagens antigas mostraria as notificações inteiras e nenhuma mensagem, quando o pedido é
+    "as 5 falas mais recentes, seja qual for a origem". A tela de Conversas não passa `limit`
+    (quer o histórico inteiro, como hoje); a ficha 360° passa 5 — sem isto ela baixava a
+    conversa inteira do WhatsApp só para mostrar cinco bolhas (ver BlocoDaConversa.tsx)."""
     chat = get_chat(db, chat_id=chat_id)
     entries: list[dict] = []
     for msg in db.scalars(
@@ -726,6 +748,12 @@ def get_timeline(db: Session, *, chat_id: str) -> list[dict]:
                 "created_at": notif.created_at,
             })
     entries.sort(key=lambda e: e["created_at"])
+    if limit is not None:
+        # Corte pelo FIM da lista ascendente = as mais recentes, na mesma ordem (ascendente) que
+        # a tela de Conversas já espera. `limit <= 0` como "nada" e não "tudo": um `[-0:]` bateria
+        # com a lista inteira por acaso da aritmética de slice do Python, e uma chamada com limite
+        # zero pedindo "nada" não pode devolver "tudo" por causa disso.
+        entries = entries[-limit:] if limit > 0 else []
     return entries
 
 

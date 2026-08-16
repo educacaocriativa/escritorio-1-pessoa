@@ -1,6 +1,8 @@
 # apps/api/tests/test_whatsapp_inbox_service.py
 """Testes do serviço do inbox de WhatsApp: ingestão do webhook, lead automático, timeline
 unificada, janela de 24h, resposta (texto/mídia/template)."""
+from datetime import UTC, datetime, timedelta
+
 import pytest
 from sqlalchemy import select
 
@@ -557,6 +559,62 @@ def test_get_timeline_merges_conversation_and_automated(db):
     timeline = inbox_service.get_timeline(db, chat_id=chat.id)
     sources = {e["source"] for e in timeline}
     assert sources == {"conversation", "automated"}
+
+
+def test_get_timeline_sem_limit_devolve_tudo(db):
+    """A tela de Conversas chama `get_timeline` sem `limit` e quer o histórico INTEIRO — o
+    comportamento de hoje não pode mudar quando o parâmetro simplesmente não é passado."""
+    _configure_credentials(db)
+    client = Client(tenant_id=TENANT_ID, name="Cliente", phone="5511900006666", source="manual")
+    db.add(client)
+    db.flush()
+    chat = _chat_for(db, client)
+    base = datetime(2026, 8, 16, 12, 0, tzinfo=UTC)
+    for i in range(12):
+        db.add(WhatsappMessage(
+            tenant_id=TENANT_ID, client_id=client.id, chat_id=chat.id, direction=DIRECTION_IN,
+            kind="text", text_body=f"m{i}", created_at=base + timedelta(minutes=i),
+        ))
+    db.commit()
+    timeline = inbox_service.get_timeline(db, chat_id=chat.id)
+    assert len(timeline) == 12
+    assert [e["text_body"] for e in timeline] == [f"m{i}" for i in range(12)]
+
+
+def test_get_timeline_limit_corta_as_mais_recentes_do_conjunto_mesclado(db):
+    """`limit` tem que cortar o CONJUNTO MESCLADO (mensagem + notificação) já ordenado por
+    instante — não N de cada fonte separadamente. Um corte "por fonte" (ex.: últimas N mensagens
+    + últimas N notificações) devolveria um recorte incorreto sempre que as duas fontes se
+    intercalam no tempo, que é exatamente o cenário abaixo."""
+    _configure_credentials(db)
+    client = Client(tenant_id=TENANT_ID, name="Cliente", phone="5511900007777", source="manual")
+    db.add(client)
+    db.flush()
+    chat = _chat_for(db, client)
+    base = datetime(2026, 8, 16, 12, 0, tzinfo=UTC)
+
+    # Intercaladas de propósito: m0(0) m1(10) n0(15) m2(20) m3(30) n1(35) m4(40) — a ordem real
+    # do conjunto mesclado. As 3 mais recentes do MESCLADO são m3, n1, m4 (30/35/40). "3 de cada
+    # fonte" incluiria m2 (20) por engano — é essa diferença que o teste prova.
+    for i, minutos in enumerate([0, 10, 20, 30, 40]):
+        db.add(WhatsappMessage(
+            tenant_id=TENANT_ID, client_id=client.id, chat_id=chat.id, direction=DIRECTION_IN,
+            kind="text", text_body=f"m{i}", created_at=base + timedelta(minutes=minutos),
+        ))
+    for i, minutos in enumerate([15, 35]):
+        db.add(Notification(
+            tenant_id=TENANT_ID, channel="whatsapp", recipient=client.phone, client_id=client.id,
+            message=f"n{i}", status="sent", created_at=base + timedelta(minutes=minutos),
+        ))
+    db.commit()
+
+    timeline = inbox_service.get_timeline(db, chat_id=chat.id, limit=3)
+    assert [e["text_body"] for e in timeline] == ["m3", "n1", "m4"]
+
+    # E sem `limit`, o mesmo cenário continua devolvendo as 7 entradas na ordem cronológica —
+    # prova de que o corte é aditivo (opt-in), não uma mudança do caminho sem `limit`.
+    tudo = inbox_service.get_timeline(db, chat_id=chat.id)
+    assert [e["text_body"] for e in tudo] == ["m0", "m1", "n0", "m2", "m3", "n1", "m4"]
 
 
 def test_send_reply_text_within_window(db, monkeypatch: pytest.MonkeyPatch):

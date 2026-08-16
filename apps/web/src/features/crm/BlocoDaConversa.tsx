@@ -36,10 +36,13 @@ export default function BlocoDaConversa({ clientId }: { clientId: string }) {
       setConversas(lista);
       const recente = maisRecente(lista);
       if (recente) {
+        // `limit` corta no SERVIDOR — sem isto a ficha baixava a conversa inteira (podem ser
+        // milhares de mensagens num cliente ativo) só para mostrar cinco bolhas. O backend já
+        // devolve na ordem ascendente que este componente espera; nada a reordenar aqui.
         const t = await api.get<TimelineEntry[]>(
-          `/whatsapp-conversations/${recente.chat_id}/timeline`,
+          `/whatsapp-conversations/${recente.chat_id}/timeline?limit=${ULTIMAS}`,
         );
-        setMensagens(Array.isArray(t.data) ? t.data.slice(-ULTIMAS) : []);
+        setMensagens(Array.isArray(t.data) ? t.data : []);
       } else {
         setMensagens([]);
       }

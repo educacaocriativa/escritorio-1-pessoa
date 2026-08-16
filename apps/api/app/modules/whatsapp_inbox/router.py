@@ -161,13 +161,18 @@ def list_conversations(
 
 @router.get("/{chat_id}/timeline")
 def get_timeline(
-    chat_id: str, user: CurrentUser = Depends(_guard), db: Session = Depends(get_tenant_db)
+    chat_id: str,
+    # `None` por padrão preserva o comportamento de hoje (histórico inteiro) para a tela de
+    # Conversas, que é a mesma rota. Só a ficha 360° manda `limit` (ver BlocoDaConversa.tsx).
+    limit: int | None = Query(default=None, gt=0),
+    user: CurrentUser = Depends(_guard),
+    db: Session = Depends(get_tenant_db),
 ) -> list[dict]:
     # Conversa inexistente vira 404 explícito (o service levanta): antes o id era de cliente e
     # um id desconhecido devolvia 200 com lista vazia — indistinguível de "conversa sem
     # mensagem" e péssimo pra diagnosticar.
     try:
-        return service.get_timeline(db, chat_id=chat_id)
+        return service.get_timeline(db, chat_id=chat_id, limit=limit)
     except service.WhatsappInboxError as e:
         raise _err(e) from e
 

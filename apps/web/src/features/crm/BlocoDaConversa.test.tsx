@@ -65,6 +65,17 @@ describe("BlocoDaConversa", () => {
     expect(screen.getByText("Oi Ju, tudo bem?")).toBeInTheDocument();
   });
 
+  it("pede a timeline já cortada no servidor (limit=5), não a inteira", async () => {
+    // Achado da revisão final: a ficha baixava a conversa INTEIRA (podem ser milhares de
+    // mensagens num cliente ativo) só para mostrar cinco bolhas, cortando no cliente com
+    // `.slice(-5)`. O corte tem que ser um parâmetro na URL, não um `.slice` depois do fetch —
+    // senão o bug volta na próxima vez que alguém tocar neste componente sem notar a régua.
+    mockar([conversa("chat-1", "Ju")]);
+    renderBloco();
+    await screen.findByText("Boa noite");
+    expect(api.get).toHaveBeenCalledWith("/whatsapp-conversations/chat-1/timeline?limit=5");
+  });
+
   it("leva para a conversa com o link certo", async () => {
     mockar([conversa("chat-1", "Ju")]);
     renderBloco();
