@@ -545,8 +545,12 @@ def list_conversations(db: Session, tenant_id: str) -> list[dict]:
     módulo (e uso futuro, ex.: auditoria)."""
     chats = {c.id: c for c in db.scalars(select(WhatsappChat)).all()}
     last_msgs: dict[str, WhatsappMessage] = {}
+    # Segunda chave de ordenação (`id`) é o desempate: duas mensagens do mesmo chat podem cair
+    # no mesmo instante (mesma transação de ingestão), e sem uma chave estável "a última
+    # mensagem" mudaria de corrida para corrida. `unread_client_ids` usa o MESMO desempate
+    # (created_at, id) — é o contrato que mantém as duas funções de acordo em empate.
     for msg in db.scalars(
-        select(WhatsappMessage).order_by(WhatsappMessage.created_at)
+        select(WhatsappMessage).order_by(WhatsappMessage.created_at, WhatsappMessage.id)
     ).all():
         if msg.chat_id is not None:
             last_msgs[msg.chat_id] = msg  # a última iteração (ordem crescente) vence
@@ -593,33 +597,41 @@ def unread_client_ids(db: Session) -> set[str]:
     o card é um só. Grupo nunca entra — `client_id` é nulo nele por decisão de produto.
 
     A sessão já chega escopada por RLS (mesma convenção de `list_conversations`).
+
+    O desempate de mensagens no mesmo instante TEM que ser o mesmo dos dois lados, ou as duas
+    funções divergem em silêncio no exato caso que a paridade deveria pegar (duas mensagens do
+    mesmo chat na mesma transação, uma `in` outra `out` — o board diria uma coisa, a caixa de
+    entrada diria outra). Por isso a query abaixo não pergunta "existe ALGUMA mensagem `in`
+    empatada no topo" — isso seria um teste existencial, não "qual é a última mensagem" — ela
+    elege exatamente UMA linha por chat via `row_number() OVER (... ORDER BY created_at DESC,
+    id DESC)`, o mesmo par `(created_at, id)` que `list_conversations` usa (lá em ordem
+    crescente, "a última iteração vence" — aqui em ordem decrescente, "a primeira linha vence";
+    os dois pegam a mesma mensagem).
     """
-    # Últimas mensagens: uma linha por chat, obtida por max(created_at) agrupado. Empate de
-    # instante (duas mensagens no mesmo commit) resolve-se pegando qualquer uma das empatadas
-    # e checando se ALGUMA delas é `in` — que é a pergunta que interessa. Não precisamos saber
-    # qual é "a" última, só se a conversa terminou com o contato falando.
-    max_por_chat = (
+    ultima_por_chat = (
         select(
             WhatsappMessage.chat_id.label("chat_id"),
-            func.max(WhatsappMessage.created_at).label("ultima_em"),
+            WhatsappMessage.direction.label("direction"),
+            WhatsappMessage.created_at.label("created_at"),
+            func.row_number()
+            .over(
+                partition_by=WhatsappMessage.chat_id,
+                order_by=(WhatsappMessage.created_at.desc(), WhatsappMessage.id.desc()),
+            )
+            .label("rn"),
         )
         .where(WhatsappMessage.chat_id.is_not(None))
-        .group_by(WhatsappMessage.chat_id)
         .subquery()
     )
     linhas = db.execute(
         select(WhatsappChat.client_id)
-        .join(max_por_chat, max_por_chat.c.chat_id == WhatsappChat.id)
-        .join(
-            WhatsappMessage,
-            (WhatsappMessage.chat_id == WhatsappChat.id)
-            & (WhatsappMessage.created_at == max_por_chat.c.ultima_em),
-        )
+        .join(ultima_por_chat, ultima_por_chat.c.chat_id == WhatsappChat.id)
         .where(
+            ultima_por_chat.c.rn == 1,
             WhatsappChat.client_id.is_not(None),
-            WhatsappMessage.direction == DIRECTION_IN,
+            ultima_por_chat.c.direction == DIRECTION_IN,
             (WhatsappChat.last_read_at.is_(None))
-            | (max_por_chat.c.ultima_em > WhatsappChat.last_read_at),
+            | (ultima_por_chat.c.created_at > WhatsappChat.last_read_at),
         )
     ).all()
     return {client_id for (client_id,) in linhas}

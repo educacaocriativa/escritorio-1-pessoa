@@ -34,17 +34,24 @@ def _chat(db, *, jid: str, client_id: str | None, kind: str = CHAT_KIND_DIRECT,
     return chat
 
 
-def _msg(db, *, chat: WhatsappChat, direction: str, minutos: int, texto: str = "oi") -> None:
-    db.add(WhatsappMessage(
+def _msg(db, *, chat: WhatsappChat, direction: str, minutos: int, texto: str = "oi",
+         msg_id: str | None = None) -> None:
+    # `msg_id` só é passado quando o teste precisa CONTROLAR o desempate (duas mensagens no
+    # mesmo `created_at`): o `id` é o critério de desempate depois de `created_at`, e o default
+    # da coluna é um UUID aleatório — sem fixar o id, um teste de empate seria não-determinístico.
+    kwargs = dict(
         tenant_id=TENANT_ID, chat_id=chat.id, client_id=chat.client_id,
         direction=direction, text_body=texto,
         created_at=BASE + timedelta(minutes=minutos),
-    ))
+    )
+    if msg_id is not None:
+        kwargs["id"] = msg_id
+    db.add(WhatsappMessage(**kwargs))
     db.commit()
 
 
 def _cenario_completo(db) -> None:
-    """As cinco situações que a regra precisa distinguir."""
+    """As seis situações que a regra precisa distinguir."""
     # 1. Nunca lida, última é do contato → ESPERANDO RESPOSTA.
     c1 = _chat(db, jid="5511900000001@s.whatsapp.net", client_id="cli-1")
     _msg(db, chat=c1, direction=DIRECTION_IN, minutos=10)
@@ -71,8 +78,21 @@ def _cenario_completo(db) -> None:
     c5b = _chat(db, jid="99995@lid", client_id="cli-5")
     _msg(db, chat=c5b, direction=DIRECTION_IN, minutos=30)
 
+    # 6. EMPATE: duas mensagens do MESMO chat no MESMO instante, uma `in` outra `out`, nunca
+    #    lida. O desempate é (created_at, id) — aqui elege a de MAIOR id como "a última", e os
+    #    ids abaixo são escolhidos de propósito para que seja a `out` ("id-c6-out" > "id-c6-in"
+    #    na comparação de string). Contato EM DIA, portanto: a última mensagem de verdade é a
+    #    `out`, mesmo com a `in` empatada no mesmo instante. Uma checagem EXISTENCIAL ("existe
+    #    ALGUMA mensagem `in` empatada no topo?") erraria isso — acharia a `in` e marcaria como
+    #    esperando resposta. É este chat que faz o teste de paridade abaixo discriminar as duas
+    #    implementações: só a que pergunta "qual É a última" (não "existe alguma") concorda com
+    #    `list_conversations` aqui.
+    c6 = _chat(db, jid="5511900000006@s.whatsapp.net", client_id="cli-6")
+    _msg(db, chat=c6, direction=DIRECTION_IN, minutos=40, msg_id="id-c6-in")
+    _msg(db, chat=c6, direction=DIRECTION_OUT, minutos=40, msg_id="id-c6-out")
 
-def test_unread_client_ids_distingue_as_cinco_situacoes(db):
+
+def test_unread_client_ids_distingue_as_seis_situacoes(db):
     _cenario_completo(db)
     assert inbox_service.unread_client_ids(db) == {"cli-1", "cli-5"}
 
