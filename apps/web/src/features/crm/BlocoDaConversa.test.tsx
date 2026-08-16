@@ -91,9 +91,48 @@ describe("BlocoDaConversa", () => {
     expect(screen.getByText(/\+1 outra conversa/i)).toBeInTheDocument();
   });
 
+  it("com três conversas, pluraliza corretamente o aviso da outras", async () => {
+    mockar([
+      { ...conversa("chat-1", "Ju"), last_message_at: "2026-08-01T10:00:00Z" },
+      { ...conversa("chat-2", "Ju"), last_message_at: "2026-08-05T10:00:00Z" },
+      { ...conversa("chat-3", "Ju"), last_message_at: "2026-08-15T23:10:00Z" },
+    ]);
+    renderBloco();
+    expect(await screen.findByText(/\+2 outras conversas/i)).toBeInTheDocument();
+  });
+
+  it("escolhe a conversa com data em vez da sem data, mesmo a sem data vindo primeiro", async () => {
+    // A sem-data aparece PRIMEIRO de propósito: se `maisRecente` naivamente pegasse o primeiro
+    // item da lista, o teste pegaria isso.
+    mockar([
+      { ...conversa("chat-sem-data", "Ju"), last_message_at: null },
+      { ...conversa("chat-com-data", "Ju"), last_message_at: "2026-08-10T10:00:00Z" },
+    ]);
+    renderBloco();
+    expect(await screen.findByRole("link", { name: /abrir conversa/i }))
+      .toHaveAttribute("href", "/conversas/chat-com-data");
+  });
+
   it("falha de rede vira aviso, não derruba a ficha", async () => {
     vi.mocked(api.get).mockRejectedValue(new Error("caiu"));
     renderBloco();
     expect(await screen.findByText(/não foi possível carregar a conversa/i)).toBeInTheDocument();
+  });
+
+  it("falha só na timeline (segunda chamada) também vira aviso, sem meio-render", async () => {
+    // A lista de conversas carrega bem — só o histórico de mensagens falha. Hoje as duas
+    // chamadas dividem um único try/catch, então o bloco inteiro degrada para o aviso. Este
+    // teste existe para pegar um futuro refactor que separe as duas chamadas e deixe o link
+    // "Abrir conversa" pendurado com a área de mensagens vazia, sem avisar o dono de nada.
+    vi.mocked(api.get).mockImplementation((url: string) => {
+      if (url.startsWith("/whatsapp-conversations?")) {
+        return Promise.resolve({ data: [conversa("chat-1", "Ju")] } as never);
+      }
+      if (url.includes("/timeline")) return Promise.reject(new Error("caiu no timeline"));
+      return Promise.resolve({ data: [] } as never);
+    });
+    renderBloco();
+    expect(await screen.findByText(/não foi possível carregar a conversa/i)).toBeInTheDocument();
+    expect(screen.queryByRole("link", { name: /abrir conversa/i })).not.toBeInTheDocument();
   });
 });

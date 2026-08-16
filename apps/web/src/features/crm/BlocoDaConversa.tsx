@@ -109,7 +109,7 @@ export default function BlocoDaConversa({ clientId }: { clientId: string }) {
             esconderia mensagem do dono. */}
         {outras > 0 && (
           <Link to="/conversas" className="text-xs text-neutral-400 hover:text-neutral-600">
-            +{outras} outra conversa
+            +{outras} outra{outras > 1 ? "s" : ""} conversa{outras > 1 ? "s" : ""}
           </Link>
         )}
       </div>
