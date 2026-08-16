@@ -35,6 +35,9 @@ class EventCreate(BaseModel):
     guests: list[str] = Field(default_factory=list)
     amount_cents: int | None = Field(default=None, ge=0)
     external_ref: str | None = None
+    # De quem é este compromisso (aponta para `clients.id`, sem FK — ver AgendaEvent.client_id).
+    # Opcional: bloqueio de horário, prazo interno e conta a pagar não têm contato.
+    client_id: str | None = None
 
     _aware = field_validator("starts_at", "ends_at")(_ensure_aware)
 
@@ -68,6 +71,8 @@ class EventUpdate(BaseModel):
     priority: str | None = None
     location: str | None = Field(default=None, max_length=255)
     meeting_url: str | None = Field(default=None, max_length=512)
+    # Reatribuir/desvincular o contato do evento (mesmo campo de EventCreate).
+    client_id: str | None = None
 
     @model_validator(mode="after")
     def _validate(self) -> EventUpdate:
@@ -110,7 +115,10 @@ class EventOut(BaseModel):
     external_ref: str | None
     # Id do evento espelhado no Google Calendar (quando o Meet foi gerado via OAuth). Story 4.1.
     google_event_id: str | None = None
-    # Nome do cliente (cobrança) ou fornecedor (conta a pagar) — resolvido no list/get.
+    # client_id é o VÍNCULO (aponta para clients.id, gravado no evento); client_name é o NOME
+    # já resolvido para exibição no card — vem de uma consulta à parte (cobrança/fornecedor),
+    # não da coluna do evento.
+    client_id: str | None = None
     client_name: str | None = None
     created_by_ai: bool
     created_at: datetime

@@ -266,6 +266,9 @@ def build_charge(db: Session, *, tenant_id: str, actor: str, data: ChargeCreate)
         all_day=True,
         amount_cents=data.amount_cents,
         external_ref=charge.id,
+        # Sem isto, só o PASSADO (backfill da migration 0078) ficaria ligado ao contato — toda
+        # cobrança nova nasceria com evento órfão na Agenda (Task 2 da Onda 2).
+        client_id=data.client_id,
     )
     db.add(event)
     db.flush()  # popula event.id

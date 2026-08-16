@@ -5,7 +5,7 @@ queries (Regra de Ouro nº 1). O tenant_id só é usado para CARIMBAR novas linh
 """
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import UTC, datetime
 
 from sqlalchemy import and_, func, select
 from sqlalchemy.orm import Session
@@ -98,6 +98,7 @@ def create_event(
         guests=data.guests,
         amount_cents=data.amount_cents,
         external_ref=data.external_ref,
+        client_id=data.client_id,
         created_by_ai=by_ai,
     )
     # Geração automática de Meet (Story 4.1): só quando é um evento de reunião, o usuário NÃO
@@ -130,6 +131,7 @@ def list_events(
     start: datetime | None = None,
     end: datetime | None = None,
     kinds: list[str] | None = None,
+    client_id: str | None = None,
     limit: int = DEFAULT_LIST_LIMIT,
     offset: int = 0,
 ) -> list[AgendaEvent]:
@@ -143,6 +145,11 @@ def list_events(
         stmt = stmt.where(AgendaEvent.starts_at <= end)
     if kinds:
         stmt = stmt.where(AgendaEvent.kind.in_(kinds))
+    if client_id is not None:
+        # Filtro da ficha 360°: só os compromissos DESTE contato. Evento sem client_id (bloqueio,
+        # prazo interno, conta a pagar) nunca casa — a coluna é nullable e `== client_id` não
+        # captura linhas NULL.
+        stmt = stmt.where(AgendaEvent.client_id == client_id)
     stmt = stmt.order_by(AgendaEvent.starts_at).limit(limit).offset(offset)
     return list(db.scalars(stmt).all())
 
@@ -192,6 +199,8 @@ def update_event(
         event.location = data.location
     if data.meeting_url is not None:
         event.meeting_url = data.meeting_url
+    if data.client_id is not None:
+        event.client_id = data.client_id
     audit.record(
         db, tenant_id=tenant_id, actor=actor, action="agenda.event.update", target=event.id,
         is_ai=by_ai,
@@ -266,3 +275,45 @@ def reschedule_event(
     db.commit()
     db.refresh(event)
     return event, conflicts
+
+
+def next_event_map(db: Session) -> dict[str, AgendaEvent]:
+    """Próximo compromisso por contato, para a linha do card do Kanban.
+
+    Consulta agregada, uma para o board inteiro — no molde de `crm_service.last_interaction_map`,
+    que existe justamente porque valor derivado guardado dessincroniza. O custo não cresce com
+    a quantidade de cards.
+
+    ⚠️ O corte é `ends_at >= agora`, NÃO `starts_at >= agora`. Evento de dia inteiro é ancorado
+    na meia-noite real do fuso do tenant (ver `create_event`), então às 15h o `starts_at` dele
+    já passou — filtrar pelo início esconderia o compromisso de HOJE, que é o mais relevante
+    que existe para o card. Pelo fim, ele aparece o dia todo e some quando acaba.
+
+    Cancelado fica de fora: não é próximo passo nenhum.
+
+    A sessão já chega escopada por RLS (mesma convenção de `list_events`).
+    """
+    agora = datetime.now(UTC)
+    # Mesmo padrão de `unread_client_ids` (whatsapp_inbox/service.py): `row_number()` particionado
+    # por contato, ordenado por (starts_at, id), ficando com rn == 1. O desempate por `id` não é
+    # decoração — dois eventos no mesmo instante fariam "o próximo" dançar entre chamadas sem ele.
+    # Sem SQL condicional por dialeto: roda igual em SQLite (teste) e Postgres (produção).
+    ranked = (
+        select(
+            AgendaEvent.id.label("id"),
+            func.row_number()
+            .over(
+                partition_by=AgendaEvent.client_id,
+                order_by=(AgendaEvent.starts_at, AgendaEvent.id),
+            )
+            .label("rn"),
+        )
+        .where(
+            AgendaEvent.client_id.is_not(None),
+            AgendaEvent.status != STATUS_CANCELLED,
+            AgendaEvent.ends_at >= agora,
+        )
+        .subquery()
+    )
+    stmt = select(AgendaEvent).join(ranked, ranked.c.id == AgendaEvent.id).where(ranked.c.rn == 1)
+    return {event.client_id: event for event in db.scalars(stmt).all()}

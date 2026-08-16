@@ -75,12 +75,15 @@ def list_events(
     start: datetime | None = Query(default=None),
     end: datetime | None = Query(default=None),
     kind: list[str] | None = Query(default=None),
+    client_id: str | None = Query(default=None),
     limit: int = Query(default=200, ge=1, le=500),
     offset: int = Query(default=0, ge=0),
     _user: CurrentUser = Depends(_guard),
     db: Session = Depends(get_tenant_db),
 ) -> list[EventOut]:
-    events = service.list_events(db, start=start, end=end, kinds=kind, limit=limit, offset=offset)
+    events = service.list_events(
+        db, start=start, end=end, kinds=kind, client_id=client_id, limit=limit, offset=offset
+    )
     return _events_out(db, events)
 
 
