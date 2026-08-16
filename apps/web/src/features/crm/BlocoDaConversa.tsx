@@ -84,7 +84,7 @@ export default function BlocoDaConversa({ clientId }: { clientId: string }) {
           mensagens.map((m, i) => (
             <div
               key={`${m.created_at}-${i}`}
-              className={`max-w-[85%] rounded-2xl px-3 py-2 text-sm ${
+              className={`max-w-[85%] break-words rounded-2xl px-3 py-2 text-sm ${
                 m.direction === "out"
                   ? "self-end bg-primary-50 text-neutral-800"
                   : "self-start bg-neutral-100 text-neutral-700"
