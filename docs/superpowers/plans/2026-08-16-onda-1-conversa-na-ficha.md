@@ -26,6 +26,10 @@
 ```bash
 # API (do diretório apps/api)
 .venv/Scripts/python.exe -m pytest tests/test_arquivo.py -v
+# ⚠️ OBRIGATÓRIO em toda tarefa que toca Python. O CI roda
+# `ruff check . && pytest` DENTRO da imagem (.github/workflows/ci.yml:47) — um E501
+# derruba o build antes de qualquer teste rodar. Limite: 100 colunas.
+.venv/Scripts/python.exe -m ruff check .
 
 # Web (da raiz do repo)
 pnpm --filter @e1p/web test
