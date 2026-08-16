@@ -254,9 +254,11 @@ export interface ClientTimelineOut {
   truncated: boolean;
 }
 
-/** `Client` do board, com a data da última interação (só o board calcula isso). */
+/** `Client` do board, com os sinais que só o board calcula. */
 export interface BoardClient extends Client {
   last_interaction_at: string | null;
+  /** Tem mensagem do contato esperando resposta. */
+  unread: boolean;
 }
 
 export interface BoardColumn {
