@@ -124,7 +124,24 @@ export async function textoForaDaTela(page: Page, raiz?: string): Promise<Corte[
       if (el.children.length > 0 || !(el.textContent ?? "").trim()) continue;
       const r = el.getBoundingClientRect();
       const limite = Math.min(recorte(el).getBoundingClientRect().right, vw);
-      const sobra = +(r.right - limite).toFixed(1);
+      // A CAIXA nem sempre é o CONTEÚDO. Um bloco sem `width` própria fica travado na largura do
+      // contêiner mesmo quando o texto não tem onde quebrar (`overflow-wrap: normal` + palavra sem
+      // espaço) — a tinta vaza para fora da caixa sem alargá-la, e `getBoundingClientRect` não vê
+      // tinta, só caixa. `scrollWidth` vê: é o conteúdo real do próprio elemento. Só conta quando o
+      // elemento NÃO recorta a si mesmo (`overflow-x` computado é `visible`) — truncamento com
+      // reticências (`.truncate`: `overflow:hidden` nele mesmo) também tem `scrollWidth >
+      // clientWidth`, e ali é a UI funcionando como projetada, não um corte a denunciar.
+      //
+      // MÁXIMO entre os dois, nunca substituição: `scrollWidth` exclui borda, `r.right - r.left`
+      // inclui. Num elemento com borda onde `clientWidth < scrollWidth <= clientWidth +
+      // larguraDaBorda`, trocar `r.right` por `r.left + scrollWidth` teria devolvido um corte
+      // MENOR que o antigo caminho já enxergava — a régua ficando mais cega no exato ponto onde
+      // devia ficar mais afiada.
+      const direita =
+        getComputedStyle(el).overflowX === "visible" && el.scrollWidth > el.clientWidth + 0.5
+          ? Math.max(r.right, r.left + el.scrollWidth)
+          : r.right;
+      const sobra = +(direita - limite).toFixed(1);
       if (sobra > 0.5) {
         fora.push({
           texto: (el.textContent ?? "").trim().replace(/\s+/g, " ").slice(0, 60),

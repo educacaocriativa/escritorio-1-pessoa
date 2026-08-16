@@ -3,6 +3,7 @@ import type {
 } from "@e1p/shared-types";
 import { ChevronLeft, History, Paperclip, Send, Users, X } from "lucide-react";
 import { Fragment, useCallback, useEffect, useRef, useState } from "react";
+import { useNavigate, useParams } from "react-router-dom";
 import { api, apiErrorMessage } from "../../lib/api";
 import { formatDate, formatTime } from "../../lib/datetime";
 import { useFuso } from "../../store/auth";
@@ -45,14 +46,35 @@ function listStamp(iso: string | null, tz: string): string {
 export default function ConversasPage() {
   const fuso = useFuso();
   const [conversations, setConversations] = useState<ConversationSummary[]>([]);
-  const [selected, setSelected] = useState<string | null>(null);
+  // Distingue "a lista ainda não respondeu" de "a lista respondeu e está vazia" — as duas
+  // batiam no mesmo `conversations.length === 0` antes desta flag, e um tenant SEM nenhuma
+  // conversa não tinha como sair do primeiro caso: `naoEncontrada` (abaixo) exigia
+  // `conversations.length > 0`, que para esse tenant nunca vira verdade. Um `/conversas/:id`
+  // de um bookmark velho ficava preso para sempre — não um flash, um estado permanente (lista
+  // some no celular, painel travado em "Selecione uma conversa", botão de histórico apontando
+  // para nada). Setada uma vez, no `finally` do primeiro fetch que resolve.
+  const [listaCarregada, setListaCarregada] = useState(false);
+  // A conversa aberta é a da URL, não estado local. Isso é o que permite a ficha 360° apontar
+  // para uma conversa específica — e faz o botão voltar do navegador funcionar aqui.
+  const { chatId } = useParams();
+  const navigate = useNavigate();
+  const selected = chatId ?? null;
   // Abaixo de `lg` o painel de histórico é uma GAVETA, não uma coluna (ver o comentário no
   // <aside>). Este estado só governa a gaveta; em `lg+` a coluna aparece sempre.
   const [historicoAberto, setHistoricoAberto] = useState(false);
 
   const loadConversations = useCallback(async () => {
-    const { data } = await api.get<ConversationSummary[]>("/whatsapp-conversations");
-    setConversations(data);
+    try {
+      const { data } = await api.get<ConversationSummary[]>("/whatsapp-conversations");
+      setConversations(data);
+    } finally {
+      // No `finally`, não no `try`: mesmo se a primeira chamada falhar, "ainda carregando"
+      // não pode durar para sempre — mas sucesso e falha são tratados como "resolveu", não
+      // como "resolveu com dado válido". Não há tela de erro dedicada aqui porque o polling
+      // de 7s já tenta de novo sozinho; um "carregando" perene em caso de erro seria pior que
+      // deixar a próxima rodada corrigir.
+      setListaCarregada(true);
+    }
   }, []);
 
   useEffect(() => {
@@ -62,6 +84,11 @@ export default function ConversasPage() {
   }, [loadConversations]);
 
   const conversaSelecionada = conversations.find((c) => c.chat_id === selected) ?? null;
+  // Id que não existe (link velho, conversa apagada) não pode virar tela branca: a lista já
+  // carregou (`listaCarregada`), então mostramos ela com um aviso. Antes disto resolver, não é
+  // "não encontrada" — é "ainda não sabemos", e o painel abaixo trata os dois casos de forma
+  // diferente (ver comentário lá).
+  const naoEncontrada = listaCarregada && selected !== null && conversaSelecionada === null;
 
   return (
     <div className="flex h-[calc(100vh-8rem)] gap-4">
@@ -72,13 +99,19 @@ export default function ConversasPage() {
           jornada inteira do contato. A gaveta do histórico (mais abaixo) já tratava o celular
           assim desde sempre; a divisão principal é que nunca foi tratada. */}
       <div
+        data-testid="lista-conversas"
         className={`w-full shrink-0 overflow-y-auto rounded-2xl bg-white shadow-sm lg:w-80 ${
-          selected ? "hidden lg:block" : "block"
+          selected && !naoEncontrada ? "hidden lg:block" : "block"
         }`}
       >
         <div className="border-b border-neutral-100 p-4">
           <h1 className="font-semibold text-neutral-800">Conversas</h1>
         </div>
+        {naoEncontrada && (
+          <p className="border-b border-amber-100 bg-amber-50 p-3 text-xs text-amber-700">
+            Conversa não encontrada. Escolha uma da lista.
+          </p>
+        )}
         {conversations.length === 0 ? (
           <p className="p-4 text-sm text-neutral-400">Nenhuma conversa ainda.</p>
         ) : (
@@ -86,7 +119,7 @@ export default function ConversasPage() {
             <button
               key={c.chat_id}
               onClick={() => {
-                setSelected(c.chat_id);
+                navigate(`/conversas/${c.chat_id}`);
                 setHistoricoAberto(false);
               }}
               className={`block w-full border-b border-neutral-50 px-4 py-3 text-left hover:bg-neutral-50 ${
@@ -115,18 +148,36 @@ export default function ConversasPage() {
         )}
       </div>
       <div
+        data-testid="painel-conversa"
         className={`min-w-0 flex-1 rounded-2xl bg-white shadow-sm ${
-          selected ? "block" : "hidden lg:block"
+          selected && !naoEncontrada ? "block" : "hidden lg:block"
         }`}
       >
-        {selected ? (
+        {/* `conversaSelecionada` (não só `!naoEncontrada`) de propósito: mesmo depois de
+            `listaCarregada` virar `true`, exigir a conversa encontrada é o que impede o painel
+            de montar otimisticamente para QUALQUER id da URL, inclusive um inventado, disparando
+            `/timeline` e `/window` para uma conversa que não existe antes de sabermos se ela
+            existe. Para um id válido isso é imperceptível (a lista já estava carregada quando o
+            clique aconteceu); para um id inválido, o painel simplesmente nunca chega a montar.
+
+            Três estados, não dois — é por isso que existe o ramo do meio: um id na URL cuja
+            lista AINDA não respondeu (`!listaCarregada`) não é a mesma coisa que "nenhum id
+            selecionado". Antes desta distinção os dois caíam no mesmo "Selecione uma conversa" —
+            uma mensagem ativamente ERRADA para quem acabou de clicar/colar um link e está
+            esperando a resposta chegar. O rótulo neutro de carregamento evita prometer uma ação
+            ("selecione") que o usuário já tomou. */}
+        {selected && !naoEncontrada && conversaSelecionada ? (
           <ConversationThread
             key={selected}
             chatId={selected}
             chat={conversations.find((c) => c.chat_id === selected) ?? null}
             onSent={loadConversations}
-            onVoltar={() => setSelected(null)}
+            onVoltar={() => navigate("/conversas")}
           />
+        ) : selected && !listaCarregada ? (
+          <div className="flex h-full items-center justify-center text-sm text-neutral-400">
+            Carregando conversa...
+          </div>
         ) : (
           <div className="flex h-full items-center justify-center text-sm text-neutral-400">
             Selecione uma conversa

@@ -78,6 +78,9 @@ export default function App() {
           <Route path="/crm" element={<CrmPage />} />
           <Route path="/crm/clients/:id" element={<ClientDetailPage />} />
           <Route path="/conversas" element={<ConversasPage />} />
+          {/* A conversa tem URL própria desde a Onda 1: é assim que a ficha 360° aponta para ela, e
+              de quebra o botão voltar do navegador passa a funcionar nesta tela. */}
+          <Route path="/conversas/:chatId" element={<ConversasPage />} />
           <Route path="/financeiro" element={<FinanceiroPage />} />
           <Route path="/financeiro/contas" element={<ContasSaldosPage />} />
           {/* Story 8.7 — rota DELIBERADAMENTE fora da sidebar: a conferência é resposta a um

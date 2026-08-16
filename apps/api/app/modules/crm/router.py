@@ -22,6 +22,7 @@ from app.modules.crm.schemas import (
     StageOut,
     StageUpdate,
 )
+from app.modules.whatsapp_inbox import service as inbox_service
 
 router = APIRouter(prefix="/crm", tags=["crm"])
 
@@ -42,6 +43,9 @@ def get_board(
 ) -> Board:
     columns = service.build_board(db, user.tenant_id)
     ultimo = service.last_interaction_map(db)
+    # Consulta agregada, uma para o board inteiro — o custo não cresce com a quantidade de
+    # cards. Lida do módulo DONO da regra de "não lida" em vez de reimplementada aqui.
+    esperando = inbox_service.unread_client_ids(db)
     return Board(
         columns=[
             BoardColumn(
@@ -50,6 +54,7 @@ def get_board(
                     BoardClient(
                         **ClientOut.model_validate(c).model_dump(),
                         last_interaction_at=ultimo.get(c.id),
+                        unread=c.id in esperando,
                     )
                     for c in clients
                 ],

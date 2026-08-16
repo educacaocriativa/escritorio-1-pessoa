@@ -1,6 +1,7 @@
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { describe, expect, it, vi } from "vitest";
+import { MemoryRouter, Route, Routes } from "react-router-dom";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { api } from "../../lib/api";
 import ConversasPage from "./ConversasPage";
 
@@ -8,6 +9,26 @@ vi.mock("../../lib/api", () => ({
   api: { get: vi.fn(), post: vi.fn() },
   apiErrorMessage: (e: unknown) => String(e),
 }));
+
+// Nenhum teste deste arquivo depende de chamadas de um teste anterior — cada um remonta seu
+// próprio `mockImplementation`. Sem isto, o HISTÓRICO de chamadas (não só o resultado) vaza de
+// um teste para o próximo, o que já quebrou uma asserção `not.toHaveBeenCalledWith` real (ver
+// describe "a conversa tem URL própria"). `clearAllMocks`, não `resetAllMocks`: reset apagaria
+// a implementação que cada teste instala antes do reset ter chance de rodar de novo.
+beforeEach(() => {
+  vi.clearAllMocks();
+});
+
+function renderNaRota(rota: string) {
+  return render(
+    <MemoryRouter initialEntries={[rota]}>
+      <Routes>
+        <Route path="/conversas" element={<ConversasPage />} />
+        <Route path="/conversas/:chatId" element={<ConversasPage />} />
+      </Routes>
+    </MemoryRouter>,
+  );
+}
 
 describe("ConversasPage", () => {
   it("lista as conversas e mostra o fio ao clicar numa delas", async () => {
@@ -38,7 +59,7 @@ describe("ConversasPage", () => {
     });
     vi.mocked(api.post).mockResolvedValue({ data: {} } as never);
 
-    render(<ConversasPage />);
+    renderNaRota("/conversas");
     await waitFor(() => screen.getByText("Doro Eventos"));
     await userEvent.click(screen.getByText("Doro Eventos"));
     // A prévia da lista e o corpo da mensagem no fio coincidem neste fixture, então mais de um
@@ -90,7 +111,7 @@ describe("ConversasPage", () => {
     });
     vi.mocked(api.post).mockResolvedValue({ data: {} } as never);
 
-    render(<ConversasPage />);
+    renderNaRota("/conversas");
     await waitFor(() => screen.getByText("Murilo Moreschi"));
     await userEvent.click(screen.getByText("Murilo Moreschi"));
     await waitFor(() => screen.getByText("sempre na curva"));
@@ -149,7 +170,7 @@ describe("ConversasPage", () => {
     });
     vi.mocked(api.post).mockResolvedValue({ data: {} } as never);
 
-    render(<ConversasPage />);
+    renderNaRota("/conversas");
     await waitFor(() => screen.getByText("Automação Residencial"));
     await userEvent.click(screen.getByText("Automação Residencial"));
 
@@ -194,7 +215,7 @@ describe("ConversasPage", () => {
       return Promise.resolve({ data: [] });
     });
 
-    render(<ConversasPage />);
+    renderNaRota("/conversas");
     await waitFor(() => screen.getByText("Cliente Antigo"));
     await userEvent.click(screen.getByText("Cliente Antigo"));
     await waitFor(() => expect(screen.queryByPlaceholderText(/mensagem/i)).not.toBeInTheDocument());
@@ -251,7 +272,7 @@ describe("ConversasPage", () => {
     });
     vi.mocked(api.post).mockResolvedValue({ data: {} } as never);
 
-    render(<ConversasPage />);
+    renderNaRota("/conversas");
     await waitFor(() => screen.getByText("Cliente A"));
 
     await userEvent.click(screen.getByText("Cliente A"));
@@ -310,7 +331,7 @@ function mockarConversas(conversas: unknown[]) {
 describe("ConversasPage — painel de histórico", () => {
   it("conversa direta com contato mostra o histórico do CRM", async () => {
     mockarConversas([CONVERSA_DIRETA]);
-    render(<ConversasPage />);
+    renderNaRota("/conversas");
     await userEvent.click(await screen.findByText("Flavio Kato"));
 
     expect(await screen.findByTestId("painel-historico")).toBeInTheDocument();
@@ -319,7 +340,7 @@ describe("ConversasPage — painel de histórico", () => {
 
   it("conversa de grupo diz em TEXTO que não há contato ligado", async () => {
     mockarConversas([GRUPO]);
-    render(<ConversasPage />);
+    renderNaRota("/conversas");
     await userEvent.click(await screen.findByText("Turma 2026"));
 
     expect(
@@ -332,7 +353,7 @@ describe("ConversasPage — painel de histórico", () => {
     // configuração de `advanceTimers` e falha de forma confusa sem ela.
     vi.useFakeTimers();
     mockarConversas([CONVERSA_DIRETA]);
-    render(<ConversasPage />);
+    renderNaRota("/conversas");
     await vi.advanceTimersByTimeAsync(0);      // resolve a carga inicial das conversas
     fireEvent.click(screen.getByText("Flavio Kato"));
     await vi.advanceTimersByTimeAsync(0);      // resolve a carga da timeline
@@ -348,5 +369,189 @@ describe("ConversasPage — painel de histórico", () => {
     await vi.advanceTimersByTimeAsync(21_000); // 3 ciclos de POLL_MS
     expect(chamadasDeTimeline()).toBe(antes);
     vi.useRealTimers();
+  });
+});
+
+// ── Conversa com URL própria ────────────────────────────────────────────────
+
+/** Duas conversas, para que "abriu a certa" seja uma afirmação com conteúdo. */
+function mockarDuasConversas() {
+  vi.mocked(api.get).mockImplementation((url: string) => {
+    if (url === "/whatsapp-conversations") {
+      return Promise.resolve({
+        data: [
+          {
+            chat_id: "c1", kind: "direct" as const, title: "Doro Eventos",
+            phone: "5511999999999", client_id: "cli-1",
+            last_message_at: "2026-07-19T10:00:00Z",
+            last_message_preview: "Oi, quero o cardápio", unread: true,
+          },
+          {
+            chat_id: "c2", kind: "direct" as const, title: "Murilo Moreschi",
+            phone: "5511977776666", client_id: "cli-2",
+            last_message_at: "2026-07-20T11:00:00Z",
+            last_message_preview: "Ok", unread: false,
+          },
+        ],
+      });
+    }
+    if (url.endsWith("/timeline")) {
+      return Promise.resolve({
+        data: [{
+          source: "conversation", direction: "in", kind: "text",
+          text_body: "Oi, quero o cardápio", media_attachment_id: null,
+          purpose_label: null, sender_name: null, created_at: "2026-07-19T10:00:00Z",
+        }],
+      });
+    }
+    if (url.endsWith("/window")) {
+      return Promise.resolve({ data: { within_session_window: true } });
+    }
+    if (url === "/whatsapp-templates") return Promise.resolve({ data: [] });
+    return Promise.resolve({ data: [] });
+  });
+  // Abrir uma conversa dispara POST /{id}/read. Sem isto o `await` recebe undefined e o
+  // teste passa por acidente — melhor mockar do que depender disso.
+  vi.mocked(api.post).mockResolvedValue({ data: {} } as never);
+}
+
+describe("ConversasPage — a conversa tem URL própria", () => {
+  it("com /conversas/:chatId, abre aquela conversa direto", async () => {
+    mockarDuasConversas();
+    renderNaRota("/conversas/c2");
+    // O campo de digitar só existe quando uma conversa está aberta.
+    expect(await screen.findByPlaceholderText(/mensagem/i)).toBeInTheDocument();
+    // E abriu a CERTA: a prova é qual timeline foi buscada, não o título na tela — título
+    // aparece na lista também, e a asserção ficaria verde com a conversa errada aberta.
+    expect(api.get).toHaveBeenCalledWith("/whatsapp-conversations/c2/timeline");
+    expect(api.get).not.toHaveBeenCalledWith("/whatsapp-conversations/c1/timeline");
+  });
+
+  it("com /conversas, mostra a lista sem nenhuma conversa aberta", async () => {
+    mockarDuasConversas();
+    renderNaRota("/conversas");
+    expect(await screen.findByText("Doro Eventos")).toBeInTheDocument();
+    expect(screen.queryByPlaceholderText(/mensagem/i)).not.toBeInTheDocument();
+  });
+
+  it("clicar numa conversa muda a URL", async () => {
+    mockarDuasConversas();
+    renderNaRota("/conversas");
+    await userEvent.click(await screen.findByText("Doro Eventos"));
+    expect(await screen.findByPlaceholderText(/mensagem/i)).toBeInTheDocument();
+    // A prova de que a URL realmente mudou (não só que "alguma" conversa abriu): o componente lê
+    // o id da URL via `useParams`, então uma timeline buscada para c1 só acontece se a rota virou
+    // /conversas/c1 — mesmo raciocínio do primeiro teste deste describe.
+    expect(api.get).toHaveBeenCalledWith("/whatsapp-conversations/c1/timeline");
+  });
+
+  it("chatId que não existe cai na lista com aviso, e não em tela branca", async () => {
+    mockarDuasConversas();
+    renderNaRota("/conversas/nao-existe");
+    expect(await screen.findByText(/conversa não encontrada/i)).toBeInTheDocument();
+    expect(screen.getByText("Doro Eventos")).toBeInTheDocument();
+  });
+
+  it("chatId que não existe NÃO monta o painel de conversa nem bate a API dele", async () => {
+    // Achado da revisão: `mockarDuasConversas` responde `/timeline` para QUALQUER id (inclusive
+    // um inventado), então uma checagem só de "a tela não quebrou" não pega o painel montando por
+    // engano — o mock "concorda" alegremente com o id errado. A prova real é dupla: o campo de
+    // digitar (só existe com uma conversa aberta de verdade) não aparece, E a API do painel nunca
+    // foi chamada para o id que não existe.
+    mockarDuasConversas();
+    renderNaRota("/conversas/nao-existe");
+    await screen.findByText(/conversa não encontrada/i);
+    expect(screen.queryByPlaceholderText(/mensagem/i)).not.toBeInTheDocument();
+    expect(api.get).not.toHaveBeenCalledWith("/whatsapp-conversations/nao-existe/timeline");
+  });
+});
+
+// ── "Ainda carregando" vs. "carregou e está vazia" ──────────────────────────
+//
+// Achado da revisão final: `naoEncontrada` exigia `conversations.length > 0`, então um tenant
+// SEM NENHUMA conversa nunca tornava essa condição verdadeira — um `/conversas/:id` de bookmark
+// velho ficava travado para sempre (não um flash: permanente). Os quatro testes abaixo cobrem os
+// estados que a distinção "carregou" vs. "não carregou ainda" precisa separar corretamente, e
+// verificam em cada um o invariante do celular: lista OU conversa, nunca as duas.
+
+/** No celular (jsdom não aplica CSS de verdade), a classe `hidden` é o que de fato esconde a
+ * coluna — checar direto na `className` em vez de `toBeVisible()`, que não enxerga Tailwind
+ * sem folha de estilo carregada. */
+function visivelNoCelular(el: HTMLElement): boolean {
+  return !el.className.split(/\s+/).includes("hidden");
+}
+
+describe("ConversasPage — carregando vs. vazia", () => {
+  it("chatId desconhecido num tenant SEM NENHUMA conversa mostra aviso, não fica travado", async () => {
+    vi.mocked(api.get).mockImplementation((url: string) => {
+      if (url === "/whatsapp-conversations") return Promise.resolve({ data: [] } as never);
+      return Promise.resolve({ data: [] } as never);
+    });
+    renderNaRota("/conversas/nao-existe");
+
+    expect(await screen.findByText(/conversa não encontrada/i)).toBeInTheDocument();
+    expect(screen.getByText(/nenhuma conversa ainda/i)).toBeInTheDocument();
+    // Lista visível (com o aviso), painel escondido — não os dois ao mesmo tempo no celular.
+    expect(visivelNoCelular(screen.getByTestId("lista-conversas"))).toBe(true);
+    expect(visivelNoCelular(screen.getByTestId("painel-conversa"))).toBe(false);
+  });
+
+  it("id válido ANTES da lista responder mostra um carregando neutro, nunca 'selecione uma conversa'", async () => {
+    // `/whatsapp-conversations` fica pendurada de propósito — simula o instante entre o mount e
+    // a resposta do fetch, que hoje (achado da revisão) mostrava "Selecione uma conversa" para
+    // um usuário que JÁ selecionou, via link ou bookmark.
+    let resolvePendente!: (v: unknown) => void;
+    const pendente = new Promise((resolve) => { resolvePendente = resolve; });
+    vi.mocked(api.get).mockImplementation((url: string) => {
+      if (url === "/whatsapp-conversations") return pendente as Promise<never>;
+      if (url === "/whatsapp-conversations/c1/timeline") return Promise.resolve({ data: [] } as never);
+      // Janela aberta de propósito: sem isto o fio (uma vez montado) trocaria o campo de texto
+      // pelo seletor de template, e a asserção de `/mensagem/i` do fim deste teste erraria por
+      // um motivo que nada tem a ver com o que ele está provando.
+      if (url === "/whatsapp-conversations/c1/window") {
+        return Promise.resolve({ data: { within_session_window: true } } as never);
+      }
+      return Promise.resolve({ data: [] } as never);
+    });
+    vi.mocked(api.post).mockResolvedValue({ data: {} } as never);
+
+    renderNaRota("/conversas/c1");
+
+    expect(await screen.findByText(/carregando conversa/i)).toBeInTheDocument();
+    expect(screen.queryByText(/^selecione uma conversa$/i)).not.toBeInTheDocument();
+    // Lista escondida, painel (com o carregando) visível — mesmo invariante do celular.
+    expect(visivelNoCelular(screen.getByTestId("lista-conversas"))).toBe(false);
+    expect(visivelNoCelular(screen.getByTestId("painel-conversa"))).toBe(true);
+
+    resolvePendente({
+      data: [{
+        chat_id: "c1", kind: "direct" as const, title: "Ju", phone: "5511999998888",
+        client_id: "cli-1", last_message_at: "2026-08-15T23:10:00Z",
+        last_message_preview: "Boa noite", unread: false,
+      }],
+    });
+    // Resolveu e achou a conversa: o carregando neutro dá lugar ao fio de verdade.
+    expect(await screen.findByPlaceholderText(/mensagem/i)).toBeInTheDocument();
+    expect(screen.queryByText(/carregando conversa/i)).not.toBeInTheDocument();
+  });
+
+  it("/conversas sem id mostra só a lista, painel escondido — sem carregando nem aviso", async () => {
+    mockarDuasConversas();
+    renderNaRota("/conversas");
+
+    expect(await screen.findByText("Doro Eventos")).toBeInTheDocument();
+    expect(screen.queryByText(/carregando conversa/i)).not.toBeInTheDocument();
+    expect(screen.queryByText(/conversa não encontrada/i)).not.toBeInTheDocument();
+    expect(visivelNoCelular(screen.getByTestId("lista-conversas"))).toBe(true);
+    expect(visivelNoCelular(screen.getByTestId("painel-conversa"))).toBe(false);
+  });
+
+  it("chatId válido, tenant COM conversas: lista some no celular, painel mostra o fio", async () => {
+    mockarDuasConversas();
+    renderNaRota("/conversas/c1");
+
+    expect(await screen.findByPlaceholderText(/mensagem/i)).toBeInTheDocument();
+    expect(visivelNoCelular(screen.getByTestId("lista-conversas"))).toBe(false);
+    expect(visivelNoCelular(screen.getByTestId("painel-conversa"))).toBe(true);
   });
 });

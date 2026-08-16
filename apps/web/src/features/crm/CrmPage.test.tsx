@@ -2,6 +2,7 @@ import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { MemoryRouter } from "react-router-dom";
+import type { Board } from "@e1p/shared-types";
 import { api } from "../../lib/api";
 import { PageActionsProvider, usePageActions } from "../../store/pageActions";
 import CrmPage from "./CrmPage";
@@ -188,5 +189,36 @@ describe("CrmPage — de onde o contato veio", () => {
     // E a origem vem ANTES na leitura do card. (A distinção VISUAL não é aferível em jsdom; ela
     // é medida no navegador, em `e2e/crm-360.spec.ts`, comparando a cor computada das duas.)
     expect(origem.compareDocumentPosition(tag)).toBe(Node.DOCUMENT_POSITION_FOLLOWING);
+  });
+});
+
+describe("CrmPage — ponto de mensagem esperando resposta", () => {
+  // Tipado como `Board` (não `as never`): achado do review — o cast escondia que este
+  // literal já estava mais estreito que o `Client` real (faltavam tenant_id, gender,
+  // birthdate, created_at). Tipar aqui faz o compilador cobrar essas quatro colunas.
+  const boardCom = (unread: boolean): Board => ({
+    columns: [{
+      stage: { id: "s1", name: "Entrada", position: 0, is_won: false, is_lost: false },
+      clients: [{
+        id: "c1", tenant_id: "t1", name: "Ju", email: null, phone: null, document: null,
+        gender: "unspecified", birthdate: null, notes: "", tags: [], source: "whatsapp",
+        stage_id: "s1", created_at: "2026-08-15T12:00:00Z",
+        stage_entered_at: "2026-08-15T12:00:00Z", last_interaction_at: null,
+        unread,
+      }],
+    }],
+  });
+
+  it("mostra o ponto quando o contato está esperando resposta", async () => {
+    vi.mocked(api.get).mockResolvedValue({ data: boardCom(true) } as never);
+    renderPage();
+    expect(await screen.findByLabelText("Mensagem esperando resposta")).toBeInTheDocument();
+  });
+
+  it("não mostra o ponto quando não há nada esperando", async () => {
+    vi.mocked(api.get).mockResolvedValue({ data: boardCom(false) } as never);
+    renderPage();
+    expect(await screen.findByText("Ju")).toBeInTheDocument();
+    expect(screen.queryByLabelText("Mensagem esperando resposta")).not.toBeInTheDocument();
   });
 });

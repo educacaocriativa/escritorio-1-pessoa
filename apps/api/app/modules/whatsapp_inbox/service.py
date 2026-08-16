@@ -9,7 +9,7 @@ from __future__ import annotations
 import logging
 from datetime import UTC, datetime, timedelta
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.core import audit, facts, whatsapp
@@ -533,7 +533,9 @@ def _preview(msg: WhatsappMessage, chat: WhatsappChat) -> str:
     return body
 
 
-def list_conversations(db: Session, tenant_id: str) -> list[dict]:
+def list_conversations(
+    db: Session, tenant_id: str, *, client_id: str | None = None
+) -> list[dict]:
     """Uma linha por CONVERSA com pelo menos 1 mensagem, ordenada pela mais recente.
 
     Indexado por `whatsapp_chats`, não mais por cliente do CRM — é o que permite grupo existir
@@ -542,12 +544,60 @@ def list_conversations(db: Session, tenant_id: str) -> list[dict]:
 
     `tenant_id` não filtra a query explicitamente: a sessão já chega escopada por RLS (mesma
     convenção de `crm_service.build_board`), é mantido no parâmetro por simetria com o resto do
-    módulo (e uso futuro, ex.: auditoria)."""
-    chats = {c.id: c for c in db.scalars(select(WhatsappChat)).all()}
+    módulo (e uso futuro, ex.: auditoria).
+
+    `client_id` filtra as conversas de UM contato (a ficha 360° usa isso). Grupo tem
+    `client_id` nulo e portanto nunca aparece filtrado — que é o correto: grupo não é contato
+    do CRM. Um contato pode ter MAIS DE UMA conversa (`@lid` + telefone), então a lista
+    filtrada não tem tamanho garantido de 1.
+
+    Com `client_id`, a carga de MENSAGENS também é restrita aos chats que sobreviveram ao
+    filtro (`WHERE chat_id IN (...)`) — sem isso, a ficha 360° materializaria todas as
+    mensagens do tenant a cada abertura de contato, o mesmo custo que esta função já paga
+    para a tela de Conversas (que o board evita chamando `unread_client_ids` em vez desta
+    função). Sem filtro, o caminho é o de sempre: nenhuma restrição, todas as mensagens.
+    """
+    consulta_chats = select(WhatsappChat)
+    if client_id is not None:
+        consulta_chats = consulta_chats.where(WhatsappChat.client_id == client_id)
+    chats = {c.id: c for c in db.scalars(consulta_chats).all()}
+    if client_id is not None and not chats:
+        # Contato sem NENHUMA conversa — o caso comum na ficha 360° (a maioria dos contatos
+        # nunca escreveu). O SQLAlchemy já compila `.in_(())` (coleção vazia) para uma
+        # expressão que nunca bate (`IN (NULL) AND (1 != 1)`), então não há risco de casar
+        # com tudo por engano — a saída antecipada aqui é só para não pagar o round-trip de
+        # uma consulta cujo resultado já sabemos, de antemão, que vem vazio.
+        return []
+
+    consulta_msgs = select(WhatsappMessage).order_by(
+        WhatsappMessage.created_at, WhatsappMessage.id
+    )
+    if client_id is not None:
+        # Restringe a carga aos chats já filtrados — sem isto o filtro só podaria o
+        # RESULTADO, e a função continuaria pagando o custo de materializar TODAS as
+        # mensagens do tenant para achar a última de cada chat.
+        consulta_msgs = consulta_msgs.where(WhatsappMessage.chat_id.in_(chats.keys()))
+
     last_msgs: dict[str, WhatsappMessage] = {}
-    for msg in db.scalars(
-        select(WhatsappMessage).order_by(WhatsappMessage.created_at)
-    ).all():
+    # Segunda chave de ordenação (`id`) é o desempate: duas mensagens do mesmo chat podem cair
+    # no mesmo instante (mesma transação de ingestão), e sem uma chave estável "a última
+    # mensagem" mudaria de corrida para corrida. `unread_client_ids` usa o MESMO desempate
+    # (created_at, id) — é a REGRA que mantém as duas funções de acordo em empate.
+    #
+    # ⚠️ O que `test_unread_client_ids_concorda_com_list_conversations` PROVA: que a regra, como
+    # está escrita hoje dos dois lados, produz a mesma resposta. O que ele NÃO garante: que
+    # apagar a coluna `id` do `ORDER BY` de UM dos dois lados derrube o teste. Sem desempate
+    # explícito, a ordem de linhas empatadas fica a critério do motor (o padrão SQL não a
+    # especifica); sob SQLite (o motor dos testes) ela tende a seguir a ordem física de inserção
+    # — e, pela fixture atual, isso reproduz por acaso a resposta certa de um dos dois lados
+    # mesmo sem o `id`. Ou seja: a guarda pega quem MUDA a regra (ex.: inverte para "menor id
+    # vence" só aqui), mas não é rede de segurança confiável contra quem apenas REMOVE o `id` do
+    # `ORDER BY` — trate esta coluna como parte do contrato, não como algo que o teste denuncia
+    # sozinho se sumir.
+    #
+    # Esta ordenação e o laço "última iteração vence" abaixo NÃO mudam com o filtro — só QUAIS
+    # linhas entram na consulta muda.
+    for msg in db.scalars(consulta_msgs).all():
         if msg.chat_id is not None:
             last_msgs[msg.chat_id] = msg  # a última iteração (ordem crescente) vence
 
@@ -576,6 +626,66 @@ def list_conversations(db: Session, tenant_id: str) -> list[dict]:
     return out
 
 
+def unread_client_ids(db: Session) -> set[str]:
+    """Contatos com mensagem esperando resposta, para o ponto no card do Kanban.
+
+    ⚠️ ESTA É A MESMA REGRA de `list_conversations` acima ("a última mensagem da conversa é do
+    contato e chegou depois do `last_read_at`"), escrita uma segunda vez. Mexeu em uma, mexa na
+    outra —
+    `test_whatsapp_inbox_nao_lidas.py::test_unread_client_ids_concorda_com_list_conversations`
+    existe exatamente para pegar quem esquecer.
+
+    A duplicação é deliberada: `list_conversations` materializa TODAS as mensagens do tenant
+    para achar a última de cada chat. A tela de Conversas paga esse preço uma vez a cada 7s
+    para um usuário; o board não pode pagá-lo a cada navegação. Aqui é uma consulta agregada,
+    de custo independente do volume de mensagens.
+
+    Devolve CONTATOS, não conversas: o mesmo contato pode ter dois chats (`@lid` + telefone) e
+    o card é um só. Grupo nunca entra — `client_id` é nulo nele por decisão de produto.
+
+    A sessão já chega escopada por RLS (mesma convenção de `list_conversations`).
+
+    O desempate de mensagens no mesmo instante TEM que ser o mesmo dos dois lados, ou as duas
+    funções podem divergir em silêncio (duas mensagens do mesmo chat na mesma transação, uma
+    `in` outra `out` — o board diria uma coisa, a caixa de entrada diria outra). Por isso a
+    query abaixo não pergunta "existe ALGUMA mensagem `in` empatada no topo" — isso seria um
+    teste existencial, não "qual é a última mensagem" — ela elege exatamente UMA linha por chat
+    via `row_number() OVER (... ORDER BY created_at DESC, id DESC)`, o mesmo par
+    `(created_at, id)` que `list_conversations` usa (lá em ordem crescente, "a última iteração
+    vence" — aqui em ordem decrescente, "a primeira linha vence"; os dois pegam a mesma
+    mensagem). Sobre o quanto o teste de paridade realmente PROVA isso — e o que ele deixa
+    passar se alguém só apagar o `id` do `ORDER BY` — ver o comentário no laço de
+    `list_conversations` acima, junto ao mesmo desempate.
+    """
+    ultima_por_chat = (
+        select(
+            WhatsappMessage.chat_id.label("chat_id"),
+            WhatsappMessage.direction.label("direction"),
+            WhatsappMessage.created_at.label("created_at"),
+            func.row_number()
+            .over(
+                partition_by=WhatsappMessage.chat_id,
+                order_by=(WhatsappMessage.created_at.desc(), WhatsappMessage.id.desc()),
+            )
+            .label("rn"),
+        )
+        .where(WhatsappMessage.chat_id.is_not(None))
+        .subquery()
+    )
+    linhas = db.execute(
+        select(WhatsappChat.client_id)
+        .join(ultima_por_chat, ultima_por_chat.c.chat_id == WhatsappChat.id)
+        .where(
+            ultima_por_chat.c.rn == 1,
+            WhatsappChat.client_id.is_not(None),
+            ultima_por_chat.c.direction == DIRECTION_IN,
+            (WhatsappChat.last_read_at.is_(None))
+            | (ultima_por_chat.c.created_at > WhatsappChat.last_read_at),
+        )
+    ).all()
+    return {client_id for (client_id,) in linhas}
+
+
 def get_chat(db: Session, *, chat_id: str) -> WhatsappChat:
     chat = db.get(WhatsappChat, chat_id)
     if chat is None:
@@ -583,13 +693,21 @@ def get_chat(db: Session, *, chat_id: str) -> WhatsappChat:
     return chat
 
 
-def get_timeline(db: Session, *, chat_id: str) -> list[dict]:
+def get_timeline(db: Session, *, chat_id: str, limit: int | None = None) -> list[dict]:
     """Mescla WhatsappMessage (a conversa) + Notification(channel=whatsapp) do cliente vinculado
     (avisos automáticos já existentes: cobrança, contrato, etc.) — leitura combinada, SEM
     migrar nenhum dado antigo (ver design doc §2).
 
     Os avisos automáticos só entram quando a conversa tem cliente: eles são endereçados a um
-    contato do CRM, e grupo não tem um."""
+    contato do CRM, e grupo não tem um.
+
+    `limit`, quando informado, corta para as N entradas mais recentes do CONJUNTO MESCLADO — não
+    N de cada fonte (mensagem e notificação são ordenadas juntas antes do corte). "N de cada
+    fonte" devolveria um recorte errado: uma conversa com 3 notificações recentes e 200
+    mensagens antigas mostraria as notificações inteiras e nenhuma mensagem, quando o pedido é
+    "as 5 falas mais recentes, seja qual for a origem". A tela de Conversas não passa `limit`
+    (quer o histórico inteiro, como hoje); a ficha 360° passa 5 — sem isto ela baixava a
+    conversa inteira do WhatsApp só para mostrar cinco bolhas (ver BlocoDaConversa.tsx)."""
     chat = get_chat(db, chat_id=chat_id)
     entries: list[dict] = []
     for msg in db.scalars(
@@ -630,6 +748,12 @@ def get_timeline(db: Session, *, chat_id: str) -> list[dict]:
                 "created_at": notif.created_at,
             })
     entries.sort(key=lambda e: e["created_at"])
+    if limit is not None:
+        # Corte pelo FIM da lista ascendente = as mais recentes, na mesma ordem (ascendente) que
+        # a tela de Conversas já espera. `limit <= 0` como "nada" e não "tudo": um `[-0:]` bateria
+        # com a lista inteira por acaso da aritmética de slice do Python, e uma chamada com limite
+        # zero pedindo "nada" não pode devolver "tudo" por causa disso.
+        entries = entries[-limit:] if limit > 0 else []
     return entries
 
 
