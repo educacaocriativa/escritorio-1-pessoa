@@ -94,3 +94,27 @@ test("a origem não se parece com a tag", async ({ page }) => {
   expect(origem.croma).toBeLessThanOrEqual(8); // cinza (medido: 3)
   expect(tag.croma).toBeGreaterThanOrEqual(12); // roxo (medido: 18)
 });
+
+test("o ponto de mensagem esperando resposta não empurra o nome para fora", async ({ page }) => {
+  await page.goto("/crm");
+
+  // O ponto está no card MAIS CHEIO da fixture: nome longo + duas tags + alça de arrastar +
+  // botão de ficha. A linha do nome já era a mais disputada do card antes de ganhar inquilino.
+  const ponto = page.getByLabel("Mensagem esperando resposta");
+  await expect(ponto).toBeVisible();
+  await expect(ponto).toBeInViewport();
+
+  // O ponto tem `shrink-0`; quem cede é o nome, via `truncate`. A prova de que a divisão
+  // funciona é o ponto estar INTEIRO dentro do card — 8px de largura, não 3 amassados.
+  const caixaDoPonto = await ponto.boundingBox();
+  expect(caixaDoPonto?.width).toBeGreaterThanOrEqual(7);
+
+  // E nada da primeira coluna saiu da tela. Mesmo recorte `.w-72` e mesmo controle positivo
+  // do primeiro teste deste arquivo — sem o controle, um seletor que deixasse de casar
+  // aprovaria a tela para sempre.
+  expect(await textoForaDaTela(page, ".w-72")).toEqual([]);
+  expect(await textoForaDaTela(page, ".seletor-que-nao-existe")).not.toEqual([]);
+
+  const { larguraDaPagina } = await medirPagina(page);
+  expect(larguraDaPagina).toBe(360);
+});

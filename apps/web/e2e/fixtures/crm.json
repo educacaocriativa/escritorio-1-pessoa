@@ -26,7 +26,8 @@
             "stage_id": "s1",
             "stage_entered_at": "2026-08-13T12:00:00Z",
             "created_at": "2026-08-13T12:00:00Z",
-            "last_interaction_at": "2026-08-13T12:00:00Z"
+            "last_interaction_at": "2026-08-13T12:00:00Z",
+            "unread": false
           },
           {
             "id": "c2",
@@ -43,7 +44,8 @@
             "stage_id": "s1",
             "stage_entered_at": "2026-08-12T09:30:00Z",
             "created_at": "2026-08-12T09:30:00Z",
-            "last_interaction_at": "2026-08-14T18:45:00Z"
+            "last_interaction_at": "2026-08-14T18:45:00Z",
+            "unread": true
           }
         ]
       },

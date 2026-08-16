@@ -121,8 +121,11 @@ export default function ClientDetailPage() {
       {/* Conversa vem depois do Histórico e antes do financeiro: o Histórico conta O QUE
           aconteceu, a Conversa mostra O QUE FOI DITO, e só então vêm as seções operacionais.
           O bloco carrega sozinho — não entra no `load()` da página, para que uma falha do
-          WhatsApp não segure a ficha inteira. */}
-      <Section icon={<MessageCircle size={16} />} title="Conversa">
+          WhatsApp não segure a ficha inteira.
+          `testId`: o `<Section>` é o MESMO componente para todas as sete seções da ficha —
+          `rounded-2xl bg-white p-5 shadow-sm` não distingue esta da de Cobranças ou Contratos,
+          e a régua de 360px precisa de um recorte que aponte só para esta. */}
+      <Section icon={<MessageCircle size={16} />} title="Conversa" testId="secao-conversa">
         <BlocoDaConversa clientId={id} />
       </Section>
 
@@ -338,9 +341,20 @@ function StatusBadge({ status }: { status: string }) {
   return <span className={`rounded-pill px-2 py-0.5 text-xs ${map[status] ?? "bg-neutral-100"}`}>{label[status] ?? status}</span>;
 }
 
-function Section({ icon, title, children }: { icon: React.ReactNode; title: string; children: React.ReactNode }) {
+function Section({
+  icon,
+  title,
+  children,
+  testId,
+}: {
+  icon: React.ReactNode;
+  title: string;
+  children: React.ReactNode;
+  /** Opcional: só a seção de Conversa precisa hoje, para a régua de 360px conseguir recortá-la. */
+  testId?: string;
+}) {
   return (
-    <div className="rounded-2xl bg-white p-5 shadow-sm">
+    <div className="rounded-2xl bg-white p-5 shadow-sm" data-testid={testId}>
       <h2 className="mb-2 flex items-center gap-2 font-semibold text-neutral-800">
         {icon} {title}
       </h2>
