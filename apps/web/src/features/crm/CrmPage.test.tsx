@@ -190,3 +190,30 @@ describe("CrmPage — de onde o contato veio", () => {
     expect(origem.compareDocumentPosition(tag)).toBe(Node.DOCUMENT_POSITION_FOLLOWING);
   });
 });
+
+describe("CrmPage — ponto de mensagem esperando resposta", () => {
+  const boardCom = (unread: boolean) => ({
+    columns: [{
+      stage: { id: "s1", name: "Entrada", position: 0, is_won: false, is_lost: false },
+      clients: [{
+        id: "c1", name: "Ju", email: null, phone: null, document: null,
+        notes: "", tags: [], source: "whatsapp", stage_id: "s1",
+        stage_entered_at: "2026-08-15T12:00:00Z", last_interaction_at: null,
+        unread,
+      }],
+    }],
+  });
+
+  it("mostra o ponto quando o contato está esperando resposta", async () => {
+    vi.mocked(api.get).mockResolvedValue({ data: boardCom(true) } as never);
+    renderPage();
+    expect(await screen.findByLabelText("Mensagem esperando resposta")).toBeInTheDocument();
+  });
+
+  it("não mostra o ponto quando não há nada esperando", async () => {
+    vi.mocked(api.get).mockResolvedValue({ data: boardCom(false) } as never);
+    renderPage();
+    expect(await screen.findByText("Ju")).toBeInTheDocument();
+    expect(screen.queryByLabelText("Mensagem esperando resposta")).not.toBeInTheDocument();
+  });
+});

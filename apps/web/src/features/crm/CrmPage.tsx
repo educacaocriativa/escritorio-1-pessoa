@@ -199,7 +199,20 @@ function Card({ client, stageId }: { client: BoardClient; stageId: string }) {
     >
       <GripVertical size={16} className="mt-0.5 shrink-0 text-neutral-300" />
       <div className="min-w-0 flex-1">
-        <p className="font-medium text-neutral-800">{client.name}</p>
+        {/* Nome e sinal na MESMA linha: o ponto é a única coisa que compete com o nome em
+            urgência, e ele não pode custar altura — o card já tem cinco linhas de conteúdo.
+            Mesma linguagem visual da lista de Conversas, para o dono não ter que aprender dois
+            vocabulários para o mesmo fato. */}
+        <p className="flex items-center gap-1.5 font-medium text-neutral-800">
+          <span className="truncate">{client.name}</span>
+          {client.unread && (
+            <span
+              aria-label="Mensagem esperando resposta"
+              title="Mensagem esperando resposta"
+              className="h-2 w-2 shrink-0 rounded-full bg-primary-600"
+            />
+          )}
+        </p>
         {/* Origem e tags dividem a mesma linha e NÃO podem se parecer: a origem é fato do
             sistema (cinza), a tag é marcação do dono (roxo). Confundir as duas foi o que fez o
             `vindo-do-site` — uma tag digitada — passar por "de onde veio" enquanto todo card de
