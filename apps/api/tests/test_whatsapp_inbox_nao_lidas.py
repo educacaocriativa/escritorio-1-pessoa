@@ -136,3 +136,10 @@ def test_list_conversations_filtrado_nunca_traz_grupo(db):
     for cid in ("cli-1", "cli-5"):
         assert all(c["kind"] != "group" for c in inbox_service.list_conversations(
             db, TENANT_ID, client_id=cid))
+
+
+def test_list_conversations_filtrado_contato_sem_conversa_devolve_vazio(db):
+    """A ficha 360° chama isto para TODO contato, e a maioria nunca escreveu — o filtro não
+    pode virar `IN ()` (que em alguns dialetos casa com tudo) nem lançar exceção."""
+    _cenario_completo(db)
+    assert inbox_service.list_conversations(db, TENANT_ID, client_id="cli-sem-conversa") == []

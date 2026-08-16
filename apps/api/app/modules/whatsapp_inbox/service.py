@@ -550,19 +550,41 @@ def list_conversations(
     `client_id` nulo e portanto nunca aparece filtrado — que é o correto: grupo não é contato
     do CRM. Um contato pode ter MAIS DE UMA conversa (`@lid` + telefone), então a lista
     filtrada não tem tamanho garantido de 1.
+
+    Com `client_id`, a carga de MENSAGENS também é restrita aos chats que sobreviveram ao
+    filtro (`WHERE chat_id IN (...)`) — sem isso, a ficha 360° materializaria todas as
+    mensagens do tenant a cada abertura de contato, o mesmo custo que esta função já paga
+    para a tela de Conversas (que o board evita chamando `unread_client_ids` em vez desta
+    função). Sem filtro, o caminho é o de sempre: nenhuma restrição, todas as mensagens.
     """
     consulta_chats = select(WhatsappChat)
     if client_id is not None:
         consulta_chats = consulta_chats.where(WhatsappChat.client_id == client_id)
     chats = {c.id: c for c in db.scalars(consulta_chats).all()}
+    if client_id is not None and not chats:
+        # Contato sem NENHUMA conversa — o caso comum na ficha 360° (a maioria dos contatos
+        # nunca escreveu). Sai cedo: um `IN (chats.keys())` vazio abaixo teria que virar
+        # `IN (NULL)` ou equivalente para não silenciosamente casar com TUDO (comportamento
+        # de `IN ()` varia por dialeto), e não há mensagem nenhuma a carregar mesmo.
+        return []
+
+    consulta_msgs = select(WhatsappMessage).order_by(
+        WhatsappMessage.created_at, WhatsappMessage.id
+    )
+    if client_id is not None:
+        # Restringe a carga aos chats já filtrados — sem isto o filtro só podaria o
+        # RESULTADO, e a função continuaria pagando o custo de materializar TODAS as
+        # mensagens do tenant para achar a última de cada chat.
+        consulta_msgs = consulta_msgs.where(WhatsappMessage.chat_id.in_(chats.keys()))
+
     last_msgs: dict[str, WhatsappMessage] = {}
     # Segunda chave de ordenação (`id`) é o desempate: duas mensagens do mesmo chat podem cair
     # no mesmo instante (mesma transação de ingestão), e sem uma chave estável "a última
     # mensagem" mudaria de corrida para corrida. `unread_client_ids` usa o MESMO desempate
-    # (created_at, id) — é o contrato que mantém as duas funções de acordo em empate.
-    for msg in db.scalars(
-        select(WhatsappMessage).order_by(WhatsappMessage.created_at, WhatsappMessage.id)
-    ).all():
+    # (created_at, id) — é o contrato que mantém as duas funções de acordo em empate. Esta
+    # ordenação e o laço "última iteração vence" abaixo NÃO mudam com o filtro — só QUAIS
+    # linhas entram na consulta muda.
+    for msg in db.scalars(consulta_msgs).all():
         if msg.chat_id is not None:
             last_msgs[msg.chat_id] = msg  # a última iteração (ordem crescente) vence
 
@@ -596,7 +618,8 @@ def unread_client_ids(db: Session) -> set[str]:
 
     ⚠️ ESTA É A MESMA REGRA de `list_conversations` acima ("a última mensagem da conversa é do
     contato e chegou depois do `last_read_at`"), escrita uma segunda vez. Mexeu em uma, mexa na
-    outra — `test_whatsapp_inbox_nao_lidas.py::test_unread_client_ids_concorda_com_list_conversations`
+    outra —
+    `test_whatsapp_inbox_nao_lidas.py::test_unread_client_ids_concorda_com_list_conversations`
     existe exatamente para pegar quem esquecer.
 
     A duplicação é deliberada: `list_conversations` materializa TODAS as mensagens do tenant
