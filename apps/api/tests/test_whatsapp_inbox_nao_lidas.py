@@ -139,7 +139,65 @@ def test_list_conversations_filtrado_nunca_traz_grupo(db):
 
 
 def test_list_conversations_filtrado_contato_sem_conversa_devolve_vazio(db):
-    """A ficha 360° chama isto para TODO contato, e a maioria nunca escreveu — o filtro não
-    pode virar `IN ()` (que em alguns dialetos casa com tudo) nem lançar exceção."""
+    """A ficha 360° chama isto para TODO contato, e a maioria nunca escreveu — o caminho de
+    `client_id` sem nenhum chat correspondente precisa devolver lista vazia, não lançar."""
     _cenario_completo(db)
     assert inbox_service.list_conversations(db, TENANT_ID, client_id="cli-sem-conversa") == []
+
+
+def test_list_conversations_filtrado_nao_le_mensagem_de_outro_contato(db):
+    """Prova que o filtro `client_id` restringe a CONSULTA, não só o resultado em Python.
+
+    Um teste que só olha `len(retorno)` ou `{c["client_id"] for c in retorno}` passaria
+    IGUAL se a filtragem fosse feita depois de carregar toda mensagem do tenant em memória
+    (o bug que o Finding 2 do review corrigiu) — o resultado final seria o mesmo, só o CUSTO
+    mudaria, e nenhuma assert sobre o JSON de saída enxerga custo.
+
+    Por isso este teste captura a consulta SQL de fato disparada (via `before_cursor_execute`,
+    mesma técnica de `test_crm_board_nao_lida.py::test_board_nao_faz_uma_consulta_por_card`) e
+    REEXECUTA essa consulta capturada numa conexão nova, contando quantas LINHAS ela devolve.
+    Se a query estiver restrita a `chat_id IN (...)` do contato-alvo, ela traz só a mensagem
+    dele. Se alguém reverter a restrição, a mesma consulta capturada volta a trazer todas as
+    mensagens do tenant — e é exatamente essa diferença de contagem que este teste mede.
+    """
+    from sqlalchemy import event
+
+    alvo = _chat(db, jid="5511900000010@s.whatsapp.net", client_id="cli-alvo")
+    _msg(db, chat=alvo, direction=DIRECTION_IN, minutos=1)
+
+    # Ruído: várias mensagens de OUTROS contatos, para que "ler tudo" e "ler só o alvo"
+    # produzam contagens bem diferentes (não bastaria 1 mensagem de ruído — 1 versus 2 também
+    # discrimina, mas fica frágil a qualquer ajuste incidental de cenário).
+    for i in range(10):
+        outro = _chat(db, jid=f"5511900002{i:03d}@s.whatsapp.net", client_id=f"cli-ruido-{i}")
+        _msg(db, chat=outro, direction=DIRECTION_IN, minutos=i)
+
+    engine = db.get_bind()
+    capturado: dict[str, object] = {}
+
+    def _antes(_conn, _cursor, statement, params, _context, _many):
+        # `whatsapp_chats` também é consultada nesta chamada — filtramos pela tabela de
+        # mensagens, que é a única cujo CUSTO este teste está medindo.
+        if "whatsapp_messages" in statement:
+            capturado["statement"] = statement
+            capturado["params"] = params
+
+    event.listen(engine, "before_cursor_execute", _antes)
+    try:
+        resultado = inbox_service.list_conversations(db, TENANT_ID, client_id="cli-alvo")
+    finally:
+        event.remove(engine, "before_cursor_execute", _antes)
+
+    assert resultado, "cenário não mediu nada — o contato-alvo devia ter 1 conversa"
+    assert "statement" in capturado, "nenhuma consulta a whatsapp_messages foi capturada"
+
+    # Reexecuta a MESMA consulta (texto + parâmetros) capturada, numa conexão nova — não
+    # confiamos em contar chamadas nem em ler o texto do SQL à procura de "WHERE"/"IN"
+    # (frágil a reformatação); contamos as LINHAS que a consulta de fato traz.
+    with engine.connect() as conn:
+        linhas = conn.exec_driver_sql(capturado["statement"], capturado["params"]).fetchall()
+
+    assert len(linhas) == 1, (
+        f"a consulta de mensagens trouxe {len(linhas)} linha(s) para um filtro de 1 "
+        "contato com 1 mensagem — deveria trazer só a dele, não o ruído dos outros 10"
+    )

@@ -563,9 +563,10 @@ def list_conversations(
     chats = {c.id: c for c in db.scalars(consulta_chats).all()}
     if client_id is not None and not chats:
         # Contato sem NENHUMA conversa — o caso comum na ficha 360° (a maioria dos contatos
-        # nunca escreveu). Sai cedo: um `IN (chats.keys())` vazio abaixo teria que virar
-        # `IN (NULL)` ou equivalente para não silenciosamente casar com TUDO (comportamento
-        # de `IN ()` varia por dialeto), e não há mensagem nenhuma a carregar mesmo.
+        # nunca escreveu). O SQLAlchemy já compila `.in_(())` (coleção vazia) para uma
+        # expressão que nunca bate (`IN (NULL) AND (1 != 1)`), então não há risco de casar
+        # com tudo por engano — a saída antecipada aqui é só para não pagar o round-trip de
+        # uma consulta cujo resultado já sabemos, de antemão, que vem vazio.
         return []
 
     consulta_msgs = select(WhatsappMessage).order_by(
