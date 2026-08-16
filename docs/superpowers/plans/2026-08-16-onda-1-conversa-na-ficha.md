@@ -33,11 +33,12 @@ pnpm --filter @e1p/web typecheck
 pnpm --filter @e1p/web lint
 ```
 
-**Antes de começar:** crie a branch de trabalho.
+**Antes de começar:** crie a branch de trabalho **a partir de `spec/crm-conversa-e-agenda-na-ficha`**, não de `main`. A spec e este plano vivem lá e ainda não foram mesclados (`main` é protegida e exige PR até para mudança só de documentação).
 
 ```bash
-git checkout main && git pull
+git checkout spec/crm-conversa-e-agenda-na-ficha
 git checkout -b feat/onda-1-conversa-na-ficha
+git log --oneline -2   # confirme que a spec e o plano estão no histórico
 ```
 
 ---
