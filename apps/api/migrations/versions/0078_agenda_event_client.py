@@ -24,6 +24,13 @@ Postgres e a migration roda offline, então não há janela de exposição.
 O backfill filtra por `kind='cobranca_receber'`. Sem esse filtro, um evento de conta a pagar
 cujo `external_ref` colidisse com o id de uma cobrança ganharia um dono errado — `external_ref`
 é ponteiro polimórfico, e o `kind` é o discriminador.
+
+O `UPDATE` também filtra por `e.client_id IS NULL`: o backfill só preenche o que nunca foi
+preenchido. Sem essa cláusula, uma reexecução manual da SQL desta migration contra produção
+(coisa que já aconteceu na história deste projeto) apagaria em silêncio qualquer vínculo que o
+dono tivesse corrigido depois pela API — e a partir desta migration existe API para isso
+(`EventUpdate.client_id`). O `IS NULL` torna o backfill reentrante: rodar de novo é seguro
+porque só toca linha que ainda não tem dono.
 """
 from collections.abc import Sequence
 
@@ -36,13 +43,14 @@ branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 
 
-def upgrade() -> None:
-    op.add_column("agenda_events", sa.Column("client_id", sa.String(36), nullable=True))
-    op.create_index(
-        "ix_agenda_events_client_id", "agenda_events", ["client_id"]
-    )
+def backfill_client_id() -> None:
+    """A janela de RLS + o UPDATE reentrante (ver ARMADILHA e `IS NULL` no docstring do módulo).
 
-    # --- backfill (ver a ARMADILHA no docstring: sem esta janela, tudo abaixo é no-op) ---
+    Extraído como função própria (em vez de inline em `upgrade()`) para que o teste de
+    idempotência (`test_backfill_nao_sobrescreve_vinculo_ja_existente`) possa reexecutar
+    exatamente este código — o mesmo que rodaria numa reexecução manual contra produção —
+    sem duplicar a SQL numa cópia que poderia divergir do que está de fato no arquivo.
+    """
     op.execute("ALTER TABLE agenda_events DISABLE ROW LEVEL SECURITY")
     op.execute("ALTER TABLE charges DISABLE ROW LEVEL SECURITY")
 
@@ -55,6 +63,7 @@ def upgrade() -> None:
            AND e.kind = 'cobranca_receber'
            AND c.client_id IS NOT NULL
            AND e.tenant_id = c.tenant_id
+           AND e.client_id IS NULL
         """
     )
 
@@ -62,6 +71,16 @@ def upgrade() -> None:
     op.execute("ALTER TABLE agenda_events FORCE ROW LEVEL SECURITY")
     op.execute("ALTER TABLE charges ENABLE ROW LEVEL SECURITY")
     op.execute("ALTER TABLE charges FORCE ROW LEVEL SECURITY")
+
+
+def upgrade() -> None:
+    op.add_column("agenda_events", sa.Column("client_id", sa.String(36), nullable=True))
+    op.create_index(
+        "ix_agenda_events_client_id", "agenda_events", ["client_id"]
+    )
+
+    # --- backfill (ver a ARMADILHA no docstring: sem esta janela, tudo abaixo é no-op) ---
+    backfill_client_id()
 
 
 def downgrade() -> None:

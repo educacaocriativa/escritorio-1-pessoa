@@ -14,6 +14,7 @@ localmente com Docker (`pytest -m rls_e2e`).
 """
 from __future__ import annotations
 
+import importlib.util
 from datetime import UTC, datetime
 from pathlib import Path
 from uuid import uuid4
@@ -22,6 +23,8 @@ import pytest
 
 pytest.importorskip("testcontainers.postgres")
 
+from alembic.migration import MigrationContext  # noqa: E402
+from alembic.operations import Operations  # noqa: E402
 from sqlalchemy import create_engine, text  # noqa: E402
 from sqlalchemy.pool import NullPool  # noqa: E402
 from testcontainers.postgres import PostgresContainer  # noqa: E402
@@ -34,6 +37,7 @@ _APP_PASS = "e1ppass"  # noqa: S105 (senha efêmera do papel de app no container
 _DB_NAME = "e1pdb"
 
 _API_DIR = Path(__file__).resolve().parents[1]
+_MIGRATION_0078_PATH = _API_DIR / "migrations" / "versions" / "0078_agenda_event_client.py"
 
 
 def _bootstrap_rls_role(super_url: str) -> None:
@@ -87,6 +91,11 @@ def ambiente():
         errado.
       - `evento_pagar`: `kind='cobranca_pagar'`, `external_ref` = esse id colidido — deve
         continuar órfão porque o filtro `kind='cobranca_receber'` o exclui da UPDATE.
+      - `evento_corrigido`: mesmo formato de `evento_cobranca` (herda `client_id` da charge no
+        backfill inicial), mas **depois** da 0078 tem o `client_id` sobrescrito para `client_b`
+        — simulando o dono corrigindo o vínculo pela API (`EventUpdate.client_id`, que a partir
+        desta migration existe). A coluna não existe antes da 0078, por isso a correção só pode
+        ser aplicada DEPOIS que a migration cria a coluna, não junto da semente original.
     """
     with PostgresContainer(
         "postgres:16-alpine",
@@ -105,12 +114,14 @@ def ambiente():
 
         tenant_a = str(uuid4())
         client_id = str(uuid4())
+        client_b_id = str(uuid4())  # "dono corrigido" — ver evento_corrigido abaixo
         charge_id = str(uuid4())
         payable_id = charge_id  # colisão DELIBERADA entre tabelas diferentes (ver docstring)
 
         evento_cobranca_id = str(uuid4())
         evento_bloqueio_id = str(uuid4())
         evento_pagar_id = str(uuid4())
+        evento_corrigido_id = str(uuid4())
 
         engine = create_engine(app_url, poolclass=NullPool)
         with engine.begin() as conn:
@@ -172,19 +183,71 @@ def ambiente():
                     "ini": _AGORA, "fim": _AGORA,
                 },
             )
+
+            # Mesmo formato de evento_cobranca — vai herdar `client_id` (cliente A) no
+            # backfill inicial da 0078. Depois da migration, corrigimos para client_b (abaixo).
+            conn.execute(
+                text(
+                    "INSERT INTO agenda_events (id, tenant_id, title, kind, external_ref, "
+                    "starts_at, ends_at) VALUES "
+                    "(:id, :t, 'Consulta', 'cobranca_receber', :ref, :ini, :fim)"
+                ),
+                {
+                    "id": evento_corrigido_id, "t": tenant_a, "ref": charge_id,
+                    "ini": _AGORA, "fim": _AGORA,
+                },
+            )
         engine.dispose()
 
         # AGORA a 0078 — o backfill encontra linhas de verdade.
         _run_migrations_as_app(app_url, "0078")
 
+        # A coluna client_id só existe a partir daqui. Simula o dono corrigindo o vínculo
+        # pela API (EventUpdate.client_id) DEPOIS do backfill inicial ter rodado.
+        engine = create_engine(app_url, poolclass=NullPool)
+        with engine.begin() as conn:
+            conn.execute(
+                text("SELECT set_config('app.current_tenant_id', :t, false)"), {"t": tenant_a}
+            )
+            conn.execute(
+                text("UPDATE agenda_events SET client_id = :b WHERE id = :id"),
+                {"b": client_b_id, "id": evento_corrigido_id},
+            )
+        engine.dispose()
+
         yield {
             "url": app_url,
             "tenant_a": tenant_a,
             "client_id": client_id,
+            "client_b_id": client_b_id,
             "evento_cobranca_id": evento_cobranca_id,
             "evento_bloqueio_id": evento_bloqueio_id,
             "evento_pagar_id": evento_pagar_id,
+            "evento_corrigido_id": evento_corrigido_id,
         }
+
+
+def _reexecutar_backfill(url: str) -> None:
+    """Reexecuta `backfill_client_id()` carregando o ARQUIVO REAL da migration 0078 — não uma
+    cópia da SQL — para que editar o arquivo (como no Step 6) mude o que este teste exercita.
+
+    Simula o cenário do achado do reviewer: alguém reexecutando a SQL da migration à mão contra
+    produção (já aconteceu na história deste projeto), depois que a Task 2 dá ao dono um jeito
+    de corrigir o vínculo pela API.
+    """
+    spec = importlib.util.spec_from_file_location("migration_0078_reexec", _MIGRATION_0078_PATH)
+    assert spec is not None and spec.loader is not None
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+
+    engine = create_engine(url, poolclass=NullPool)
+    try:
+        with engine.begin() as conn:
+            ctx = MigrationContext.configure(conn)
+            with Operations.context(ctx):
+                mod.backfill_client_id()
+    finally:
+        engine.dispose()
 
 
 def _client_id_de(ambiente: dict, evento_id: str) -> str | None:
@@ -242,6 +305,30 @@ def test_backfill_nao_inventa_dono(ambiente):
     assert pagar is None, (
         f"cobranca_pagar cujo external_ref colide com o id de uma charge não deveria herdar "
         f"dono (o filtro kind='cobranca_receber' deveria excluí-lo), veio {pagar!r}"
+    )
+
+
+def test_backfill_nao_sobrescreve_vinculo_ja_existente(ambiente):
+    """Reexecutar a SQL do backfill à mão não pode apagar uma correção que o dono já fez.
+
+    `evento_corrigido` herdou `client_id` de `client_id` (cliente A) no backfill original e foi
+    depois corrigido para `client_b` — como a Task 2 (`EventUpdate.client_id`) passa a permitir.
+    Sem a cláusula `AND e.client_id IS NULL`, reexecutar o backfill re-derivaria de `charges` e
+    apagaria a correção em silêncio, exatamente como uma reexecução manual contra produção faria
+    (já aconteceu na história deste projeto).
+    """
+    antes = _client_id_de(ambiente, ambiente["evento_corrigido_id"])
+    assert antes == ambiente["client_b_id"], (
+        f"pré-condição da fixture falhou: esperava client_b={ambiente['client_b_id']!r} "
+        f"antes da reexecução, veio {antes!r}"
+    )
+
+    _reexecutar_backfill(ambiente["url"])
+
+    depois = _client_id_de(ambiente, ambiente["evento_corrigido_id"])
+    assert depois == ambiente["client_b_id"], (
+        f"reexecução do backfill sobrescreveu a correção do dono: esperado "
+        f"client_b={ambiente['client_b_id']!r}, veio {depois!r}"
     )
 
 
