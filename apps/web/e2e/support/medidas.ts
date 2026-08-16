@@ -84,9 +84,16 @@ export async function alvosPequenos(page: Page, min = 44, raiz?: string): Promis
  * Texto que só EXISTE se o dono rolar de lado — o defeito que a Onda 2b-ii achou na primeira
  * medição (`R$ 3.` no lugar de `R$ 3.000,00`). Para cada folha com texto, acha o ancestral que
  * recorta e mede quanto sobra fora dele.
+ *
+ * `raiz` recorta a VARREDURA (nunca o cálculo: o ancestral que recorta continua sendo procurado
+ * para cima, mesmo fora dela). Use quando a tela tiver um deslizador horizontal LEGÍTIMO e a
+ * pergunta for sobre o que está dentro do painel visível — o Kanban é o caso: as colunas seguintes
+ * ficam fora da viewport por construção, e sem o recorte elas afogam o resultado com três cortes
+ * que não são defeito de ninguém. Escopo que deixou de casar cai no documento inteiro, e não em
+ * lista vazia: um seletor podre tem de aparecer como ruído, nunca como aprovação.
  */
-export async function textoForaDaTela(page: Page): Promise<Corte[]> {
-  return page.evaluate(() => {
+export async function textoForaDaTela(page: Page, raiz?: string): Promise<Corte[]> {
+  return page.evaluate((raizSel) => {
     const descrever = (el: Element): string => {
       const cls =
         typeof el.className === "string"
@@ -112,7 +119,8 @@ export async function textoForaDaTela(page: Page): Promise<Corte[]> {
     };
     const vw = document.documentElement.clientWidth;
     const fora: { texto: string; descricao: string; forcaFora: number }[] = [];
-    for (const el of [...document.querySelectorAll("body *")].filter(visivel)) {
+    const escopo: ParentNode = raizSel ? (document.querySelector(raizSel) ?? document.body) : document.body;
+    for (const el of [...escopo.querySelectorAll("*")].filter(visivel)) {
       if (el.children.length > 0 || !(el.textContent ?? "").trim()) continue;
       const r = el.getBoundingClientRect();
       const limite = Math.min(recorte(el).getBoundingClientRect().right, vw);
@@ -126,5 +134,5 @@ export async function textoForaDaTela(page: Page): Promise<Corte[]> {
       }
     }
     return fora;
-  });
+  }, raiz);
 }

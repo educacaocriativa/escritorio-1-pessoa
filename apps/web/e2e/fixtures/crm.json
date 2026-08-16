@@ -1,0 +1,63 @@
+{
+  "/crm/board": {
+    "columns": [
+      {
+        "stage": {
+          "id": "s1",
+          "name": "Entrada",
+          "position": 0,
+          "is_won": false,
+          "is_lost": false,
+          "is_archived": false
+        },
+        "clients": [
+          {
+            "id": "c1",
+            "tenant_id": "t1",
+            "name": "554399706687",
+            "email": null,
+            "phone": "554399706687",
+            "document": null,
+            "gender": "unspecified",
+            "birthdate": null,
+            "notes": "",
+            "tags": [],
+            "source": "whatsapp",
+            "stage_id": "s1",
+            "stage_entered_at": "2026-08-13T12:00:00Z",
+            "created_at": "2026-08-13T12:00:00Z",
+            "last_interaction_at": "2026-08-13T12:00:00Z"
+          },
+          {
+            "id": "c2",
+            "tenant_id": "t1",
+            "name": "Maria Aparecida Gonçalves de Souza",
+            "email": "maria.aparecida.goncalves@exemplo.com.br",
+            "phone": "5511987654321",
+            "document": null,
+            "gender": "unspecified",
+            "birthdate": null,
+            "notes": "",
+            "tags": ["vindo-do-site", "orçamento-enviado"],
+            "source": "api",
+            "stage_id": "s1",
+            "stage_entered_at": "2026-08-12T09:30:00Z",
+            "created_at": "2026-08-12T09:30:00Z",
+            "last_interaction_at": "2026-08-14T18:45:00Z"
+          }
+        ]
+      },
+      {
+        "stage": {
+          "id": "s2",
+          "name": "Em contato",
+          "position": 1,
+          "is_won": false,
+          "is_lost": false,
+          "is_archived": false
+        },
+        "clients": []
+      }
+    ]
+  }
+}
