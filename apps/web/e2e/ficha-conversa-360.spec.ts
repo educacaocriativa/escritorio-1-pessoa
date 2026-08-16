@@ -92,6 +92,10 @@ test("a conversa na ficha cabe em 360px, mesmo com texto sem espaço", async ({ 
   // conteúdo fora da tela por acidente para o seletor podre encontrar. Por isso o controle planta,
   // só para o instante desta asserção, um texto sem filhos fora da tela: prova de que a função
   // ENXERGA corte nesta página quando ele existe — e não que a fixture por acaso nunca produz um.
+  // O `<span>` acima é INLINE — some do DOM sozinho quando o Playwright fecha o contexto de
+  // teste ao final (não há `marca.remove()`: cada teste roda numa página nova). Ele só prova o
+  // caminho ANTIGO (`r.right`), o de sempre: inline reporta `scrollWidth === clientWidth === 0`,
+  // então nunca cai no ramo `scrollWidth`.
   await page.evaluate(() => {
     const marca = document.createElement("span");
     marca.textContent = "marca de controle positivo";
@@ -100,4 +104,32 @@ test("a conversa na ficha cabe em 360px, mesmo com texto sem espaço", async ({ 
     document.body.appendChild(marca);
   });
   expect(await textoForaDaTela(page, ".seletor-que-nao-existe")).not.toEqual([]);
+});
+
+test("textoForaDaTela pega bloco SEM largura própria que vaza via scrollWidth", async ({ page }) => {
+  // Controle positivo do ramo NOVO (`scrollWidth`), que o teste acima não cobre: o `<span>` dele
+  // é inline e nunca cai nesse ramo (ver comentário lá). Revertendo `medidas.ts` para o
+  // `r.right` puro (o Finding 2 do review final), aquele teste continua passando — SEM
+  // ESTE aqui, o ponto cego que a Onda 1 fechou reabriria em silêncio.
+  //
+  // O elemento é um `<div>` de BLOCO (não `<span>`), sem `width` própria — herda a do contêiner
+  // por `display:block` — com um token sem espaço, hífen ou barra: não tem onde quebrar. É o
+  // cenário real que a bolha de chat expôs antes do `break-words` (ver o comentário no topo
+  // deste arquivo): a CAIXA fica presa na largura do contêiner, a tinta vaza sem alargá-la, e
+  // `getBoundingClientRect().right` não vê nada — só `scrollWidth` vê.
+  await page.goto("/crm/clients/c1");
+  await expect(page.getByRole("link", { name: "Abrir conversa" })).toBeVisible();
+
+  await page.evaluate(() => {
+    const bloco = document.createElement("div");
+    bloco.textContent =
+      "blocoDeTesteSemLarguraPropriaComUmTokenBemLongoSemEspacoQueVazaViaScrollWidth1234567890";
+    bloco.setAttribute("data-marca-scrollwidth-bloco", "");
+    document.querySelector('[data-testid="secao-conversa"]')?.appendChild(bloco);
+  });
+
+  const cortes = await textoForaDaTela(page, '[data-testid="secao-conversa"]');
+  const achado = cortes.find((c) => c.texto.startsWith("blocoDeTesteSemLarguraPropria"));
+  expect(achado).toBeDefined();
+  expect(achado!.forcaFora).toBeGreaterThan(0);
 });

@@ -131,9 +131,15 @@ export async function textoForaDaTela(page: Page, raiz?: string): Promise<Corte[
       // elemento NÃO recorta a si mesmo (`overflow-x` computado é `visible`) — truncamento com
       // reticências (`.truncate`: `overflow:hidden` nele mesmo) também tem `scrollWidth >
       // clientWidth`, e ali é a UI funcionando como projetada, não um corte a denunciar.
+      //
+      // MÁXIMO entre os dois, nunca substituição: `scrollWidth` exclui borda, `r.right - r.left`
+      // inclui. Num elemento com borda onde `clientWidth < scrollWidth <= clientWidth +
+      // larguraDaBorda`, trocar `r.right` por `r.left + scrollWidth` teria devolvido um corte
+      // MENOR que o antigo caminho já enxergava — a régua ficando mais cega no exato ponto onde
+      // devia ficar mais afiada.
       const direita =
         getComputedStyle(el).overflowX === "visible" && el.scrollWidth > el.clientWidth + 0.5
-          ? r.left + el.scrollWidth
+          ? Math.max(r.right, r.left + el.scrollWidth)
           : r.right;
       const sobra = +(direita - limite).toFixed(1);
       if (sobra > 0.5) {
