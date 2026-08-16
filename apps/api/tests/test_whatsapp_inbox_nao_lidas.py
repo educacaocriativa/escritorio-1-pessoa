@@ -114,3 +114,25 @@ def test_unread_client_ids_concorda_com_list_conversations(db):
 def test_unread_client_ids_vazio_sem_mensagem(db):
     _chat(db, jid="5511900000009@s.whatsapp.net", client_id="cli-9")
     assert inbox_service.unread_client_ids(db) == set()
+
+
+def test_list_conversations_filtra_por_client_id(db):
+    _cenario_completo(db)
+    do_contato = inbox_service.list_conversations(db, TENANT_ID, client_id="cli-5")
+    assert len(do_contato) == 2  # o caso `@lid` + telefone: duas conversas, um contato
+    assert {c["client_id"] for c in do_contato} == {"cli-5"}
+
+
+def test_list_conversations_sem_filtro_continua_trazendo_grupo(db):
+    """O filtro é OPCIONAL e não pode mudar o comportamento da tela de Conversas."""
+    _cenario_completo(db)
+    todas = inbox_service.list_conversations(db, TENANT_ID)
+    assert any(c["kind"] == "group" for c in todas)
+
+
+def test_list_conversations_filtrado_nunca_traz_grupo(db):
+    """Grupo tem `client_id` nulo — filtrar por contato jamais pode trazê-lo."""
+    _cenario_completo(db)
+    for cid in ("cli-1", "cli-5"):
+        assert all(c["kind"] != "group" for c in inbox_service.list_conversations(
+            db, TENANT_ID, client_id=cid))

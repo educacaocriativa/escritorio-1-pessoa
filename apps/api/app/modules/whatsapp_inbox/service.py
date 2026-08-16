@@ -533,7 +533,9 @@ def _preview(msg: WhatsappMessage, chat: WhatsappChat) -> str:
     return body
 
 
-def list_conversations(db: Session, tenant_id: str) -> list[dict]:
+def list_conversations(
+    db: Session, tenant_id: str, *, client_id: str | None = None
+) -> list[dict]:
     """Uma linha por CONVERSA com pelo menos 1 mensagem, ordenada pela mais recente.
 
     Indexado por `whatsapp_chats`, não mais por cliente do CRM — é o que permite grupo existir
@@ -542,8 +544,17 @@ def list_conversations(db: Session, tenant_id: str) -> list[dict]:
 
     `tenant_id` não filtra a query explicitamente: a sessão já chega escopada por RLS (mesma
     convenção de `crm_service.build_board`), é mantido no parâmetro por simetria com o resto do
-    módulo (e uso futuro, ex.: auditoria)."""
-    chats = {c.id: c for c in db.scalars(select(WhatsappChat)).all()}
+    módulo (e uso futuro, ex.: auditoria).
+
+    `client_id` filtra as conversas de UM contato (a ficha 360° usa isso). Grupo tem
+    `client_id` nulo e portanto nunca aparece filtrado — que é o correto: grupo não é contato
+    do CRM. Um contato pode ter MAIS DE UMA conversa (`@lid` + telefone), então a lista
+    filtrada não tem tamanho garantido de 1.
+    """
+    consulta_chats = select(WhatsappChat)
+    if client_id is not None:
+        consulta_chats = consulta_chats.where(WhatsappChat.client_id == client_id)
+    chats = {c.id: c for c in db.scalars(consulta_chats).all()}
     last_msgs: dict[str, WhatsappMessage] = {}
     # Segunda chave de ordenação (`id`) é o desempate: duas mensagens do mesmo chat podem cair
     # no mesmo instante (mesma transação de ingestão), e sem uma chave estável "a última

@@ -152,9 +152,11 @@ def _err(e: service.WhatsappInboxError) -> HTTPException:
 
 @router.get("")
 def list_conversations(
-    user: CurrentUser = Depends(_guard), db: Session = Depends(get_tenant_db)
+    client_id: str | None = Query(default=None),
+    user: CurrentUser = Depends(_guard),
+    db: Session = Depends(get_tenant_db),
 ) -> list[dict]:
-    return service.list_conversations(db, user.tenant_id)
+    return service.list_conversations(db, user.tenant_id, client_id=client_id)
 
 
 @router.get("/{chat_id}/timeline")

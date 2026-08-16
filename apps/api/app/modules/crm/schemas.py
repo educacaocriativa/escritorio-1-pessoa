@@ -167,15 +167,18 @@ class ClientOut(BaseModel):
 
 
 class BoardClient(ClientOut):
-    """`ClientOut` + a data da última interação.
+    """`ClientOut` + os sinais que só o board calcula.
 
-    Campo separado do `ClientOut` de propósito: só o board calcula isso (via duas consultas
-    agrupadas). Se `last_interaction_at` vivesse em `ClientOut`, todo endpoint que devolve
-    cliente passaria a afirmar `null` — e `null` significaria tanto "sem interação" quanto
-    "não calculei", que são coisas diferentes.
+    Campos separados do `ClientOut` de propósito: só o board calcula isso (via consultas
+    agrupadas). Se vivessem em `ClientOut`, todo endpoint que devolve cliente passaria a
+    afirmar `null` — e `null` significaria tanto "sem interação" quanto "não calculei", que
+    são coisas diferentes.
     """
 
     last_interaction_at: datetime | None = None
+    # Tem mensagem do contato esperando resposta. Booleano e não contador: o card não tem
+    # espaço para número, e "quantas" é pergunta da tela de Conversas.
+    unread: bool = False
 
 
 class BoardColumn(BaseModel):
