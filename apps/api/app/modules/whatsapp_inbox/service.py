@@ -9,7 +9,7 @@ from __future__ import annotations
 import logging
 from datetime import UTC, datetime, timedelta
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.core import audit, facts, whatsapp
@@ -574,6 +574,55 @@ def list_conversations(db: Session, tenant_id: str) -> list[dict]:
         })
     out.sort(key=lambda c: c["last_message_at"], reverse=True)
     return out
+
+
+def unread_client_ids(db: Session) -> set[str]:
+    """Contatos com mensagem esperando resposta, para o ponto no card do Kanban.
+
+    ⚠️ ESTA É A MESMA REGRA de `list_conversations` acima ("a última mensagem da conversa é do
+    contato e chegou depois do `last_read_at`"), escrita uma segunda vez. Mexeu em uma, mexa na
+    outra — `test_whatsapp_inbox_nao_lidas.py::test_unread_client_ids_concorda_com_list_conversations`
+    existe exatamente para pegar quem esquecer.
+
+    A duplicação é deliberada: `list_conversations` materializa TODAS as mensagens do tenant
+    para achar a última de cada chat. A tela de Conversas paga esse preço uma vez a cada 7s
+    para um usuário; o board não pode pagá-lo a cada navegação. Aqui é uma consulta agregada,
+    de custo independente do volume de mensagens.
+
+    Devolve CONTATOS, não conversas: o mesmo contato pode ter dois chats (`@lid` + telefone) e
+    o card é um só. Grupo nunca entra — `client_id` é nulo nele por decisão de produto.
+
+    A sessão já chega escopada por RLS (mesma convenção de `list_conversations`).
+    """
+    # Últimas mensagens: uma linha por chat, obtida por max(created_at) agrupado. Empate de
+    # instante (duas mensagens no mesmo commit) resolve-se pegando qualquer uma das empatadas
+    # e checando se ALGUMA delas é `in` — que é a pergunta que interessa. Não precisamos saber
+    # qual é "a" última, só se a conversa terminou com o contato falando.
+    max_por_chat = (
+        select(
+            WhatsappMessage.chat_id.label("chat_id"),
+            func.max(WhatsappMessage.created_at).label("ultima_em"),
+        )
+        .where(WhatsappMessage.chat_id.is_not(None))
+        .group_by(WhatsappMessage.chat_id)
+        .subquery()
+    )
+    linhas = db.execute(
+        select(WhatsappChat.client_id)
+        .join(max_por_chat, max_por_chat.c.chat_id == WhatsappChat.id)
+        .join(
+            WhatsappMessage,
+            (WhatsappMessage.chat_id == WhatsappChat.id)
+            & (WhatsappMessage.created_at == max_por_chat.c.ultima_em),
+        )
+        .where(
+            WhatsappChat.client_id.is_not(None),
+            WhatsappMessage.direction == DIRECTION_IN,
+            (WhatsappChat.last_read_at.is_(None))
+            | (max_por_chat.c.ultima_em > WhatsappChat.last_read_at),
+        )
+    ).all()
+    return {client_id for (client_id,) in linhas}
 
 
 def get_chat(db: Session, *, chat_id: str) -> WhatsappChat:
