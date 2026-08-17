@@ -195,8 +195,18 @@ function eventColor(e: AgendaEvent, hoje: string): string {
   return "bg-primary-100 text-primary-700";
 }
 const hhmm = (iso: string, tz: string) => formatTime(iso, tz);
-// Card: mostra o nome do cliente/fornecedor quando houver (cobranças/contas), senão o título.
-const chipLabel = (e: AgendaEvent) => e.client_name || e.title;
+// O atalho (nome no lugar do título) é só para os kinds FINANCEIROS. O título deles é
+// AUTO-GERADO pelo backend ("A receber: Fulano"), então mostrar o nome puro é um encurtamento
+// inofensivo — mesma informação, mais curta.
+// Desde que `client_id`/`client_name` passaram a ser resolvidos para QUALQUER kind com contato
+// vinculado (Onda 2, Task 3 — join direto em `_events_out`), uma reunião ou atendimento ligado a
+// um contato também ganhou `client_name`. Mas o título desses eventos foi DIGITADO pelo dono
+// ("Alinhamento do casamento 12/12") e carrega informação que o nome do contato não tem — no
+// calendário, que é o lugar de bater o olho e saber do que se trata, trocar por nome perderia
+// isso. Por isso a restrição por kind abaixo: NÃO simplificar de volta para `client_name || title`.
+const FINANCIAL_KINDS = new Set(["cobranca_receber", "cobranca_pagar"]);
+const chipLabel = (e: AgendaEvent) =>
+  FINANCIAL_KINDS.has(e.kind) && e.client_name ? e.client_name : e.title;
 // Eventos de dia inteiro (cobranças, contas a pagar, prazos) são gravados à meia-noite UTC:
 // casamos pela DATA do calendário (sem fuso) para não "voltar" um dia em fuso negativo.
 // Eventos com horário usam a data local normalmente.

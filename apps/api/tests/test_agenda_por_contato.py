@@ -17,7 +17,6 @@ from sqlalchemy.orm import Session
 from app.core.tz import DEFAULT_TENANT_TIMEZONE, day_window_utc, tenant_today
 from app.modules.agenda import service as agenda_service
 from app.modules.agenda.models import STATUS_CANCELLED, AgendaEvent
-from app.modules.crm.models import Client
 from app.modules.receivables.models import Charge
 
 REGISTER = {
@@ -205,13 +204,15 @@ def test_next_event_map_inclui_evento_de_dia_inteiro_de_hoje(db: Session):
 # ── metade das cobranças. A metade do fornecedor (payables) não tem client_id e fica. ───────
 
 
-def test_client_name_do_evento_e_o_mesmo_pelos_dois_caminhos(client: TestClient, db: Session,
-                                                               headers):
-    """A trava da limpeza: derivação antiga e join novo produzem o MESMO `client_name`.
+def test_cobranca_e_evento_concordam_no_client_id_ligado(client: TestClient, db: Session, headers):
+    """Checagem de base, NÃO a trava da limpeza: prova só que Tasks 1/2 ligaram os ids certos.
 
-    Roda ANTES da remoção do caminho velho. Se um backfill errasse uma linha, a Agenda
-    perderia um nome que hoje mostra — e ninguém perceberia, porque nenhum teste afirmava
-    que os dois caminhos concordam.
+    Faz dois lookups crus no banco (Charge.client_id e AgendaEvent.client_id) e afirma que
+    concordam — nunca chama `_events_out` nem bate no endpoint, então não exercita o join que
+    o router faz. `test_cobranca_criada_ja_nasce_com_client_id_no_evento` (acima) já cobre esse
+    mesmo fato de forma mais direta; este teste fica como reforço de que o vínculo é o MESMO id
+    dos dois lados, não como guarda da refatoração de `_events_out` — essa guarda é
+    `test_client_name_no_get_events_vem_do_join_direto`, abaixo, que bate no endpoint real.
     """
     cl = client.post("/crm/clients", json={"name": "Cliente Paridade"}, headers=headers).json()
     due_date = (datetime.now(UTC).date() + timedelta(days=30)).isoformat()
@@ -229,15 +230,33 @@ def test_client_name_do_evento_e_o_mesmo_pelos_dois_caminhos(client: TestClient,
     ).first()
     assert event is not None
 
-    # Caminho antigo: external_ref (charge["id"]) -> Charge -> Client.name.
     charge_row = db.get(Charge, charge["id"])
-    nome_antigo = db.get(Client, charge_row.client_id).name
+    assert charge_row.client_id == event.client_id
 
-    # Caminho novo: AgendaEvent.client_id -> Client.name (join direto, sem passar por Charge).
-    nome_novo = db.get(Client, event.client_id).name
 
-    assert nome_antigo is not None
-    assert nome_antigo == nome_novo
+def test_client_name_no_get_events_vem_do_join_direto(client: TestClient, headers):
+    """A trava real da limpeza: `GET /agenda/events` devolve o nome do cliente pelo endpoint.
+
+    Espelha `test_conta_a_pagar_continua_mostrando_o_fornecedor` (abaixo), mas para a metade
+    que FOI trocada por join direto. Bate no endpoint de verdade (não em `Client`/`Charge` crus),
+    então uma quebra em `_events_out` — por exemplo, um typo que troque `client_id` por
+    `external_ref` no join — apareceria aqui, não só numa checagem de banco que nem passa pelo
+    router.
+    """
+    cl = client.post("/crm/clients", json={"name": "Cliente Endpoint"}, headers=headers).json()
+    due_date = (datetime.now(UTC).date() + timedelta(days=30)).isoformat()
+    client.post(
+        "/receivables/charges",
+        json={
+            "kind": "service", "method": "pix", "amount_cents": 5000,
+            "due_date": due_date, "description": "Mensalidade", "client_id": cl["id"],
+        },
+        headers=headers,
+    )
+
+    events = client.get("/agenda/events", headers=headers).json()
+    receber = next(e for e in events if e["kind"] == "cobranca_receber")
+    assert receber["client_name"] == "Cliente Endpoint"
 
 
 def test_conta_a_pagar_continua_mostrando_o_fornecedor(client: TestClient, headers):
