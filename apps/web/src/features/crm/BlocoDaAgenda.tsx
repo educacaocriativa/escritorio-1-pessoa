@@ -71,7 +71,11 @@ export default function BlocoDaAgenda({ clientId }: { clientId: string }) {
         <ul className="divide-y divide-neutral-100">
           {eventos.map((e) => (
             <li key={e.id} className="py-2.5">
-              <p className="text-sm font-medium text-neutral-800">{e.title}</p>
+              {/* `break-words`: o título vem de digitação livre e pode chegar sem espaço, hífen
+                  ou barra (o dono grudando o nome de um fornecedor, por exemplo) — sem quebra de
+                  palavra o texto vaza a caixa em vez de quebrar linha (achado da régua de 360px,
+                  Onda 2 Task 8: `forcaFora` de 439px com um título assim). */}
+              <p className="break-words text-sm font-medium text-neutral-800">{e.title}</p>
               {/* Dia inteiro é DATA DE CALENDÁRIO (gravada à meia-noite UTC): formata pela
                   string, sem `Date`, para não "voltar" um dia em fuso negativo. Com horário é
                   INSTANTE: converte para o fuso do tenant — nunca `localYmd` aqui (ver a nota

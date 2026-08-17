@@ -16,6 +16,11 @@ import { semearSessao } from "./support/sessao";
  * A fixture é de PIOR CASO PLAUSÍVEL: o rótulo mais comprido ("Integração") num card que também
  * tem o nome mais longo e duas tags, e o card de WhatsApp com o nome caindo no telefone cru —
  * que é como ele nasce quando o contato não tem `pushName`.
+ *
+ * [Onda 2, Task 8] O card ganhou uma TERCEIRA linha de rodapé: o próximo compromisso da Agenda
+ * (ou o aviso de que não há um). `c2` — o card mais cheio, já disputando espaço com nome, duas
+ * tags e o ponto de "esperando resposta" — é quem recebe o título de compromisso mais comprido
+ * plausível, para provar que a linha TRUNCA de verdade em vez de só não estourar por sorte.
  */
 test.beforeEach(async ({ page }) => {
   await semearSessao(page);
@@ -117,4 +122,37 @@ test("o ponto de mensagem esperando resposta não empurra o nome para fora", asy
 
   const { larguraDaPagina } = await medirPagina(page);
   expect(larguraDaPagina).toBe(360);
+});
+
+test("a linha do próximo passo trunca — de verdade — e não estoura a coluna", async ({ page }) => {
+  await page.goto("/crm");
+
+  // O card mais cheio (c2, `next_event_title` da fixture) recebe o compromisso mais comprido
+  // plausível: "Reunião de alinhamento do casamento 12/12". Não é escolhido por ACASO caber —
+  // é escolhido por FORÇAR a reticência. A prova de que ela ENGATOU é `scrollWidth >
+  // clientWidth` do próprio parágrafo (mesma régua de `.truncate` que a Onda 1 já usa em
+  // `medidas.ts`), não a ausência de estouro na página: um texto que apenas coubesse por sorte
+  // passaria nas DUAS provas e não provaria nada sobre o `truncate` em si.
+  const proximo = page.getByText(/^próximo: Reunião de alinhamento/);
+  await expect(proximo).toBeVisible();
+  const [scrollWidth, clientWidth] = await proximo.evaluate((el) => [el.scrollWidth, el.clientWidth]);
+  expect(scrollWidth).toBeGreaterThan(clientWidth);
+
+  // A PÁGINA continua sem rolar de lado, e nada da PRIMEIRA coluna (onde o card mora) sai da
+  // tela — mesmo recorte `.w-72` e mesmo controle positivo dos outros testes deste arquivo.
+  const { larguraDaPagina } = await medirPagina(page);
+  expect(larguraDaPagina).toBe(360);
+  expect(await textoForaDaTela(page, ".w-72")).toEqual([]);
+  expect(await textoForaDaTela(page, ".seletor-que-nao-existe")).not.toEqual([]);
+});
+
+test("o card sem próximo passo avisa, sem estourar a coluna", async ({ page }) => {
+  await page.goto("/crm");
+
+  // c1 tem `next_event_at`/`next_event_title` nulos os dois — o estado "sem próximo passo" que
+  // a fixture exercita de propósito (ver comentário no topo do arquivo e em `crm.json`).
+  await expect(page.getByText("sem próximo passo")).toBeVisible();
+
+  expect(await textoForaDaTela(page, ".w-72")).toEqual([]);
+  expect(await textoForaDaTela(page, ".seletor-que-nao-existe")).not.toEqual([]);
 });

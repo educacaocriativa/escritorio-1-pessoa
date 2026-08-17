@@ -137,7 +137,11 @@ export default function ClientDetailPage() {
           FUTURO e deixa marcar sem sair da ficha. Carrega sozinho, fora do `load()` da página,
           pelo mesmo motivo do `BlocoDaConversa`: uma falha da Agenda não pode derrubar Cobranças
           e o resto da tela. */}
-      <Section icon={<CalendarDays size={16} />} title="Agenda">
+      {/* `testId`: mesma razão da Conversa — as OITO seções da ficha compartilham
+          `rounded-2xl bg-white`, e `querySelector` devolve só a PRIMEIRA ocorrência do
+          documento (o cabeçalho do cliente). Sem recorte próprio, a régua de 360px mediria o
+          cabeçalho em vez da Agenda. */}
+      <Section icon={<CalendarDays size={16} />} title="Agenda" testId="secao-agenda">
         <BlocoDaAgenda clientId={id} />
       </Section>
 
@@ -362,7 +366,8 @@ function Section({
   icon: React.ReactNode;
   title: string;
   children: React.ReactNode;
-  /** Opcional: só a seção de Conversa precisa hoje, para a régua de 360px conseguir recortá-la. */
+  /** Opcional: Conversa e Agenda precisam, para a régua de 360px conseguir recortá-las —
+   *  as duas compartilham `rounded-2xl bg-white` com as outras seis seções da ficha. */
   testId?: string;
 }) {
   return (

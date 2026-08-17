@@ -27,7 +27,9 @@
             "stage_entered_at": "2026-08-13T12:00:00Z",
             "created_at": "2026-08-13T12:00:00Z",
             "last_interaction_at": "2026-08-13T12:00:00Z",
-            "unread": false
+            "unread": false,
+            "next_event_at": null,
+            "next_event_title": null
           },
           {
             "id": "c2",
@@ -45,7 +47,9 @@
             "stage_entered_at": "2026-08-12T09:30:00Z",
             "created_at": "2026-08-12T09:30:00Z",
             "last_interaction_at": "2026-08-14T18:45:00Z",
-            "unread": true
+            "unread": true,
+            "next_event_at": "2026-08-20T13:00:00Z",
+            "next_event_title": "Reunião de alinhamento do casamento 12/12"
           }
         ]
       },
