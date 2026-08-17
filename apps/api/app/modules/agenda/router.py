@@ -83,8 +83,10 @@ def list_events(
     kind: list[str] | None = Query(default=None),
     client_id: str | None = Query(default=None),
     # Default `False`: preserva o comportamento de hoje da tela de Agenda, que lista TODO evento
-    # (cancelado incluso — o card mostra o status). A ficha 360° (`BlocoDaAgenda`) manda `true`
-    # explicitamente, para não impersonar um "próximo compromisso" com um evento cancelado.
+    # (cancelado/feito incluso — o card mostra o status). A ficha 360° (`BlocoDaAgenda`) manda
+    # `true` explicitamente, para não impersonar um "próximo compromisso" com um evento cancelado
+    # OU JÁ FEITO. Nome mantido por compatibilidade de contrato de API; o filtro por trás exclui
+    # `TERMINAL_STATUSES` inteiro — ver o comentário em `agenda/service.py::list_events`.
     exclude_cancelled: bool = Query(default=False),
     limit: int = Query(default=200, ge=1, le=500),
     offset: int = Query(default=0, ge=0),

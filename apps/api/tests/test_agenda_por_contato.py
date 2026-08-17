@@ -16,7 +16,7 @@ from sqlalchemy.orm import Session
 
 from app.core.tz import DEFAULT_TENANT_TIMEZONE, day_window_utc, tenant_today
 from app.modules.agenda import service as agenda_service
-from app.modules.agenda.models import STATUS_CANCELLED, AgendaEvent
+from app.modules.agenda.models import STATUS_CANCELLED, STATUS_DONE, AgendaEvent
 from app.modules.receivables.models import Charge
 
 REGISTER = {
@@ -149,6 +149,33 @@ def test_exclude_cancelled_filtra_o_cancelado_do_filtro_por_contato(client: Test
     assert resp.json() == []
 
 
+def test_exclude_cancelled_tambem_filtra_o_done_adiantado(client: TestClient, db: Session, headers):
+    """Achado da revisão final da Onda 2: `TERMINAL_STATUSES` = {cancelled, done}, não só
+    cancelado. Um compromisso marcado `done` ANTES da hora (o dono adianta o status) não pode
+    continuar aparecendo no bloco de "próximos compromissos" da ficha 360° — já aconteceu, do
+    ponto de vista de quem olha o card."""
+    cl = client.post(
+        "/crm/clients", json={"name": "Cliente Done Adiantado"}, headers=headers
+    ).json()
+    agora = datetime.now(UTC)
+    db.add(
+        AgendaEvent(
+            tenant_id=cl["tenant_id"], title="Feito antes da hora", kind="atendimento",
+            status=STATUS_DONE, client_id=cl["id"],
+            starts_at=agora + timedelta(days=1), ends_at=agora + timedelta(days=1, hours=1),
+        )
+    )
+    db.commit()
+
+    resp = client.get(
+        "/agenda/events",
+        params={"client_id": cl["id"], "exclude_cancelled": "true"},
+        headers=headers,
+    )
+    assert resp.status_code == 200
+    assert resp.json() == []
+
+
 def test_sem_exclude_cancelled_o_padrao_continua_devolvendo_o_cancelado(
     client: TestClient, headers,
 ):
@@ -228,6 +255,26 @@ def test_next_event_map_ignora_cancelado(db: Session):
     mapa = agenda_service.next_event_map(db)
     # O cancelado é o mais perto — se contasse, o mapa apontaria pra ele, não pro `depois`.
     assert mapa["cli-2"].id == depois.id
+
+
+def test_next_event_map_ignora_done_adiantado(db: Session):
+    """Irmã de `test_next_event_map_ignora_cancelado`: `done` ANTES da hora também não é
+    próximo passo. `TERMINAL_STATUSES = {cancelled, done}` — achado da revisão final da Onda 2,
+    que a implementação original só cobria a metade `cancelled`."""
+    agora = datetime.now(UTC)
+    _row(
+        db, client_id="cli-3",
+        starts_at=agora + timedelta(hours=1), ends_at=agora + timedelta(hours=2),
+        status=STATUS_DONE,
+    )
+    depois = _row(
+        db, client_id="cli-3",
+        starts_at=agora + timedelta(days=1), ends_at=agora + timedelta(days=1, hours=1),
+    )
+
+    mapa = agenda_service.next_event_map(db)
+    # O `done` adiantado é o mais perto — se contasse, o mapa apontaria pra ele, não pro `depois`.
+    assert mapa["cli-3"].id == depois.id
 
 
 def test_next_event_map_inclui_evento_de_dia_inteiro_de_hoje(db: Session):

@@ -152,10 +152,18 @@ def list_events(
         # captura linhas NULL.
         stmt = stmt.where(AgendaEvent.client_id == client_id)
     if exclude_cancelled:
-        stmt = stmt.where(AgendaEvent.status != STATUS_CANCELLED)
+        # ⚠️ **O NOME do parâmetro ficou menor que o que ele faz** (achado da revisão final da
+        # Onda 2): exclui `TERMINAL_STATUSES` inteiro (`cancelled` E `done`), não só cancelado —
+        # um evento marcado `done` ANTES da hora não pode continuar aparecendo no bloco de
+        # "próximo compromisso" da ficha 360° como se ainda estivesse por vir. NÃO renomeado
+        # para `exclude_terminal` porque `exclude_cancelled` é também o nome do QUERY PARAM
+        # público (`GET /agenda/events?exclude_cancelled=true`, consumido por `BlocoDaAgenda.tsx`
+        # e pelos testes de `test_agenda_por_contato.py`) — o ganho de precisão do nome não paga
+        # o custo de uma migração de contrato de API só por isto. Este comentário é a correção.
+        stmt = stmt.where(AgendaEvent.status.not_in(TERMINAL_STATUSES))
     # Default `False`, ao contrário de `count_events` (default `True`): a tela de Agenda chama
-    # `list_events` sem este parâmetro e RENDERIZA todo evento, cancelado incluso (o card mostra
-    # o status); mudar o default aqui apagaria eventos cancelados do calendário sem ninguém pedir.
+    # `list_events` sem este parâmetro e RENDERIZA todo evento, cancelado/feito incluso (o card
+    # mostra o status); mudar o default aqui apagaria eventos do calendário sem ninguém pedir.
     # É a ficha 360° (`BlocoDaAgenda`) que passa `exclude_cancelled=True` explicitamente — ver
     # `router.py`.
     stmt = stmt.order_by(AgendaEvent.starts_at).limit(limit).offset(offset)
@@ -292,12 +300,20 @@ def next_event_map(db: Session) -> dict[str, AgendaEvent]:
     que existe justamente porque valor derivado guardado dessincroniza. O custo não cresce com
     a quantidade de cards.
 
-    ⚠️ O corte é `ends_at >= agora`, NÃO `starts_at >= agora`. Evento de dia inteiro é ancorado
-    na meia-noite real do fuso do tenant (ver `create_event`), então às 15h o `starts_at` dele
-    já passou — filtrar pelo início esconderia o compromisso de HOJE, que é o mais relevante
-    que existe para o card. Pelo fim, ele aparece o dia todo e some quando acaba.
+    ⚠️ O corte é `ends_at >= agora`, NÃO `starts_at >= agora`. Evento de dia inteiro tem `starts_at`
+    ancorado à MEIA-NOITE — mas em qual fuso depende de QUEM criou o evento, e as duas
+    convenções coexistem de propósito (achado da revisão final da Onda 2, não unificado aqui:
+    virar migration de dados está fora desta onda):
+      - `create_event` ancora na meia-noite REAL do fuso do TENANT (convertida p/ UTC via
+        `day_window_utc` — ver a docstring dele);
+      - `receivables.service.build_charge` (a população DOMINANTE que alimenta este mapa, já
+        que toda cobrança nasce com evento) ancora na meia-noite UTC CRUA — ver o comentário lá.
+    Nos dois casos, às 15h no fuso do tenant o `starts_at` já ficou no passado — filtrar pelo
+    início esconderia o compromisso de HOJE, que é o mais relevante que existe para o card.
+    Pelo fim, ele aparece o dia todo e some quando acaba, em QUALQUER das duas convenções.
 
-    Cancelado fica de fora: não é próximo passo nenhum.
+    Cancelado E feito ficam de fora (`TERMINAL_STATUSES`): nenhum dos dois é próximo passo — um
+    `done` adiantado pelo dono é tão "já resolvido" quanto um cancelado, para esta pergunta.
 
     A sessão já chega escopada por RLS (mesma convenção de `list_events`).
     """
@@ -318,7 +334,11 @@ def next_event_map(db: Session) -> dict[str, AgendaEvent]:
         )
         .where(
             AgendaEvent.client_id.is_not(None),
-            AgendaEvent.status != STATUS_CANCELLED,
+            # `TERMINAL_STATUSES`, não só `STATUS_CANCELLED` (achado da revisão final da Onda 2):
+            # um compromisso marcado `done` ANTES da hora (o dono adianta o status) não é "próximo
+            # passo" nenhum — ele já aconteceu, do ponto de vista de quem preenche o card. Cancelado
+            # e feito são os dois jeitos de um evento deixar de ser pendência.
+            AgendaEvent.status.not_in(TERMINAL_STATUSES),
             AgendaEvent.ends_at >= agora,
         )
         .subquery()

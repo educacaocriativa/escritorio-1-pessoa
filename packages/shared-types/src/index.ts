@@ -189,7 +189,14 @@ export interface AgendaEvent {
    *  `agenda/schemas.py`). Gap deixado pela Task 2/3 desta onda: o backend já devolvia o campo,
    *  mas o tipo compartilhado não o declarava — a ficha 360° (Task 6) é a primeira consumidora. */
   client_id: string | null;
-  /** Nome do cliente (cobrança) ou fornecedor (conta a pagar), resolvido no list/get. */
+  /** Nome resolvido para exibição no card, no list/get — não da coluna do evento. Desde a
+   *  Task 3 (Onda 2), o join direto por `client_id` resolve o NOME DO CONTATO para QUALQUER
+   *  evento vinculado (reunião, atendimento, cobrança...), não só cobrança/conta a pagar; a
+   *  metade sem `client_id` — conta a pagar — continua resolvendo o fornecedor por
+   *  `external_ref` (ver `agenda/router.py::_events_out`). `chipLabel` (AgendaPage.tsx) usa
+   *  isto como ATALHO só para os kinds financeiros, justamente porque o título deles já é
+   *  auto-gerado ("A receber: Fulano") — não confundir a restrição de exibição com a origem
+   *  do dado, que é ampla. */
   client_name: string | null;
   created_by_ai: boolean;
   created_at: string;
