@@ -1,13 +1,17 @@
 """Rotas do CRM & Funil Kanban. Exigem tenant autenticado + permissão ao módulo 'crm'."""
 from __future__ import annotations
 
+from datetime import datetime
+
 from fastapi import APIRouter, Depends, HTTPException, Query, Response
 from sqlalchemy.orm import Session
 
 from app.core.facts import CRM_NOTA_CRIADA
 from app.core.tenancy import CurrentUser, get_tenant_db, require_module
 from app.modules.agenda import service as agenda_service
+from app.modules.agenda.models import AgendaEvent
 from app.modules.crm import service, timeline
+from app.modules.crm.models import Client
 from app.modules.crm.schemas import (
     Board,
     BoardClient,
@@ -55,19 +59,32 @@ def get_board(
         columns=[
             BoardColumn(
                 stage=StageOut.model_validate(stage),
-                clients=[
-                    BoardClient(
-                        **ClientOut.model_validate(c).model_dump(),
-                        last_interaction_at=ultimo.get(c.id),
-                        unread=c.id in esperando,
-                        next_event_at=ev.starts_at if (ev := proximo.get(c.id)) else None,
-                        next_event_title=ev.title if ev else None,
-                    )
-                    for c in clients
-                ],
+                clients=[_board_client(c, ultimo, esperando, proximo) for c in clients],
             )
             for stage, clients in columns
         ]
+    )
+
+
+def _board_client(
+    c: Client,
+    ultimo: dict[str, datetime],
+    esperando: set[str],
+    proximo: dict[str, AgendaEvent],
+) -> BoardClient:
+    # Statement, não expressão dentro do comprehension de propósito: um walrus lendo `ev` em
+    # dois kwargs vizinhos só funciona hoje porque kwargs são avaliados na ordem em que estão
+    # escritos — trocar `next_event_at`/`next_event_title` de lugar, ou inserir um campo entre
+    # eles, não erra em lugar nenhum: silenciosamente lê o `ev` do card ANTERIOR do loop.
+    # Isolando a consulta ao mapa numa variável antes de montar o objeto, essa armadilha não
+    # existe — não "arrume" isto de volta para um walrus inline.
+    ev = proximo.get(c.id)
+    return BoardClient(
+        **ClientOut.model_validate(c).model_dump(),
+        last_interaction_at=ultimo.get(c.id),
+        unread=c.id in esperando,
+        next_event_at=ev.starts_at if ev else None,
+        next_event_title=ev.title if ev else None,
     )
 
 
