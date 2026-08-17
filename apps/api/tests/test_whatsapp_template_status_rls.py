@@ -193,7 +193,7 @@ def test_evento_nao_aprova_template_de_outro_tenant(app_url):
     """`apply_status_events` NÃO filtra por tenant_id — quem isola é a RLS. Se a policy não
     estiver valendo, o evento do tenant A aprova o template homônimo do tenant B: a Meta não
     garante `meta_template_id` único entre WABAs diferentes."""
-    from app.core.whatsapp.providers.meta import TemplateStatusEvent
+    from app.core.whatsapp.inbound import TemplateStatusEvent
     from app.modules.whatsapp_templates import service
     from app.modules.whatsapp_templates.models import WhatsappTemplate
 

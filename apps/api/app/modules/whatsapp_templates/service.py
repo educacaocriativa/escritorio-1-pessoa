@@ -15,7 +15,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.core import audit, whatsapp
-from app.core.whatsapp.providers.meta import TemplateStatusEvent
+from app.core.whatsapp.inbound import TemplateStatusEvent
 from app.modules.settings.service import get_profile
 from app.modules.whatsapp_templates.models import (
     STATUS_APPROVED,

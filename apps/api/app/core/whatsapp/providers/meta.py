@@ -12,12 +12,11 @@ from __future__ import annotations
 import hashlib
 import hmac
 import logging
-from dataclasses import dataclass
 
 import httpx
 
 from app.config import settings
-from app.core.whatsapp.inbound import InboundMessage
+from app.core.whatsapp.inbound import InboundMessage, TemplateStatusEvent
 
 logger = logging.getLogger("e1p.whatsapp")
 
@@ -391,18 +390,6 @@ def parse_inbound(payload: dict) -> list[InboundMessage]:
 # O `field` do `change` que carrega aprovação/rejeição de template. O MESMO webhook recebe
 # `messages` (mensagem recebida) e este — é o `field` que separa um do outro.
 TEMPLATE_STATUS_FIELD = "message_template_status_update"
-
-
-@dataclass(frozen=True)
-class TemplateStatusEvent:
-    """Um evento de mudança de status, já normalizado. Só FORMA — o que é status válido e o
-    que fazer com ele é decisão do domínio (`whatsapp_templates/service.apply_status_events`).
-    """
-
-    meta_template_id: str  # texto: a Meta manda número no webhook e String(64) no GET da Graph
-    status: str  # o `event` cru da Meta, ainda NÃO validado contra os STATUS_* do model
-    rejected_reason: str | None
-    category: str | None  # `message_template_category`; None = o evento não informou
 
 
 def extract_waba_id(payload: dict) -> str | None:

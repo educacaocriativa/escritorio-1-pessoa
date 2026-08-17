@@ -29,7 +29,7 @@ from sqlalchemy.orm import Session
 
 from app.core import whatsapp as core_whatsapp
 from app.core.tenancy import get_tenant_db
-from app.core.whatsapp.providers.meta import TemplateStatusEvent
+from app.core.whatsapp.inbound import TemplateStatusEvent
 from app.db.session import get_db, get_tenant_session_factory
 from app.modules.auth.router import router as auth_router
 from app.modules.settings.service import get_profile
