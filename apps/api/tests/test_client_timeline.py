@@ -158,6 +158,33 @@ def test_timeline_nao_inclui_compromisso_futuro(client: TestClient, headers, con
     assert all(e["kind"] != "agenda" for e in entries)
 
 
+def test_timeline_nao_inclui_compromisso_cancelado(client: TestClient, headers, contato):
+    """Cancelado não é fato: a timeline não pode dizer "você se encontrou" de um encontro
+    que não houve.
+
+    O evento é criado no PASSADO de propósito — `ends_at < agora` já seria motivo suficiente
+    para incluí-lo, então só o filtro de `status` pode estar segurando este teste. Um evento
+    cancelado no FUTURO não provaria nada: o filtro de data já bastaria para escondê-lo.
+    """
+    resp = client.post(
+        "/agenda/events",
+        json={
+            "title": "Consulta cancelada", "kind": "atendimento",
+            "starts_at": "2026-01-10T13:00:00+00:00", "ends_at": "2026-01-10T14:00:00+00:00",
+            "client_id": contato,
+        },
+        headers=headers,
+    )
+    assert resp.status_code == 201, resp.text
+    event_id = resp.json()["event"]["id"]
+
+    cancel_resp = client.post(f"/agenda/events/{event_id}/cancel", headers=headers)
+    assert cancel_resp.status_code == 200, cancel_resp.text
+
+    entries = client.get(f"/crm/clients/{contato}/timeline", headers=headers).json()["entries"]
+    assert all(e["kind"] != "agenda" for e in entries)
+
+
 def test_timeline_de_agenda_respeita_o_limite_por_fonte(client: TestClient, headers, contato):
     """Mesma regra das outras três fontes: `LIMITE_POR_FONTE` e `truncated`."""
     base = datetime.now(UTC) - timedelta(days=365)
