@@ -1,11 +1,13 @@
 import type { ClientTimelineEntry, ClientTimelineOut } from "@e1p/shared-types";
 import {
-  ArrowRightLeft, FileText, MessageSquarePlus, Receipt, RotateCcw,
+  ArrowRightLeft, CalendarDays, FileText, MessageSquarePlus, Receipt, RotateCcw,
   Sparkles, UserPlus, Workflow,
 } from "lucide-react";
 import type { JSX } from "react";
 import { useCallback, useEffect, useState } from "react";
 import { api, apiErrorMessage } from "../../lib/api";
+import { formatDateTime } from "../../lib/datetime";
+import { useFuso } from "../../store/auth";
 
 /** Ícone e cor por tipo de fato. Um `kind` novo vindo de um backend mais recente cai no
  *  neutro em vez de sumir da tela. */
@@ -17,24 +19,18 @@ const APARENCIA: Record<string, { icon: JSX.Element; cor: string }> = {
   "crm.lead.reaberto": { icon: <RotateCcw size={14} />, cor: "bg-amber-50 text-amber-700" },
   "crm.nota.criada": { icon: <MessageSquarePlus size={14} />, cor: "bg-emerald-50 text-emerald-700" },
   "crm.funil.inscrito": { icon: <Workflow size={14} />, cor: "bg-neutral-100 text-neutral-600" },
-  // Estes três NÃO mudam: são gerados por `crm/timeline.py` a partir de `quotes`/`charges`,
-  // lidos na origem, e nunca passaram pela tabela persistida.
+  // Estes quatro NÃO mudam: são gerados por `crm/timeline.py` a partir de `quotes`/`charges`/
+  // `agenda_events`, lidos na origem, e nunca passaram pela tabela persistida.
   quote: { icon: <FileText size={14} />, cor: "bg-sky-50 text-sky-700" },
   charge: { icon: <Receipt size={14} />, cor: "bg-sky-50 text-sky-700" },
   payment: { icon: <Receipt size={14} />, cor: "bg-emerald-50 text-emerald-700" },
+  agenda: { icon: <CalendarDays size={14} />, cor: "bg-sky-50 text-sky-700" },
 };
 
 const NEUTRO = { icon: <Sparkles size={14} />, cor: "bg-neutral-100 text-neutral-600" };
 
-/** `at` é um INSTANTE (timestamptz), não uma data de negócio — formata no fuso local, mesma
- *  convenção da ConversasPage (e o oposto da regra all-day da Agenda). */
-const quando = (iso: string) =>
-  new Date(iso).toLocaleString("pt-BR", {
-    day: "2-digit", month: "2-digit", year: "numeric",
-    hour: "2-digit", minute: "2-digit",
-  });
-
 export default function ClientTimeline({ clientId }: { clientId: string }) {
+  const fuso = useFuso();
   const [entries, setEntries] = useState<ClientTimelineEntry[]>([]);
   const [truncated, setTruncated] = useState(false);
   const [nota, setNota] = useState("");
@@ -129,7 +125,7 @@ export default function ClientTimeline({ clientId }: { clientId: string }) {
                     <p className="whitespace-pre-wrap text-sm text-neutral-600">{e.body}</p>
                   )}
                   <p className="text-[11px] text-neutral-400">
-                    {quando(e.at)}
+                    {formatDateTime(e.at, fuso)}
                     {e.is_ai && " · IA"}
                   </p>
                 </div>

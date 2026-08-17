@@ -5,7 +5,7 @@ queries (Regra de Ouro nº 1). O tenant_id só é usado para CARIMBAR novas linh
 """
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import UTC, datetime
 
 from sqlalchemy import and_, func, select
 from sqlalchemy.orm import Session
@@ -98,6 +98,7 @@ def create_event(
         guests=data.guests,
         amount_cents=data.amount_cents,
         external_ref=data.external_ref,
+        client_id=data.client_id,
         created_by_ai=by_ai,
     )
     # Geração automática de Meet (Story 4.1): só quando é um evento de reunião, o usuário NÃO
@@ -130,6 +131,8 @@ def list_events(
     start: datetime | None = None,
     end: datetime | None = None,
     kinds: list[str] | None = None,
+    client_id: str | None = None,
+    exclude_cancelled: bool = False,
     limit: int = DEFAULT_LIST_LIMIT,
     offset: int = 0,
 ) -> list[AgendaEvent]:
@@ -143,6 +146,26 @@ def list_events(
         stmt = stmt.where(AgendaEvent.starts_at <= end)
     if kinds:
         stmt = stmt.where(AgendaEvent.kind.in_(kinds))
+    if client_id is not None:
+        # Filtro da ficha 360°: só os compromissos DESTE contato. Evento sem client_id (bloqueio,
+        # prazo interno, conta a pagar) nunca casa — a coluna é nullable e `== client_id` não
+        # captura linhas NULL.
+        stmt = stmt.where(AgendaEvent.client_id == client_id)
+    if exclude_cancelled:
+        # ⚠️ **O NOME do parâmetro ficou menor que o que ele faz** (achado da revisão final da
+        # Onda 2): exclui `TERMINAL_STATUSES` inteiro (`cancelled` E `done`), não só cancelado —
+        # um evento marcado `done` ANTES da hora não pode continuar aparecendo no bloco de
+        # "próximo compromisso" da ficha 360° como se ainda estivesse por vir. NÃO renomeado
+        # para `exclude_terminal` porque `exclude_cancelled` é também o nome do QUERY PARAM
+        # público (`GET /agenda/events?exclude_cancelled=true`, consumido por `BlocoDaAgenda.tsx`
+        # e pelos testes de `test_agenda_por_contato.py`) — o ganho de precisão do nome não paga
+        # o custo de uma migração de contrato de API só por isto. Este comentário é a correção.
+        stmt = stmt.where(AgendaEvent.status.not_in(TERMINAL_STATUSES))
+    # Default `False`, ao contrário de `count_events` (default `True`): a tela de Agenda chama
+    # `list_events` sem este parâmetro e RENDERIZA todo evento, cancelado/feito incluso (o card
+    # mostra o status); mudar o default aqui apagaria eventos do calendário sem ninguém pedir.
+    # É a ficha 360° (`BlocoDaAgenda`) que passa `exclude_cancelled=True` explicitamente — ver
+    # `router.py`.
     stmt = stmt.order_by(AgendaEvent.starts_at).limit(limit).offset(offset)
     return list(db.scalars(stmt).all())
 
@@ -192,6 +215,8 @@ def update_event(
         event.location = data.location
     if data.meeting_url is not None:
         event.meeting_url = data.meeting_url
+    if data.client_id is not None:
+        event.client_id = data.client_id
     audit.record(
         db, tenant_id=tenant_id, actor=actor, action="agenda.event.update", target=event.id,
         is_ai=by_ai,
@@ -266,3 +291,57 @@ def reschedule_event(
     db.commit()
     db.refresh(event)
     return event, conflicts
+
+
+def next_event_map(db: Session) -> dict[str, AgendaEvent]:
+    """Próximo compromisso por contato, para a linha do card do Kanban.
+
+    Consulta agregada, uma para o board inteiro — no molde de `crm_service.last_interaction_map`,
+    que existe justamente porque valor derivado guardado dessincroniza. O custo não cresce com
+    a quantidade de cards.
+
+    ⚠️ O corte é `ends_at >= agora`, NÃO `starts_at >= agora`. Evento de dia inteiro tem `starts_at`
+    ancorado à MEIA-NOITE — mas em qual fuso depende de QUEM criou o evento, e as duas
+    convenções coexistem de propósito (achado da revisão final da Onda 2, não unificado aqui:
+    virar migration de dados está fora desta onda):
+      - `create_event` ancora na meia-noite REAL do fuso do TENANT (convertida p/ UTC via
+        `day_window_utc` — ver a docstring dele);
+      - `receivables.service.build_charge` (a população DOMINANTE que alimenta este mapa, já
+        que toda cobrança nasce com evento) ancora na meia-noite UTC CRUA — ver o comentário lá.
+    Nos dois casos, às 15h no fuso do tenant o `starts_at` já ficou no passado — filtrar pelo
+    início esconderia o compromisso de HOJE, que é o mais relevante que existe para o card.
+    Pelo fim, ele aparece o dia todo e some quando acaba, em QUALQUER das duas convenções.
+
+    Cancelado E feito ficam de fora (`TERMINAL_STATUSES`): nenhum dos dois é próximo passo — um
+    `done` adiantado pelo dono é tão "já resolvido" quanto um cancelado, para esta pergunta.
+
+    A sessão já chega escopada por RLS (mesma convenção de `list_events`).
+    """
+    agora = datetime.now(UTC)
+    # Mesmo padrão de `unread_client_ids` (whatsapp_inbox/service.py): `row_number()` particionado
+    # por contato, ordenado por (starts_at, id), ficando com rn == 1. O desempate por `id` não é
+    # decoração — dois eventos no mesmo instante fariam "o próximo" dançar entre chamadas sem ele.
+    # Sem SQL condicional por dialeto: roda igual em SQLite (teste) e Postgres (produção).
+    ranked = (
+        select(
+            AgendaEvent.id.label("id"),
+            func.row_number()
+            .over(
+                partition_by=AgendaEvent.client_id,
+                order_by=(AgendaEvent.starts_at, AgendaEvent.id),
+            )
+            .label("rn"),
+        )
+        .where(
+            AgendaEvent.client_id.is_not(None),
+            # `TERMINAL_STATUSES`, não só `STATUS_CANCELLED` (achado da revisão final da Onda 2):
+            # um compromisso marcado `done` ANTES da hora (o dono adianta o status) não é "próximo
+            # passo" nenhum — ele já aconteceu, do ponto de vista de quem preenche o card. Cancelado
+            # e feito são os dois jeitos de um evento deixar de ser pendência.
+            AgendaEvent.status.not_in(TERMINAL_STATUSES),
+            AgendaEvent.ends_at >= agora,
+        )
+        .subquery()
+    )
+    stmt = select(AgendaEvent).join(ranked, ranked.c.id == AgendaEvent.id).where(ranked.c.rn == 1)
+    return {event.client_id: event for event in db.scalars(stmt).all()}

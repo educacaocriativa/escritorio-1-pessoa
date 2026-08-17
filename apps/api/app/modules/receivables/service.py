@@ -253,6 +253,14 @@ def build_charge(db: Session, *, tenant_id: str, actor: str, data: ChargeCreate)
     who = client.name if client else (data.description or "cobrança")
 
     # Injeta o vencimento na Agenda (marcador, não ocupa horário).
+    #
+    # ⚠️ **Meia-noite UTC CRUA, e não a meia-noite do fuso do tenant** (achado da revisão final
+    # da Onda 2). `agenda/service.py::create_event` ancora eventos all-day na meia-noite REAL do
+    # fuso via `day_window_utc` — este ponto NÃO segue o mesmo caminho, e as duas convenções
+    # coexistem no sistema hoje. Unificar é migration de dados (reancorar todo `AgendaEvent`
+    # all-day já gravado), fora do escopo desta onda — o que ESTA onda corrigiu foi a EXIBIÇÃO
+    # (`BoardClient.next_event_all_day` em `crm/schemas.py` + `formatDay` no card do Kanban),
+    # não o armazenamento. Ver a nota espelhada em `agenda/service.py::next_event_map`.
     day_start = datetime.combine(data.due_date, time.min, tzinfo=UTC)
     event = AgendaEvent(
         tenant_id=tenant_id,
@@ -266,6 +274,9 @@ def build_charge(db: Session, *, tenant_id: str, actor: str, data: ChargeCreate)
         all_day=True,
         amount_cents=data.amount_cents,
         external_ref=charge.id,
+        # Sem isto, só o PASSADO (backfill da migration 0078) ficaria ligado ao contato — toda
+        # cobrança nova nasceria com evento órfão na Agenda (Task 2 da Onda 2).
+        client_id=data.client_id,
     )
     db.add(event)
     db.flush()  # popula event.id
@@ -370,6 +381,7 @@ def reschedule_charge(
     if charge.agenda_event_id:
         ev = db.get(AgendaEvent, charge.agenda_event_id)
         if ev is not None:
+            # Mesma convenção (meia-noite UTC crua) de `build_charge` — ver o comentário lá.
             day_start = datetime.combine(due_date, time.min, tzinfo=UTC)
             ev.starts_at = day_start
             ev.ends_at = day_start.replace(hour=23, minute=59)
@@ -427,6 +439,7 @@ def update_charge(db: Session, *, charge_id: str, tenant_id: str, actor: str, da
     ev = db.get(AgendaEvent, charge.agenda_event_id) if charge.agenda_event_id else None
     if ev is not None:
         if data.due_date is not None:
+            # Mesma convenção (meia-noite UTC crua) de `build_charge` — ver o comentário lá.
             day_start = datetime.combine(charge.due_date, time.min, tzinfo=UTC)
             ev.starts_at = day_start
             ev.ends_at = day_start.replace(hour=23, minute=59)

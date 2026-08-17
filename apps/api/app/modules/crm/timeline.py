@@ -3,16 +3,23 @@
 Mescla DUAS fontes com contratos diferentes:
 
 - **Persistida** — `facts`: os fatos narrativos (chegou, voltou, moveu, decidiu).
-- **Derivada** — `quotes` e `charges`: os fatos financeiros, lidos na ORIGEM.
+- **Derivada** — `quotes`, `charges` e `agenda_events`: os fatos financeiros e de compromisso,
+  lidos na ORIGEM.
 
-O financeiro não é copiado para `facts` de propósito. Guardar `amount_cents` em
-segundo lugar criaria uma segunda versão da verdade sobre dinheiro — a forma exata do bug que
+O financeiro e o compromisso não são copiados para `facts` de propósito. Guardar `amount_cents`
+ou `starts_at` em segundo lugar criaria uma segunda versão da verdade — a forma exata do bug que
 a Onda 0 do Epic 8 gastou uma onda inteira desfazendo. Ler da origem também traz de graça o
-histórico RETROATIVO: contatos que já existiam mostram as cobranças de meses atrás sem
-nenhuma migration de dados.
+histórico RETROATIVO: contatos que já existiam mostram as cobranças e os compromissos de meses
+atrás sem nenhuma migration de dados.
 
-Fica fora de `service.py` porque é leitura cross-módulo (toca `receivables` e `quotes`), com
-responsabilidade distinta das regras de escrita do CRM.
+Só compromissos JÁ REALIZADOS entram aqui (`ends_at < agora`, excluído `cancelled`): o futuro
+é a pergunta do bloco de Agenda, não da timeline do contato — duas telas, duas perguntas. E só
+os que a Agenda narra com EXCLUSIVIDADE: `cobranca_receber`/`cobranca_pagar` ficam de fora
+(`KINDS_FINANCEIROS_JA_NARRADOS`) porque a fonte `charges` já os conta como fato financeiro —
+sem a exclusão, cada cobrança apareceria DUAS vezes (o dinheiro e um compromisso fantasma).
+
+Fica fora de `service.py` porque é leitura cross-módulo (toca `receivables`, `quotes` e
+`agenda`), com responsabilidade distinta das regras de escrita do CRM.
 """
 from __future__ import annotations
 
@@ -22,8 +29,23 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.core.facts import Fact
+from app.modules.agenda.models import (
+    KIND_COBRANCA_PAGAR,
+    KIND_COBRANCA_RECEBER,
+    STATUS_CANCELLED,
+    AgendaEvent,
+)
 from app.modules.quotes.models import Quote
 from app.modules.receivables.models import Charge
+
+# Kinds financeiros: todo `cobranca_receber`/`cobranca_pagar` já é narrado pela fonte `charges`
+# acima (título "Cobrança de R$ X — vence DD/MM/AAAA"). Desde a Task 2/3 da Onda 2, ESSES eventos
+# de Agenda também carregam `client_id` (backfill da 0078 + escrita em `receivables/service.py`),
+# então sem esta exclusão eles casariam de novo aqui e cada cobrança virava DOIS fatos na
+# timeline — o dinheiro (fonte `charges`) e um "Compromisso: A receber: Fulano" fantasma que o
+# dono nunca marcou. Achado da revisão final da onda: o financeiro já tem dono nesta tela; a
+# Agenda entra só com o que ela EXCLUSIVAMENTE sabe (atendimento, reunião, audiência...).
+KINDS_FINANCEIROS_JA_NARRADOS = {KIND_COBRANCA_RECEBER, KIND_COBRANCA_PAGAR}
 
 # Teto POR FONTE. A resposta declara `truncated` quando qualquer fonte bate nele — a tela
 # avisa em vez de fingir que aquilo é tudo.
@@ -111,6 +133,33 @@ def build(db: Session, *, client_id: str, limit: int = LIMITE_POR_FONTE) -> tupl
             "title": f"Orçamento “{q.title}” — {_brl(q.total_cents)} ({q.status})",
             "body": q.notes, "actor": "sistema", "is_ai": False,
             "at": _instante(q.created_at),
+        })
+
+    agora = datetime.now(UTC)
+    compromissos = list(
+        db.scalars(
+            select(AgendaEvent)
+            .where(
+                AgendaEvent.client_id == client_id,
+                AgendaEvent.ends_at < agora,
+                AgendaEvent.status != STATUS_CANCELLED,
+                # Ver `KINDS_FINANCEIROS_JA_NARRADOS` no topo do arquivo — a fonte `charges`
+                # acima já é dona de contar cobrança nesta timeline.
+                AgendaEvent.kind.not_in(KINDS_FINANCEIROS_JA_NARRADOS),
+            )
+            .order_by(AgendaEvent.starts_at.desc(), AgendaEvent.id.desc())
+            .limit(limit + 1)
+        ).all()
+    )
+    if len(compromissos) > limit:
+        truncated = True
+        compromissos = compromissos[:limit]
+    for ev in compromissos:
+        entradas.append({
+            "id": f"agenda:{ev.id}", "kind": "agenda",
+            "title": f"Compromisso: {ev.title}",
+            "body": ev.description, "actor": "sistema", "is_ai": False,
+            "at": _instante(ev.starts_at),
         })
 
     entradas.sort(key=lambda e: e["at"], reverse=True)

@@ -75,4 +75,12 @@ class AgendaEvent(Base, TenantMixin, TimestampMixin):
     # Referência à entidade de origem (id do processo, fatura, contrato...).
     external_ref: Mapped[str | None] = mapped_column(String(64), nullable=True)
 
+    # De QUEM é este compromisso. Nullable é o caso normal: bloqueio de horário, prazo
+    # interno e conta a pagar não têm cliente. Sem FK e `String(36)`, como
+    # `whatsapp_chats.client_id` — a Agenda não deve ganhar dependência dura da tabela do CRM.
+    #
+    # Não confundir com `external_ref`: aquele é ponteiro POLIMÓRFICO, lido conforme o `kind`
+    # (id de cobrança, de conta a pagar...). Este é sempre um `clients.id`.
+    client_id: Mapped[str | None] = mapped_column(String(36), nullable=True, index=True)
+
     created_by_ai: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)

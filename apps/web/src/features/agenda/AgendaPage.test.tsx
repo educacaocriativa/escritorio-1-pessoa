@@ -1,3 +1,4 @@
+import type { AgendaEvent } from "@e1p/shared-types";
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
@@ -94,5 +95,82 @@ describe("AgendaPage — Novo evento (Story 7.15, Task 2)", () => {
     // Modal permanece aberto e o botão volta a ficar habilitado (saving → false).
     expect(screen.getByRole("heading", { name: "Novo evento" })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Criar evento" })).toBeEnabled();
+  });
+});
+
+// Task 3 (Onda 2, limpeza do _events_out): `client_name` passou a vir de QUALQUER evento
+// com contato vinculado, não só cobranças (ver AgendaPage.tsx, `chipLabel`). O card do
+// calendário restringe o atalho "mostra o nome" aos kinds financeiros — os únicos cujo
+// título é auto-gerado pelo backend. Eventos "reunião"/"atendimento" mostram o título que o
+// dono digitou, mesmo linkados a um contato.
+function agendaEvent(overrides: Partial<AgendaEvent> = {}): AgendaEvent {
+  // "Hoje" no fuso fixo do runner (America/Sao_Paulo, ver vitest.config.ts) — mesmo fuso que
+  // `hojeDoTenant` usa quando não há sessão (fallback FUSO_PADRAO), então o evento cai dentro
+  // da grade do mês que a AgendaPage abre por padrão.
+  const now = new Date();
+  const at = (h: number) =>
+    new Date(now.getFullYear(), now.getMonth(), now.getDate(), h, 0, 0).toISOString();
+  return {
+    id: "ev-1",
+    tenant_id: "t-1",
+    title: "Evento",
+    description: "",
+    kind: "atendimento",
+    status: "scheduled",
+    priority: "normal",
+    source: "manual",
+    starts_at: at(9),
+    ends_at: at(10),
+    all_day: false,
+    location: "",
+    meeting_url: null,
+    guests: [],
+    amount_cents: null,
+    external_ref: null,
+    google_event_id: null,
+    client_id: null,
+    client_name: null,
+    created_by_ai: false,
+    created_at: at(8),
+    ...overrides,
+  };
+}
+
+function mockEvents(events: AgendaEvent[]) {
+  vi.mocked(api.get).mockImplementation((url: string) => {
+    if (url === "/agenda/events") return Promise.resolve({ data: events } as never);
+    return Promise.resolve({ data: [] } as never);
+  });
+}
+
+describe("AgendaPage — chipLabel (Task 3, Onda 2): atalho de nome só para kinds financeiros", () => {
+  it("cobrança com client_name mostra o NOME no card, não o título auto-gerado", async () => {
+    mockEvents([
+      agendaEvent({
+        id: "ev-receber",
+        title: "A receber: cobrança gerada automaticamente",
+        kind: "cobranca_receber",
+        client_name: "Fulana da Silva",
+      }),
+    ]);
+    const { container } = renderPage();
+
+    await waitFor(() => expect(container.textContent).toContain("Fulana da Silva"));
+    expect(container.textContent).not.toContain("cobrança gerada automaticamente");
+  });
+
+  it("reunião com contato vinculado mostra o TÍTULO digitado, não o nome do contato", async () => {
+    mockEvents([
+      agendaEvent({
+        id: "ev-reuniao",
+        title: "Alinhamento do casamento 12/12",
+        kind: "reuniao",
+        client_name: "Cliente Vinculado",
+      }),
+    ]);
+    const { container } = renderPage();
+
+    await waitFor(() => expect(container.textContent).toContain("Alinhamento do casamento 12/12"));
+    expect(container.textContent).not.toContain("Cliente Vinculado");
   });
 });

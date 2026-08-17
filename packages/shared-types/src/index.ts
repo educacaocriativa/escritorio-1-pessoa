@@ -184,7 +184,19 @@ export interface AgendaEvent {
   external_ref: string | null;
   /** Id do evento espelhado no Google Calendar (quando o Meet foi gerado via OAuth). */
   google_event_id: string | null;
-  /** Nome do cliente (cobrança) ou fornecedor (conta a pagar), resolvido no list/get. */
+  /** De quem é este compromisso (aponta para `clients.id`). `null` para bloqueio de horário,
+   *  prazo interno e conta a pagar — nunca têm contato (espelha `EventOut.client_id` em
+   *  `agenda/schemas.py`). Gap deixado pela Task 2/3 desta onda: o backend já devolvia o campo,
+   *  mas o tipo compartilhado não o declarava — a ficha 360° (Task 6) é a primeira consumidora. */
+  client_id: string | null;
+  /** Nome resolvido para exibição no card, no list/get — não da coluna do evento. Desde a
+   *  Task 3 (Onda 2), o join direto por `client_id` resolve o NOME DO CONTATO para QUALQUER
+   *  evento vinculado (reunião, atendimento, cobrança...), não só cobrança/conta a pagar; a
+   *  metade sem `client_id` — conta a pagar — continua resolvendo o fornecedor por
+   *  `external_ref` (ver `agenda/router.py::_events_out`). `chipLabel` (AgendaPage.tsx) usa
+   *  isto como ATALHO só para os kinds financeiros, justamente porque o título deles já é
+   *  auto-gerado ("A receber: Fulano") — não confundir a restrição de exibição com a origem
+   *  do dado, que é ampla. */
   client_name: string | null;
   created_by_ai: boolean;
   created_at: string;
@@ -239,7 +251,7 @@ export interface ClientTimelineEntry {
   id: string;
   kind:
     | "lead_created" | "lead_return" | "stage_move" | "reopened" | "note" | "funnel"
-    | "quote" | "charge" | "payment";
+    | "quote" | "charge" | "payment" | "agenda";
   title: string;
   body: string;
   actor: string;
@@ -259,6 +271,14 @@ export interface BoardClient extends Client {
   last_interaction_at: string | null;
   /** Tem mensagem do contato esperando resposta. */
   unread: boolean;
+  /** Próximo compromisso do contato na Agenda — `null` nos dois junto significa "sem próximo passo". */
+  next_event_at: string | null;
+  next_event_title: string | null;
+  /** `next_event_at` é dia inteiro ou tem horário? Determina COMO formatar: dia inteiro usa
+   *  `formatDay` (lê a data da string, sem fuso — `receivables` ancora à meia-noite UTC, não
+   *  na do fuso do tenant); com horário usa `formatDateShort` (converte o instante para o fuso).
+   *  Mesma distinção que `BlocoDaAgenda` já faz com `AgendaEvent.all_day`. */
+  next_event_all_day: boolean;
 }
 
 export interface BoardColumn {
