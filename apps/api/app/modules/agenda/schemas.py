@@ -71,7 +71,9 @@ class EventUpdate(BaseModel):
     priority: str | None = None
     location: str | None = Field(default=None, max_length=255)
     meeting_url: str | None = Field(default=None, max_length=512)
-    # Reatribuir/desvincular o contato do evento (mesmo campo de EventCreate).
+    # Reatribuir o contato do evento (mesmo campo de EventCreate). `None` = campo OMITIDO, não
+    # "limpar o vínculo": `update_event` só grava quando `data.client_id is not None`, então dá
+    # para trocar A por B, mas não existe hoje um jeito de desvincular via PATCH.
     client_id: str | None = None
 
     @model_validator(mode="after")

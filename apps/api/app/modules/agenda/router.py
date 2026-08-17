@@ -19,34 +19,40 @@ from app.modules.agenda.schemas import (
 )
 from app.modules.crm.models import Client
 from app.modules.payables.models import Payable
-from app.modules.receivables.models import Charge
 
 
 def _events_out(db: Session, events: list[AgendaEvent]) -> list[EventOut]:
-    """Resolve o nome do cliente (cobrança) / fornecedor (conta a pagar) para o card."""
-    receber_refs = [
-        e.external_ref for e in events if e.kind == "cobranca_receber" and e.external_ref
-    ]
-    pagar_refs = [e.external_ref for e in events if e.kind == "cobranca_pagar" and e.external_ref]
+    """Resolve o nome exibido no card: cliente (vínculo direto) / fornecedor (derivação).
+
+    Os dois caminhos existem porque são coisas diferentes. Cliente é VÍNCULO: o evento carrega
+    `client_id` (Tasks 1/2 desta onda — backfill do passado + escrita no nascimento), então o nome
+    vem de um join direto por id, sem passar por `external_ref`/`Charge`. Fornecedor CONTINUA
+    sendo DERIVAÇÃO: conta a pagar não tem cliente e nunca terá `client_id` — o nome só existe
+    porque `Payable.supplier` é alcançável via `external_ref`. Remover este segundo caminho
+    apagaria o nome do fornecedor da tela da Agenda.
+    """
+    client_ids = {e.client_id for e in events if e.client_id}
     names: dict[str, str] = {}
-    if receber_refs:
-        charges = db.scalars(select(Charge).where(Charge.id.in_(receber_refs))).all()
-        client_ids = {c.client_id for c in charges if c.client_id}
-        cmap = {}
-        if client_ids:
-            rows = db.scalars(select(Client).where(Client.id.in_(client_ids)))
-            cmap = {c.id: c.name for c in rows}
-        for c in charges:
-            if c.client_id and c.client_id in cmap:
-                names[c.id] = cmap[c.client_id]
+    if client_ids:
+        rows = db.scalars(select(Client).where(Client.id.in_(client_ids)))
+        names = {c.id: c.name for c in rows}
+
+    pagar_refs = [e.external_ref for e in events if e.kind == "cobranca_pagar" and e.external_ref]
+    supplier_names: dict[str, str] = {}
     if pagar_refs:
         for p in db.scalars(select(Payable).where(Payable.id.in_(pagar_refs))):
             if p.supplier:
-                names[p.id] = p.supplier
+                supplier_names[p.id] = p.supplier
+
     out = []
     for e in events:
         eo = EventOut.model_validate(e)
-        eo.client_name = names.get(e.external_ref) if e.external_ref else None
+        if e.client_id:
+            eo.client_name = names.get(e.client_id)
+        elif e.external_ref:
+            eo.client_name = supplier_names.get(e.external_ref)
+        else:
+            eo.client_name = None
         out.append(eo)
     return out
 

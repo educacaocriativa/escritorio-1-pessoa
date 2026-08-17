@@ -17,6 +17,8 @@ from sqlalchemy.orm import Session
 from app.core.tz import DEFAULT_TENANT_TIMEZONE, day_window_utc, tenant_today
 from app.modules.agenda import service as agenda_service
 from app.modules.agenda.models import STATUS_CANCELLED, AgendaEvent
+from app.modules.crm.models import Client
+from app.modules.receivables.models import Charge
 
 REGISTER = {
     "legal_name": "Agenda por Contato ME",
@@ -197,3 +199,59 @@ def test_next_event_map_inclui_evento_de_dia_inteiro_de_hoje(db: Session):
 
     mapa = agenda_service.next_event_map(db)
     assert mapa["cli-hoje"].id == evento.id
+
+
+# ── Task 3: _events_out — join direto substitui a derivação por external_ref, MAS só a ──────
+# ── metade das cobranças. A metade do fornecedor (payables) não tem client_id e fica. ───────
+
+
+def test_client_name_do_evento_e_o_mesmo_pelos_dois_caminhos(client: TestClient, db: Session,
+                                                               headers):
+    """A trava da limpeza: derivação antiga e join novo produzem o MESMO `client_name`.
+
+    Roda ANTES da remoção do caminho velho. Se um backfill errasse uma linha, a Agenda
+    perderia um nome que hoje mostra — e ninguém perceberia, porque nenhum teste afirmava
+    que os dois caminhos concordam.
+    """
+    cl = client.post("/crm/clients", json={"name": "Cliente Paridade"}, headers=headers).json()
+    due_date = (datetime.now(UTC).date() + timedelta(days=30)).isoformat()
+    charge = client.post(
+        "/receivables/charges",
+        json={
+            "kind": "service", "method": "pix", "amount_cents": 5000,
+            "due_date": due_date, "description": "Mensalidade", "client_id": cl["id"],
+        },
+        headers=headers,
+    ).json()
+
+    event = db.scalars(
+        select(AgendaEvent).where(AgendaEvent.external_ref == charge["id"])
+    ).first()
+    assert event is not None
+
+    # Caminho antigo: external_ref (charge["id"]) -> Charge -> Client.name.
+    charge_row = db.get(Charge, charge["id"])
+    nome_antigo = db.get(Client, charge_row.client_id).name
+
+    # Caminho novo: AgendaEvent.client_id -> Client.name (join direto, sem passar por Charge).
+    nome_novo = db.get(Client, event.client_id).name
+
+    assert nome_antigo is not None
+    assert nome_antigo == nome_novo
+
+
+def test_conta_a_pagar_continua_mostrando_o_fornecedor(client: TestClient, headers):
+    """A metade que NÃO morre. Conta a pagar não tem cliente; o nome vem de `payables.supplier`."""
+    resp = client.post(
+        "/payables/bills",
+        json={
+            "description": "Aluguel", "category": "Estrutura", "supplier": "Imobiliária Paridade",
+            "amount_cents": 250000, "due_date": "2099-08-05",
+        },
+        headers=headers,
+    )
+    assert resp.status_code == 201, resp.text
+
+    events = client.get("/agenda/events", headers=headers).json()
+    pagar = next(e for e in events if e["kind"] == "cobranca_pagar")
+    assert pagar["client_name"] == "Imobiliária Paridade"
