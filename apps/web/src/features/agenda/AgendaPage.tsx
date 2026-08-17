@@ -6,7 +6,7 @@ import Modal from "../../components/Modal";
 import { api } from "../../lib/api";
 import GanchoDaVima from "../dna/GanchoDaVima";
 import { usePrimaryAction } from "../../store/pageActions";
-import { formatDateTime, formatDay, formatTime, today } from "../../lib/datetime";
+import { formatDateTime, formatDay, formatTime, localYmd, today } from "../../lib/datetime";
 import { useFuso } from "../../store/auth";
 import NewEventModal from "./NewEventModal";
 
@@ -25,18 +25,14 @@ const addDays = (d: Date, n: number) => {
 };
 const startOfWeek = (d: Date) => addDays(d, -d.getDay()); // semana começa no domingo
 const sameDay = (a: Date, b: Date) => a.toDateString() === b.toDateString();
-// Exportado: `NewEventModal.tsx` (Onda 2, Task 5) também precisa converter a data pré-preenchida
-// pelo clique no calendário — helper compartilhado, não duplicado.
-export const ymd = (d: Date) =>
-  `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
 /**
  * "Hoje" no fuso do TENANT, como `Date` local — a âncora da grade do calendário.
  *
- * A grade inteira (`startOfDay`, `addDays`, `startOfWeek`, `ymd`) trabalha em `Date` local, e
- * isso é coerente: são posições numa grade, não instantes. O que NÃO podia continuar local era
- * o ponto de partida — `new Date()` num navegador em UTC começava a grade no dia errado.
- * Montamos o dia certo pelas PARTES, para que a `Date` resultante seja a meia-noite local desse
- * dia e toda a aritmética seguinte continue valendo.
+ * A grade inteira (`startOfDay`, `addDays`, `startOfWeek`, `localYmd` de `lib/datetime.ts`)
+ * trabalha em `Date` local, e isso é coerente: são posições numa grade, não instantes. O que NÃO
+ * podia continuar local era o ponto de partida — `new Date()` num navegador em UTC começava a
+ * grade no dia errado. Montamos o dia certo pelas PARTES, para que a `Date` resultante seja a
+ * meia-noite local desse dia e toda a aritmética seguinte continue valendo.
  */
 const hojeDoTenant = (tz: string) => {
   const [a, m, d] = today(tz).split("-").map(Number);
@@ -76,7 +72,7 @@ export default function AgendaPage() {
     // Fronteiras em UTC-date (meia-noite UTC da data do grid), não o local→UTC: assim os
     // eventos de dia inteiro (gravados à meia-noite UTC) não caem fora do range nas bordas.
     const { data } = await api.get<AgendaEvent[]>("/agenda/events", {
-      params: { start: `${ymd(start)}T00:00:00.000Z`, end: `${ymd(end)}T00:00:00.000Z`, limit: 500 },
+      params: { start: `${localYmd(start)}T00:00:00.000Z`, end: `${localYmd(end)}T00:00:00.000Z`, limit: 500 },
     });
     setEvents(data);
   }, [start, end]);
@@ -202,10 +198,10 @@ const chipLabel = (e: AgendaEvent) =>
 // casamos pela DATA do calendário (sem fuso) para não "voltar" um dia em fuso negativo.
 // Eventos com horário usam a data local normalmente.
 const eventYmd = (e: AgendaEvent) =>
-  e.all_day ? e.starts_at.slice(0, 10) : ymd(new Date(e.starts_at));
+  e.all_day ? e.starts_at.slice(0, 10) : localYmd(new Date(e.starts_at));
 const eventsOfDay = (events: AgendaEvent[], d: Date) =>
   events
-    .filter((e) => eventYmd(e) === ymd(d))
+    .filter((e) => eventYmd(e) === localYmd(d))
     .sort((a, b) => +new Date(a.starts_at) - +new Date(b.starts_at));
 
 function MonthGrid({
@@ -223,7 +219,7 @@ function MonthGrid({
 }) {
   const fuso = useFuso();
   const today = hojeDoTenant(fuso);
-  const hoje = ymd(today);
+  const hoje = localYmd(today);
   return (
     <div className="overflow-hidden rounded-2xl border border-neutral-100 bg-white">
       <div className="grid grid-cols-7 border-b border-neutral-100 text-center text-xs font-medium text-neutral-400">
@@ -291,7 +287,7 @@ function WeekView({
 }) {
   const fuso = useFuso();
   const today = hojeDoTenant(fuso);
-  const hoje = ymd(today);
+  const hoje = localYmd(today);
   return (
     <div className="grid grid-cols-7 gap-2">
       {days.map((d) => {
@@ -340,7 +336,7 @@ function DayView({
   onEventClick: (e: AgendaEvent) => void;
 }) {
   const fuso = useFuso();
-  const hoje = ymd(hojeDoTenant(fuso));
+  const hoje = localYmd(hojeDoTenant(fuso));
   const dayEvents = eventsOfDay(events, day);
   return (
     <div className="rounded-2xl border border-neutral-100 bg-white p-4">

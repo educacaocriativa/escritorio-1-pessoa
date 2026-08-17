@@ -3,7 +3,7 @@ import { Video } from "lucide-react";
 import { useEffect, useState } from "react";
 import Modal, { Field } from "../../components/Modal";
 import { api, apiErrorMessage, getGoogleStatus } from "../../lib/api";
-import { ymd } from "./AgendaPage";
+import { localYmd } from "../../lib/datetime";
 
 // Tipos de evento que geram Meet automaticamente quando o Google está conectado (Story 4.1).
 const MEET_KINDS = new Set(["reuniao", "atendimento", "audiencia"]);
@@ -61,7 +61,7 @@ export default function NewEventModal({
   // pré-preenche a data ao abrir num dia do calendário
   useEffect(() => {
     if (open && initialDate) {
-      const d = ymd(initialDate);
+      const d = localYmd(initialDate);
       setStartDate(d);
       setEndDate(d);
       setStart(`${d}T09:00`);

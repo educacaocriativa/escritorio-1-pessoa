@@ -105,3 +105,21 @@ export function formatDay(ymd: string | null | undefined): string {
 export function today(tz: string, now: Date = new Date()): string {
   return now.toLocaleDateString("en-CA", { timeZone: fusoValido(tz) });
 }
+
+/**
+ * `Date` → `"YYYY-MM-DD"` pelas partes LOCAIS do objeto — fuso da MÁQUINA, não do tenant.
+ *
+ * Único helper deste módulo que NÃO recebe `tz`, e de propósito: ele não formata um instante
+ * (`starts_at`, `created_at`), formata a posição de uma grade de calendário já construída em
+ * `Date` locais (`AgendaPage.tsx`: `startOfDay`/`addDays`/`startOfWeek`), cuja âncora (`hoje`) já
+ * foi resolvida no fuso do tenant por `today()`/`hojeDoTenant` antes de entrar nessa aritmética.
+ * Formatar essas posições pelas partes locais do `Date` é coerente com essa aritmética.
+ *
+ * Pela mesma razão, `localYmd` NÃO é seguro para formatar um instante vindo da API
+ * (`new Date(iso)` interpretado no fuso do NAVEGADOR, não do tenant) — para isso use
+ * `formatDate`/`formatDay` acima. Movida de `AgendaPage.tsx` (Onda 2, Task 5) sem mudar
+ * comportamento: era local a ela, agora é compartilhada com `NewEventModal.tsx`.
+ */
+export function localYmd(d: Date): string {
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+}
