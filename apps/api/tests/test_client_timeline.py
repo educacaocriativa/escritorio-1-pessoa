@@ -185,6 +185,46 @@ def test_timeline_nao_inclui_compromisso_cancelado(client: TestClient, headers, 
     assert all(e["kind"] != "agenda" for e in entries)
 
 
+# ── Achado da revisão final da Onda 2: cobrança NÃO pode duplicar como compromisso fantasma ─
+
+
+def test_cobranca_via_api_nao_duplica_como_compromisso_na_timeline(
+    client: TestClient, headers, contato,
+):
+    """Vai pela rota real (`POST /receivables/charges`), não por um `Charge(...)` cru no banco.
+
+    `test_timeline_inclui_a_cobranca_sem_copiar_o_valor` semeia a `Charge` direto no banco —
+    isso NUNCA passa por `receivables.service.build_charge`, então o `AgendaEvent` gêmeo (que
+    `build_charge` cria, com o MESMO `client_id`) nunca chega a existir, e o teste não conseguia
+    enxergar o bug: a cobrança tinha que nascer pela rota de verdade para o evento fantasma
+    também nascer.
+
+    O vencimento é no PASSADO de propósito: só um evento com `ends_at < agora` entra nesta
+    timeline (é o corte de "já realizado"). Uma cobrança com vencimento futuro não provaria nada
+    — o filtro de data já a esconderia, kind ou não.
+    """
+    due_date = (datetime.now(UTC).date() - timedelta(days=5)).isoformat()
+    resp = client.post(
+        "/receivables/charges",
+        json={
+            "kind": "service", "method": "pix", "amount_cents": 30000,
+            "due_date": due_date, "description": "Consulta", "client_id": contato,
+        },
+        headers=headers,
+    )
+    assert resp.status_code == 201, resp.text
+
+    entries = client.get(f"/crm/clients/{contato}/timeline", headers=headers).json()["entries"]
+
+    cobrancas = [e for e in entries if e["kind"] == "charge"]
+    assert len(cobrancas) == 1
+
+    # A trava real deste teste: NENHUM "Compromisso: A receber: ..." fantasma — a mesma
+    # cobrança não pode aparecer também como `kind == "agenda"`.
+    fantasmas = [e for e in entries if e["kind"] == "agenda"]
+    assert fantasmas == [], f"compromisso fantasma vazando na timeline: {fantasmas}"
+
+
 def test_timeline_de_agenda_respeita_o_limite_por_fonte(client: TestClient, headers, contato):
     """Mesma regra das outras três fontes: `LIMITE_POR_FONTE` e `truncated`."""
     base = datetime.now(UTC) - timedelta(days=365)
