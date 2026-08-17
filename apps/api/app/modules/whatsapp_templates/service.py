@@ -15,8 +15,16 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.core import audit, whatsapp
+from app.core.whatsapp.providers.meta import TemplateStatusEvent
 from app.modules.settings.service import get_profile
-from app.modules.whatsapp_templates.models import STATUS_PENDING, WhatsappTemplate
+from app.modules.whatsapp_templates.models import (
+    STATUS_APPROVED,
+    STATUS_DISABLED,
+    STATUS_PAUSED,
+    STATUS_PENDING,
+    STATUS_REJECTED,
+    WhatsappTemplate,
+)
 from app.modules.whatsapp_templates.schemas import TemplateCreate
 
 logger = logging.getLogger("e1p.whatsapp_templates")
@@ -143,6 +151,68 @@ def sync_template(db: Session, *, tenant_id: str, template_id: str) -> WhatsappT
     db.commit()
     db.refresh(template)
     return template
+
+
+# Os únicos status que este produto sabe representar — espelham os STATUS_* do model e o
+# `STATUS_LABEL` da tela (`apps/web/src/features/config/WhatsappSection.tsx`), que é um Record
+# FECHADO. A Meta emite 14 valores de `event` no webhook (`ARCHIVED`, `FLAGGED`, `LOCKED`,
+# `IN_APPEAL`, `LIMIT_EXCEEDED`, `REINSTATED`, `PENDING_DELETION`, ...); gravá-los faria a tela
+# mostrar rótulo vazio, então são ignorados de propósito.
+_STATUS_CONHECIDOS = frozenset(
+    {STATUS_PENDING, STATUS_APPROVED, STATUS_REJECTED, STATUS_PAUSED, STATUS_DISABLED}
+)
+
+
+def apply_status_events(
+    db: Session, *, tenant_id: str, events: list[TemplateStatusEvent]
+) -> int:
+    """Aplica os eventos de `message_template_status_update` já parseados. Devolve quantos
+    templates foram de fato atualizados.
+
+    É o caminho OPOSTO ao de `sync_template`: em vez de perguntar o status à Graph API quando
+    alguém clica em "Sincronizar", a Meta empurra a mudança assim que ela acontece (issue #36).
+    O botão manual continua existindo como fallback.
+
+    Recebe uma sessão JÁ no tenant certo (o router do webhook abre a `tenant_session` depois de
+    resolver a conta pelo WABA). Por isso NÃO filtra por `tenant_id` na query — a RLS isola
+    (Regra de Ouro nº 1); o parâmetro `tenant_id` existe para log e para deixar a assinatura
+    igual à das irmãs deste módulo.
+
+    `category_approved` só é escrito quando o evento INFORMA a categoria: `None` significa "o
+    evento não falou", não "não tem" — sobrescrever apagaria o que o "Sincronizar" trouxe.
+
+    Cada evento é commitado isoladamente: um evento órfão no meio do lote não pode impedir os
+    demais (mesmo princípio de `whatsapp_inbox.service.ingest_webhook_payload`).
+    """
+    aplicados = 0
+    for event in events:
+        if event.status not in _STATUS_CONHECIDOS:
+            logger.info(
+                "[whatsapp_template:webhook] status desconhecido ignorado tenant=%s "
+                "meta_template_id=%s status=%s",
+                tenant_id, event.meta_template_id, event.status,
+            )
+            continue
+        template = db.scalar(
+            select(WhatsappTemplate).where(
+                WhatsappTemplate.meta_template_id == event.meta_template_id
+            )
+        )
+        if template is None:
+            # Template criado direto no painel da Meta, ou de outro tenant (a RLS já o
+            # escondeu). Não é erro: a Meta manda o evento pra todo mundo daquele WABA.
+            logger.info(
+                "[whatsapp_template:webhook] template desconhecido tenant=%s "
+                "meta_template_id=%s", tenant_id, event.meta_template_id,
+            )
+            continue
+        template.status = event.status
+        template.rejected_reason = event.rejected_reason
+        if event.category is not None:
+            template.category_approved = event.category
+        db.commit()
+        aplicados += 1
+    return aplicados
 
 
 def delete_template(db: Session, *, tenant_id: str, actor: str, template_id: str) -> None:
