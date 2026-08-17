@@ -16,7 +16,7 @@ import logging
 import httpx
 
 from app.config import settings
-from app.core.whatsapp.inbound import InboundMessage
+from app.core.whatsapp.inbound import InboundMessage, TemplateStatusEvent
 
 logger = logging.getLogger("e1p.whatsapp")
 
@@ -382,4 +382,73 @@ def parse_inbound(payload: dict) -> list[InboundMessage]:
                     ))
                 except (AttributeError, TypeError, KeyError):
                     continue  # isola só esta mensagem — ver docstring
+    return out
+
+
+# ── Status de template (message_template_status_update) ─────────────────────
+
+# O `field` do `change` que carrega aprovação/rejeição de template. O MESMO webhook recebe
+# `messages` (mensagem recebida) e este — é o `field` que separa um do outro.
+TEMPLATE_STATUS_FIELD = "message_template_status_update"
+
+
+def extract_waba_id(payload: dict) -> str | None:
+    """O WABA ID vive em `entry[].id` — o evento de template não traz telefone nenhum, então
+    este é o ÚNICO identificador de conta disponível para resolver o tenant.
+
+    Nunca levanta: ver o contrato no docstring de `parse_template_status`.
+    """
+    try:
+        for entry in payload.get("entry", []):
+            waba_id = entry.get("id")
+            if isinstance(waba_id, str) and waba_id:
+                return waba_id
+    except (AttributeError, TypeError, KeyError):
+        return None
+    return None
+
+
+def parse_template_status(payload: dict) -> list[TemplateStatusEvent]:
+    """Extrai os eventos de status de template do payload da Meta.
+
+    **Nunca levanta exceção — devolve `[]`.** Diferente de `parse_inbound` (que levanta
+    `ValueError` e vira 400), esta função roda ANTES do caminho de mensagem no router, sobre
+    TODO payload que chega. Se ela levantasse, roubaria os 400 que hoje nascem em
+    `_extract_phone_number_id`/`parse_inbound` — e cada um deles tem teste. Diante de qualquer
+    surpresa de forma, o resultado é "não era evento de template", o fluxo segue para o
+    caminho antigo, e o pior caso é o status ficar como estava até alguém usar o botão
+    "Sincronizar" (que continua existindo justamente para isso).
+
+    O `event` sai daqui CRU: a Meta tem 14 valores e este produto sabe representar 5. Filtrar
+    é decisão de domínio, e mora num lugar só (`apply_status_events`).
+    """
+    out: list[TemplateStatusEvent] = []
+    try:
+        for entry in payload.get("entry", []):
+            for change in entry.get("changes", []):
+                if change.get("field") != TEMPLATE_STATUS_FIELD:
+                    continue
+                value = change.get("value", {})
+                if not isinstance(value, dict):
+                    continue
+                meta_template_id = value.get("message_template_id")
+                status = value.get("event")
+                if meta_template_id is None or not isinstance(status, str):
+                    continue
+                reason = value.get("reason")
+                categoria = value.get("message_template_category")
+                out.append(
+                    TemplateStatusEvent(
+                        meta_template_id=str(meta_template_id),
+                        status=status,
+                        # A Meta manda a string "NONE" quando não há motivo — guardá-la faria a
+                        # tela mostrar "NONE" como se fosse a justificativa da Meta.
+                        rejected_reason=(
+                            reason if isinstance(reason, str) and reason != "NONE" else None
+                        ),
+                        category=categoria if isinstance(categoria, str) and categoria else None,
+                    )
+                )
+    except (AttributeError, TypeError, KeyError):
+        return []
     return out

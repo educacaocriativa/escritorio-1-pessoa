@@ -290,3 +290,113 @@ def test_meta_parse_inbound_skips_only_the_malformed_media_field() -> None:
         }],
     }
     assert meta.parse_inbound(payload) == []
+
+
+# ── Evento de status de template (message_template_status_update) ───────────
+#
+# Payload conferido contra o exemplo oficial da Meta:
+# developers.facebook.com/documentation/business-messaging/whatsapp/webhooks/reference/
+#   message_template_status_update
+# WABA em `entry[].id`, `message_template_id` INTEIRO, `reason: "NONE"` quando não há motivo,
+# e a categoria vem como `message_template_category`.
+
+
+def _evento_template(*, event="APPROVED", template_id=1689556908129832, reason="NONE",
+                     waba="102290129340398", categoria="UTILITY") -> dict:
+    value = {
+        "event": event,
+        "message_template_id": template_id,
+        "message_template_name": "order_confirmation",
+        "message_template_language": "pt_BR",
+        "reason": reason,
+    }
+    if categoria is not None:
+        value["message_template_category"] = categoria
+    return {
+        "object": "whatsapp_business_account",
+        "entry": [{
+            "id": waba,
+            "time": 1751247548,
+            "changes": [{"value": value, "field": "message_template_status_update"}],
+        }],
+    }
+
+
+def test_parse_template_status_extrai_aprovacao() -> None:
+    eventos = meta.parse_template_status(_evento_template())
+    assert len(eventos) == 1
+    # A Meta manda INTEIRO no webhook; `WhatsappTemplate.meta_template_id` é String(64).
+    assert eventos[0].meta_template_id == "1689556908129832"
+    assert eventos[0].status == "APPROVED"
+    assert eventos[0].rejected_reason is None  # "NONE" da Meta NÃO é um motivo
+    assert eventos[0].category == "UTILITY"
+
+
+def test_parse_template_status_guarda_o_motivo_da_rejeicao() -> None:
+    eventos = meta.parse_template_status(
+        _evento_template(event="REJECTED", reason="INVALID_FORMAT")
+    )
+    assert eventos[0].status == "REJECTED"
+    assert eventos[0].rejected_reason == "INVALID_FORMAT"
+
+
+def test_parse_template_status_sem_categoria_devolve_none() -> None:
+    """Categoria ausente não pode virar string vazia: `None` é o sinal de "não mexa no que já
+    estava lá" para quem grava (ver `apply_status_events`)."""
+    eventos = meta.parse_template_status(_evento_template(categoria=None))
+    assert eventos[0].category is None
+
+
+def test_parse_template_status_ignora_evento_de_mensagem() -> None:
+    """O MESMO endpoint recebe os dois tipos. Confundi-los seria pior que ignorá-los."""
+    payload = {
+        "entry": [{
+            "id": "102290129340398",
+            "changes": [{
+                "field": "messages",
+                "value": {
+                    "metadata": {"phone_number_id": "phone-1"},
+                    "messages": [{"from": "5511900000000", "id": "wamid.1", "type": "text",
+                                  "text": {"body": "oi"}}],
+                },
+            }],
+        }],
+    }
+    assert meta.parse_template_status(payload) == []
+
+
+def test_parse_template_status_nao_levanta_com_payload_deformado() -> None:
+    """Contrato explícito: quem responde 400 é o caminho de mensagem, e há teste pra cada
+    forma quebrada lá. Este parser roda ANTES e não pode roubar aquela resposta."""
+    for deformado in [
+        {"entry": "nao-e-lista"},
+        {"entry": [{"changes": "nao-e-lista"}]},
+        {"entry": [{"changes": [{"field": "message_template_status_update", "value": "boom"}]}]},
+        {"entry": [{"changes": [{"value": {"event": "APPROVED"}}]}]},  # sem `field`
+        {},
+    ]:
+        assert meta.parse_template_status(deformado) == []
+
+
+def test_parse_template_status_descarta_evento_sem_id_de_template() -> None:
+    payload = _evento_template()
+    del payload["entry"][0]["changes"][0]["value"]["message_template_id"]
+    assert meta.parse_template_status(payload) == []
+
+
+def test_parse_template_status_aceita_status_que_o_produto_nao_conhece() -> None:
+    """A Meta tem 14 valores de `event` (ARCHIVED, FLAGGED, LOCKED, ...) e este produto sabe
+    representar 5. Filtrar é decisão de DOMÍNIO (`apply_status_events`), não do parser: aqui
+    o evento passa cru, para que a decisão more num lugar só."""
+    eventos = meta.parse_template_status(_evento_template(event="FLAGGED"))
+    assert eventos[0].status == "FLAGGED"
+
+
+def test_extract_waba_id_le_o_id_do_entry() -> None:
+    assert meta.extract_waba_id(_evento_template(waba="waba-42")) == "waba-42"
+
+
+def test_extract_waba_id_devolve_none_quando_nao_ha() -> None:
+    assert meta.extract_waba_id({"entry": [{}]}) is None
+    assert meta.extract_waba_id({"entry": "nao-e-lista"}) is None
+    assert meta.extract_waba_id({"entry": [{"id": 123}]}) is None  # número não é WABA válido

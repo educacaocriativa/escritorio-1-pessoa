@@ -37,7 +37,9 @@ def test_whatsapp_conversation_state_columns():
 def test_public_whatsapp_account_columns():
     cols = {c.name for c in PublicWhatsappAccount.__table__.columns}
     assert cols == {
-        "phone_number_id", "tenant_id", "app_secret", "verify_token",
+        # `waba_id` entrou na 0079: o evento de aprovação de template chega roteado por WABA,
+        # não por telefone (issue #36). É a 2ª chave de resolução pré-auth desta tabela.
+        "phone_number_id", "tenant_id", "app_secret", "verify_token", "waba_id",
         "created_at", "updated_at",
     }
 

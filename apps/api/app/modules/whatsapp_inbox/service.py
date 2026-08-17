@@ -116,6 +116,24 @@ def resolve_by_verify_token(db: Session, *, verify_token: str) -> PublicWhatsapp
     )
 
 
+def resolve_by_waba_id(db: Session, *, waba_id: str) -> PublicWhatsappAccount | None:
+    """Resolve tenant/app_secret pelo WABA ID — o caminho do evento de status de TEMPLATE, que
+    não carrega `phone_number_id` nenhum (ver `providers/meta.parse_template_status`).
+
+    `waba_id` não é único (um WABA pode ter vários números, e cada número é uma linha), mas
+    todas as linhas do mesmo WABA são do mesmo tenant e carregam o mesmo `app_secret` — o
+    dual-write escreve ambos a partir do mesmo perfil. A ordenação por `phone_number_id` só
+    torna a escolha determinística entre linhas equivalentes.
+    """
+    if not _is_safe_identifier(waba_id):
+        return None
+    return db.scalars(
+        select(PublicWhatsappAccount)
+        .where(PublicWhatsappAccount.waba_id == waba_id)
+        .order_by(PublicWhatsappAccount.phone_number_id)
+    ).first()
+
+
 # ── Ingestão (webhook) ──────────────────────────────────────────────────────
 
 

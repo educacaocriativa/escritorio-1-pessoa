@@ -29,10 +29,16 @@ from sqlalchemy.orm import Session
 
 from app.core import whatsapp as core_whatsapp
 from app.core.tenancy import get_tenant_db
+from app.core.whatsapp.inbound import TemplateStatusEvent
 from app.db.session import get_db, get_tenant_session_factory
 from app.modules.auth.router import router as auth_router
 from app.modules.settings.service import get_profile
-from app.modules.whatsapp_templates.models import WhatsappTemplate
+from app.modules.whatsapp_templates import service
+from app.modules.whatsapp_templates.models import (
+    STATUS_APPROVED,
+    STATUS_PENDING,
+    WhatsappTemplate,
+)
 from app.modules.whatsapp_templates.router import router as whatsapp_templates_router
 
 REGISTER_A = {
@@ -372,3 +378,141 @@ def test_requires_auth(client: TestClient):
 # isolamento cross-tenant de verdade (tenant A não vê/sincroniza/exclui template de tenant B) é
 # validado no Postgres real com RLS FORCE em `test_whatsapp_templates_rls.py` (marcador
 # `rls_e2e`, mesmo padrão de `test_cost_centers_rls.py`/`test_rls_isolation.py`).
+
+
+# ── Status vindo do webhook (issue #36) ──────────────────────────────────────
+#
+# O caminho oposto ao `sync_template`: em vez de PERGUNTAR o status à Graph API quando alguém
+# clica em "Sincronizar", a Meta EMPURRA a mudança assim que ela acontece. O que chega aqui já
+# passou pelo parser (`providers/meta.parse_template_status`) e pela resolução de tenant no
+# router público — este service só aplica.
+
+
+def _template_pendente(db: Session, tenant_id: str, *, meta_template_id: str,
+                       nome: str = "lembrete", categoria_aprovada: str | None = None):
+    tpl = WhatsappTemplate(
+        tenant_id=tenant_id, name=nome, language="pt_BR", category_requested="UTILITY",
+        body_text="Olá {{1}}", variable_count=1, variable_examples=["Maria"],
+        status=STATUS_PENDING, meta_template_id=meta_template_id,
+        category_approved=categoria_aprovada,
+    )
+    db.add(tpl)
+    db.commit()
+    db.refresh(tpl)
+    return tpl
+
+
+def test_apply_status_events_aprova_o_template(db: Session, tenant_id: str):
+    tpl = _template_pendente(db, tenant_id, meta_template_id="777")
+
+    aplicados = service.apply_status_events(
+        db, tenant_id=tenant_id,
+        events=[TemplateStatusEvent(meta_template_id="777", status="APPROVED",
+                                    rejected_reason=None, category="UTILITY")],
+    )
+
+    assert aplicados == 1
+    db.refresh(tpl)
+    assert tpl.status == "APPROVED"
+    assert tpl.category_approved == "UTILITY"
+
+
+def test_apply_status_events_guarda_o_motivo_da_rejeicao(db: Session, tenant_id: str):
+    tpl = _template_pendente(db, tenant_id, meta_template_id="888", nome="promo")
+
+    service.apply_status_events(
+        db, tenant_id=tenant_id,
+        events=[TemplateStatusEvent(meta_template_id="888", status="REJECTED",
+                                    rejected_reason="INVALID_FORMAT", category="MARKETING")],
+    )
+
+    db.refresh(tpl)
+    assert tpl.status == "REJECTED"
+    assert tpl.rejected_reason == "INVALID_FORMAT"
+
+
+def test_apply_status_events_ignora_status_que_a_tela_nao_sabe_mostrar(
+    db: Session, tenant_id: str
+):
+    """A tela tem um Record FECHADO com 5 status (`STATUS_LABEL` em WhatsappSection.tsx), e a
+    Meta emite 14 valores de `event`. Gravar "FLAGGED" faria o rótulo sair vazio — e um status
+    que a Meta inventar amanhã não pode quebrar a tela de quem nem usa aquele recurso."""
+    tpl = _template_pendente(db, tenant_id, meta_template_id="999", nome="flag")
+    tpl.status = STATUS_APPROVED
+    db.commit()
+
+    aplicados = service.apply_status_events(
+        db, tenant_id=tenant_id,
+        events=[TemplateStatusEvent(meta_template_id="999", status="FLAGGED",
+                                    rejected_reason=None, category=None)],
+    )
+
+    assert aplicados == 0
+    db.refresh(tpl)
+    assert tpl.status == STATUS_APPROVED  # intocado
+
+
+def test_apply_status_events_sem_categoria_preserva_a_que_ja_estava(
+    db: Session, tenant_id: str
+):
+    """Evento sem `message_template_category` não pode apagar a categoria que o "Sincronizar"
+    manual já tinha trazido — `None` significa "não informou", não "não tem"."""
+    tpl = _template_pendente(db, tenant_id, meta_template_id="1000", nome="cat",
+                             categoria_aprovada="UTILITY")
+
+    service.apply_status_events(
+        db, tenant_id=tenant_id,
+        events=[TemplateStatusEvent(meta_template_id="1000", status="APPROVED",
+                                    rejected_reason=None, category=None)],
+    )
+
+    db.refresh(tpl)
+    assert tpl.category_approved == "UTILITY"
+
+
+def test_apply_status_events_atualiza_a_categoria_quando_a_meta_a_muda(
+    db: Session, tenant_id: str
+):
+    """A Meta pode aprovar numa categoria diferente da pedida (é o motivo de
+    `category_approved` existir separado de `category_requested`)."""
+    tpl = _template_pendente(db, tenant_id, meta_template_id="1001", nome="recat",
+                             categoria_aprovada="MARKETING")
+
+    service.apply_status_events(
+        db, tenant_id=tenant_id,
+        events=[TemplateStatusEvent(meta_template_id="1001", status="APPROVED",
+                                    rejected_reason=None, category="UTILITY")],
+    )
+
+    db.refresh(tpl)
+    assert tpl.category_approved == "UTILITY"
+
+
+def test_apply_status_events_ignora_template_desconhecido(db: Session, tenant_id: str):
+    """Evento de um template criado direto no painel da Meta, que nunca existiu aqui."""
+    aplicados = service.apply_status_events(
+        db, tenant_id=tenant_id,
+        events=[TemplateStatusEvent(meta_template_id="nao-existe", status="APPROVED",
+                                    rejected_reason=None, category=None)],
+    )
+    assert aplicados == 0
+
+
+def test_apply_status_events_isola_falha_de_um_evento(db: Session, tenant_id: str):
+    """Um lote pode trazer vários eventos. Um desconhecido no meio não pode impedir os outros
+    — mesmo princípio de `whatsapp_inbox.service.ingest_webhook_payload`."""
+    tpl = _template_pendente(db, tenant_id, meta_template_id="1111", nome="lote")
+
+    aplicados = service.apply_status_events(
+        db, tenant_id=tenant_id,
+        events=[
+            TemplateStatusEvent(meta_template_id="orfao", status="APPROVED",
+                                rejected_reason=None, category=None),
+            TemplateStatusEvent(meta_template_id="1111", status="APPROVED",
+                                rejected_reason=None, category=None),
+        ],
+    )
+
+    assert aplicados == 1
+    db.refresh(tpl)
+    assert tpl.status == STATUS_APPROVED

@@ -160,3 +160,12 @@ class PublicWhatsappAccount(Base, TimestampMixin):
     # no nível Python (migration 0056 ajusta o tipo SQL subjacente p/ TEXT).
     app_secret: Mapped[str] = mapped_column(EncryptedToken, nullable=False)
     verify_token: Mapped[str] = mapped_column(String(64), nullable=False)
+    # O WABA ID (WhatsApp Business Account) do tenant. Redundante com
+    # `TenantProfile.whatsapp_waba_id` de propósito, pelo MESMO motivo de `app_secret` estar
+    # aqui: o evento de aprovação de template chega numa requisição SEM tenant e traz só o
+    # WABA em `entry[].id` — `tenant_profiles` tem RLS e é ilegível nesse ponto.
+    #
+    # NÃO é único: um WABA pode ter vários números, e cada número é uma linha desta tabela.
+    # Todas as linhas do mesmo WABA pertencem ao MESMO tenant (o dual-write escreve os dois
+    # campos do mesmo perfil), então qualquer uma serve para resolver tenant/app_secret.
+    waba_id: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)

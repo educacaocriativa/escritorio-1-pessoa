@@ -291,6 +291,18 @@ function CredentialsCard() {
                   {profile.whatsapp_verify_token}
                 </code>
               </div>
+              <div className="mt-2">
+                <span className="mb-1 block text-xs text-neutral-500">
+                  Campos a assinar (Webhook fields)
+                </span>
+                <code className="block rounded-lg bg-white px-3 py-2 text-xs">
+                  messages, message_template_status_update
+                </code>
+                <p className="mt-1 text-xs text-neutral-500">
+                  Sem o segundo, o status dos seus templates só muda quando você clicar em
+                  &quot;Sincronizar&quot;.
+                </p>
+              </div>
             </div>
           )}
 

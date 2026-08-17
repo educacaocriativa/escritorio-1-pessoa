@@ -1,8 +1,12 @@
-"""Formato normalizado de mensagem recebida — o que sobra depois que cada provider (Meta,
-Evolution) traduz o próprio formato de payload. De `whatsapp_inbox/service.py` pra dentro
+"""Formatos normalizados do que CHEGA de um provider — o que sobra depois que cada provider
+(Meta, Evolution) traduz o próprio formato de payload. De `whatsapp_inbox/service.py` pra dentro
 (resolver cliente, criar lead, deduplicar, enfileirar mídia pendente) nada sabe qual provider
 originou a mensagem — só enxerga isto. Ver
 docs/superpowers/specs/2026-07-30-whatsapp-evolution-multi-tenant-design.md §6.
+
+Este módulo é a fronteira PÚBLICA dessas formas: módulos de domínio podem importar daqui, mas
+NÃO de `app.core.whatsapp.providers.*` — há gate estrutural que barra
+(`test_whatsapp_dispatcher.py::test_no_direct_provider_imports`).
 """
 from __future__ import annotations
 
@@ -51,3 +55,22 @@ class InboundMessage:
     # está ligado) — ingest cria o Attachment na hora, sem depender do worker.
     media_mime_type: str | None = None
     media_filename: str | None = None
+
+
+@dataclass(frozen=True)
+class TemplateStatusEvent:
+    """Mudança de status de um template, empurrada pela Meta (`message_template_status_update`).
+
+    Mora aqui, ao lado de `InboundMessage`, pelo mesmo motivo: é uma forma normalizada do que
+    chega de um provider, e `whatsapp_templates/service.py` (domínio) precisa enxergá-la sem
+    importar `providers.meta` — o que o gate estrutural barra.
+
+    Só FORMA: o que é status válido e o que fazer com ele é decisão do domínio
+    (`whatsapp_templates/service.apply_status_events`). Exclusivo da Meta por natureza — a
+    Evolution não tem templates aprovados (ver `providers/evolution.fetch_template_status`).
+    """
+
+    meta_template_id: str  # texto: a Meta manda número no webhook e String(64) no GET da Graph
+    status: str  # o `event` cru da Meta, ainda NÃO validado contra os STATUS_* do model
+    rejected_reason: str | None
+    category: str | None  # `message_template_category`; None = o evento não informou
