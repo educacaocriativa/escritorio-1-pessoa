@@ -163,6 +163,24 @@ describe("WhatsappSection — credenciais", () => {
     expect(screen.getByText(/public\/whatsapp\/webhook/)).toBeInTheDocument();
   });
 
+  it("diz quais campos assinar no painel da Meta", async () => {
+    // A URL e o verify token sozinhos não fazem o webhook disparar: sem assinar os CAMPOS, a
+    // Meta nunca envia nada. `message_template_status_update` é o que traz a aprovação do
+    // template sem ninguém clicar em "Sincronizar" (issue #36).
+    mockGet(
+      profile({
+        whatsapp_configured: true, whatsapp_phone_id: "phone-123",
+        whatsapp_waba_id: "waba-456", whatsapp_verify_token: "abc123xyz",
+      }),
+    );
+    render(<WhatsappSection />);
+
+    await screen.findByText("Conectado");
+    expect(
+      screen.getByText(/messages, message_template_status_update/),
+    ).toBeInTheDocument();
+  });
+
   it("não mostra o bloco do webhook quando ainda não há verify_token", async () => {
     mockGet(profile({ whatsapp_configured: false, whatsapp_verify_token: "" }));
     render(<WhatsappSection />);
