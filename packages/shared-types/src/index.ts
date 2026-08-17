@@ -239,7 +239,7 @@ export interface ClientTimelineEntry {
   id: string;
   kind:
     | "lead_created" | "lead_return" | "stage_move" | "reopened" | "note" | "funnel"
-    | "quote" | "charge" | "payment";
+    | "quote" | "charge" | "payment" | "agenda";
   title: string;
   body: string;
   actor: string;

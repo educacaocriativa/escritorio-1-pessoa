@@ -1,6 +1,6 @@
 import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { api } from "../../lib/api";
 import ClientTimeline from "./ClientTimeline";
 
@@ -8,6 +8,8 @@ vi.mock("../../lib/api", () => ({
   api: { get: vi.fn(), post: vi.fn() },
   apiErrorMessage: (e: unknown) => String(e),
 }));
+
+vi.mock("../../store/auth", () => ({ useFuso: () => "America/Sao_Paulo" }));
 
 const ENTRADA = {
   id: "1", kind: "crm.lead.criado", title: "Chegou pelo site", body: "",
@@ -81,5 +83,62 @@ describe("ClientTimeline", () => {
 
     render(<ClientTimeline clientId="c1" />);
     expect(await screen.findByText(/nenhum registro/i)).toBeInTheDocument();
+  });
+
+  describe("fuso do tenant, não da máquina", () => {
+    const TZ_ORIGINAL = process.env.TZ;
+
+    afterEach(() => {
+      process.env.TZ = TZ_ORIGINAL;
+    });
+
+    it("formata no fuso do tenant, não no do navegador", async () => {
+      // `vitest.config.ts` fixa TZ=America/Sao_Paulo pra suíte inteira — o MESMO fuso do
+      // tenant mockado acima, então rodar isto com o `TZ` padrão faria o `quando()` ANTIGO
+      // (sem `timeZone`, no relógio da máquina) acertar por coincidência: máquina e tenant
+      // dariam o mesmo resultado, e o teste passaria mesmo sem o conserto. Pra provar a
+      // correção de verdade, este teste simula a MÁQUINA em outro fuso (a viagem/servidor
+      // headless que o comentário original da ConversasPage descrevia) e confirma que a tela
+      // ignora o relógio dela e usa sempre o fuso do tenant, vindo de `useFuso()`.
+      process.env.TZ = "Asia/Tokyo";
+
+      const ENTRADA = {
+        id: "9", kind: "agenda", title: "Compromisso: Reunião", body: "",
+        actor: "sistema", is_ai: false, at: "2026-08-16T23:30:00Z",
+      };
+      vi.mocked(api.get).mockResolvedValue({
+        data: { entries: [ENTRADA], truncated: false },
+      } as never);
+
+      render(<ClientTimeline clientId="c1" />);
+      await screen.findByTestId("timeline-title");
+
+      // Fuso do tenant (America/Sao_Paulo, UTC-3): 23:30 UTC vira 20:30 do MESMO dia 16/08.
+      expect(screen.getByText("16/08/2026 20:30")).toBeInTheDocument();
+      // O `quando()` antigo, no relógio da MÁQUINA (Tóquio, UTC+9), teria mostrado
+      // 17/08/2026 08:30 — um dia adiante e 12h de diferença. Isso NÃO pode aparecer.
+      expect(screen.queryByText("17/08/2026 08:30")).not.toBeInTheDocument();
+    });
+  });
+
+  it("compromisso realizado tem identidade visual própria, não o ícone neutro", async () => {
+    // O vocabulário de `kind` em APARENCIA é FECHADO: um `kind` sem entrada ali cai no
+    // `NEUTRO` (`bg-neutral-100`). Este teste prova que "agenda" TEM entrada própria (mesma
+    // família visual das outras fontes derivadas, `bg-sky-50`) — se o mapa esquecesse
+    // "agenda", o compromisso realizado ficaria indistinguível de um `kind` desconhecido.
+    const COMPROMISSO = {
+      id: "7", kind: "agenda", title: "Compromisso: Sessão de fotos", body: "",
+      actor: "sistema", is_ai: false, at: "2026-08-10T14:00:00Z",
+    };
+    vi.mocked(api.get).mockResolvedValue({
+      data: { entries: [COMPROMISSO], truncated: false },
+    } as never);
+
+    render(<ClientTimeline clientId="c1" />);
+    const titulo = await screen.findByTestId("timeline-title");
+    const item = titulo.closest("li");
+
+    expect(item?.querySelector(".bg-sky-50")).not.toBeNull();
+    expect(item?.querySelector(".bg-neutral-100")).toBeNull();
   });
 });
