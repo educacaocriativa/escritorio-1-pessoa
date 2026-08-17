@@ -204,7 +204,7 @@ describe("CrmPage — ponto de mensagem esperando resposta", () => {
         gender: "unspecified", birthdate: null, notes: "", tags: [], source: "whatsapp",
         stage_id: "s1", created_at: "2026-08-15T12:00:00Z",
         stage_entered_at: "2026-08-15T12:00:00Z", last_interaction_at: null,
-        unread,
+        unread, next_event_at: null, next_event_title: null,
       }],
     }],
   });
@@ -220,5 +220,48 @@ describe("CrmPage — ponto de mensagem esperando resposta", () => {
     renderPage();
     expect(await screen.findByText("Ju")).toBeInTheDocument();
     expect(screen.queryByLabelText("Mensagem esperando resposta")).not.toBeInTheDocument();
+  });
+});
+
+describe("CrmPage — a linha do próximo passo", () => {
+  // Próximo compromisso e a AUSÊNCIA dele são estados opostos da mesma pergunta: nunca os dois
+  // juntos. `nextEventAt: null` exercita o card sem nada marcado (o caso mais acionável, quem
+  // vai esfriar); com data, exercita o card que já tem o próximo passo escrito.
+  const boardCom = (nextEventAt: string | null, nextEventTitle: string | null): Board => ({
+    columns: [{
+      stage: { id: "s1", name: "Entrada", position: 0, is_won: false, is_lost: false },
+      clients: [{
+        id: "c1", tenant_id: "t1", name: "Ju", email: null, phone: null, document: null,
+        gender: "unspecified", birthdate: null, notes: "", tags: [], source: "whatsapp",
+        stage_id: "s1", created_at: "2026-08-15T12:00:00Z",
+        stage_entered_at: "2026-08-15T12:00:00Z", last_interaction_at: null,
+        unread: false, next_event_at: nextEventAt, next_event_title: nextEventTitle,
+      }],
+    }],
+  });
+
+  it("mostra o próximo compromisso quando existe", async () => {
+    vi.mocked(api.get).mockResolvedValue({
+      data: boardCom("2026-08-20T14:00:00Z", "Reunião de alinhamento"),
+    } as never);
+    renderPage();
+    expect(
+      await screen.findByText(/próximo: Reunião de alinhamento em 20\/08/i),
+    ).toBeInTheDocument();
+  });
+
+  it("diz 'sem próximo passo' quando não existe", async () => {
+    vi.mocked(api.get).mockResolvedValue({ data: boardCom(null, null) } as never);
+    renderPage();
+    expect(await screen.findByText("sem próximo passo")).toBeInTheDocument();
+  });
+
+  it("nunca mostra os dois ao mesmo tempo", async () => {
+    vi.mocked(api.get).mockResolvedValue({
+      data: boardCom("2026-08-20T14:00:00Z", "Reunião de alinhamento"),
+    } as never);
+    renderPage();
+    await screen.findByText(/próximo: Reunião de alinhamento em 20\/08/i);
+    expect(screen.queryByText("sem próximo passo")).not.toBeInTheDocument();
   });
 });

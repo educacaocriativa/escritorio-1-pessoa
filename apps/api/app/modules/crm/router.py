@@ -6,6 +6,7 @@ from sqlalchemy.orm import Session
 
 from app.core.facts import CRM_NOTA_CRIADA
 from app.core.tenancy import CurrentUser, get_tenant_db, require_module
+from app.modules.agenda import service as agenda_service
 from app.modules.crm import service, timeline
 from app.modules.crm.schemas import (
     Board,
@@ -46,6 +47,10 @@ def get_board(
     # Consulta agregada, uma para o board inteiro — o custo não cresce com a quantidade de
     # cards. Lida do módulo DONO da regra de "não lida" em vez de reimplementada aqui.
     esperando = inbox_service.unread_client_ids(db)
+    # Idem: uma consulta agregada para o board inteiro, dona da Agenda. Devolve o EVENTO
+    # inteiro (não uma tupla achatada) — aqui só extraímos `starts_at`/`title`, mas o mesmo
+    # mapa também alimenta o bloco da ficha 360°, que lê outros campos do mesmo agregado.
+    proximo = agenda_service.next_event_map(db)
     return Board(
         columns=[
             BoardColumn(
@@ -55,6 +60,8 @@ def get_board(
                         **ClientOut.model_validate(c).model_dump(),
                         last_interaction_at=ultimo.get(c.id),
                         unread=c.id in esperando,
+                        next_event_at=ev.starts_at if (ev := proximo.get(c.id)) else None,
+                        next_event_title=ev.title if ev else None,
                     )
                     for c in clients
                 ],

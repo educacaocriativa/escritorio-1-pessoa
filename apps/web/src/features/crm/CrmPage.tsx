@@ -240,6 +240,17 @@ function Card({ client, stageId }: { client: BoardClient; stageId: string }) {
             última interação: {formatDateShort(client.last_interaction_at, fuso)}
           </p>
         )}
+        {/* Próximo passo e a AUSÊNCIA dele são estados opostos da mesma pergunta e nunca
+            aparecem juntos — por isso uma linha só, e não duas. O aviso de "sem próximo passo"
+            é o mais acionável do card: mostra quem vai esfriar. */}
+        {client.next_event_at ? (
+          <p className="truncate text-[10px] text-neutral-400">
+            próximo: {client.next_event_title} em{" "}
+            {formatDateShort(client.next_event_at, fuso)}
+          </p>
+        ) : (
+          <p className="text-[10px] text-neutral-400">sem próximo passo</p>
+        )}
       </div>
       <button
         onClick={() => navigate(`/crm/clients/${client.id}`)}

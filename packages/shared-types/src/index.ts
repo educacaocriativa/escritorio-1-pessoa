@@ -264,6 +264,9 @@ export interface BoardClient extends Client {
   last_interaction_at: string | null;
   /** Tem mensagem do contato esperando resposta. */
   unread: boolean;
+  /** Próximo compromisso do contato na Agenda — `null` nos dois junto significa "sem próximo passo". */
+  next_event_at: string | null;
+  next_event_title: string | null;
 }
 
 export interface BoardColumn {

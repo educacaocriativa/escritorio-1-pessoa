@@ -179,6 +179,12 @@ class BoardClient(ClientOut):
     # Tem mensagem do contato esperando resposta. Booleano e não contador: o card não tem
     # espaço para número, e "quantas" é pergunta da tela de Conversas.
     unread: bool = False
+    # Próximo compromisso do contato na Agenda — ou ausência dele, o sinal mais acionável do
+    # card (mostra quem vai esfriar sem nada marcado). Vêm de `agenda_service.next_event_map`,
+    # extraídos no router; `None` nos dois juntos significa "sem próximo passo", nunca um sem o
+    # outro.
+    next_event_at: datetime | None = None
+    next_event_title: str | None = None
 
 
 class BoardColumn(BaseModel):
