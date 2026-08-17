@@ -82,6 +82,33 @@ def test_board_traz_o_proximo_compromisso_do_contato(client, db, headers):
     assert cards[sem_nada]["next_event_title"] is None
 
 
+def test_board_traz_next_event_all_day_do_compromisso(client, db, headers):
+    """Achado da revisão final da Onda 2: o card precisa saber SE o próximo passo é dia inteiro
+    para escolher como formatar a data (`next_event_all_day` — ver `CrmPage.tsx`).
+
+    Dois contatos: um com compromisso de HORÁRIO (`all_day=False`), outro de DIA INTEIRO
+    (`all_day=True`, o caso de uma cobrança gerada por `receivables`) — prova que o campo
+    reflete o evento de CADA card, não uma constante.
+    """
+    com_horario = _contato(client, headers, "Compromisso com horário")
+    _compromisso(db, com_horario, titulo="Reunião", status="scheduled")
+
+    dia_inteiro = _contato(client, headers, "Compromisso dia inteiro")
+    contato_row = db.get(Client, dia_inteiro)
+    agora = datetime.now(UTC)
+    evento_dia_inteiro = AgendaEvent(
+        tenant_id=contato_row.tenant_id, title="A receber: Fulana", kind="cobranca_receber",
+        status="scheduled", client_id=dia_inteiro, all_day=True,
+        starts_at=agora + timedelta(days=2), ends_at=agora + timedelta(days=2, hours=23),
+    )
+    db.add(evento_dia_inteiro)
+    db.commit()
+
+    cards = _cards(client.get("/crm/board", headers=headers).json())
+    assert cards[com_horario]["next_event_all_day"] is False
+    assert cards[dia_inteiro]["next_event_all_day"] is True
+
+
 def test_board_nao_traz_compromisso_cancelado(client, db, headers):
     """Cancelado não é próximo passo nenhum — mesma regra que `next_event_map` já aplica."""
     contato = _contato(client, headers, "Só tem cancelado")

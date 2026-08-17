@@ -85,6 +85,7 @@ def _board_client(
         unread=c.id in esperando,
         next_event_at=ev.starts_at if ev else None,
         next_event_title=ev.title if ev else None,
+        next_event_all_day=ev.all_day if ev else False,
     )
 
 

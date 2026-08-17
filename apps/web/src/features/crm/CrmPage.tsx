@@ -4,7 +4,7 @@ import { useCallback, useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import Modal, { Field } from "../../components/Modal";
 import { api, apiErrorMessage } from "../../lib/api";
-import { formatDateShort } from "../../lib/datetime";
+import { formatDateShort, formatDay } from "../../lib/datetime";
 import GanchoDaVima from "../dna/GanchoDaVima";
 import { rotuloDaOrigem } from "./origem";
 import { usePrimaryAction } from "../../store/pageActions";
@@ -246,7 +246,15 @@ function Card({ client, stageId }: { client: BoardClient; stageId: string }) {
         {client.next_event_at ? (
           <p className="truncate text-[10px] text-neutral-400">
             próximo: {client.next_event_title} em{" "}
-            {formatDateShort(client.next_event_at, fuso)}
+            {/* Mesma distinção que `BlocoDaAgenda` já faz: dia inteiro é DATA DE CALENDÁRIO
+                (cobrança de `receivables` grava à meia-noite UTC, não na do fuso do tenant —
+                `formatDay` lê a string sem converter fuso, então não "volta" um dia). Com
+                horário é INSTANTE de verdade: aí sim converte para o fuso do tenant. Achado da
+                revisão final da Onda 2 — antes disto o card usava `formatDateShort` sempre, e
+                uma cobrança vencendo dia 22 aparecia como 21 em fuso negativo. */}
+            {client.next_event_all_day
+              ? formatDay(client.next_event_at)
+              : formatDateShort(client.next_event_at, fuso)}
           </p>
         ) : (
           <p className="text-[10px] text-neutral-400">sem próximo passo</p>

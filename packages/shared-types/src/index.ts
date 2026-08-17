@@ -267,6 +267,11 @@ export interface BoardClient extends Client {
   /** Próximo compromisso do contato na Agenda — `null` nos dois junto significa "sem próximo passo". */
   next_event_at: string | null;
   next_event_title: string | null;
+  /** `next_event_at` é dia inteiro ou tem horário? Determina COMO formatar: dia inteiro usa
+   *  `formatDay` (lê a data da string, sem fuso — `receivables` ancora à meia-noite UTC, não
+   *  na do fuso do tenant); com horário usa `formatDateShort` (converte o instante para o fuso).
+   *  Mesma distinção que `BlocoDaAgenda` já faz com `AgendaEvent.all_day`. */
+  next_event_all_day: boolean;
 }
 
 export interface BoardColumn {

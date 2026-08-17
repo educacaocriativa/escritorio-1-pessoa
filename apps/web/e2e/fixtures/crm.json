@@ -29,7 +29,8 @@
             "last_interaction_at": "2026-08-13T12:00:00Z",
             "unread": false,
             "next_event_at": null,
-            "next_event_title": null
+            "next_event_title": null,
+            "next_event_all_day": false
           },
           {
             "id": "c2",
@@ -49,7 +50,8 @@
             "last_interaction_at": "2026-08-14T18:45:00Z",
             "unread": true,
             "next_event_at": "2026-08-20T13:00:00Z",
-            "next_event_title": "Reunião de alinhamento do casamento 12/12"
+            "next_event_title": "Reunião de alinhamento do casamento 12/12",
+            "next_event_all_day": false
           }
         ]
       },

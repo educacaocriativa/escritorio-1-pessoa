@@ -185,6 +185,12 @@ class BoardClient(ClientOut):
     # outro.
     next_event_at: datetime | None = None
     next_event_title: str | None = None
+    # Dia inteiro ou horário? O card precisa saber para escolher COMO formatar `next_event_at`:
+    # um evento all-day de `receivables` é ancorado na meia-noite UTC (não na do fuso do tenant,
+    # ver `agenda/service.py::next_event_map`), então formatar como INSTANTE (convertendo fuso)
+    # "volta" um dia em fuso negativo. `False` por padrão (sem próximo passo, o campo não importa
+    # — mas Pydantic não aceita `None` sem tornar o tipo opcional à toa).
+    next_event_all_day: bool = False
 
 
 class BoardColumn(BaseModel):

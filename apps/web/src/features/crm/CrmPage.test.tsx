@@ -204,7 +204,7 @@ describe("CrmPage — ponto de mensagem esperando resposta", () => {
         gender: "unspecified", birthdate: null, notes: "", tags: [], source: "whatsapp",
         stage_id: "s1", created_at: "2026-08-15T12:00:00Z",
         stage_entered_at: "2026-08-15T12:00:00Z", last_interaction_at: null,
-        unread, next_event_at: null, next_event_title: null,
+        unread, next_event_at: null, next_event_title: null, next_event_all_day: false,
       }],
     }],
   });
@@ -227,7 +227,9 @@ describe("CrmPage — a linha do próximo passo", () => {
   // Próximo compromisso e a AUSÊNCIA dele são estados opostos da mesma pergunta: nunca os dois
   // juntos. `nextEventAt: null` exercita o card sem nada marcado (o caso mais acionável, quem
   // vai esfriar); com data, exercita o card que já tem o próximo passo escrito.
-  const boardCom = (nextEventAt: string | null, nextEventTitle: string | null): Board => ({
+  const boardCom = (
+    nextEventAt: string | null, nextEventTitle: string | null, allDay = false,
+  ): Board => ({
     columns: [{
       stage: { id: "s1", name: "Entrada", position: 0, is_won: false, is_lost: false },
       clients: [{
@@ -236,6 +238,7 @@ describe("CrmPage — a linha do próximo passo", () => {
         stage_id: "s1", created_at: "2026-08-15T12:00:00Z",
         stage_entered_at: "2026-08-15T12:00:00Z", last_interaction_at: null,
         unread: false, next_event_at: nextEventAt, next_event_title: nextEventTitle,
+        next_event_all_day: allDay,
       }],
     }],
   });
@@ -263,5 +266,53 @@ describe("CrmPage — a linha do próximo passo", () => {
     renderPage();
     await screen.findByText(/próximo: Reunião de alinhamento em 20\/08/i);
     expect(screen.queryByText("sem próximo passo")).not.toBeInTheDocument();
+  });
+});
+
+describe("CrmPage — próximo passo de dia inteiro não 'volta' um dia (achado da revisão final)", () => {
+  // `receivables/service.py::build_charge` ancora o evento de cobrança à MEIA-NOITE UTC (não na
+  // meia-noite do fuso do tenant, ao contrário de `agenda/service.py::create_event`). O teste
+  // roda sem `AuthContext` ao redor (`renderPage` só empacota Router + PageActions), e
+  // `useFuso()` cai no fallback `FUSO_PADRAO = "America/Sao_Paulo"` (UTC−3) quando o contexto
+  // é `null` — o cenário exato do achado: "2026-08-22T00:00:00Z" em UTC−3 é 21/08 21h. Formatar
+  // como INSTANTE (`formatDateShort`, que converte fuso) imprimiria "21/08"; o card tem que
+  // usar `formatDay` (lê a string, sem conversão) e mostrar "22/08" — a data real do vencimento.
+  const boardComProximo = (
+    nextEventAt: string, nextEventTitle: string, allDay: boolean,
+  ): Board => ({
+    columns: [{
+      stage: { id: "s1", name: "Entrada", position: 0, is_won: false, is_lost: false },
+      clients: [{
+        id: "c1", tenant_id: "t1", name: "Ju", email: null, phone: null, document: null,
+        gender: "unspecified", birthdate: null, notes: "", tags: [], source: "whatsapp",
+        stage_id: "s1", created_at: "2026-08-15T12:00:00Z",
+        stage_entered_at: "2026-08-15T12:00:00Z", last_interaction_at: null,
+        unread: false, next_event_at: nextEventAt, next_event_title: nextEventTitle,
+        next_event_all_day: allDay,
+      }],
+    }],
+  });
+
+  it("cobrança vencendo dia 22 mostra 22/08 no card, não 21/08", async () => {
+    vi.mocked(api.get).mockResolvedValue({
+      data: boardComProximo("2026-08-22T00:00:00Z", "A receber: Fulana", true),
+    } as never);
+    renderPage();
+    expect(
+      await screen.findByText(/próximo: A receber: Fulana em 22\/08/i),
+    ).toBeInTheDocument();
+    expect(screen.queryByText(/em 21\/08/i)).not.toBeInTheDocument();
+  });
+
+  it("compromisso COM horário continua convertendo para o fuso do tenant (formatDateShort)", async () => {
+    // Contraste: `all_day: false` não pode passar a usar `formatDay` por engano — um evento com
+    // horário É um instante de verdade, e tem que continuar convertendo fuso.
+    vi.mocked(api.get).mockResolvedValue({
+      data: boardComProximo("2026-08-20T14:00:00Z", "Reunião de alinhamento", false),
+    } as never);
+    renderPage();
+    expect(
+      await screen.findByText(/próximo: Reunião de alinhamento em 20\/08/i),
+    ).toBeInTheDocument();
   });
 });
