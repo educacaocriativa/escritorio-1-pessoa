@@ -30,9 +30,15 @@ export default function BlocoDaAgenda({ clientId }: { clientId: string }) {
       // (cujo `starts_at` já ficou no passado à meia-noite, mas `ends_at` ainda não). Um corte
       // client-side por `starts_at >= agora` reintroduziria esse bug. O backend já devolve
       // ordenado por `starts_at` ascendente (mais próximo primeiro); nada a reordenar aqui.
+      //
+      // `exclude_cancelled=true`: este bloco é o único dos três (Histórico, next_event_map e
+      // este) que ainda deixava um compromisso CANCELADO se passar por "próximo compromisso" —
+      // e é exatamente o sinal que o estado vazio existe para revelar (contato esfriando sem
+      // próximo passo). O default do endpoint é `false` (a tela de Agenda continua mostrando
+      // cancelados no calendário); aqui pedimos explicitamente o filtro.
       const agora = new Date().toISOString();
       const { data } = await api.get<AgendaEvent[]>(
-        `/agenda/events?client_id=${encodeURIComponent(clientId)}&start=${encodeURIComponent(agora)}`,
+        `/agenda/events?client_id=${encodeURIComponent(clientId)}&start=${encodeURIComponent(agora)}&exclude_cancelled=true`,
       );
       setEventos(Array.isArray(data) ? data : []);
       setErro(false);

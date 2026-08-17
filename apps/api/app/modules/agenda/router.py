@@ -82,13 +82,18 @@ def list_events(
     end: datetime | None = Query(default=None),
     kind: list[str] | None = Query(default=None),
     client_id: str | None = Query(default=None),
+    # Default `False`: preserva o comportamento de hoje da tela de Agenda, que lista TODO evento
+    # (cancelado incluso — o card mostra o status). A ficha 360° (`BlocoDaAgenda`) manda `true`
+    # explicitamente, para não impersonar um "próximo compromisso" com um evento cancelado.
+    exclude_cancelled: bool = Query(default=False),
     limit: int = Query(default=200, ge=1, le=500),
     offset: int = Query(default=0, ge=0),
     _user: CurrentUser = Depends(_guard),
     db: Session = Depends(get_tenant_db),
 ) -> list[EventOut]:
     events = service.list_events(
-        db, start=start, end=end, kinds=kind, client_id=client_id, limit=limit, offset=offset
+        db, start=start, end=end, kinds=kind, client_id=client_id,
+        exclude_cancelled=exclude_cancelled, limit=limit, offset=offset,
     )
     return _events_out(db, events)
 

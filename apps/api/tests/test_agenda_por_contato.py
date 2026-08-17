@@ -119,6 +119,59 @@ def test_evento_sem_client_id_nao_aparece_no_filtro(client: TestClient, headers)
     assert body[0]["client_id"] == cl["id"]
 
 
+# ── exclude_cancelled: achado da revisão do Task 6 ──────────────────────────────────────────
+# Histórico (`crm/timeline.py`) e `next_event_map` já excluem cancelado; `list_events` era o
+# único dos três que não tinha essa trava. `BlocoDaAgenda` (ficha 360°) pede `exclude_cancelled`
+# explicitamente para não impersonar um cancelado como "próximo compromisso"; a Agenda continua
+# sem passar o parâmetro, então o default tem que preservar o comportamento de hoje.
+
+
+def test_exclude_cancelled_filtra_o_cancelado_do_filtro_por_contato(client: TestClient, headers):
+    """A chamada que o `BlocoDaAgenda` faz: um evento futuro CANCELADO não pode aparecer."""
+    cl = client.post("/crm/clients", json={"name": "Cliente Cancelado"}, headers=headers).json()
+    created = client.post(
+        "/agenda/events",
+        json=_event(
+            client_id=cl["id"],
+            starts_at="2099-01-01T10:00:00+00:00", ends_at="2099-01-01T11:00:00+00:00",
+        ),
+        headers=headers,
+    ).json()["event"]
+    cancel = client.post(f"/agenda/events/{created['id']}/cancel", headers=headers)
+    assert cancel.status_code == 200
+
+    resp = client.get(
+        "/agenda/events",
+        params={"client_id": cl["id"], "exclude_cancelled": "true"},
+        headers=headers,
+    )
+    assert resp.status_code == 200
+    assert resp.json() == []
+
+
+def test_sem_exclude_cancelled_o_padrao_continua_devolvendo_o_cancelado(
+    client: TestClient, headers,
+):
+    """Default `False` é escolha de COMPATIBILIDADE, não descuido — a tela de Agenda (que não
+    manda o parâmetro) continua vendo todo evento, cancelado incluso, como sempre viu."""
+    cl = client.post("/crm/clients", json={"name": "Cliente Cancelado 2"}, headers=headers).json()
+    created = client.post(
+        "/agenda/events",
+        json=_event(
+            client_id=cl["id"],
+            starts_at="2099-01-01T10:00:00+00:00", ends_at="2099-01-01T11:00:00+00:00",
+        ),
+        headers=headers,
+    ).json()["event"]
+    client.post(f"/agenda/events/{created['id']}/cancel", headers=headers)
+
+    resp = client.get("/agenda/events", params={"client_id": cl["id"]}, headers=headers)
+    assert resp.status_code == 200
+    body = resp.json()
+    assert len(body) == 1
+    assert body[0]["status"] == "cancelled"
+
+
 # ── receivables grava o vínculo no evento que ela cria ──────────────────────────────────────
 
 

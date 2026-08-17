@@ -132,6 +132,7 @@ def list_events(
     end: datetime | None = None,
     kinds: list[str] | None = None,
     client_id: str | None = None,
+    exclude_cancelled: bool = False,
     limit: int = DEFAULT_LIST_LIMIT,
     offset: int = 0,
 ) -> list[AgendaEvent]:
@@ -150,6 +151,13 @@ def list_events(
         # prazo interno, conta a pagar) nunca casa — a coluna é nullable e `== client_id` não
         # captura linhas NULL.
         stmt = stmt.where(AgendaEvent.client_id == client_id)
+    if exclude_cancelled:
+        stmt = stmt.where(AgendaEvent.status != STATUS_CANCELLED)
+    # Default `False`, ao contrário de `count_events` (default `True`): a tela de Agenda chama
+    # `list_events` sem este parâmetro e RENDERIZA todo evento, cancelado incluso (o card mostra
+    # o status); mudar o default aqui apagaria eventos cancelados do calendário sem ninguém pedir.
+    # É a ficha 360° (`BlocoDaAgenda`) que passa `exclude_cancelled=True` explicitamente — ver
+    # `router.py`.
     stmt = stmt.order_by(AgendaEvent.starts_at).limit(limit).offset(offset)
     return list(db.scalars(stmt).all())
 
