@@ -172,6 +172,9 @@ def _sync_whatsapp_webhook_snapshot(db: Session, profile: TenantProfile) -> None
             tenant_id=profile.tenant_id,
             app_secret=profile.whatsapp_app_secret,
             verify_token=profile.whatsapp_verify_token,
+            # O evento de aprovação de template chega roteado por WABA, não por telefone —
+            # ver o docstring da 0079. `fully_configured` acima já garante que não é None.
+            waba_id=profile.whatsapp_waba_id,
         )
     )
 

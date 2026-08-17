@@ -257,6 +257,10 @@ def test_whatsapp_verify_token_generated_when_fully_configured(
     assert snap is not None
     assert snap.app_secret == "secret-xyz"
     assert snap.verify_token == body["whatsapp_verify_token"]
+    # O evento de aprovação de template chega roteado por WABA, não por telefone (issue #36).
+    # Sem este dual-write, todo tenant que configurar credenciais DEPOIS da 0079 ficaria de
+    # fora — o backfill da migration cobre só quem já existia.
+    assert snap.waba_id == "waba-456"
 
 
 def test_whatsapp_public_snapshot_removed_when_incomplete(

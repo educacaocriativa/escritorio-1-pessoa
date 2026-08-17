@@ -97,6 +97,45 @@ def test_resolve_by_verify_token_returns_none_for_unknown_token(db):
     assert inbox_service.resolve_by_verify_token(db, verify_token="token-inexistente") is None
 
 
+def test_resolve_by_waba_id_finds_by_waba(db):
+    """O caminho do evento de status de TEMPLATE, que não carrega `phone_number_id` nenhum."""
+    db.add(PublicWhatsappAccount(
+        phone_number_id="phone-resolve-3", tenant_id=TENANT_ID, app_secret="segredo-resolve-3",
+        verify_token="verify-resolve-3", waba_id="waba-resolve-3",
+    ))
+    db.commit()
+    account = inbox_service.resolve_by_waba_id(db, waba_id="waba-resolve-3")
+    assert account is not None
+    assert account.tenant_id == TENANT_ID
+    assert account.app_secret == "segredo-resolve-3"
+
+
+def test_resolve_by_waba_id_returns_none_for_unknown_waba(db):
+    assert inbox_service.resolve_by_waba_id(db, waba_id="waba-inexistente") is None
+
+
+def test_resolve_by_waba_id_rejects_waba_with_nul_byte(db):
+    # Mesma guarda de `resolve_account`: o WABA vem de payload público, e um NUL levanta
+    # `psycopg.DataError` no bind do parâmetro em produção (SQLite tolera — ver o comentário
+    # longo em `test_resolve_account_rejects_phone_number_id_with_nul_byte`).
+    assert inbox_service.resolve_by_waba_id(db, waba_id="waba\x00-1") is None
+
+
+def test_resolve_by_waba_id_com_varios_numbers_no_mesmo_waba(db):
+    """Um WABA pode ter vários números — e cada número é uma linha. Todas são do mesmo tenant
+    e carregam o mesmo `app_secret`, então qualquer uma resolve; a ordenação só torna a
+    escolha determinística."""
+    for numero in ("phone-b", "phone-a"):
+        db.add(PublicWhatsappAccount(
+            phone_number_id=numero, tenant_id=TENANT_ID, app_secret="segredo-multi",
+            verify_token=f"verify-{numero}", waba_id="waba-multi",
+        ))
+    db.commit()
+    account = inbox_service.resolve_by_waba_id(db, waba_id="waba-multi")
+    assert account is not None
+    assert account.phone_number_id == "phone-a"
+
+
 def test_resolve_account_rejects_phone_number_id_with_nul_byte(db):
     # JSON permite um NUL escapado numa string e `json.loads` produz um `str` Python com NUL de
     # verdade. No driver de produção (psycopg), fazer bind desse valor num parâmetro de query
