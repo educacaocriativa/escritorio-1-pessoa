@@ -14,6 +14,7 @@ from app.db.session import get_db, get_tenant_session_factory
 from app.modules.whatsapp_inbox import service
 from app.modules.whatsapp_inbox.schemas import SendTemplateRequest, SendTextRequest
 from app.modules.whatsapp_session import service as whatsapp_session_service
+from app.modules.whatsapp_templates import service as whatsapp_templates_service
 
 public_router = APIRouter(prefix="/public/whatsapp", tags=["whatsapp-inbox-public"])
 router = APIRouter(prefix="/whatsapp-conversations", tags=["whatsapp-inbox"])
@@ -63,6 +64,16 @@ def _extract_phone_number_id(payload: dict) -> str | None:
     return None
 
 
+def _exigir_assinatura(*, app_secret: str, body: bytes, signature_header: str | None) -> None:
+    """Levanta 403 se a assinatura não bater. Extraído porque os DOIS ramos do webhook
+    (mensagem e status de template) precisam da mesma checagem com o `app_secret` da conta já
+    resolvida — duas cópias divergiriam na primeira mudança."""
+    if not whatsapp.verify_webhook_signature(
+        app_secret=app_secret, body=body, signature_header=signature_header
+    ):
+        raise HTTPException(status_code=403, detail="Assinatura inválida")
+
+
 @public_router.post("/webhook")
 async def receive_webhook(
     request: Request,
@@ -80,6 +91,36 @@ async def receive_webhook(
     if not isinstance(payload, dict):
         raise HTTPException(status_code=400, detail="JSON inválido")
 
+    # ── Ramo 1: aprovação/rejeição de template (issue #36) ──────────────────
+    # Roda ANTES do caminho de mensagem porque é ele que sabe se este payload é de template.
+    # `parse_template_status` nunca levanta (ver docstring lá): payload de mensagem, ou
+    # qualquer payload deformado, devolve [] e o fluxo cai no caminho antigo — que segue
+    # respondendo os mesmos 400 de sempre, com os mesmos testes.
+    #
+    # O roteamento aqui é por WABA, não por telefone: o evento de template NÃO tem
+    # `metadata.phone_number_id` (era assim que ele morria em 404 antes da issue #36).
+    template_events = whatsapp.meta.parse_template_status(payload)
+    if template_events:
+        waba_id = whatsapp.meta.extract_waba_id(payload)
+        if not waba_id:
+            raise HTTPException(status_code=404, detail="WABA não encontrada no payload")
+        account = service.resolve_by_waba_id(db, waba_id=waba_id)
+        if account is None:
+            raise HTTPException(
+                status_code=404, detail="Conta não configurada nesta plataforma"
+            )
+        _exigir_assinatura(
+            app_secret=account.app_secret,
+            body=body,
+            signature_header=request.headers.get("x-hub-signature-256"),
+        )
+        with session_factory(account.tenant_id) as tdb:
+            whatsapp_templates_service.apply_status_events(
+                tdb, tenant_id=account.tenant_id, events=template_events
+            )
+        return {"status": "ok"}
+
+    # ── Ramo 2: mensagem recebida (o caminho original) ──────────────────────
     phone_number_id = _extract_phone_number_id(payload)
     if phone_number_id is not None and not isinstance(phone_number_id, str):
         # Presente mas com tipo errado (dict/list) — passaria direto pro `if not phone_number_id`
@@ -93,11 +134,11 @@ async def receive_webhook(
     if account is None:
         raise HTTPException(status_code=404, detail="Número não configurado nesta plataforma")
 
-    signature = request.headers.get("x-hub-signature-256")
-    if not whatsapp.verify_webhook_signature(
-        app_secret=account.app_secret, body=body, signature_header=signature
-    ):
-        raise HTTPException(status_code=403, detail="Assinatura inválida")
+    _exigir_assinatura(
+        app_secret=account.app_secret,
+        body=body,
+        signature_header=request.headers.get("x-hub-signature-256"),
+    )
 
     try:
         messages = whatsapp.meta.parse_inbound(payload)
