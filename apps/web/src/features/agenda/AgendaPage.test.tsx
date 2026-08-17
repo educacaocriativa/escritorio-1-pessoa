@@ -128,6 +128,7 @@ function agendaEvent(overrides: Partial<AgendaEvent> = {}): AgendaEvent {
     amount_cents: null,
     external_ref: null,
     google_event_id: null,
+    client_id: null,
     client_name: null,
     created_by_ai: false,
     created_at: at(8),

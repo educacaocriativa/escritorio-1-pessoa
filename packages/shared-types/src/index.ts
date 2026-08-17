@@ -184,6 +184,11 @@ export interface AgendaEvent {
   external_ref: string | null;
   /** Id do evento espelhado no Google Calendar (quando o Meet foi gerado via OAuth). */
   google_event_id: string | null;
+  /** De quem é este compromisso (aponta para `clients.id`). `null` para bloqueio de horário,
+   *  prazo interno e conta a pagar — nunca têm contato (espelha `EventOut.client_id` em
+   *  `agenda/schemas.py`). Gap deixado pela Task 2/3 desta onda: o backend já devolvia o campo,
+   *  mas o tipo compartilhado não o declarava — a ficha 360° (Task 6) é a primeira consumidora. */
+  client_id: string | null;
   /** Nome do cliente (cobrança) ou fornecedor (conta a pagar), resolvido no list/get. */
   client_name: string | null;
   created_by_ai: boolean;

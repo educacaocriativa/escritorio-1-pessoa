@@ -7,7 +7,8 @@ import type {
   Quote,
 } from "@e1p/shared-types";
 import {
-  ArrowLeft, FileSignature, FileText, Gavel, History, MessageCircle, Pencil, Receipt, Workflow,
+  ArrowLeft, CalendarDays, FileSignature, FileText, Gavel, History, MessageCircle, Pencil,
+  Receipt, Workflow,
 } from "lucide-react";
 import { useCallback, useEffect, useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
@@ -15,6 +16,7 @@ import { api, apiErrorMessage } from "../../lib/api";
 import { formatDate, formatDay } from "../../lib/datetime";
 import { useFuso } from "../../store/auth";
 import { rotaDaCobranca } from "../cobrancas/rota";
+import BlocoDaAgenda from "./BlocoDaAgenda";
 import BlocoDaConversa from "./BlocoDaConversa";
 import ClientTimeline from "./ClientTimeline";
 import { hojeISO } from "../financeiro/contas";
@@ -127,6 +129,16 @@ export default function ClientDetailPage() {
           e a régua de 360px precisa de um recorte que aponte só para esta. */}
       <Section icon={<MessageCircle size={16} />} title="Conversa" testId="secao-conversa">
         <BlocoDaConversa clientId={id} />
+      </Section>
+
+      {/* Agenda vem depois da Conversa e antes do operacional: a ficha conta uma história — o
+          que aconteceu (Histórico), o que foi dito (Conversa), o que está marcado (Agenda), e só
+          então o operacional (Cobranças, Contratos...). Bloco ATIVO, não só narrativo: mostra o
+          FUTURO e deixa marcar sem sair da ficha. Carrega sozinho, fora do `load()` da página,
+          pelo mesmo motivo do `BlocoDaConversa`: uma falha da Agenda não pode derrubar Cobranças
+          e o resto da tela. */}
+      <Section icon={<CalendarDays size={16} />} title="Agenda">
+        <BlocoDaAgenda clientId={id} />
       </Section>
 
       {/* Cobranças */}
