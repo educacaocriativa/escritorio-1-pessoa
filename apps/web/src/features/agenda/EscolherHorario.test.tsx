@@ -14,9 +14,18 @@ vi.mock("../../lib/api", () => ({
   apiErrorMessage: () => "Erro inesperado",
 }));
 
-vi.mock("../../store/auth", () => ({ useFuso: () => "America/Sao_Paulo" }));
+// O fuso do TENANT é trocável por teste (modelo de `NewEventModal.test.tsx`). O `vitest.config.ts`
+// fixa o fuso da MÁQUINA em America/Sao_Paulo: enquanto o tenant mockado for esse mesmo valor,
+// `eventosDoDia`/`faixasLivres`/`hojeDoTenant` lidos pelo fuso do tenant e lidos pelas partes
+// locais do `Date` dão o MESMO resultado — e nenhuma asserção deste arquivo consegue distinguir
+// os dois. É o defeito da issue #120, a família do `toContain("flex-wrap")` do CLAUDE.md §5.1.
+let fusoDoTenant = "America/Sao_Paulo";
+// Tóquio (UTC+9, sem horário de verão) está 12h à frente do runner: sob ele os dois caminhos
+// discordam até sobre que DIA é. Mesmo valor que `grade.test.ts` usa no nível unitário — aqui
+// ele prova que o COMPONENTE repassa o fuso do tenant àquela aritmética, e não outro qualquer.
+const FUSO_DISTANTE = "Asia/Tokyo";
 
-
+vi.mock("../../store/auth", () => ({ useFuso: () => fusoDoTenant }));
 
 // O dia base deste arquivo é quinta 15/10/2026 às 09:00 do tenant (12:00Z), não o 10/10 da
 // fixture compartilhada.
@@ -39,6 +48,7 @@ const abrir = (onEscolher = vi.fn()) => {
 
 beforeEach(() => {
   vi.mocked(api.get).mockReset();
+  fusoDoTenant = "America/Sao_Paulo";
   // "Agora" fixo: 10/10/2026 09:00 no fuso do tenant. Sem isto, os testes de faixa livre
   // mudariam de resultado conforme o dia em que a suíte roda.
   vi.useFakeTimers({ shouldAdvanceTime: true });
@@ -51,6 +61,10 @@ afterEach(() => {
 
 describe("EscolherHorario", () => {
   it("mostra a disponibilidade do dia escolhido antes de qualquer formulário", async () => {
+    // ⚠️ Fuso do runner de propósito: este teste é sobre a ORDEM (a agenda antes do formulário) e
+    // sobre a faixa tomada sumir da oferta — não sobre fuso. Ele não distingue tenant de
+    // navegador, e não é para distinguir: quem faz essa prova é o `describe` "fuso do tenant,
+    // não do navegador" no fim do arquivo. Não troque o fuso aqui.
     mockar([evento()]);
     abrir();
 
@@ -91,6 +105,9 @@ describe("EscolherHorario", () => {
   });
 
   it("no dia de hoje, não oferece horário que já passou", async () => {
+    // ⚠️ Fuso do runner de propósito: o que se prova aqui é a REGRA DO CORTE (`<=`, a faixa das
+    // 09h em ponto já não vale), não de que relógio ele sai. O teste irmão em "fuso do tenant,
+    // não do navegador" faz a outra prova, com o corte lido em Tóquio.
     mockar([]);
     abrir();
 
@@ -176,5 +193,54 @@ describe("EscolherHorario", () => {
     await userEvent.click(screen.getByRole("button", { name: /16 de novembro/ }));
     expect(screen.getByText("Compromisso de novembro")).toBeInTheDocument();
     expect(screen.queryByText("Alinhamento do casamento")).not.toBeInTheDocument();
+  });
+
+  /**
+   * `grade.test.ts` já prova, no nível unitário, que `eventosDoDia`/`faixasLivres`/`hojeDoTenant`
+   * respeitam o fuso que RECEBEM. O que falta — e é o que estes dois testes fecham — é que o
+   * COMPONENTE entregue a elas o fuso do TENANT (`useFuso()`), e não o relógio da máquina. Sem um
+   * fuso distante do runner, essa passagem de parâmetro é invisível: os dois valores coincidem.
+   */
+  describe("fuso do tenant, não do navegador", () => {
+    it("abre no dia de HOJE do tenant e corta o passado pelo relógio dele", async () => {
+      // 10/10/2026 22:00Z é 11/10 07:00 em Tóquio e 10/10 19:00 em São Paulo (o fuso do runner).
+      // Lendo pelo tenant: o seletor abre no dia 11 e, às 07h, a janela inteira de 08–18h ainda
+      // está por vir. Lendo pelo navegador: abriria no dia 10 às 19h, com TUDO já no passado —
+      // "Sem horário livre". Os dois desfechos são opostos, e é isso que a asserção mede.
+      fusoDoTenant = FUSO_DISTANTE;
+      vi.setSystemTime(new Date("2026-10-10T22:00:00Z"));
+      mockar([]);
+      abrir();
+
+      await waitFor(() => expect(vi.mocked(api.get)).toHaveBeenCalled());
+
+      expect(screen.getByRole("heading", { level: 4 })).toHaveTextContent(/11 de outubro/i);
+      expect(screen.getByRole("button", { name: "08:00–09:00" })).toBeInTheDocument();
+      expect(screen.queryByText(/sem horário livre/i)).not.toBeInTheDocument();
+    });
+
+    it("põe o compromisso no dia do tenant — e é lá que a faixa dele some da oferta", async () => {
+      // 15/10 23:00Z–16/10 00:00Z é 16/10 08:00–09:00 em Tóquio e 15/10 20:00–21:00 em São Paulo.
+      // O compromisso troca de DIA conforme o fuso, e a faixa que ele ocupa vai junto: só quem lê
+      // pelo tenant o coloca no dia 16 tomando as 08h. Quem lê pelo navegador deixa o dia 16
+      // inteiramente livre — e o seletor ofereceria 08:00 em cima de um compromisso existente,
+      // que é o defeito exato que a feature existe para impedir.
+      fusoDoTenant = FUSO_DISTANTE;
+      mockar([evento({ starts_at: "2026-10-15T23:00:00Z", ends_at: "2026-10-16T00:00:00Z" })]);
+      abrir();
+
+      await userEvent.click(await screen.findByRole("button", { name: /16 de outubro/ }));
+
+      expect(screen.getByText("Alinhamento do casamento")).toBeInTheDocument();
+      expect(screen.queryByRole("button", { name: "08:00–09:00" })).not.toBeInTheDocument();
+      expect(screen.getByRole("button", { name: "09:00–10:00" })).toBeInTheDocument();
+
+      // E o espelho: no dia 15 — onde o relógio do NAVEGADOR o colocaria — ele não está, e as
+      // 20h nem sequer são oferecidas (a janela para às 18h), então a prova é a ausência do
+      // título e a oferta intacta das 08h.
+      await userEvent.click(screen.getByRole("button", { name: /15 de outubro/ }));
+      expect(screen.queryByText("Alinhamento do casamento")).not.toBeInTheDocument();
+      expect(screen.getByRole("button", { name: "08:00–09:00" })).toBeInTheDocument();
+    });
   });
 });

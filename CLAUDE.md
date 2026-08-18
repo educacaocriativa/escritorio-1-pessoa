@@ -96,6 +96,46 @@ certo, e a tela estava errada. **Nenhum teste de `apps/web/e2e/` pode aferir cla
   checks to pass" (mesmo modelo de `secret-scan`/`sast-semgrep`). Enquanto isso, a régua **mede e não
   barra** — e foi a ausência de barreira, não a de conhecimento, que deixou seis telas passarem.
 
+### 5.2 A régua do fuso nos testes (issue #120, fechada em 2026-08-18)
+
+**Um teste sobre fuso do tenant que roda com o fuso do tenant IGUAL ao da máquina não testa fuso
+nenhum.** `apps/web/vitest.config.ts` fixa `env: { TZ: "America/Sao_Paulo" }` para a suíte inteira.
+Enquanto o mock devolver `useFuso: () => "America/Sao_Paulo"` — ou o teste não mockar nada e cair no
+fallback `FUSO_PADRAO`, que é o mesmo valor —, ler o instante pelo fuso do **tenant** e lê-lo pelas
+partes locais do `Date` produzem o mesmo resultado **por construção**. É a família do
+`toContain("flex-wrap")` do §5.1: asserção estruturalmente incapaz de falhar.
+
+Medido na PR #119: **5 de 5 mutações no coração do `features/agenda/grade.ts` sobreviveram a 11
+testes verdes** — inclusive trocar `today(fuso, …)` por `localYmd(new Date(…))`. A mutação sobreviveu
+ao teste literalmente chamado *"agrupa pelo dia do TENANT, não pelo do navegador"*. **A produção
+estava certa; o que faltava era um teste capaz de dizer isso.**
+
+- **O padrão** é `let fusoDoTenant = "America/Sao_Paulo"` no topo, `vi.mock(".../store/auth", () => ({
+  useFuso: () => fusoDoTenant }))`, reset no `beforeEach` e `fusoDoTenant = FUSO_DISTANTE` só nos
+  testes que existem para provar fuso. `FUSO_DISTANTE = "Asia/Tokyo"` (UTC+9, sem horário de verão):
+  12h à frente do runner, então os dois caminhos discordam até sobre que **dia** é. Referências:
+  `features/agenda/grade.test.ts` e `features/agenda/NewEventModal.test.tsx`.
+- ⚠️ **Nem toda asserção com data deve trocar de fuso, e a exceção precisa estar ESCRITA.** As provas
+  de que uma **data de calendário NÃO converte** (`formatDay` em `all_day`/`due_date`) só funcionam
+  com um fuso **negativo**: é o UTC−3 que puxa a meia-noite UTC para o dia anterior e denuncia um
+  `formatDateShort` indevido. Em Tóquio, `00:00Z` vira 09:00 do mesmo dia e a mutação **sobrevive** —
+  "consertar" esses testes para um fuso distante os ENFRAQUECE. Os casos estão comentados no lugar
+  (`BlocoDaAgenda.test.tsx`, `CrmPage.test.tsx`).
+- ⚠️ **Marca gravada não se compara com a função que a gravou.** `EntradaDoDia.test.tsx` afirmava
+  `localStorage.setItem(CHAVE, today(FUSO))` e o componente lia `today(fuso)`: o teste comparava o
+  código consigo mesmo e passava com qualquer fuso. Agora a marca é uma **string literal**
+  (`"2026-08-17"`) com o relógio congelado num instante em que Tóquio, São Paulo e UTC discordam.
+- **A correção só vale verificada POR MUTAÇÃO.** Para cada asserção consertada, troque a leitura de
+  produção para o fuso do navegador (`today(fuso)` → `localYmd(new Date())`, ou
+  `formatX(iso, fuso)` → `formatX(iso, Intl.DateTimeFormat().resolvedOptions().timeZone)`) e confirme
+  que o teste **morre**. Sem isso a correção é cosmética. Restaure por **cópia do arquivo**, nunca
+  por `git checkout` num arquivo com trabalho não commitado.
+- **Dívida que fica:** a mesma classe existe fora da lista de quem mocka `useFuso`. Os testes de
+  `pagar/ComprovantePage`, `pagar/PagarPage` e `cobrancas/CobrancasPage` montam "hoje" com
+  `d.getFullYear()/getMonth()/getDate()` (o dia do **navegador**) e comparam com o `today(fuso)` da
+  tela; com tenant e runner no mesmo fuso, essas asserções também não conseguem falhar. Não foram
+  tocadas nesta passada.
+
 ## 6. Estado atual / roadmap
 - [x] Fundação do monorepo, docs, agentes de QA, CI local.
 - [x] Core do backend: tenancy (RLS) + anonimizador + camada de IA + auditoria.
