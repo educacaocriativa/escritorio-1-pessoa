@@ -721,3 +721,57 @@ describe("recorte e paginacao da lista (spec 2026-08-18)", () => {
     });
   });
 });
+
+describe("reativar conta cancelada (spec 2026-08-18, §6)", () => {
+  const CONTA_CANCELADA = {
+    ...CONTA_ABERTA,
+    id: "b-9",
+    description: "Assinatura cancelada",
+    status: "canceled",
+  };
+
+  function renderPagar() {
+    render(
+      <MemoryRouter>
+        <PageActionsProvider>
+          <PagarPage />
+        </PageActionsProvider>
+      </MemoryRouter>,
+    );
+  }
+
+  function mockComCancelada() {
+    vi.mocked(api.get).mockImplementation((url: string) => {
+      if (url === "/payables/summary") return Promise.resolve({ data: emptySummary } as never);
+      if (url === "/payables/bills")
+        return Promise.resolve({ data: { items: [CONTA_CANCELADA], total: 1 } } as never);
+      return Promise.resolve({ data: [] } as never);
+    });
+    vi.mocked(api.post).mockResolvedValue({ data: {} } as never);
+  }
+
+  it("linha cancelada oferece Reativar", async () => {
+    mockComCancelada();
+    renderPagar();
+
+    expect(await screen.findByRole("button", { name: /reativar/i })).toBeInTheDocument();
+  });
+
+  it("linha aberta NAO oferece Reativar", async () => {
+    mockComConta([CONTA]);
+    renderPagar();
+    await screen.findByText("Aluguel");
+
+    expect(screen.queryByRole("button", { name: /reativar/i })).not.toBeInTheDocument();
+  });
+
+  it("Reativar chama a rota propria, nao /reverse", async () => {
+    mockComCancelada();
+    vi.spyOn(window, "confirm").mockReturnValue(true);
+    renderPagar();
+
+    fireEvent.click(await screen.findByRole("button", { name: /reativar/i }));
+
+    await waitFor(() => expect(api.post).toHaveBeenCalledWith("/payables/bills/b-9/reactivate"));
+  });
+});

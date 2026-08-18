@@ -194,6 +194,26 @@ export default function PagarPage() {
    * A consequência no sistema, essa sim, é idêntica: a conta volta para "A pagar", reaparece na
    * Fila e o movimento bancário é apagado.
    */
+  /**
+   * Reativar é rota PRÓPRIA, não `/reverse`.
+   *
+   * `reverse` apaga movimento bancário — trabalho que aqui não existe, porque cancelar só age
+   * sobre conta em aberto, que não tem movimento nenhum. A confirmação avisa do vencimento porque
+   * é a única consequência que surpreende: reativada depois do prazo, a conta volta Atrasada, com
+   * a data original preservada.
+   */
+  async function reactivate(id: string) {
+    if (
+      !confirm(
+        'Reativar esta conta? Ela volta para "A pagar" com o vencimento original — se ele já ' +
+          "passou, ela aparece como Atrasada e você pode editar a data.",
+      )
+    )
+      return;
+    await api.post(`/payables/bills/${id}/reactivate`);
+    load();
+  }
+
   async function reverse(id: string, agendada = false) {
     const pergunta = agendada
       ? "Cancelar o agendamento desta conta? O débito programado deixa de ser contado e ela volta " +
@@ -333,6 +353,14 @@ export default function PagarPage() {
                         {p.status === "scheduled" && (
                           <button onClick={() => reverse(p.id, true)} className="text-xs font-medium text-neutral-400 hover:text-danger">
                             Cancelar agendamento
+                          </button>
+                        )}
+                        {/* Invisível na visão padrão (que abre em "Em aberto"); chega-se a ela
+                            por Status → Cancelado. Reativar é gesto deliberado, não algo em que
+                            se tropeça enquanto se dá baixa em contas. */}
+                        {p.status === "canceled" && (
+                          <button onClick={() => reactivate(p.id)} className="text-xs font-medium text-neutral-500 hover:text-primary-600">
+                            Reativar
                           </button>
                         )}
                       </div>
