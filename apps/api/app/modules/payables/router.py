@@ -14,6 +14,7 @@ from app.modules.payables.schemas import (
     PayableOut,
     PayablePayIn,
     PayablePaymentUpdate,
+    PayablesPageOut,
     PayablesPaidBeforeOut,
     PayablesSummary,
     PayableUpdate,
@@ -69,18 +70,22 @@ def categories(
     return service.list_categories(db)
 
 
-@router.get("/bills", response_model=list[PayableOut])
+@router.get("/bills", response_model=PayablesPageOut)
 def list_bills(
-    status: str | None = Query(default=None),
+    status: list[str] | None = Query(default=None),
+    limit: int = Query(default=50, ge=1, le=500),
+    offset: int = Query(default=0, ge=0),
     _user: CurrentUser = Depends(_guard),
     db: Session = Depends(get_tenant_db),
-) -> list[PayableOut]:
-    # Fuso resolvido UMA vez para a lista inteira: `_out` por linha faria uma consulta de perfil
+) -> PayablesPageOut:
+    # Fuso resolvido UMA vez para a página inteira: `_out` por linha faria uma consulta de perfil
     # por conta (N+1). Mesmo cuidado da listagem de `receivables`.
     hoje = hoje_do_tenant(db)
-    return [
-        service.payable_out(p, hoje) for p in service.list_payables(db, status=status)
-    ]
+    itens = service.list_payables(db, status=status, limit=limit, offset=offset)
+    return PayablesPageOut(
+        items=[service.payable_out(p, hoje) for p in itens],
+        total=service.count_payables(db, status=status),
+    )
 
 
 @router.get("/bills/paid-before", response_model=PayablesPaidBeforeOut)
