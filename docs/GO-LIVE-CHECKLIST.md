@@ -132,7 +132,7 @@
 
 ## 9. CI e branch protection (Story 3.2)
 - [x] CI já existe e roda de verdade (`test-in-prod-image` + `cross-tenant-rls`) — validado na PR #7
-- [ ] Habilitar branch protection em GitHub → Settings → Branches → marcar os 2 checks como obrigatórios (transforma o CI num gate real, hoje só reporta status)
+- [x] Branch protection habilitada — o CI é gate real, não só status. Conjunto obrigatório de `main` verificado em **2026-08-18**: `test-in-prod-image`, `cross-tenant-rls`, `secret-scan`, `sast-semgrep` e `frontend` (os 5 jobs do `ci.yml`). Push direto é rejeitado (GH006). Para reconferir sem ser admin: receita no CLAUDE.md §5.1
 - [ ] (Fora do escopo atual) CD automático — deploy hoje é `git pull` + rebuild manual na VPS
 
 ## 10. Staging (Story 3.1)

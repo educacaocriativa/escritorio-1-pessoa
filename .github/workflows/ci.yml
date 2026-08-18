@@ -4,20 +4,24 @@
 # e garante o isolamento RLS num Postgres real (testcontainers).
 # Story 6.2: adiciona `secret-scan` (gitleaks) e `sast-semgrep` como gates de segurança.
 #
-# Gate obrigatório: se qualquer job falhar, o workflow fica vermelho. Para que isso
-# BLOQUEIE merge/deploy de fato, @devops deve habilitar branch protection em
-# GitHub → Settings → Branches → "Require status checks to pass" marcando
-# `test-in-prod-image` e `cross-tenant-rls` (follow-up fora do escopo de código — Task 5).
+# Gate obrigatório: se qualquer job falhar, o workflow fica vermelho — e isso BLOQUEIA o
+# merge. Os CINCO jobs deste arquivo são required checks em `main`, conjunto verificado em
+# 2026-08-18: `test-in-prod-image`, `cross-tenant-rls`, `secret-scan`, `sast-semgrep` e
+# `frontend`. Push direto em `main` é rejeitado (GH006); toda mudança passa por PR.
+# Para reconferir o conjunto SEM ser admin do repositório, a receita está no CLAUDE.md §5.1 —
+# a rota óbvia (`/branches/main/protection`) responde 404 para quem não é admin, e esse 404 é
+# indistinguível de "branch não protegida": não o leia como resposta.
 #
-# Story 6.2 — gates OBSERVÁVEIS primeiro, bloqueantes depois: `secret-scan` e
-# `sast-semgrep` seguem O MESMO modelo — hoje aparecem no PR (check vermelho quando
-# acham algo), mas NÃO impedem merge porque ainda não estão em "Require status checks
-# to pass". A promoção para bloqueante é um follow-up de @devops (mesma tela de branch
-# protection acima), a ser feito após um período de observação sem falso positivo
-# excessivo — assim ninguém trava merge por falso positivo no dia 1. NÃO usamos
-# `continue-on-error` (deixaria o check sempre verde e tornaria a promoção via branch
-# protection um no-op) — o mecanismo de "não-bloqueante" é a AUSÊNCIA do check na lista
-# de required, igual aos dois jobs acima.
+# O PADRÃO desta casa — gates OBSERVÁVEIS primeiro, bloqueantes depois — está CONCLUÍDO para
+# estes cinco, e foi assim que os cinco chegaram a required: um gate novo entra rodando e
+# aparecendo no PR (check vermelho quando acha algo) mas FORA da lista de required; roda um
+# período de observação; e só é promovido a bloqueante depois de se mostrar sem falso positivo
+# excessivo — assim ninguém trava merge por falso positivo no dia 1. Gate novo daqui pra frente
+# nasce assim (é o caso do job de mutação noturna, issue #121).
+#
+# NÃO usamos `continue-on-error` para obter a fase observável: ele deixaria o check sempre
+# verde e tornaria a promoção via branch protection um no-op. O mecanismo de "não-bloqueante"
+# é a AUSÊNCIA do check na lista de required — nunca `continue-on-error`.
 name: CI
 
 on:
@@ -97,7 +101,7 @@ jobs:
   # O CLI/binário gitleaks é MIT, sem registro nem EULA (mesma engine, cobertura
   # idêntica): custo zero de verdade + zero fricção operacional/legal (Regra de Ouro nº 4).
   # O padrão `docker run` é o mesmo já usado por `test-in-prod-image` neste arquivo.
-  # Observável, não bloqueante — ver o cabeçalho (branch protection é o gate de merge).
+  # Required check em `main` (verificado em 2026-08-18) — chegou lá pela promoção do cabeçalho.
   secret-scan:
     runs-on: ubuntu-latest
     steps:
@@ -134,7 +138,7 @@ jobs:
   # (p/typescript, p/react, p/owasp-top-ten) — não o pack genérico p/ci (mais ruidoso).
   # Escaneia SÓ apps/web (TS/React): o backend Python já é coberto por `ruff` no job
   # test-in-prod-image; SAST Python (p/python) fica como follow-up, não é escopo do AC2.
-  # Observável, não bloqueante — ver o cabeçalho.
+  # Required check em `main` (verificado em 2026-08-18) — ver o cabeçalho.
   sast-semgrep:
     runs-on: ubuntu-latest
     steps:
@@ -160,12 +164,12 @@ jobs:
   # assim que seis telas mergearam com "validação em ~360px não foi feita" e três PRs de correção
   # em campo foram pagos (#56, #58, #89).
   #
-  # Observável primeiro, bloqueante depois — MESMO modelo de `secret-scan`/`sast-semgrep` deste
-  # arquivo: o job aparece no PR e fica vermelho quando acha algo, mas só IMPEDE merge quando
-  # @devops o acrescentar em "Require status checks to pass" (GitHub → Settings → Branches).
-  # Sem esse passo a régua mede e não barra — e foi a ausência de barreira, não a de conhecimento,
-  # que deixou seis telas passarem. NÃO usamos `continue-on-error` (deixaria o check sempre verde
-  # e tornaria a promoção via branch protection um no-op).
+  # Percorreu o MESMO caminho de `secret-scan`/`sast-semgrep` — observável primeiro, bloqueante
+  # depois (ver cabeçalho) — e a promoção JÁ ACONTECEU: `frontend` é required check em `main`,
+  # verificado em 2026-08-18. A régua agora mede E barra. Foi a ausência de barreira, não a de
+  # conhecimento, que deixou seis telas passarem; é essa repetição que a barreira hoje impede.
+  # NÃO usamos `continue-on-error` (deixaria o check sempre verde e tornaria a promoção via
+  # branch protection um no-op).
   frontend:
     runs-on: ubuntu-latest
     defaults:
