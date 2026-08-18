@@ -7,11 +7,22 @@ export default function Modal({
   onClose,
   children,
   footer,
+  testId,
 }: {
   title: string;
   open: boolean;
   onClose: () => void;
   children: ReactNode;
+  /**
+   * `data-testid` na CAIXA do modal — cabeçalho e rodapé inclusive.
+   *
+   * ⚠️ Existe por causa da régua de 360px. Pôr o recorte no conteúdo (`children`) deixa título e
+   * barra de ação FORA da varredura de `textoForaDaTela`, e foi exatamente assim que um título
+   * comprido empurrando o "Fechar" 338px para fora da tela passou por uma medição que devolveu
+   * lista vazia. Todo modal medido pela régua deve receber `testId` aqui, nunca num `<div>`
+   * interno.
+   */
+  testId?: string;
   /**
    * Ação primária do modal. Vive numa barra `sticky bottom-0` DENTRO da caixa que rola, para que
    * ela nunca saia da tela enquanto o dono preenche o formulário. **Opcional**: modal que não
@@ -31,15 +42,21 @@ export default function Modal({
       onClick={onClose}
     >
       <div
+        data-testid={testId}
         className="max-h-[85vh] w-full max-w-md overflow-y-auto rounded-2xl bg-white p-6 shadow-xl"
         onClick={(e) => e.stopPropagation()}
       >
-        <div className="mb-4 flex items-center justify-between">
-          <h2 className="text-lg font-bold text-neutral-800">{title}</h2>
+        <div className="mb-4 flex items-start justify-between gap-2">
+          {/* `min-w-0 break-words`: o título é digitação livre — nome de contato, título de evento
+              — e `name` aceita 255 chars no backend. Sem os dois, um nome colado sem espaço não
+              tem onde quebrar, o `<h2>` cresce e empurra o "Fechar" para fora da tela: medido em
+              698px numa viewport de 360. O `shrink-0` no botão é a outra metade — sem ele o
+              flex o espreme antes de deixar o título quebrar. */}
+          <h2 className="min-w-0 break-words text-lg font-bold text-neutral-800">{title}</h2>
           <button
             onClick={onClose}
             aria-label="Fechar"
-            className="-mr-2 flex h-11 w-11 items-center justify-center rounded-pill text-neutral-400 hover:text-neutral-700"
+            className="-mr-2 flex h-11 w-11 shrink-0 items-center justify-center rounded-pill text-neutral-400 hover:text-neutral-700"
           >
             <X size={20} />
           </button>

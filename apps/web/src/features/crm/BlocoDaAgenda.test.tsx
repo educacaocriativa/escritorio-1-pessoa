@@ -1,6 +1,6 @@
-import { fireEvent, render, screen } from "@testing-library/react";
+import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { api } from "../../lib/api";
 import BlocoDaAgenda from "./BlocoDaAgenda";
 
@@ -30,7 +30,7 @@ function mockar(eventos: unknown[]) {
   vi.mocked(api.get).mockResolvedValue({ data: eventos } as never);
 }
 
-const renderBloco = () => render(<BlocoDaAgenda clientId="cli-1" />);
+const renderBloco = () => render(<BlocoDaAgenda clientId="cli-1" nome="Loana" />);
 
 // Mesmo motivo do `beforeEach` em `BlocoDaConversa.test.tsx`: `mockReset()` devolve o próprio
 // mock, e um corpo de expressão única faria o Vitest tratar esse retorno como hook de limpeza
@@ -38,6 +38,12 @@ const renderBloco = () => render(<BlocoDaAgenda clientId="cli-1" />);
 beforeEach(() => {
   vi.mocked(api.get).mockReset();
   vi.mocked(api.post).mockReset();
+});
+
+// Em `afterEach`, não no corpo do teste: se uma asserção falhar antes do `useRealTimers()`, os
+// fake timers vazam para os testes seguintes e uma falha vira cascata de falhas sem relação.
+afterEach(() => {
+  vi.useRealTimers();
 });
 
 describe("BlocoDaAgenda", () => {
@@ -101,24 +107,46 @@ describe("BlocoDaAgenda", () => {
     ).toBeInTheDocument();
   });
 
-  it("abre o modal de marcar e, ao criar, recarrega a lista", async () => {
-    const user = userEvent.setup();
+  it("mostra a agenda antes do formulário — o formulário não abre no primeiro clique", async () => {
+    // O gap que este bloco tinha: "Marcar com este cliente" abria o formulário direto, e o dono
+    // escolhia a data sem ver o próprio calendário. Agora a disponibilidade vem primeiro.
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    vi.setSystemTime(new Date("2026-08-16T12:00:00Z"));
+    mockar([]);
+    renderBloco();
+
+    await screen.findByText("Nenhum compromisso marcado");
+    await userEvent.click(screen.getByRole("button", { name: /marcar com este cliente/i }));
+
+    expect(screen.getByRole("heading", { name: "Marcar com Loana" })).toBeInTheDocument();
+    expect(screen.queryByRole("heading", { name: "Novo evento" })).not.toBeInTheDocument();
+  });
+
+  it("escolher um horário abre o formulário já preenchido e, ao criar, recarrega a lista", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    vi.setSystemTime(new Date("2026-08-16T12:00:00Z"));
     mockar([]);
     vi.mocked(api.post).mockResolvedValue({ data: { conflicts: [] } } as never);
     renderBloco();
 
     await screen.findByText("Nenhum compromisso marcado");
-    await user.click(screen.getByRole("button", { name: /marcar com este cliente/i }));
+    await userEvent.click(screen.getByRole("button", { name: /marcar com este cliente/i }));
+    await userEvent.click(await screen.findByRole("button", { name: /20 de agosto/ }));
+    await userEvent.click(screen.getByRole("button", { name: "10:00–11:00" }));
+
+    // O seletor sai de cena e o formulário entra com a escolha já feita — o dono não redigita
+    // a data que acabou de apontar no calendário.
     expect(screen.getByRole("heading", { name: "Novo evento" })).toBeInTheDocument();
+    expect(screen.queryByRole("heading", { name: "Marcar com Loana" })).not.toBeInTheDocument();
+    expect(screen.getByLabelText("Início")).toHaveValue("2026-08-20T10:00");
+    expect(screen.getByLabelText("Fim")).toHaveValue("2026-08-20T11:00");
 
     // Depois de abrir, a próxima chamada a `GET /agenda/events` já devolve o evento recém-criado
     // — é isso que prova que a lista recarregou, e não só que o modal fechou.
     mockar([evento({ id: "ev-novo", title: "Atendimento cliente" })]);
 
-    await user.type(screen.getByLabelText("Título"), "Atendimento cliente");
-    fireEvent.change(screen.getByLabelText("Início"), { target: { value: "2026-08-20T09:00" } });
-    fireEvent.change(screen.getByLabelText("Fim"), { target: { value: "2026-08-20T10:00" } });
-    await user.click(screen.getByRole("button", { name: "Criar evento" }));
+    await userEvent.type(screen.getByLabelText("Título"), "Atendimento cliente");
+    await userEvent.click(screen.getByRole("button", { name: "Criar evento" }));
 
     // O evento nasce ligado a ESTE contato — mesmo vínculo que a Task 5 testou no modal isolado.
     expect(vi.mocked(api.post)).toHaveBeenCalledWith(
@@ -131,8 +159,12 @@ describe("BlocoDaAgenda", () => {
   });
 
   it("formata o horário no fuso do tenant", async () => {
-    // 13:00 UTC em America/Sao_Paulo (UTC-3, sem horário de verão) é 10:00 — se o bloco usasse
-    // o fuso do NAVEGADOR (headless roda em UTC) o teste pegaria "13:00" em vez de "10:00".
+    // 13:00 UTC em America/Sao_Paulo (UTC−3, sem horário de verão) é 10:00.
+    // ⚠️ Este teste NÃO distingue fuso do tenant de fuso do navegador, e o comentário anterior
+    // dizia que sim ("headless roda em UTC"): `vitest.config.ts` fixa `TZ: "America/Sao_Paulo"`
+    // para a suíte inteira, e o mock de `useFuso` devolve o mesmo valor — com os dois iguais, os
+    // dois caminhos dão o mesmo resultado. Quem quiser essa prova use um fuso de tenant DIFERENTE
+    // do runner, como `grade.test.ts` faz com `FUSO_DISTANTE`.
     mockar([evento({ starts_at: "2026-08-20T13:00:00Z" })]);
     renderBloco();
 
@@ -144,5 +176,35 @@ describe("BlocoDaAgenda", () => {
     renderBloco();
 
     expect(await screen.findByText(/não foi possível carregar a agenda/i)).toBeInTheDocument();
+  });
+
+  it("o formulário nasce limpo a cada escolha — 'Dia inteiro' de uma vez anterior não engole a hora nova", async () => {
+    // O `NewEventModal` fica MONTADO o tempo todo e guarda estado próprio. `allDay`, título e
+    // aviso de conflito nunca eram resetados: o dono marcava "Dia inteiro" uma vez e, na próxima
+    // vez que apontasse uma faixa livre, o `save()` descartava `start`/`end` em silêncio e criava
+    // um evento sem horário. É o defeito que o `NewBillModal` já pagou com `key` (CLAUDE.md).
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    vi.setSystemTime(new Date("2026-08-16T12:00:00Z"));
+    mockar([]);
+    renderBloco();
+
+    await screen.findByText("Nenhum compromisso marcado");
+    await userEvent.click(screen.getByRole("button", { name: /marcar com este cliente/i }));
+    await userEvent.click(await screen.findByRole("button", { name: /20 de agosto/ }));
+    await userEvent.click(screen.getByRole("button", { name: "10:00–11:00" }));
+
+    await userEvent.type(screen.getByLabelText("Título"), "rascunho abandonado");
+    await userEvent.click(screen.getByLabelText("Dia inteiro"));
+    expect(screen.getByLabelText("Dia inteiro")).toBeChecked();
+
+    // Desiste e recomeça.
+    await userEvent.click(screen.getByRole("button", { name: /fechar/i }));
+    await userEvent.click(screen.getByRole("button", { name: /marcar com este cliente/i }));
+    await userEvent.click(await screen.findByRole("button", { name: /21 de agosto/ }));
+    await userEvent.click(screen.getByRole("button", { name: "14:00–15:00" }));
+
+    expect(screen.getByLabelText("Dia inteiro")).not.toBeChecked();
+    expect(screen.getByLabelText("Título")).toHaveValue("");
+    expect(screen.getByLabelText("Início")).toHaveValue("2026-08-21T14:00");
   });
 });

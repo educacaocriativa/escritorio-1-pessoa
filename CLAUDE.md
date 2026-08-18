@@ -1807,9 +1807,214 @@ contato quando na verdade tinha uma etiqueta a mais em alguns.
   exibir o valor cru **em silêncio**; um `export type ClientSource` em `shared-types` trocaria isso
   por erro de TypeScript. E o padrão `rounded-pill` inline já passou de **7 ocorrências**
   (`Attachments.tsx:79` é quase idêntico ao selo novo) sem nunca virar um `<Pill>` — este diff
-  seguiu a convenção local, não a piorou. **Acessibilidade:** a distinção origem × tag é por cor e
-  posição; o texto difere e o selo tem `title`, então não é codificação puramente cromática, mas
-  não há forma nem ícone separando os dois.
+  seguiu a convenção local, não a piorou.
+  ⚠️ **"7 ocorrências" ficou defasado: são 190**, em ~50 arquivos de `apps/web/src` (contado em
+  2026-08-18). O número importa porque é ele que decide a dívida: "7" se lê como *ainda não vale um
+  componente*, e **190** se lê como *isto é o design system, e ele não foi declarado*. Enquanto o
+  número estiver errado, a dívida vai ser adiada com razão aparente.
+  **Acessibilidade:** a distinção origem × tag é por cor e posição; o texto difere e o selo tem
+  `title`, então não é codificação puramente cromática, mas não há forma nem ícone separando os
+  dois.
+
+### Marcar compromisso: a agenda vem antes do formulário (2026-08-18)
+
+O botão "Marcar com este cliente" da ficha 360° abria o `NewEventModal` com `initialDate={null}`:
+o dono escolhia data e hora **sem ver o próprio calendário** e só descobria a colisão depois de
+salvar, pelo aviso de conflito. Agora o passo 1 é a disponibilidade; o formulário só aparece com
+data e hora já decididas. **Zero backend, zero migration** — reusa `GET /agenda/events`.
+
+- [x] **`features/agenda/grade.ts`** — a aritmética de calendário saiu de dentro do `AgendaPage.tsx`
+  (`startOfDay`, `addDays`, `startOfWeek`, `sameDay`, `hojeDoTenant`, `eventYmd`, `eventsOfDay`,
+  `gradeDoMes`) e virou módulo compartilhado. Refactor puro, sem mudança de comportamento: os dois
+  calendários passam a nascer da MESMA matemática, e é assim que um deles não começa a semana num
+  dia diferente do outro.
+- [x] **`faixasLivres(eventos, dia, fuso, agora)`** — blocos de 1h entre `HORA_ABERTURA` (8) e
+  `HORA_FECHAMENTO` (18). **A janela é FIXA de propósito:** não existe expediente configurável no
+  backend, e inventar um (migration + endpoint + tela) para oferecer atalhos de horário seria
+  construir um épico para resolver um clique. O botão "Outro horário" é a válvula de escape.
+  - ⚠️ **`all_day` NÃO ocupa faixa.** Cobrança, conta a pagar e prazo são **todos** de dia inteiro;
+    se ocupassem, todo dia com uma parcela vencendo apareceria cheio — o oposto do que o seletor
+    existe para mostrar. Elas aparecem só na lista "já marcado" do dia. Tem teste; não "corrija".
+  - Cancelado não ocupa (mesma postura do `exclude_cancelled` do `BlocoDaAgenda`); no dia de hoje,
+    faixa que já começou some.
+- ⚠️ **`eventosDoDia` é IRMÃO de `eventsOfDay`, e a diferença é o ponto.** Aquele agrupa por
+  `localYmd(new Date(iso))` — o fuso do **navegador**, convenção antiga do `AgendaPage`, mantida
+  intacta. O novo agrupa pelo fuso do **tenant** (§6.0), porque as faixas livres já são calculadas
+  lá: se as duas listas discordassem sobre a que dia pertence um compromisso das 23h, o seletor
+  ofereceria uma faixa livre logo abaixo do compromisso que a ocupa. Uniformizar os dois é decisão
+  separada, e mexe no `AgendaPage`.
+- [x] **`NewEventModal` ganhou `initialHour?: number | null`** — ausente mantém o 09:00–10:00 de
+  quem clicou num dia da Agenda sem dizer a que horas. `AgendaPage` não passa nada e segue idêntico.
+- [x] **O seletor NÃO recebe `clientId`** — disponibilidade é a agenda do **dono** inteira, não os
+  compromissos daquele contato. Filtrar por contato mostraria um mês vazio para quem está com a
+  semana lotada. O `clientId` continua indo ao `NewEventModal`, que é quem vincula.
+- [x] **O aviso de conflito do `NewEventModal` continua valendo** e não virou redundância: a agenda
+  pode mudar entre abrir o mês e salvar, e o seletor não conhece compromisso fora de 08–18h.
+- ⚠️ **A grade de 7 colunas NÃO alcança 44px de alvo tocável em 360px, e a exceção está escrita no
+  teste.** Sete células de 44px pedem 308px + vãos; a caixa do modal oferece **280px** de área útil
+  — é aritmeticamente impossível sem quebrar o calendário em duas linhas por semana. A rede da grade
+  é uma altura mínima medida (36px); o recorte segue a postura já documentada do
+  `modal-conta-360.spec.ts` para os campos de 38px: **a exceção fica escrita, não escondida num
+  filtro**.
+- [x] **O aceite em ~360px foi MEDIDO antes do merge, e achou quatro defeitos reais**
+  (`apps/web/e2e/ficha-marcar-360.spec.ts`): navegação de mês com **30×30px**, "Hoje" com **26px**,
+  as faixas de horário com **32px** e "Outro horário" com **38px** — todos abaixo do mínimo tocável,
+  e nenhum deles visível numa asserção de classe CSS. Corrigidos com `min-h-[44px]`; o padding
+  cresce, a fonte não.
+  - ⚠️ **O spec congela o relógio** (`page.clock.setFixedTime`). Sem isso ele é bomba-relógio: o
+    seletor abre no mês CORRENTE, e em setembro "20 de agosto" simplesmente não está na grade.
+  - O localizador do título longo é **escopado ao seletor**: o mesmo texto está na lista do
+    `BlocoDaAgenda`, atrás do modal, e o Playwright recusa dois elementos em modo estrito.
+#### O que o passo 3 do §5 achou — e a suíte estava VERDE o tempo todo
+
+Os três papéis de QA rodaram sobre o código já verde (675 testes, 31 do gate de 360px, `tsc` e
+`eslint` limpos) e o veredito do caça-bugs foi **FAIL**. Vale registrar o que nenhum gate mecânico
+pegou:
+
+- ⚠️ **Trocar de mês deixava o dia selecionado ÓRFÃO — e um dia lotado passava a exibir dez faixas
+  livres.** `irPara` mexia só em `anchor`; `eventos` virava a lista do mês novo e o painel de baixo
+  continuava escrito *"15 de outubro"*, agora sobre uma janela que não cobre mais aquela data.
+  Dois cliques, sem nada de exótico, e o seletor oferecia horário em cima de um compromisso
+  existente — **o oposto exato do que a feature existe para fazer**, sem nem a célula selecionada
+  na tela para denunciar. O `dia` agora acompanha o mês (voltar ao mês corrente reencontra HOJE;
+  qualquer outro começa no dia 1).
+  - O teste `"busca os eventos do mês novo ao navegar"` passava por cima disso porque aferia só os
+    PARÂMETROS da requisição, nunca o que a tela mostra depois. **Asserção sobre o pedido não é
+    asserção sobre a resposta.**
+- ⚠️ **A faixa era ESCOLHIDA no fuso do tenant e GRAVADA no fuso do navegador.** `grade.ts` inteiro
+  fala em fuso do tenant, de propósito; aí a hora atravessava a fronteira como string ingênua e o
+  `new Date(...)` do `save()` a reinterpretava na máquina de quem abriu a tela. Medido: tenant em
+  São Paulo com navegador em Manaus → o dono aponta 14:00 e o evento nasce às 15:00. É a família
+  §6.0, reintroduzida **na costura entre dois componentes que, isolados, estavam certos**.
+  `instanteNoFuso` (em `grade.ts`, com duas passadas por causa de horário de verão) resolve a hora
+  de parede no instante real, e `paraInputLocal` a devolve na linguagem do `datetime-local`. Com os
+  dois fusos iguais — o caso normal — o resultado é byte a byte o de antes.
+- ⚠️ **Densidade da grade custava 342 ms a 3,3 s de main thread por render.** `eventosDoDia(...)`
+  por CÉLULA varria a lista 42 vezes, e `today()` constrói dois `Intl.DateTimeFormat` descartáveis
+  por chamada (~200 µs medidos). Com 50 eventos no mês — trivial, porque cada cobrança e cada conta
+  a pagar viram um `agenda_events` — a tela travava a cada toque num dia, no aparelho de 360px que
+  a feature declara atender. `densidadePorDia` faz uma passada por evento, memoizada.
+- ⚠️ **`vi.setSystemTime` + `useFuso` mockado com o MESMO fuso do runner tornam o teste de fuso
+  incapaz de falhar.** O `vitest.config.ts` fixa `TZ: "America/Sao_Paulo"`; enquanto o fuso do
+  tenant nos testes for esse mesmo, ler o instante pelo fuso do tenant e lê-lo pelas partes locais
+  do `Date` dão o mesmo resultado. **Cinco de cinco mutações no coração do `grade.ts` sobreviveram
+  aos 11 testes verdes**, incluindo trocar `today(fuso, ...)` por `localYmd(new Date(...))` — no
+  teste literalmente chamado *"agrupa pelo dia do TENANT, não pelo do navegador"*. É a família do
+  `toContain("flex-wrap")` do §5.1, e a produção estava CERTA: o que faltava era um teste capaz de
+  dizer isso. Agora há `FUSO_DISTANTE = "Asia/Tokyo"` (12h à frente do runner), e as mutações
+  morrem.
+  - **A regra que fica: um teste sobre fuso do tenant que roda com o fuso do tenant igual ao da
+    máquina não testa fuso nenhum.** Vale para todo `vi.mock("../../store/auth")` da suíte.
+- **Compromisso que atravessa a meia-noite** não ocupava nada do dia seguinte (o plantão 22h→09h
+  deixava as 08h do dia 11 oferecidas). `intervaloNoDia` tem três ramos por isso.
+- **Na hora cheia exata** a faixa que começa AGORA era oferecida — o corte virou `<=`. O único
+  teste de corte usava 14:30, que passa com `<` e com `<=`; **só a hora cheia separa os dois**.
+- ⚠️ **O `NewEventModal` fica MONTADO o tempo todo e só reescreve as datas ao abrir.** `allDay`,
+  título, descrição e o aviso de conflito sobreviviam entre aberturas — e um "Dia inteiro" herdado
+  faz o `save()` **descartar em silêncio** a hora que o dono acabou de apontar na faixa livre.
+  Corrigido com `key`, como o `NewBillModal` já havia pago; o `seq` no `key` existe porque
+  reescolher exatamente o mesmo dia e hora repetiria a chave. **A primeira abertura de cada sessão
+  sempre funciona** — é o que esconde o defeito num teste manual apressado.
+- **Corrida na troca de mês**: dois toques rápidos e a resposta do mês antigo chegando por último
+  sobrescrevia a do mês visível. Guarda de sequência por `useRef` no `load`.
+
+Duplicações que o dedup separou entre **introduzidas por este changeset** e herdadas — as três
+introduzidas foram fechadas: `paramsDaGrade` (a regra da fronteira UTC-date vivia num comentário
+copiado em dois arquivos, e regra que mora em comentário duplicado é regra que deriva),
+`src/test/fixtures/agenda.ts` + `e2e/support/fixtures.ts` (o literal de 21 campos ia para seis
+lugares, e as cópias de e2e nem eram tipadas), e `horaCheia`/`lib/texto.ts`.
+
+#### A segunda rodada — o QA reprovou a PRÓPRIA correção, e três consertos estavam sem prova
+
+Reverificados por mutação, os nove consertos morrem quando desfeitos (cada um derruba o teste que
+o cobre). Mas a rodada achou mais quatro coisas, e a primeira é a mais instrutiva do PR inteiro:
+
+- ⚠️ **A correção do fuso INTRODUZIU um bug de fuso.** `offsetEmMinutos` calculava o offset pelo
+  truque comum — `new Date(x.toLocaleString("en-US", { timeZone: … }))` dos dois lados, subtrai, e
+  o fuso da máquina se cancela. Ele cancela **exceto** quando as duas strings caem em lados opostos
+  da virada de horário de verão **do NAVEGADOR**: aí sobram 60 minutos. Medido varrendo 16.643
+  combinações de (fuso do tenant × dia × hora):
+
+  | fuso da MÁQUINA | quebras com `new Date(string)` | quebras com `formatToParts` |
+  |---|---|---|
+  | `America/New_York` | **52** | 0 |
+  | `Australia/Sydney` | **29** | 0 |
+  | `Europe/Dublin` | **23** | 0 |
+  | `America/Sao_Paulo` | 0 | 0 |
+
+  A última linha é o ponto: **sob o fuso que o `vitest.config.ts` fixa, as duas implementações são
+  indistinguíveis.** Nenhum teste desta suíte poderia pegar isso — a prova teve de ser uma
+  varredura fora do runner. Hoje `offsetEmMinutos` usa `formatToParts` + `Date.UTC` e **não
+  constrói `Date` a partir de string em lugar nenhum**; a ausência é a funcionalidade.
+  - O Brasil não tem horário de verão e o produto é brasileiro — mas `tenants.timezone` aceita
+    qualquer zona IANA, e **o fuso do navegador é de quem ABRE a tela, não de quem configurou o
+    tenant**.
+- ⚠️ **`densidadePorDia` nasceu sem rede.** Devolver um `Map` vazio — as bolinhas do calendário
+  sumindo inteiras, que é o sinal que faz o dono escolher em que dia clicar — passava em **41 de
+  41** testes. Foi o helper criado pela correção de performance, exatamente o padrão que a primeira
+  rodada tinha acabado de gastar uma rodada eliminando. **Correção nova é código novo, e código
+  novo nasce com teste.**
+- ⚠️ **O teste de horário de verão era decorativo.** O caso escolhido (`America/New_York`,
+  01/11/2026, 14:00) acerta já na primeira aproximação — a transição às 06:00Z fica antes da parede
+  das 14:00Z —, então a segunda passada de `instanteNoFuso` nunca era exercitada e uma
+  implementação de passada única passava. **A zona e a data não são intercambiáveis:** o caso que
+  separa as duas é a LESTE de Greenwich (`Australia/Sydney`, 04/04/2026, 16:00). Há agora um
+  invariante varrendo 7 zonas × 4 datas de virada × 10 horas.
+- **Dois ramos de `intervaloNoDia` estavam descobertos** — o compromisso que começa DENTRO da
+  janela e vara a noite (o teste existente usava 22:00, fora de 08–18, e por isso não distinguia),
+  e o que cobre o dia do meio por fora. Sem eles, uma viagem de 9 a 12 deixava os dias 10 e 11 100%
+  livres.
+- **A régua estava cega para metade do modal.** `data-testid="seletor-horario"` vivia no `children`
+  do `Modal`, então cabeçalho e rodapé ficavam FORA de `textoForaDaTela` — e a varredura devolvia
+  lista vazia enquanto um nome de contato sem espaço empurrava o botão "Fechar" para **x=698 numa
+  viewport de 360**. O `scrollWidth` da página continuava 360, porque a caixa tem `overflow-y-auto`:
+  o mesmo disfarce que `medidas.ts` documenta para o `main.overflow-x-hidden`.
+  - `Modal` ganhou `testId` (na CAIXA, com a razão escrita na prop) e o `<h2>` ganhou
+    `min-w-0 break-words` + `shrink-0` no botão. **O conserto é do `Modal`, não do seletor:** o
+    detalhe de evento da Agenda (`AgendaPage.tsx`, `<Modal title={event.title}>`) tinha a mesma
+    exposição. **Todo modal medido pela régua deve receber `testId`, nunca um `<div>` interno.**
+- **Performance, medida de novo:** a densidade caiu ~10× (135 ms → 14 ms com 50 eventos), mas o
+  ramo do meia-noite encareceu `faixasLivres` em 4× — `intervaloNoDia` formatava as horas de TODO
+  evento da janela de 42 dias antes de descobrir que 97% deles não encostam no dia. Agora as duas
+  datas vêm primeiro e a saída acontece antes de qualquer `formatTime`; `doDia` e `livres` também
+  passaram a ser memoizados, senão cada toque num dia repagava a varredura inteira.
+- **`limit: 500` deixou de ser silencioso.** É o teto do endpoint e não há campo de total, então
+  bater nele corta a CAUDA do mês (o backend ordena por `starts_at`) e aqueles dias apareceriam sem
+  bolinha e com as dez faixas livres — a lista incompleta virando uma DECISÃO. Não paginamos:
+  quando `length` bate no teto, a tela **diz que não sabe**.
+
+Duas dívidas de teste também fecharam: `vi.useRealTimers()` saiu do corpo para um `afterEach` (no
+corpo, uma asserção que falha antes dele vaza fake timers e transforma uma falha em cascata), e o
+comentário que dizia *"headless roda em UTC"* foi corrigido — `vitest.config.ts` fixa
+`America/Sao_Paulo` desde sempre, e era essa crença que sustentava a asserção incapaz de falhar da
+primeira rodada.
+
+- **Dívida:** a grade não tem navegação por teclado (setas entre dias) — hoje é clique/toque e
+  `Tab`. E não há atalho para "próximo horário livre", que resolveria o caso do dono que só quer o
+  primeiro encaixe possível, sem escolher dia.
+- **Dívida:** `eventosDoDia` (fuso do tenant) e `eventsOfDay` (fuso do navegador) são coerentes
+  DENTRO de cada tela e discordam ENTRE elas — com navegador ≠ tenant, um compromisso das 23h30
+  aparece num dia no seletor da ficha e no dia seguinte no calendário da Agenda. Uniformizar mexe
+  em `MonthGrid`/`WeekView`/`DayView` e pede regressão própria.
+- **Dívida:** `lib/datetime.ts` documenta duas espécies (instante e data de calendário) e falta a
+  terceira que este changeset tornou inegável — **posição de grade** (`Date` local, sem `tz`). São
+  6 call sites de `toLocaleDateString` direto entre `AgendaPage` e `EscolherHorario`, e
+  `formatWeekday` já existe com exatamente o bag de opções que dois deles remontam à mão — **com
+  zero consumidores**, e `noUnusedLocals` não pega export não usado: enquanto ele estiver lá, morto
+  e invisível a qualquer busca por uso, é ele que faz a próxima pessoa escrever o 7º
+  `toLocaleDateString`. Enquanto isso, a afirmação do §6.0 ("a ÚNICA porta de formatação") tem seis
+  exceções.
+  ⚠️ **Quando essa dívida for aberta, `instanteNoFuso` e `offsetEmMinutos` vão junto.** Eles vivem
+  em `grade.ts` provisoriamente — nasceram da grade, mas produzem e manipulam INSTANTE, que pela
+  contabilidade do repo é matéria de `lib/datetime.ts`. Deixá-los lá depois da mudança faria
+  `grade.ts` virar o segundo módulo de fuso do frontend, e a porta única deixaria de ser única
+  também nesse eixo. O cabeçalho do `grade.ts` já diz isso.
+- **Dívida:** a mesma regra de 44px aparece com duas grafias no `EscolherHorario` — `min-h-[44px]`
+  (4×) e `h-11 w-11` (2×, a navegação de mês). São 12 ocorrências de `min-h-[44px]` no app;
+  `packages/design-tokens` já é dono do `rounded-pill`, e um `minHeight: { toque: "44px" }` no
+  preset daria `min-h-toque` greppável. E a nota do `rounded-pill` neste arquivo diz **7
+  ocorrências** quando a contagem real é **190** — o erro de 27× faz a dívida se ler como "ainda
+  não vale um componente".
 
 ## Vima: o Registro de Fatos e o briefing (PRs #85 e #90, 2026-08-06/07)
 

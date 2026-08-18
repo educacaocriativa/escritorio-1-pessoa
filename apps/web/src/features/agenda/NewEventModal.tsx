@@ -4,9 +4,19 @@ import { useEffect, useState } from "react";
 import Modal, { Field } from "../../components/Modal";
 import { api, apiErrorMessage, getGoogleStatus } from "../../lib/api";
 import { localYmd } from "../../lib/datetime";
+import { useFuso } from "../../store/auth";
+import { instanteNoFuso } from "./grade";
 
 // Tipos de evento que geram Meet automaticamente quando o Google está conectado (Story 4.1).
 const MEET_KINDS = new Set(["reuniao", "atendimento", "audiencia"]);
+
+/**
+ * Instante -> o que o `<input type="datetime-local">` espera: `"YYYY-MM-DDTHH:mm"` nas partes
+ * LOCAIS do navegador. E o inverso exato do `new Date(valor)` que o `save()` faz, entao o
+ * instante que entra e o instante que sai.
+ */
+const paraInputLocal = (d: Date) =>
+  `${localYmd(d)}T${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}`;
 
 const KINDS = [
   ["atendimento", "Atendimento"],
@@ -20,12 +30,16 @@ const KINDS = [
 export default function NewEventModal({
   open,
   initialDate,
+  initialHour,
   onClose,
   onCreated,
   clientId,
 }: {
   open: boolean;
   initialDate: Date | null;
+  /** Hora cheia escolhida no `EscolherHorario` (14 => 14:00–15:00). Ausente = 09:00–10:00, o
+   *  default de quem clicou num dia da Agenda sem dizer a que horas. */
+  initialHour?: number | null;
   onClose: () => void;
   onCreated: () => void;
   /** Quando presente, o evento nasce ligado a este contato. A ficha 360° usa isto; a tela de
@@ -47,6 +61,7 @@ export default function NewEventModal({
   const [conflict, setConflict] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
   const [googleConnected, setGoogleConnected] = useState(false);
+  const fuso = useFuso();
 
   // Descobre se o Google está conectado (para a dica de "Meet automático"). Silencioso em falha.
   useEffect(() => {
@@ -58,16 +73,24 @@ export default function NewEventModal({
 
   const autoMeet = googleConnected && MEET_KINDS.has(kind);
 
-  // pré-preenche a data ao abrir num dia do calendário
+  // Pré-preenche a data ao abrir num dia do calendário — e a HORA quando ela veio junto.
+  //
+  // ⚠️ A hora é de PAREDE DO TENANT, não do navegador. O seletor decide as faixas no fuso do
+  // tenant (`faixasLivres`) e o `<input type="datetime-local">` fala no fuso da máquina: escrever
+  // `"14:00"` direto fazia o `new Date(...)` do `save()` reinterpretá-la localmente, e um dono com
+  // o navegador em outro fuso marcava um horário diferente do que apontou na tela — a família §6.0
+  // do CLAUDE.md, na costura entre os dois componentes. Quando os dois fusos coincidem (o caso
+  // normal) o resultado é byte a byte o de antes.
   useEffect(() => {
     if (open && initialDate) {
       const d = localYmd(initialDate);
       setStartDate(d);
       setEndDate(d);
-      setStart(`${d}T09:00`);
-      setEnd(`${d}T10:00`);
+      const h = initialHour ?? 9;
+      setStart(paraInputLocal(instanteNoFuso(initialDate, h * 60, fuso)));
+      setEnd(paraInputLocal(instanteNoFuso(initialDate, (h + 1) * 60, fuso)));
     }
-  }, [open, initialDate]);
+  }, [open, initialDate, initialHour, fuso]);
 
   async function save() {
     setError(null);
