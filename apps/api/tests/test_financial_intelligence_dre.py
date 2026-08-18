@@ -324,7 +324,7 @@ def test_AC14_dre_IDENTICA_campo_a_campo_com_e_sem_conta_agendada(client: TestCl
     antes = _dre(client, headers)
 
     conta = _conta_bancaria_814(client, headers)
-    bill = client.get("/payables/bills", headers=headers).json()[0]
+    bill = client.get("/payables/bills", headers=headers).json()["items"][0]
     _agendar_814(client, headers, bill["id"], conta["id"])
 
     assert _dre(client, headers) == antes, (

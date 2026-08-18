@@ -547,7 +547,7 @@ def test_AC14_lucratividade_IDENTICA_com_e_sem_conta_agendada(client: TestClient
         },
         headers=headers,
     ).json()
-    bill = client.get("/payables/bills", headers=headers).json()[0]
+    bill = client.get("/payables/bills", headers=headers).json()["items"][0]
     futuro = datetime.now(UTC).date() + timedelta(days=20)
     resp = client.post(
         f"/payables/bills/{bill['id']}/pay",

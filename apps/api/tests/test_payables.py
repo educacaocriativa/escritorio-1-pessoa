@@ -101,7 +101,7 @@ def test_recurring_generates_occurrences(client: TestClient, headers):
         json=_bill(due_date="2026-08-05", recurrence="monthly", recurrence_count=3),
         headers=headers,
     )
-    bills = client.get("/payables/bills", headers=headers).json()
+    bills = client.get("/payables/bills", headers=headers).json()["items"]
     assert len(bills) == 3  # 3 contas geradas
     dues = sorted(b["due_date"] for b in bills)
     assert dues == ["2026-08-05", "2026-09-05", "2026-10-05"]  # vencimentos mensais
@@ -276,7 +276,7 @@ def test_recurring_payable_competence_advances(client: TestClient, headers):
                    recurrence="monthly", recurrence_count=3),
         headers=headers,
     )
-    bills = client.get("/payables/bills", headers=headers).json()
+    bills = client.get("/payables/bills", headers=headers).json()["items"]
     comps = sorted(b["competence_date"] for b in bills)
     assert comps == ["2026-08-01", "2026-09-01", "2026-10-01"]
 

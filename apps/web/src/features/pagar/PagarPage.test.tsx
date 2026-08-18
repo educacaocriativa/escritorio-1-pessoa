@@ -50,7 +50,8 @@ const CONTA_ABERTA = {
 function mockComConta(contasBancarias: unknown[]) {
   vi.mocked(api.get).mockImplementation((url: string) => {
     if (url === "/payables/summary") return Promise.resolve({ data: emptySummary } as never);
-    if (url === "/payables/bills") return Promise.resolve({ data: [CONTA_ABERTA] } as never);
+    if (url === "/payables/bills")
+      return Promise.resolve({ data: { items: [CONTA_ABERTA], total: 1 } } as never);
     if (url === "/bank/accounts") return Promise.resolve({ data: contasBancarias } as never);
     return Promise.resolve({ data: [] } as never);
   });
@@ -89,7 +90,8 @@ function renderPage() {
 beforeEach(() => {
   vi.mocked(api.get).mockImplementation((url: string) => {
     if (url === "/payables/summary") return Promise.resolve({ data: emptySummary } as never);
-    if (url === "/payables/bills") return Promise.resolve({ data: [] } as never);
+    if (url === "/payables/bills")
+      return Promise.resolve({ data: { items: [], total: 0 } } as never);
     if (url === "/contracts") return Promise.resolve({ data: [] } as never);
     return Promise.resolve({ data: [] } as never);
   });
@@ -144,7 +146,8 @@ describe("PagarPage — bandeja de comprovantes (Task 11)", () => {
   it("mostra o aviso quando há comprovantes aguardando", async () => {
     vi.mocked(api.get).mockImplementation((url: string) => {
       if (url === "/payables/summary") return Promise.resolve({ data: emptySummary } as never);
-      if (url === "/payables/bills") return Promise.resolve({ data: [] } as never);
+      if (url === "/payables/bills")
+        return Promise.resolve({ data: { items: [], total: 0 } } as never);
       if (url === "/payables/receipts")
         return Promise.resolve({
           data: [
@@ -180,14 +183,17 @@ describe("PagarPage — bandeja de comprovantes (Task 11)", () => {
       if (url === "/payables/summary") return Promise.resolve({ data: emptySummary } as never);
       if (url === "/payables/bills")
         return Promise.resolve({
-          data: [{
-            id: "b-1", description: "Aluguel", category: "Estrutura", supplier: "Imobiliária",
-            amount_cents: 250000, due_date: "2099-08-05", status: "open", is_overdue: false,
-            paid_at: null, recurrence: "none", recurrence_count: 1, recurrence_group: null,
-            payment_code: "", attachment_url: "", created_at: "2026-01-01T00:00:00Z",
-            tenant_id: "t-1", competence_date: null, chart_account_id: null, contract_id: null,
-            cost_center_id: null,
-          }],
+          data: {
+            items: [{
+              id: "b-1", description: "Aluguel", category: "Estrutura", supplier: "Imobiliária",
+              amount_cents: 250000, due_date: "2099-08-05", status: "open", is_overdue: false,
+              paid_at: null, recurrence: "none", recurrence_count: 1, recurrence_group: null,
+              payment_code: "", attachment_url: "", created_at: "2026-01-01T00:00:00Z",
+              tenant_id: "t-1", competence_date: null, chart_account_id: null, contract_id: null,
+              cost_center_id: null,
+            }],
+            total: 1,
+          },
         } as never);
       return Promise.resolve({ data: [] } as never);
     });
@@ -428,7 +434,7 @@ describe("Story 8.14 — a conta agendada tem rótulo próprio e gesto próprio"
     vi.mocked(api.get).mockImplementation((url: string) => {
       if (url === "/payables/summary") return Promise.resolve({ data: emptySummary } as never);
       if (url === "/payables/bills") {
-        return Promise.resolve({ data: [CONTA_AGENDADA] } as never);
+        return Promise.resolve({ data: { items: [CONTA_AGENDADA], total: 1 } } as never);
       }
       if (url === "/bank/accounts") return Promise.resolve({ data: [CONTA] } as never);
       return Promise.resolve({ data: [] } as never);
@@ -524,7 +530,8 @@ describe("PagarPage — duplicar conta a pagar", () => {
   function mockBills(bills: unknown[]) {
     vi.mocked(api.get).mockImplementation((url: string) => {
       if (url === "/payables/summary") return Promise.resolve({ data: emptySummary } as never);
-      if (url === "/payables/bills") return Promise.resolve({ data: bills } as never);
+      if (url === "/payables/bills")
+        return Promise.resolve({ data: { items: bills, total: bills.length } } as never);
       return Promise.resolve({ data: [] } as never);
     });
   }
@@ -614,5 +621,157 @@ describe("PagarPage — duplicar conta a pagar", () => {
     expect(screen.getByLabelText("Fornecedor")).toHaveValue("");
     expect(screen.getByLabelText("Valor (R$)")).toHaveValue("");
     expect(screen.getByLabelText("Vencimento")).toHaveValue("");
+  });
+});
+
+describe("recorte e paginacao da lista (spec 2026-08-18)", () => {
+  function renderPagar() {
+    render(
+      <MemoryRouter>
+        <PageActionsProvider>
+          <PagarPage />
+        </PageActionsProvider>
+      </MemoryRouter>,
+    );
+  }
+
+  function paramsDaUltimaBusca(): Record<string, unknown> {
+    const chamada = vi
+      .mocked(api.get)
+      .mock.calls.filter(([u]) => u === "/payables/bills")
+      .at(-1)!;
+    return (chamada[1] as { params: Record<string, unknown> }).params;
+  }
+
+  it("pede a primeira pagina com o recorte padrao", async () => {
+    mockComConta([CONTA]);
+    renderPagar();
+
+    await waitFor(() => expect(api.get).toHaveBeenCalledWith("/payables/bills", expect.anything()));
+    const params = paramsDaUltimaBusca();
+    expect(params.status).toEqual(["open", "scheduled"]);
+    // Atrasado vence no passado: um piso de data esconderia a conta mais urgente que existe.
+    expect(params).not.toHaveProperty("from");
+    expect(params.offset).toBe(0);
+  });
+
+  it("mostra quantas contas estao a vista e quantas existem", async () => {
+    vi.mocked(api.get).mockImplementation((url: string) => {
+      if (url === "/payables/summary") return Promise.resolve({ data: emptySummary } as never);
+      if (url === "/payables/bills")
+        return Promise.resolve({ data: { items: [CONTA_ABERTA], total: 213 } } as never);
+      return Promise.resolve({ data: [] } as never);
+    });
+    renderPagar();
+
+    expect(await screen.findByText(/Mostrando 1 de 213/i)).toBeInTheDocument();
+  });
+
+  it("carregar mais ANEXA a lista em vez de substituir", async () => {
+    const SEGUNDA = { ...CONTA_ABERTA, id: "b-2", description: "Energia" };
+    vi.mocked(api.get).mockImplementation((url: string, config?: unknown) => {
+      if (url === "/payables/summary") return Promise.resolve({ data: emptySummary } as never);
+      if (url === "/payables/bills") {
+        const offset = (config as { params: { offset: number } }).params.offset;
+        return Promise.resolve({
+          data: { items: offset === 0 ? [CONTA_ABERTA] : [SEGUNDA], total: 2 },
+        } as never);
+      }
+      return Promise.resolve({ data: [] } as never);
+    });
+    renderPagar();
+
+    expect(await screen.findByText("Aluguel")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: /carregar mais/i }));
+
+    expect(await screen.findByText("Energia")).toBeInTheDocument();
+    // O erro classico de paginacao: a segunda pagina apagar a primeira.
+    expect(screen.getByText("Aluguel")).toBeInTheDocument();
+  });
+
+  it("digitar no filtro de texto dispara UMA chamada, nao uma por tecla", async () => {
+    mockComConta([CONTA]);
+    renderPagar();
+    await screen.findByText("Aluguel");
+    const antes = vi.mocked(api.get).mock.calls.filter(([u]) => u === "/payables/bills").length;
+
+    fireEvent.change(screen.getByLabelText(/buscar fornecedor ou descri/i), {
+      target: { value: "anthropic" },
+    });
+
+    await waitFor(() => {
+      expect(paramsDaUltimaBusca().q).toBe("anthropic");
+    });
+    const depois = vi.mocked(api.get).mock.calls.filter(([u]) => u === "/payables/bills").length;
+    expect(depois - antes).toBe(1);
+  });
+
+  it("trocar o status para Cancelado refaz a busca com o recorte novo", async () => {
+    mockComConta([CONTA]);
+    renderPagar();
+    await screen.findByText("Aluguel");
+
+    fireEvent.change(screen.getByLabelText("Status"), { target: { value: "canceled" } });
+
+    await waitFor(() => {
+      const params = paramsDaUltimaBusca();
+      expect(params.status).toEqual(["canceled"]);
+      expect(params.order).toBe("desc"); // historico se le do mais recente para tras
+      expect(params.offset).toBe(0); // trocar filtro volta para a primeira pagina
+    });
+  });
+});
+
+describe("reativar conta cancelada (spec 2026-08-18, §6)", () => {
+  const CONTA_CANCELADA = {
+    ...CONTA_ABERTA,
+    id: "b-9",
+    description: "Assinatura cancelada",
+    status: "canceled",
+  };
+
+  function renderPagar() {
+    render(
+      <MemoryRouter>
+        <PageActionsProvider>
+          <PagarPage />
+        </PageActionsProvider>
+      </MemoryRouter>,
+    );
+  }
+
+  function mockComCancelada() {
+    vi.mocked(api.get).mockImplementation((url: string) => {
+      if (url === "/payables/summary") return Promise.resolve({ data: emptySummary } as never);
+      if (url === "/payables/bills")
+        return Promise.resolve({ data: { items: [CONTA_CANCELADA], total: 1 } } as never);
+      return Promise.resolve({ data: [] } as never);
+    });
+    vi.mocked(api.post).mockResolvedValue({ data: {} } as never);
+  }
+
+  it("linha cancelada oferece Reativar", async () => {
+    mockComCancelada();
+    renderPagar();
+
+    expect(await screen.findByRole("button", { name: /reativar/i })).toBeInTheDocument();
+  });
+
+  it("linha aberta NAO oferece Reativar", async () => {
+    mockComConta([CONTA]);
+    renderPagar();
+    await screen.findByText("Aluguel");
+
+    expect(screen.queryByRole("button", { name: /reativar/i })).not.toBeInTheDocument();
+  });
+
+  it("Reativar chama a rota propria, nao /reverse", async () => {
+    mockComCancelada();
+    vi.spyOn(window, "confirm").mockReturnValue(true);
+    renderPagar();
+
+    fireEvent.click(await screen.findByRole("button", { name: /reativar/i }));
+
+    await waitFor(() => expect(api.post).toHaveBeenCalledWith("/payables/bills/b-9/reactivate"));
   });
 });

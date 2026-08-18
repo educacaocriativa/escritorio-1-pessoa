@@ -211,7 +211,7 @@ def test_tarifa_de_dois_reais_e_noventa_passa_sem_aviso(client: TestClient, head
     )
     assert resp.status_code == 201, resp.text
     assert resp.json()["operation_nature"] == "tarifa_bancaria"
-    assert client.get("/payables/bills", headers=headers).json() == []
+    assert client.get("/payables/bills", headers=headers).json()["items"] == []
 
 
 def test_entrada_com_payable_de_mesmo_valor_nao_dispara(client: TestClient, headers, account):
