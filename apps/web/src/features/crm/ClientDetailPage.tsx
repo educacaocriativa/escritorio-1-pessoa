@@ -142,7 +142,7 @@ export default function ClientDetailPage() {
           documento (o cabeçalho do cliente). Sem recorte próprio, a régua de 360px mediria o
           cabeçalho em vez da Agenda. */}
       <Section icon={<CalendarDays size={16} />} title="Agenda" testId="secao-agenda">
-        <BlocoDaAgenda clientId={id} />
+        <BlocoDaAgenda clientId={id} nome={client.name} />
       </Section>
 
       {/* Cobranças */}

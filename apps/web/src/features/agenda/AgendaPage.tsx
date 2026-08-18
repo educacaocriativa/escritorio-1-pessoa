@@ -6,40 +6,26 @@ import Modal from "../../components/Modal";
 import { api } from "../../lib/api";
 import GanchoDaVima from "../dna/GanchoDaVima";
 import { usePrimaryAction } from "../../store/pageActions";
-import { formatDateTime, formatDay, formatTime, localYmd, today } from "../../lib/datetime";
+import { formatDateTime, formatDay, formatTime, localYmd } from "../../lib/datetime";
+import { sentenceCase } from "../../lib/texto";
+import {
+  WEEKDAYS,
+  addDays,
+  eventYmd,
+  eventsOfDay,
+  gradeDoMes,
+  paramsDaGrade,
+  hojeDoTenant,
+  sameDay,
+  startOfDay,
+  startOfWeek,
+} from "./grade";
 import { useFuso } from "../../store/auth";
 import NewEventModal from "./NewEventModal";
 
 const brl = (c: number) => (c / 100).toLocaleString("pt-BR", { style: "currency", currency: "BRL" });
 
 type View = "month" | "week" | "day";
-
-const WEEKDAYS = ["Dom", "Seg", "Ter", "Qua", "Qui", "Sex", "Sáb"];
-
-// ── helpers de data (sem lib) ──────────────────────────
-const startOfDay = (d: Date) => new Date(d.getFullYear(), d.getMonth(), d.getDate());
-const addDays = (d: Date, n: number) => {
-  const r = startOfDay(d);
-  r.setDate(r.getDate() + n);
-  return r;
-};
-const startOfWeek = (d: Date) => addDays(d, -d.getDay()); // semana começa no domingo
-const sameDay = (a: Date, b: Date) => a.toDateString() === b.toDateString();
-/**
- * "Hoje" no fuso do TENANT, como `Date` local — a âncora da grade do calendário.
- *
- * A grade inteira (`startOfDay`, `addDays`, `startOfWeek`, `localYmd` de `lib/datetime.ts`)
- * trabalha em `Date` local, e isso é coerente: são posições numa grade, não instantes. O que NÃO
- * podia continuar local era o ponto de partida — `new Date()` num navegador em UTC começava a
- * grade no dia errado. Montamos o dia certo pelas PARTES, para que a `Date` resultante seja a
- * meia-noite local desse dia e toda a aritmética seguinte continue valendo.
- */
-const hojeDoTenant = (tz: string) => {
-  const [a, m, d] = today(tz).split("-").map(Number);
-  return new Date(a, m - 1, d);
-};
-// só a primeira letra maiúscula (ex.: "junho de 2026" -> "Junho de 2026")
-const sentenceCase = (s: string) => (s ? s.charAt(0).toUpperCase() + s.slice(1) : s);
 
 function rangeFor(view: View, anchor: Date): { start: Date; end: Date; days: Date[] } {
   if (view === "day") {
@@ -50,11 +36,7 @@ function rangeFor(view: View, anchor: Date): { start: Date; end: Date; days: Dat
     const days = Array.from({ length: 7 }, (_, i) => addDays(s, i));
     return { start: s, end: addDays(s, 7), days };
   }
-  // month: grade de 6 semanas a partir do domingo anterior ao dia 1
-  const first = new Date(anchor.getFullYear(), anchor.getMonth(), 1);
-  const gridStart = startOfWeek(first);
-  const days = Array.from({ length: 42 }, (_, i) => addDays(gridStart, i));
-  return { start: gridStart, end: addDays(gridStart, 42), days };
+  return gradeDoMes(anchor);
 }
 
 export default function AgendaPage() {
@@ -69,10 +51,8 @@ export default function AgendaPage() {
   const { start, end, days } = useMemo(() => rangeFor(view, anchor), [view, anchor]);
 
   const load = useCallback(async () => {
-    // Fronteiras em UTC-date (meia-noite UTC da data do grid), não o local→UTC: assim os
-    // eventos de dia inteiro (gravados à meia-noite UTC) não caem fora do range nas bordas.
     const { data } = await api.get<AgendaEvent[]>("/agenda/events", {
-      params: { start: `${localYmd(start)}T00:00:00.000Z`, end: `${localYmd(end)}T00:00:00.000Z`, limit: 500 },
+      params: paramsDaGrade(start, end),
     });
     setEvents(data);
   }, [start, end]);
@@ -194,15 +174,6 @@ const hhmm = (iso: string, tz: string) => formatTime(iso, tz);
 const FINANCIAL_KINDS = new Set(["cobranca_receber", "cobranca_pagar"]);
 const chipLabel = (e: AgendaEvent) =>
   FINANCIAL_KINDS.has(e.kind) && e.client_name ? e.client_name : e.title;
-// Eventos de dia inteiro (cobranças, contas a pagar, prazos) são gravados à meia-noite UTC:
-// casamos pela DATA do calendário (sem fuso) para não "voltar" um dia em fuso negativo.
-// Eventos com horário usam a data local normalmente.
-const eventYmd = (e: AgendaEvent) =>
-  e.all_day ? e.starts_at.slice(0, 10) : localYmd(new Date(e.starts_at));
-const eventsOfDay = (events: AgendaEvent[], d: Date) =>
-  events
-    .filter((e) => eventYmd(e) === localYmd(d))
-    .sort((a, b) => +new Date(a.starts_at) - +new Date(b.starts_at));
 
 function MonthGrid({
   days,

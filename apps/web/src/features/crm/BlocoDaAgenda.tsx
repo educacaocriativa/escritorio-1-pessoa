@@ -4,6 +4,7 @@ import { useCallback, useEffect, useState } from "react";
 import { api } from "../../lib/api";
 import { formatDateTime, formatDay } from "../../lib/datetime";
 import { useFuso } from "../../store/auth";
+import EscolherHorario from "../agenda/EscolherHorario";
 import NewEventModal from "../agenda/NewEventModal";
 
 /**
@@ -14,12 +15,21 @@ import NewEventModal from "../agenda/NewEventModal";
  * botão "Marcar com este cliente" para o dono agir sem sair da tela. O estado vazio é o mais
  * importante dos dois — "Nenhum compromisso marcado" é o sinal de um contato esfriando no funil.
  */
-export default function BlocoDaAgenda({ clientId }: { clientId: string }) {
+export default function BlocoDaAgenda({ clientId, nome }: { clientId: string; nome: string }) {
   const fuso = useFuso();
   const [eventos, setEventos] = useState<AgendaEvent[]>([]);
   const [erro, setErro] = useState(false);
   const [carregando, setCarregando] = useState(true);
-  const [open, setOpen] = useState(false);
+  // Dois passos, dois estados: primeiro o dono vê a agenda (`escolhendo`), depois preenche o
+  // formulário (`escolha`). `escolha` guardar o dia (e a hora, quando veio de uma faixa) é o que
+  // faz o formulário nascer preenchido.
+  const [escolhendo, setEscolhendo] = useState(false);
+  // `seq` é o que faz o `key` do formulário MUDAR a cada escolha — inclusive quando o dono
+  // reescolhe exatamente o mesmo dia e a mesma hora. Sem ele, a chave se repetiria e o React
+  // reusaria a instância suja.
+  const [escolha, setEscolha] = useState<{ dia: Date; hora: number | null; seq: number } | null>(
+    null,
+  );
 
   const load = useCallback(async () => {
     // Falha aqui NÃO pode derrubar a ficha — mesma postura do `BlocoDaConversa`: degrada para um
@@ -89,19 +99,42 @@ export default function BlocoDaAgenda({ clientId }: { clientId: string }) {
       )}
 
       <button
-        onClick={() => setOpen(true)}
+        onClick={() => setEscolhendo(true)}
         className="flex w-full items-center justify-center gap-1.5 rounded-pill bg-primary-50 py-2 text-sm font-semibold text-primary-600 hover:bg-primary-100"
       >
         <CalendarPlus size={14} /> Marcar com este cliente
       </button>
 
-      {/* Reusa o `NewEventModal` da Task 5 — ele já cuida do aviso de conflito, mantendo-se
-          aberto quando a API reporta sobreposição para o dono decidir. `onCreated` só recarrega
-          a lista; o próprio modal chama `onClose` quando não há conflito. */}
+      {/* Passo 1 — "quando dá?". Mostra o mês do dono e as faixas livres do dia. Só depois de
+          uma escolha o formulário aparece: era aqui que o dono marcava às cegas. */}
+      <EscolherHorario
+        open={escolhendo}
+        nome={nome}
+        onClose={() => setEscolhendo(false)}
+        onEscolher={(dia, hora) => {
+          setEscolha((anterior) => ({ dia, hora, seq: (anterior?.seq ?? 0) + 1 }));
+          setEscolhendo(false);
+        }}
+      />
+
+      {/* Passo 2 — reusa o `NewEventModal` da Task 5, que já cuida do aviso de conflito,
+          mantendo-se aberto quando a API reporta sobreposição para o dono decidir. `onCreated`
+          só recarrega a lista; o próprio modal chama `onClose` quando não há conflito.
+          O aviso de conflito continua importando mesmo com o seletor na frente: a agenda pode ter
+          mudado entre abrir o mês e salvar, e o seletor não conhece compromisso fora de 08–18h. */}
+      {/* ⚠️ O `key` NÃO é enfeite. O `NewEventModal` fica montado o tempo todo e guarda estado
+          próprio; só `startDate`/`start`/`end` são reescritos ao abrir. `allDay`, título,
+          descrição, convidados e o aviso de conflito sobreviviam de uma abertura para a outra — e
+          um "Dia inteiro" herdado faz o `save()` DESCARTAR a hora que o dono acabou de apontar na
+          faixa livre, em silêncio. É o mesmo defeito que o `NewBillModal` já pagou com `key`, e a
+          primeira abertura de cada sessão sempre funciona, o que é o que o esconde num teste
+          manual apressado. */}
       <NewEventModal
-        open={open}
-        initialDate={null}
-        onClose={() => setOpen(false)}
+        key={escolha?.seq ?? 0}
+        open={escolha !== null}
+        initialDate={escolha?.dia ?? null}
+        initialHour={escolha?.hora ?? null}
+        onClose={() => setEscolha(null)}
         onCreated={load}
         clientId={clientId}
       />
