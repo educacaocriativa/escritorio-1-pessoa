@@ -92,9 +92,21 @@ certo, e a tela estava errada. **Nenhum teste de `apps/web/e2e/` pode aferir cla
   Node** (é a mesma lacuna que o comentário no topo dele descreve para o jsdom). **Dívida:** o teste
   continua sensível à versão do Node, e o CI hoje exercita só a versão dos desenvolvedores — não o
   piso `>=22` que o repositório promete suportar.
-  **Dívida:** ele é **observável, não bloqueante**, até @devops o acrescentar em "Require status
-  checks to pass" (mesmo modelo de `secret-scan`/`sast-semgrep`). Enquanto isso, a régua **mede e não
-  barra** — e foi a ausência de barreira, não a de conhecimento, que deixou seis telas passarem.
+- ✅ **O job `frontend` BARRA o merge — a dívida de 2026-08-10 está fechada (issue #122).** Conjunto
+  obrigatório de `main`, **verificado em 2026-08-18**: `test-in-prod-image`, `cross-tenant-rls`,
+  `secret-scan`, `sast-semgrep` e **`frontend`**. A régua mede **e barra**. Ela já estava na
+  configuração antes desta data — o que faltava era alguém conseguir LER a configuração, não mudá-la.
+  **Como reler sem ser admin** (o dono é o único admin, e reabrir isso à mão custou uma issue):
+  `GET /branches/main/protection` responde **404 tanto para "branch não protegida" quanto para "seu
+  token não é admin"**, e `repository.branchProtectionRules` do GraphQL devolve `totalCount: 0` pelo
+  mesmo motivo — **nenhum dos dois é resposta**, os dois são o silêncio da falta de permissão. Quem
+  tem só `push` lê pelo `refUpdateRule`, que é a projeção não-admin da mesma regra:
+  ```bash
+  gh api graphql -f query='query { repository(owner:"educacaocriativa", name:"escritorio-1-pessoa")
+    { ref(qualifiedName:"refs/heads/main") { refUpdateRule { requiredStatusCheckContexts } } } }'
+  ```
+  Confirmação cruzada: `/branches/main` traz `"protected": true`, e `/rules/branches/main` volta `[]`
+  — ou seja, a proteção é **branch protection clássica**, não ruleset; procurar em Rules não acha.
 
 ## 6. Estado atual / roadmap
 - [x] Fundação do monorepo, docs, agentes de QA, CI local.
@@ -426,8 +438,7 @@ Medidos num **clone novo** (worktree limpa, `pnpm install`, nada mais), eram coi
 - [x] **`pnpm lint` não rodava em NENHUM job do CI**, e é essa a explicação de por que o NBSP
   sobreviveu do #102 até aqui: `ci.yml` tinha typecheck, vitest e o gate de 360px, e nada de
   `eslint`. O job `frontend` ganhou a etapa **Lint** (antes do typecheck, que é a mais rápida das
-  quatro). Ela é **observável, não bloqueante**, como o resto do job — a dívida de tornar
-  `frontend` um required check segue com @devops (§5.1).
+  quatro). Ela **barra o merge** como o resto do job: `frontend` é required check em `main` (§5.1).
 
 > **A regra que fica:** gate vermelho no SEU checkout não é, por si, dívida do repositório.
 > *"Vermelho aqui"* e *"vermelho num clone novo"* são afirmações diferentes, e distinguir as duas
