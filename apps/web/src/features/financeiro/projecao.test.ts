@@ -100,7 +100,18 @@ describe("runwayLabel", () => {
 
   it("trata caixa crescente (null) e limite (0)", () => {
     expect(runwayLabel(runway({ days: null, burn_rate_cents_per_day: 0 }))).toContain("Sem risco");
-    expect(runwayLabel(runway({ days: 0 }))).toContain("0 dias");
+    // ⚠️ `toContain("0 dias")` aqui era falsa confiança, achada por mutação (#121): trocar
+    // `days <= 0` por `days < 0` faz o zero cair no caminho de baixo, onde `parts` fica vazio e o
+    // `|| "0 dias"` devolve literalmente "0 dias" — que CONTÉM "0 dias". Os dois programas passavam.
+    // A frase inteira é o que distingue: "Caixa no limite" é alarme, "0 dias" seco não é.
+    expect(runwayLabel(runway({ days: 0 }))).toBe("Caixa no limite (0 dias)");
+  });
+
+  it("runway NEGATIVO também é 'caixa no limite', nunca aritmética de mês negativo", () => {
+    // Sem o `<=`, `days: -5` vira `Math.floor(-5 / 30) = -1` mês e `-5 % 30 = -5` dias — os dois
+    // filtrados pelos `> 0` seguintes, devolvendo um "0 dias" tranquilo para um caixa que JÁ
+    // estourou. O backend não deveria mandar negativo; a tela não pode depender disso.
+    expect(runwayLabel(runway({ days: -5 }))).toBe("Caixa no limite (0 dias)");
   });
 
   it("[Story 8.1 AC5] suprimido diz INDISPONÍVEL e JAMAIS 'sem risco'", () => {

@@ -179,6 +179,21 @@ export function larguraDoCampo(viewport: number, colunas: number): number {
  * Composição (a barra é um `space-y-3` dentro de um `p-4`):
  *   resumo da conta + checkbox (40) + campos conta/data (38) + botão (46) + 2 gaps (24) + p-4 (32).
  */
+//
+// ⚠️ Sobrevivente CONHECIDO do teste de mutação (#121), e o disable abaixo declara uma dívida —
+// não um mutante equivalente. Seis mutações aritméticas nesta soma sobrevivem, e todas ENCOLHEM
+// a barra (`40 - 38`, `12 / 2`, `… - PADDING_DA_BARRA * 2`). Sobrevivem porque as duas asserções
+// que existem em `baixa.test.ts` são de UM LADO SÓ — `ALTURA_DA_BARRA < 320` e
+// `PADDING_INFERIOR_DA_PAGINA >= ALTURA_DA_BARRA` — e uma barra menor passa nas duas. O erro que
+// elas pegam é "a barra cresceu demais"; o que passa é "a barra encolheu e o `pb-52` foi
+// dimensionado por uma altura que não é a real", que é justamente como o último cartão volta a
+// ficar escondido atrás dela (PR #58).
+//
+// NÃO há unit test capaz de fechar isso: este número é uma MEDIDA do DOM renderizado, e a única
+// asserção possível aqui seria copiar a mesma soma para o outro lado do `expect`. O que valeria é
+// medir a barra da `ComprovantePage` com a régua de 360px (`e2e/`, CLAUDE.md §5.1) — e essa tela
+// NÃO está entre as medidas hoje. Dívida registrada no CLAUDE.md §5.2.
+// Stryker disable next-line ArithmeticOperator
 export const ALTURA_DA_BARRA = 40 + 38 + 46 + 12 * 2 + PADDING_DA_BARRA * 2;
 /** `pb-52` = 13rem = 208px. Tem de ser ≥ `ALTURA_DA_BARRA`. */
 export const PADDING_INFERIOR_DA_PAGINA = 208;
