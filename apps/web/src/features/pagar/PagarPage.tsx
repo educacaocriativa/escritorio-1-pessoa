@@ -12,6 +12,7 @@ import type { CostCenter } from "../financeiro/costCenters";
 import CostCenterSelect from "../financeiro/CostCenterSelect";
 import { type ChartAccount, GRUPOS_DRE } from "../financeiro/planoContas";
 import { DialogDeBaixa } from "./EscolhaDaBaixa";
+import FiltrosDaLista from "./FiltrosDaLista";
 import { camposDaCopia, type CamposDaConta } from "./duplicar";
 import { formatDay, today } from "../../lib/datetime";
 import { useFuso } from "../../store/auth";
@@ -106,8 +107,7 @@ export default function PagarPage() {
   // Comprovantes que chegaram pelo celular e ainda não foram vinculados a nenhuma conta.
   const [inbox, setInbox] = useState<{ id: string }[]>([]);
   const fuso = useFuso();
-  // O `setFiltro` entra na Task 6, junto com a barra de recorte que o aciona.
-  const [filtro] = useState<FiltroPagar>(() => filtroPadrao(today(fuso)));
+  const [filtro, setFiltro] = useState<FiltroPagar>(() => filtroPadrao(today(fuso)));
   const [total, setTotal] = useState(0);
   const [offset, setOffset] = useState(0);
   const [carregando, setCarregando] = useState(false);
@@ -148,7 +148,17 @@ export default function PagarPage() {
   }, [filtro]);
 
   useEffect(() => {
-    load();
+    let vivo = true;
+    // Um filtro de texto sem debounce dispara uma chamada por tecla; `vivo` descarta a resposta de
+    // um recorte que o usuário já abandonou e evita a lista "piscar" com dado velho. Mesmo padrão
+    // de `AccountModal.tsx`.
+    const t = setTimeout(() => {
+      if (vivo) load(0);
+    }, 300);
+    return () => {
+      vivo = false;
+      clearTimeout(t);
+    };
   }, [load]);
 
   // Rótulo estruturado quando o lançamento tem vínculo; senão cai no texto legado (`category`).
@@ -201,8 +211,6 @@ export default function PagarPage() {
         <h1 className="text-2xl font-bold text-neutral-800">Despesas</h1>
       </div>
 
-      <GanchoDaVima gancho="payables.conta.criada" />
-
       {inbox.length > 0 && (
         <Link
           to={`/comprovante/${inbox[0].id}`}
@@ -221,6 +229,13 @@ export default function PagarPage() {
         <Stat label="Nesta semana" value={brl(summary.week_cents)} tone="text-neutral-700" />
         <Stat label="Pago no mês" value={brl(summary.paid_month_cents)} tone="text-accent-700" />
       </div>
+
+      <FiltrosDaLista
+        valor={filtro}
+        onChange={setFiltro}
+        categorias={chartAccounts}
+        centros={costCenters}
+      />
 
       {/* overflow-x-auto (não overflow-hidden): achado de campo — em tela estreita a tabela tem
           7 colunas e ficava CORTADA em vez de rolável, escondendo Status e as ações (Editar/
@@ -347,6 +362,11 @@ export default function PagarPage() {
           )}
         </div>
       </div>
+
+      {/* O gancho da Vima vive DEPOIS da tabela desde a spec 2026-08-18. Acima do título ele
+          ocupava ~200px da primeira dobra e empurrava a lista para fora da tela — disputando o
+          espaço mais nobre com o motivo pelo qual a página é aberta. Continua sendo respondido. */}
+      <GanchoDaVima gancho="payables.conta.criada" />
 
       {/* A baixa passa por aqui desde a Story 8.13: a conta bancária de onde o dinheiro saiu é
           obrigatória no backend (8.12) e o dia é escolhido junto, no MESMO container do botão que

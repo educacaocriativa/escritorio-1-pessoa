@@ -688,4 +688,36 @@ describe("recorte e paginacao da lista (spec 2026-08-18)", () => {
     // O erro classico de paginacao: a segunda pagina apagar a primeira.
     expect(screen.getByText("Aluguel")).toBeInTheDocument();
   });
+
+  it("digitar no filtro de texto dispara UMA chamada, nao uma por tecla", async () => {
+    mockComConta([CONTA]);
+    renderPagar();
+    await screen.findByText("Aluguel");
+    const antes = vi.mocked(api.get).mock.calls.filter(([u]) => u === "/payables/bills").length;
+
+    fireEvent.change(screen.getByLabelText(/buscar fornecedor ou descri/i), {
+      target: { value: "anthropic" },
+    });
+
+    await waitFor(() => {
+      expect(paramsDaUltimaBusca().q).toBe("anthropic");
+    });
+    const depois = vi.mocked(api.get).mock.calls.filter(([u]) => u === "/payables/bills").length;
+    expect(depois - antes).toBe(1);
+  });
+
+  it("trocar o status para Cancelado refaz a busca com o recorte novo", async () => {
+    mockComConta([CONTA]);
+    renderPagar();
+    await screen.findByText("Aluguel");
+
+    fireEvent.change(screen.getByLabelText("Status"), { target: { value: "canceled" } });
+
+    await waitFor(() => {
+      const params = paramsDaUltimaBusca();
+      expect(params.status).toEqual(["canceled"]);
+      expect(params.order).toBe("desc"); // historico se le do mais recente para tras
+      expect(params.offset).toBe(0); // trocar filtro volta para a primeira pagina
+    });
+  });
 });
