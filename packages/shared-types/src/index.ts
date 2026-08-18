@@ -481,6 +481,16 @@ export interface Payable {
   created_at: string;
 }
 
+/** Uma página de `GET /payables/bills` — `items` mais o total REAL do recorte.
+ *
+ * O `total` ignora `limit`/`offset` de propósito: é ele que permite à tela dizer
+ * "mostrando 50 de 213". Sem isso o truncamento volta a ser silencioso.
+ */
+export interface PayablesPage {
+  items: Payable[];
+  total: number;
+}
+
 export interface PayablesSummary {
   open_cents: number;
   overdue_cents: number;
