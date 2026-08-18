@@ -10,6 +10,20 @@ vi.mock("../../lib/api", () => ({
   apiErrorMessage: (e: unknown) => String(e),
 }));
 
+// O fuso do TENANT é trocável por teste (modelo de `NewEventModal.test.tsx`). Antes da issue #120
+// este arquivo não mockava `useFuso` e caía no fallback `FUSO_PADRAO = "America/Sao_Paulo"` — o
+// MESMO fuso que o `vitest.config.ts` fixa para a máquina. Com os dois iguais, o separador de dia
+// e o horário de cada bolha saem idênticos lendo pelo tenant ou pelo relógio do navegador, e a
+// asserção sobre eles fica estruturalmente incapaz de falhar. O default abaixo preserva
+// exatamente o comportamento anterior de todos os outros testes deste arquivo.
+// `ClientTimeline` (renderizado por esta tela) também consome `useFuso` — o mock parcial cobre
+// os dois, e nenhum dos dois usa mais nada de `store/auth`.
+let fusoDoTenant = "America/Sao_Paulo";
+// Tóquio (UTC+9, sem horário de verão) está 12h à frente do runner.
+const FUSO_DISTANTE = "Asia/Tokyo";
+
+vi.mock("../../store/auth", () => ({ useFuso: () => fusoDoTenant }));
+
 // Nenhum teste deste arquivo depende de chamadas de um teste anterior — cada um remonta seu
 // próprio `mockImplementation`. Sem isto, o HISTÓRICO de chamadas (não só o resultado) vaza de
 // um teste para o próximo, o que já quebrou uma asserção `not.toHaveBeenCalledWith` real (ver
@@ -17,6 +31,7 @@ vi.mock("../../lib/api", () => ({
 // a implementação que cada teste instala antes do reset ter chance de rodar de novo.
 beforeEach(() => {
   vi.clearAllMocks();
+  fusoDoTenant = "America/Sao_Paulo";
 });
 
 function renderNaRota(rota: string) {
@@ -69,7 +84,59 @@ describe("ConversasPage", () => {
     expect(screen.getByPlaceholderText(/mensagem/i)).toBeInTheDocument();
   });
 
+  it("o separador de dia e o horário saem no fuso do TENANT, não no do navegador", async () => {
+    // O fio agrupa por DIA (`dayKey`) e carimba cada bolha (`hhmm`), os dois no fuso do tenant.
+    // O teste irmão abaixo mede as duas coisas com o tenant no MESMO fuso da máquina, e por isso
+    // não consegue distinguir os dois caminhos — é o defeito da issue #120. Aqui o tenant vai
+    // para Tóquio (UTC+9) e a máquina fica em São Paulo (UTC−3): 19/07 23:30Z é 20/07 08:30 em
+    // Tóquio e 19/07 20:30 em São Paulo. Muda o horário E o dia do separador.
+    fusoDoTenant = FUSO_DISTANTE;
+    vi.mocked(api.get).mockImplementation((url: string) => {
+      if (url === "/whatsapp-conversations") {
+        return Promise.resolve({
+          data: [{
+            chat_id: "c1", kind: "direct" as const, title: "Murilo Moreschi", phone: "5511977776666",
+            client_id: "c1", last_message_at: "2026-07-19T23:30:00Z",
+            last_message_preview: "sempre na curva", unread: false,
+          }],
+        });
+      }
+      if (url === "/whatsapp-conversations/c1/timeline") {
+        return Promise.resolve({
+          data: [{
+            source: "conversation", direction: "in", kind: "text",
+            text_body: "sempre na curva", media_attachment_id: null, purpose_label: null,
+            sender_name: null, created_at: "2026-07-19T23:30:00Z",
+          }],
+        });
+      }
+      if (url === "/whatsapp-conversations/c1/window") {
+        return Promise.resolve({ data: { within_session_window: true } });
+      }
+      if (url === "/whatsapp-templates") return Promise.resolve({ data: [] });
+      return Promise.resolve({ data: [] });
+    });
+
+    renderNaRota("/conversas");
+    await waitFor(() => screen.getByText("Murilo Moreschi"));
+    await userEvent.click(screen.getByText("Murilo Moreschi"));
+    await waitFor(() => expect(screen.getAllByText("sempre na curva").length).toBeGreaterThan(0));
+
+    expect(screen.getByText("08:30")).toBeInTheDocument();
+    expect(screen.queryByText("20:30")).not.toBeInTheDocument();
+    // O separador do dia acompanha: segunda 20/07 em Tóquio, domingo 19/07 em São Paulo. O regex
+    // exige o dia-da-semana antes da data, o que distingue o SEPARADOR do carimbo da lista de
+    // conversas (que é só a data) — mesma distinção do teste irmão.
+    expect(screen.getByText(/^\S+,? 20\/07\/2026$/)).toBeInTheDocument();
+    // 19/07 não aparece em lugar NENHUM da tela: nem no separador, nem no carimbo da lista, que
+    // também converte pelo fuso do tenant.
+    expect(screen.queryAllByText(/19\/07\/2026/)).toHaveLength(0);
+  });
+
   it("distingue autor e mostra dia e horário de cada mensagem", async () => {
+    // ⚠️ Fuso do runner de propósito: o que este teste mede é a AUTORIA ("Você ·") e a contagem
+    // de separadores (um por dia, não um por mensagem) — não a conversão de fuso, que o teste
+    // logo acima prova com o tenant em Tóquio. Não troque o fuso aqui.
     // Instantes fixos em UTC-3 (fuso do produto) para o horário renderizado ser previsível.
     // Os dois primeiros são do mesmo dia; o terceiro é de outro dia — exige 2 separadores.
     vi.mocked(api.get).mockImplementation((url: string) => {

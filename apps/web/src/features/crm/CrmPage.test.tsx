@@ -18,6 +18,19 @@ vi.mock("../../lib/api", () => ({
     "Erro inesperado",
 }));
 
+// O fuso do TENANT é trocável por teste (modelo de `NewEventModal.test.tsx`). Antes da issue #120
+// este arquivo não mockava `useFuso` e caía no fallback `FUSO_PADRAO = "America/Sao_Paulo"` — o
+// MESMO fuso que o `vitest.config.ts` fixa para a máquina. Com os dois iguais, converter um
+// instante pelo fuso do tenant e lê-lo pelo relógio do navegador dá o mesmo resultado por
+// construção, e a asserção de fuso não consegue falhar. `CrmPage` e sua subárvore (`Modal`,
+// `GanchoDaVima`, `pageActions`) só usam `useFuso` deste módulo — o mock parcial é seguro.
+let fusoDoTenant = "America/Sao_Paulo";
+// Tóquio (UTC+9, sem horário de verão) está 12h à frente do runner: sob ele os dois caminhos
+// discordam até sobre que DIA é.
+const FUSO_DISTANTE = "Asia/Tokyo";
+
+vi.mock("../../store/auth", () => ({ useFuso: () => fusoDoTenant }));
+
 // Estratégia (a) da Task 0: o botão "Novo cliente" vive na topbar (AppShell). Topbar de teste local.
 function Topbar() {
   const { action } = usePageActions();
@@ -43,6 +56,7 @@ beforeEach(() => {
     return Promise.resolve({ data: [] } as never);
   });
   vi.mocked(api.post).mockReset();
+  fusoDoTenant = "America/Sao_Paulo";
 });
 
 describe("CrmPage — Novo cliente (Story 7.15, Task 1)", () => {
@@ -244,6 +258,9 @@ describe("CrmPage — a linha do próximo passo", () => {
   });
 
   it("mostra o próximo compromisso quando existe", async () => {
+    // ⚠️ Fuso do runner de propósito: este teste é sobre a LINHA existir com o título certo, não
+    // sobre conversão de fuso — 14:00Z cai no dia 20 em qualquer fuso plausível. A prova de fuso
+    // é o teste "converte o instante para o fuso do TENANT" mais abaixo. Não troque o fuso aqui.
     vi.mocked(api.get).mockResolvedValue({
       data: boardCom("2026-08-20T14:00:00Z", "Reunião de alinhamento"),
     } as never);
@@ -271,12 +288,11 @@ describe("CrmPage — a linha do próximo passo", () => {
 
 describe("CrmPage — próximo passo de dia inteiro não 'volta' um dia (achado da revisão final)", () => {
   // `receivables/service.py::build_charge` ancora o evento de cobrança à MEIA-NOITE UTC (não na
-  // meia-noite do fuso do tenant, ao contrário de `agenda/service.py::create_event`). O teste
-  // roda sem `AuthContext` ao redor (`renderPage` só empacota Router + PageActions), e
-  // `useFuso()` cai no fallback `FUSO_PADRAO = "America/Sao_Paulo"` (UTC−3) quando o contexto
-  // é `null` — o cenário exato do achado: "2026-08-22T00:00:00Z" em UTC−3 é 21/08 21h. Formatar
-  // como INSTANTE (`formatDateShort`, que converte fuso) imprimiria "21/08"; o card tem que
-  // usar `formatDay` (lê a string, sem conversão) e mostrar "22/08" — a data real do vencimento.
+  // meia-noite do fuso do tenant, ao contrário de `agenda/service.py::create_event`). Com o
+  // tenant em UTC−3 — o padrão deste arquivo — "2026-08-22T00:00:00Z" é 21/08 21h: o cenário
+  // exato do achado. Formatar como INSTANTE (`formatDateShort`, que converte fuso) imprimiria
+  // "21/08"; o card tem que usar `formatDay` (lê a string, sem conversão) e mostrar "22/08" — a
+  // data real do vencimento.
   const boardComProximo = (
     nextEventAt: string, nextEventTitle: string, allDay: boolean,
   ): Board => ({
@@ -294,6 +310,11 @@ describe("CrmPage — próximo passo de dia inteiro não 'volta' um dia (achado 
   });
 
   it("cobrança vencendo dia 22 mostra 22/08 no card, não 21/08", async () => {
+    // ⚠️ Fuso do runner (UTC−3) DE PROPÓSITO, e trocá-lo por Tóquio ENFRAQUECERIA a asserção:
+    // o que este teste prova é que a data de calendário NÃO converte, e quem denuncia a conversão
+    // indevida é um fuso NEGATIVO — em UTC−3 a meia-noite UTC "volta" para 21/08 21h. Em Tóquio,
+    // 00:00Z vira 09:00 do MESMO dia 22 e a troca por `formatDateShort` sobreviveria. Não
+    // "conserte" este para um fuso distante.
     vi.mocked(api.get).mockResolvedValue({
       data: boardComProximo("2026-08-22T00:00:00Z", "A receber: Fulana", true),
     } as never);
@@ -304,15 +325,21 @@ describe("CrmPage — próximo passo de dia inteiro não 'volta' um dia (achado 
     expect(screen.queryByText(/em 21\/08/i)).not.toBeInTheDocument();
   });
 
-  it("compromisso COM horário continua convertendo para o fuso do tenant (formatDateShort)", async () => {
+  it("compromisso COM horário converte o instante para o fuso do TENANT, não do navegador", async () => {
     // Contraste: `all_day: false` não pode passar a usar `formatDay` por engano — um evento com
     // horário É um instante de verdade, e tem que continuar convertendo fuso.
+    //
+    // Tenant em Tóquio (UTC+9), máquina em São Paulo (UTC−3): 20/08 23:00Z é 21/08 08:00 em
+    // Tóquio e 20/08 20:00 em São Paulo. Só quem lê pelo fuso do TENANT escreve 21/08 no card;
+    // ler pelo relógio do navegador — ou pela string, como o ramo `all_day` faz — daria 20/08.
+    fusoDoTenant = FUSO_DISTANTE;
     vi.mocked(api.get).mockResolvedValue({
-      data: boardComProximo("2026-08-20T14:00:00Z", "Reunião de alinhamento", false),
+      data: boardComProximo("2026-08-20T23:00:00Z", "Reunião de alinhamento", false),
     } as never);
     renderPage();
     expect(
-      await screen.findByText(/próximo: Reunião de alinhamento em 20\/08/i),
+      await screen.findByText(/próximo: Reunião de alinhamento em 21\/08/i),
     ).toBeInTheDocument();
+    expect(screen.queryByText(/em 20\/08/i)).not.toBeInTheDocument();
   });
 });

@@ -9,6 +9,10 @@ vi.mock("../../lib/api", () => ({
   apiErrorMessage: (e: unknown) => String(e),
 }));
 
+// Fuso do tenant igual ao do runner (o `vitest.config.ts` fixa `TZ: "America/Sao_Paulo"`), e aqui
+// isso NÃO é o defeito da issue #120: quem varia é a MÁQUINA — o teste "formata no fuso do tenant"
+// lá embaixo troca `process.env.TZ` para Tóquio, que é a outra metade da mesma prova. Nenhum outro
+// teste deste arquivo afirma coisa alguma sobre data ou hora, então nada mais aqui depende de fuso.
 vi.mock("../../store/auth", () => ({ useFuso: () => "America/Sao_Paulo" }));
 
 const ENTRADA = {
@@ -118,6 +122,10 @@ describe("ClientTimeline", () => {
       // O `quando()` antigo, no relógio da MÁQUINA (Tóquio, UTC+9), teria mostrado
       // 17/08/2026 08:30 — um dia adiante e 12h de diferença. Isso NÃO pode aparecer.
       expect(screen.queryByText("17/08/2026 08:30")).not.toBeInTheDocument();
+      // ✅ VERIFICADO POR MUTAÇÃO (issue #120): trocar `formatDateTime(e.at, fuso)` por
+      // `formatDateTime(e.at, Intl.DateTimeFormat().resolvedOptions().timeZone)` — ler pelo fuso
+      // do navegador — MATA este teste. É a prova de que o `process.env.TZ` acima chega mesmo ao
+      // `Intl` em tempo de execução, e de que a asserção não é decorativa.
     });
   });
 

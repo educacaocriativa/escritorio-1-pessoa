@@ -451,9 +451,10 @@ White-label por subdomínio (`joaosilva.e1p.com`). O certificado curinga exige T
 - **Wildcard na Topologia B (Traefik compartilhado):** a emissão real do cert curinga depende
   de config externa em `/opt/infra/proxy/` (certresolver DNS-01/Cloudflare) — ver §10.3.
 - **CI** já existe (`.github/workflows/ci.yml`, Story 3.2): testa a imagem de produção e o
-  isolamento RLS a cada push/PR na `main`. **Pendente (@devops):** habilitar branch protection
-  em GitHub → Settings → Branches marcando `test-in-prod-image` e `cross-tenant-rls` como checks
-  obrigatórios (transforma o workflow num gate que BLOQUEIA merge, não só um status vermelho).
+  isolamento RLS a cada push/PR na `main`. Branch protection está **habilitada** e o workflow
+  BLOQUEIA merge: os 5 jobs são checks obrigatórios (conjunto verificado em **2026-08-18** —
+  `test-in-prod-image`, `cross-tenant-rls`, `secret-scan`, `sast-semgrep`, `frontend`); push
+  direto em `main` é rejeitado (GH006). Receita para reconferir sem admin: CLAUDE.md §5.1.
   **CD (deploy automático)** ainda não existe — o deploy segue `git pull` + rebuild manual na VPS.
 - Monitoramento/alertas: **implementado** na Story 3.4 com Uptime Kuma self-hosted —
   ver **§9**. (Migração para observabilidade gerenciada na AWS Fase B fica para quando o

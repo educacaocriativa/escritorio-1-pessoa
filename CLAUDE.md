@@ -92,9 +92,61 @@ certo, e a tela estava errada. **Nenhum teste de `apps/web/e2e/` pode aferir cla
   Node** (é a mesma lacuna que o comentário no topo dele descreve para o jsdom). **Dívida:** o teste
   continua sensível à versão do Node, e o CI hoje exercita só a versão dos desenvolvedores — não o
   piso `>=22` que o repositório promete suportar.
-  **Dívida:** ele é **observável, não bloqueante**, até @devops o acrescentar em "Require status
-  checks to pass" (mesmo modelo de `secret-scan`/`sast-semgrep`). Enquanto isso, a régua **mede e não
-  barra** — e foi a ausência de barreira, não a de conhecimento, que deixou seis telas passarem.
+- ✅ **O job `frontend` BARRA o merge — a dívida de 2026-08-10 está fechada (issue #122).** Conjunto
+  obrigatório de `main`, **verificado em 2026-08-18**: `test-in-prod-image`, `cross-tenant-rls`,
+  `secret-scan`, `sast-semgrep` e **`frontend`**. A régua mede **e barra**. Ela já estava na
+  configuração antes desta data — o que faltava era alguém conseguir LER a configuração, não mudá-la.
+  **Como reler sem ser admin** (o dono é o único admin, e reabrir isso à mão custou uma issue):
+  `GET /branches/main/protection` responde **404 tanto para "branch não protegida" quanto para "seu
+  token não é admin"**, e `repository.branchProtectionRules` do GraphQL devolve `totalCount: 0` pelo
+  mesmo motivo — **nenhum dos dois é resposta**, os dois são o silêncio da falta de permissão. Quem
+  tem só `push` lê pelo `refUpdateRule`, que é a projeção não-admin da mesma regra:
+  ```bash
+  gh api graphql -f query='query { repository(owner:"educacaocriativa", name:"escritorio-1-pessoa")
+    { ref(qualifiedName:"refs/heads/main") { refUpdateRule { requiredStatusCheckContexts } } } }'
+  ```
+  Confirmação cruzada: `/branches/main` traz `"protected": true`, e `/rules/branches/main` volta `[]`
+  — ou seja, a proteção é **branch protection clássica**, não ruleset; procurar em Rules não acha.
+
+### 5.2 A régua do fuso nos testes (issue #120, fechada em 2026-08-18)
+
+**Um teste sobre fuso do tenant que roda com o fuso do tenant IGUAL ao da máquina não testa fuso
+nenhum.** `apps/web/vitest.config.ts` fixa `env: { TZ: "America/Sao_Paulo" }` para a suíte inteira.
+Enquanto o mock devolver `useFuso: () => "America/Sao_Paulo"` — ou o teste não mockar nada e cair no
+fallback `FUSO_PADRAO`, que é o mesmo valor —, ler o instante pelo fuso do **tenant** e lê-lo pelas
+partes locais do `Date` produzem o mesmo resultado **por construção**. É a família do
+`toContain("flex-wrap")` do §5.1: asserção estruturalmente incapaz de falhar.
+
+Medido na PR #119: **5 de 5 mutações no coração do `features/agenda/grade.ts` sobreviveram a 11
+testes verdes** — inclusive trocar `today(fuso, …)` por `localYmd(new Date(…))`. A mutação sobreviveu
+ao teste literalmente chamado *"agrupa pelo dia do TENANT, não pelo do navegador"*. **A produção
+estava certa; o que faltava era um teste capaz de dizer isso.**
+
+- **O padrão** é `let fusoDoTenant = "America/Sao_Paulo"` no topo, `vi.mock(".../store/auth", () => ({
+  useFuso: () => fusoDoTenant }))`, reset no `beforeEach` e `fusoDoTenant = FUSO_DISTANTE` só nos
+  testes que existem para provar fuso. `FUSO_DISTANTE = "Asia/Tokyo"` (UTC+9, sem horário de verão):
+  12h à frente do runner, então os dois caminhos discordam até sobre que **dia** é. Referências:
+  `features/agenda/grade.test.ts` e `features/agenda/NewEventModal.test.tsx`.
+- ⚠️ **Nem toda asserção com data deve trocar de fuso, e a exceção precisa estar ESCRITA.** As provas
+  de que uma **data de calendário NÃO converte** (`formatDay` em `all_day`/`due_date`) só funcionam
+  com um fuso **negativo**: é o UTC−3 que puxa a meia-noite UTC para o dia anterior e denuncia um
+  `formatDateShort` indevido. Em Tóquio, `00:00Z` vira 09:00 do mesmo dia e a mutação **sobrevive** —
+  "consertar" esses testes para um fuso distante os ENFRAQUECE. Os casos estão comentados no lugar
+  (`BlocoDaAgenda.test.tsx`, `CrmPage.test.tsx`).
+- ⚠️ **Marca gravada não se compara com a função que a gravou.** `EntradaDoDia.test.tsx` afirmava
+  `localStorage.setItem(CHAVE, today(FUSO))` e o componente lia `today(fuso)`: o teste comparava o
+  código consigo mesmo e passava com qualquer fuso. Agora a marca é uma **string literal**
+  (`"2026-08-17"`) com o relógio congelado num instante em que Tóquio, São Paulo e UTC discordam.
+- **A correção só vale verificada POR MUTAÇÃO.** Para cada asserção consertada, troque a leitura de
+  produção para o fuso do navegador (`today(fuso)` → `localYmd(new Date())`, ou
+  `formatX(iso, fuso)` → `formatX(iso, Intl.DateTimeFormat().resolvedOptions().timeZone)`) e confirme
+  que o teste **morre**. Sem isso a correção é cosmética. Restaure por **cópia do arquivo**, nunca
+  por `git checkout` num arquivo com trabalho não commitado.
+- **Dívida que fica:** a mesma classe existe fora da lista de quem mocka `useFuso`. Os testes de
+  `pagar/ComprovantePage`, `pagar/PagarPage` e `cobrancas/CobrancasPage` montam "hoje" com
+  `d.getFullYear()/getMonth()/getDate()` (o dia do **navegador**) e comparam com o `today(fuso)` da
+  tela; com tenant e runner no mesmo fuso, essas asserções também não conseguem falhar. Não foram
+  tocadas nesta passada.
 
 ### 5.3 O teste de mutação (`apps/web/stryker.config.mjs`, desde 2026-08-18)
 
@@ -435,6 +487,80 @@ caso — ela exige saber de antemão quantas vezes vai repetir e supõe valor fi
   `pnpm typecheck` e `pnpm lint` já falhavam antes deste diff.~~ **FECHADOS em 2026-08-12**, num PR
   separado só disso — e **só UM dos dois era defeito do repositório.** Ver a seção logo abaixo.
 
+## Financeiro: o recorte da lista de Contas a Pagar (2026-08-18)
+
+> Spec: `docs/superpowers/specs/2026-08-18-contas-a-pagar-recorte-design.md` ·
+> Plano: `docs/superpowers/plans/2026-08-18-contas-a-pagar-recorte.md`
+
+A tela era uma lista única, sem filtro, ordenada por vencimento **crescente** — a conta mais antiga
+já paga ocupava a primeira linha. E, como recorrência aqui é **materializada** (`create_payable`
+grava N linhas reais ligadas por `recurrence_group`), a lista crescia sozinha sem o dono lançar
+nada.
+
+- [x] ⚠️ **O defeito mais grave não era a rolagem: era o truncamento silencioso.**
+  `list_payables` tinha `limit=200` fixo e o router **não expunha** `limit`/`offset`. Com a
+  ordenação crescente, a rota devolvia as **200 mais antigas** — passando de 200 contas, o que
+  sumia da tela era o **futuro, ainda por pagar**. Sem aviso, sem contagem, sem sintoma. O teste
+  `test_teto_de_200_nao_engole_o_futuro` reprova o código antigo e é a régua da entrega.
+- [x] **`GET /payables/bills` devolve `{items, total}`**, não lista nua, e aceita `status`
+  (**repetível**), `from`, `to`, `q`, `cost_center_id`, `chart_account_id`, `order`, `limit`,
+  `offset`. O `total` é o do recorte inteiro: é ele que sustenta o **"Mostrando 50 de 213"**, que
+  aparece SEMPRE e não só quando trunca. O pecado antigo não era ter teto — era o teto não se
+  anunciar.
+- [x] **A tela abre em "o que eu devo"**: `status ∈ (open, scheduled)`, **sem piso de data** e com
+  teto no fim do mês seguinte. ⚠️ **O "sem piso" é deliberado.** Atrasado vence no passado; um
+  `from` na visão padrão esconderia exatamente a conta mais urgente que existe. Travado por
+  `test_from_ausente_nao_engole_atrasado_antigo` e pelo teste de front do recorte padrão.
+- [x] **A ordenação segue a intenção do filtro:** em aberto/agendada `asc`; pago/cancelado `desc`
+  (histórico se lê do mais recente para trás). A direção é decidida no front (`filtros.ts`) e vai
+  explícita na query — o backend obedece e valida, não adivinha.
+- ⚠️ **`list_payables` e `count_payables` compartilham `_filtros()`. Não duplique o `where`.**
+  Divergindo, a tela anuncia um `total` que a própria lista não confirma: nada quebra, o rodapé só
+  passa a mentir. `test_total_sempre_casa_com_a_lista` cobre sete combinações de filtro.
+- ⚠️ **O `q` escapa `%` e `_` antes do `ilike`.** Sem isso, digitar `%` casa com tudo e a busca
+  parece funcionar enquanto não filtra nada — defeito sem sintoma. A implementação ingênua passa em
+  todos os outros testes e falha só em `test_q_escapa_curinga_do_like`.
+- ⚠️ **`from` é palavra reservada em Python:** o parâmetro é `due_from` com `alias="from"`.
+- [x] **`POST /payables/bills/{id}/reactivate`** — conta cancelada volta para `open` **com o
+  vencimento original**. Reativada depois do prazo, nasce **Atrasada**, que é o que ela é: empurrar
+  a data para hoje apagaria o vencimento contratado e a Projeção/DRE passariam a contar uma data
+  que nunca existiu.
+  - ⚠️ **Não é `/reverse`, e a separação é de significado.** `reverse` quer dizer *"esta saída não
+    vai acontecer"* e seu trabalho é **apagar o movimento bancário**; `cancel_payable` só aceita
+    conta em aberto, que nunca teve movimento nenhum. Fundir os dois obrigaria um
+    `if status == canceled: pula tudo` no meio da lógica mais delicada do arquivo.
+- [x] **`pagar/filtros.ts`** — estado do filtro, puro e sem DOM (12 testes). ⚠️ **`fimDoMesSeguinte`
+  faz aritmética de string, nunca `new Date`:** o dia já chega no fuso do tenant (`today(useFuso())`)
+  e reconstruir um `Date` devolveria o cálculo ao fuso do navegador — em UTC−3, das 21h à meia-noite
+  o horizonte pularia um dia (regra §6.0).
+- [x] **`GanchoDaVima` desceu para DEPOIS da tabela.** Acima do título ele ocupava ~200px da
+  primeira dobra e empurrava a lista para fora da tela.
+- [x] **Centro de custo e Categoria ficam atrás de "Mais filtros" SÓ no celular** — e isso foi
+  **medido, não suposto**. Com os cinco controles na mesma linha, em 360px a barra refluía em cinco
+  linhas, ocupava ~300px e jogava a tabela para `y=765`, fora da dobra de 740px. Recolhidos:
+  `y=653`. De `sm` para cima os cinco aparecem juntos. `e2e/pagar-360.spec.ts` mede por
+  `boundingBox`, nunca por classe CSS.
+- ⚠️ **BUG DE INTEGRAÇÃO ACHADO E CORRIGIDO: o axios serializava `status[]=open`.** O FastAPI
+  declara `status: list[str] | None = Query(default=None)` e só reconhece a forma **repetida**
+  (`status=open&status=scheduled`); com colchetes ele não vê o parâmetro, recebe `None` e devolve a
+  lista **sem filtro nenhum** — a tela pediria "o que eu devo" e receberia pago e cancelado junto,
+  sem erro e sem sintoma. Corrigido com `paramsSerializer: { indexes: null }` nos **dois** clientes
+  de `lib/api.ts`.
+  - ⚠️ **Nenhuma camada de teste pegava isso, e vale entender por quê:** o pytest monta a URL crua
+    já na forma certa, o vitest assere o objeto `params` **antes** de serializar, e o gate de layout
+    recebe payload fixo seja qual for a query. Só medir a URL real fecha a fresta — é o que
+    `e2e/pagar-contrato.spec.ts` faz, e é o único lugar do projeto onde axios de verdade roda.
+- **A busca da barra de cima CONTINUA DESLIGADA** (`AppShell.tsx`, `<input>` sem `onChange` — o
+  próprio código diz *"é decoração até alguém ligá-la"*). **Não é regressão e não é bug**: é o
+  Projeto B, ainda sem spec. Registrado aqui para a próxima sessão não gastar tempo procurando um
+  defeito que não existe. O filtro de texto de Contas a Pagar é o primitivo que ele vai reusar.
+- **Dívida:** `receivables.cancel_charge` tem o mesmo beco sem saída — cobrança cancelada também
+  não volta. Fora de escopo (não foi pedido e dobraria a superfície de teste); a rota seria
+  `POST /receivables/charges/{id}/reactivate`, com a mesma forma do `reactivate_payable`.
+- **Dívida:** sem índice para o `ilike` sobre `description`/`supplier`. Com alguns milhares de
+  linhas por tenant, já cortadas pela RLS, roda sem. `pg_trgm` é o gatilho quando incomodar —
+  otimização especulativa agora.
+
 ## Os dois gates herdados de `main` — e a diferença entre "vermelho aqui" e "vermelho num clone novo"
 
 O parágrafo acima registrava `pnpm lint` e `pnpm typecheck` como duas dívidas irmãs de `main`.
@@ -459,8 +585,7 @@ Medidos num **clone novo** (worktree limpa, `pnpm install`, nada mais), eram coi
 - [x] **`pnpm lint` não rodava em NENHUM job do CI**, e é essa a explicação de por que o NBSP
   sobreviveu do #102 até aqui: `ci.yml` tinha typecheck, vitest e o gate de 360px, e nada de
   `eslint`. O job `frontend` ganhou a etapa **Lint** (antes do typecheck, que é a mais rápida das
-  quatro). Ela é **observável, não bloqueante**, como o resto do job — a dívida de tornar
-  `frontend` um required check segue com @devops (§5.1).
+  quatro). Ela **barra o merge** como o resto do job: `frontend` é required check em `main` (§5.1).
 
 > **A regra que fica:** gate vermelho no SEU checkout não é, por si, dívida do repositório.
 > *"Vermelho aqui"* e *"vermelho num clone novo"* são afirmações diferentes, e distinguir as duas
