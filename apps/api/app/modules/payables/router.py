@@ -14,6 +14,7 @@ from app.modules.payables.schemas import (
     PayableOut,
     PayablePayIn,
     PayablePaymentUpdate,
+    PayablesPageOut,
     PayablesPaidBeforeOut,
     PayablesSummary,
     PayableUpdate,
@@ -69,18 +70,39 @@ def categories(
     return service.list_categories(db)
 
 
-@router.get("/bills", response_model=list[PayableOut])
+@router.get("/bills", response_model=PayablesPageOut)
 def list_bills(
-    status: str | None = Query(default=None),
+    status: list[str] | None = Query(default=None),
+    # `from`/`to` são as palavras naturais na URL; `from` é reservada em Python, daí o alias.
+    due_from: date_type | None = Query(default=None, alias="from"),
+    due_to: date_type | None = Query(default=None, alias="to"),
+    q: str | None = Query(default=None, max_length=120),
+    cost_center_id: str | None = Query(default=None),
+    chart_account_id: str | None = Query(default=None),
+    order: str = Query(default="asc", pattern="^(asc|desc)$"),
+    limit: int = Query(default=50, ge=1, le=500),
+    offset: int = Query(default=0, ge=0),
     _user: CurrentUser = Depends(_guard),
     db: Session = Depends(get_tenant_db),
-) -> list[PayableOut]:
-    # Fuso resolvido UMA vez para a lista inteira: `_out` por linha faria uma consulta de perfil
+) -> PayablesPageOut:
+    # Fuso resolvido UMA vez para a página inteira: `_out` por linha faria uma consulta de perfil
     # por conta (N+1). Mesmo cuidado da listagem de `receivables`.
     hoje = hoje_do_tenant(db)
-    return [
-        service.payable_out(p, hoje) for p in service.list_payables(db, status=status)
-    ]
+    # O recorte vai como dict ÚNICO para buscar e contar: esquecer um argumento em uma das duas
+    # chamadas reproduz, pela porta da rota, a divergência que `_filtros` existe para impedir.
+    recorte = dict(
+        status=status,
+        due_from=due_from,
+        due_to=due_to,
+        q=q,
+        cost_center_id=cost_center_id,
+        chart_account_id=chart_account_id,
+    )
+    itens = service.list_payables(db, order=order, limit=limit, offset=offset, **recorte)
+    return PayablesPageOut(
+        items=[service.payable_out(p, hoje) for p in itens],
+        total=service.count_payables(db, **recorte),
+    )
 
 
 @router.get("/bills/paid-before", response_model=PayablesPaidBeforeOut)
@@ -208,6 +230,22 @@ def cancel_bill(
 ) -> PayableOut:
     try:
         p = service.cancel_payable(
+            db, payable_id=payable_id, tenant_id=user.tenant_id, actor=user.user_id
+        )
+    except service.PayableError as e:
+        raise _err(e) from e
+    return _out(db, p)
+
+
+@router.post("/bills/{payable_id}/reactivate", response_model=PayableOut)
+def reactivate_bill(
+    payable_id: str,
+    user: CurrentUser = Depends(_guard),
+    db: Session = Depends(get_tenant_db),
+) -> PayableOut:
+    """Conta cancelada volta para 'A pagar'. Rota própria — ver `service.reactivate_payable`."""
+    try:
+        p = service.reactivate_payable(
             db, payable_id=payable_id, tenant_id=user.tenant_id, actor=user.user_id
         )
     except service.PayableError as e:
