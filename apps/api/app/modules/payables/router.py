@@ -73,6 +73,13 @@ def categories(
 @router.get("/bills", response_model=PayablesPageOut)
 def list_bills(
     status: list[str] | None = Query(default=None),
+    # `from`/`to` são as palavras naturais na URL; `from` é reservada em Python, daí o alias.
+    due_from: date_type | None = Query(default=None, alias="from"),
+    due_to: date_type | None = Query(default=None, alias="to"),
+    q: str | None = Query(default=None, max_length=120),
+    cost_center_id: str | None = Query(default=None),
+    chart_account_id: str | None = Query(default=None),
+    order: str = Query(default="asc", pattern="^(asc|desc)$"),
     limit: int = Query(default=50, ge=1, le=500),
     offset: int = Query(default=0, ge=0),
     _user: CurrentUser = Depends(_guard),
@@ -81,10 +88,20 @@ def list_bills(
     # Fuso resolvido UMA vez para a página inteira: `_out` por linha faria uma consulta de perfil
     # por conta (N+1). Mesmo cuidado da listagem de `receivables`.
     hoje = hoje_do_tenant(db)
-    itens = service.list_payables(db, status=status, limit=limit, offset=offset)
+    # O recorte vai como dict ÚNICO para buscar e contar: esquecer um argumento em uma das duas
+    # chamadas reproduz, pela porta da rota, a divergência que `_filtros` existe para impedir.
+    recorte = dict(
+        status=status,
+        due_from=due_from,
+        due_to=due_to,
+        q=q,
+        cost_center_id=cost_center_id,
+        chart_account_id=chart_account_id,
+    )
+    itens = service.list_payables(db, order=order, limit=limit, offset=offset, **recorte)
     return PayablesPageOut(
         items=[service.payable_out(p, hoje) for p in itens],
-        total=service.count_payables(db, status=status),
+        total=service.count_payables(db, **recorte),
     )
 
 

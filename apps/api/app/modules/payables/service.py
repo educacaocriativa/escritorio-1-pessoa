@@ -322,15 +322,52 @@ def update_payable(db: Session, *, payable_id: str, tenant_id: str, actor: str, 
     return p
 
 
-def _filtros(stmt, *, status: list[str] | None = None):
+def _escapa_curinga(termo: str) -> str:
+    """Neutraliza `%` e `_` para que o texto do usuário seja tratado como TEXTO no `ilike`.
+
+    Sem isto, buscar `%` casa com todas as linhas e a busca parece funcionar enquanto não filtra
+    nada — o pior tipo de defeito de busca, porque não tem sintoma.
+    """
+    return termo.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+
+
+def _filtros(
+    stmt,
+    *,
+    status: list[str] | None = None,
+    due_from: date | None = None,
+    due_to: date | None = None,
+    q: str | None = None,
+    cost_center_id: str | None = None,
+    chart_account_id: str | None = None,
+):
     """Construtor ÚNICO do predicado da listagem — usado por `list_payables` E `count_payables`.
 
     ⚠️ **Não duplique este `where` do outro lado.** Dois blocos copiados divergem na primeira
     manutenção, e a partir daí a tela anuncia um `total` que a própria lista não confirma: nada
     quebra, o rodapé só passa a mentir. É um modo de falha discreto e caro de achar.
+
+    `due_from` é opcional **e a tela não o manda na visão padrão, de propósito**: atrasado tem
+    vencimento no passado, então qualquer piso de data esconde a conta mais urgente que existe.
     """
     if status:
         stmt = stmt.where(Payable.status.in_(status))
+    if due_from is not None:
+        stmt = stmt.where(Payable.due_date >= due_from)
+    if due_to is not None:
+        stmt = stmt.where(Payable.due_date <= due_to)
+    if q:
+        alvo = f"%{_escapa_curinga(q)}%"
+        stmt = stmt.where(
+            or_(
+                Payable.description.ilike(alvo, escape="\\"),
+                Payable.supplier.ilike(alvo, escape="\\"),
+            )
+        )
+    if cost_center_id:
+        stmt = stmt.where(Payable.cost_center_id == cost_center_id)
+    if chart_account_id:
+        stmt = stmt.where(Payable.chart_account_id == chart_account_id)
     return stmt
 
 
@@ -338,19 +375,52 @@ def list_payables(
     db: Session,
     *,
     status: list[str] | None = None,
+    due_from: date | None = None,
+    due_to: date | None = None,
+    q: str | None = None,
+    cost_center_id: str | None = None,
+    chart_account_id: str | None = None,
+    order: str = "asc",
     limit: int = 200,
     offset: int = 0,
 ) -> list[Payable]:
     limit = max(1, min(limit, 500))
+    stmt = _filtros(
+        select(Payable),
+        status=status,
+        due_from=due_from,
+        due_to=due_to,
+        q=q,
+        cost_center_id=cost_center_id,
+        chart_account_id=chart_account_id,
+    )
     # Desempate por `id`: sem ele, contas com o MESMO vencimento podem trocar de posição entre
     # duas consultas e o `offset` passa a repetir ou pular linha entre páginas.
-    stmt = _filtros(select(Payable), status=status).order_by(Payable.due_date, Payable.id)
+    coluna = Payable.due_date.desc() if order == "desc" else Payable.due_date.asc()
+    stmt = stmt.order_by(coluna, Payable.id)
     return list(db.scalars(stmt.limit(limit).offset(max(0, offset))).all())
 
 
-def count_payables(db: Session, *, status: list[str] | None = None) -> int:
+def count_payables(
+    db: Session,
+    *,
+    status: list[str] | None = None,
+    due_from: date | None = None,
+    due_to: date | None = None,
+    q: str | None = None,
+    cost_center_id: str | None = None,
+    chart_account_id: str | None = None,
+) -> int:
     """Quantas contas o recorte tem, ignorando `limit`/`offset`."""
-    stmt = _filtros(select(func.count()).select_from(Payable), status=status)
+    stmt = _filtros(
+        select(func.count()).select_from(Payable),
+        status=status,
+        due_from=due_from,
+        due_to=due_to,
+        q=q,
+        cost_center_id=cost_center_id,
+        chart_account_id=chart_account_id,
+    )
     return int(db.scalar(stmt) or 0)
 
 
