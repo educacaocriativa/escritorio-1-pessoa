@@ -1,10 +1,12 @@
 # gitleaks — configuração de secret scan do e1p (Story 6.2).
 #
 # Rodado no CI pelo job `secret-scan` de .github/workflows/ci.yml, usando o CLI
-# gitleaks OSS (MIT, gratuito) via container pinado por digest — NÃO a gitleaks-action
-# (desde a v2 a Action exige um GITLEAKS_LICENSE para contas de ORGANIZAÇÃO — chave
-# gratuita, mas com registro externo + EULA proprietário; este repo é da org
-# `educacaocriativa`). O CLI é MIT, sem registro nem EULA. Ver o cabeçalho do ci.yml.
+# gitleaks OSS (MIT, gratuito) via container pinado por digest — NÃO a gitleaks-action.
+# Motivo: desde a v2.0.0 a Action deixou de ser MIT e passou a um EULA PROPRIETÁRIO da
+# Gitleaks LLC (source-available, sem direito de modificar/derivar); o CLI segue MIT, sem
+# EULA, com a mesma engine e cobertura idêntica. NÃO é questão de chave: o GITLEAKS_LICENSE
+# só é exigido para repos de conta de ORGANIZAÇÃO e este repo é de conta de USUÁRIO
+# (`.owner.type` = "User", conferido em 2026-08-18). Ver o cabeçalho do ci.yml e a issue #131.
 #
 # Herda o ruleset default do gitleaks (100+ detectores de segredo) e adiciona uma
 # allowlist VERSIONADA para conviver com achados legítimos já tratados (AC1). Cada
