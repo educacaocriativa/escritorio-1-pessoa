@@ -93,6 +93,12 @@ export default {
   // "Cannot find TestRunner plugin \"vitest\". In fact, no TestRunner plugins were loaded.
   // Did you forget to install it?" — com o pacote instalado e visível no diretório.
   plugins: ["@stryker-mutator/vitest-runner"],
+  //
+  // Consequencia pratica: os plugins carregados sao SO estes. Passar `--reporters` na linha de
+  // comando (ex.: `--reporters clear-text,progress`) derruba a corrida com um erro de injecao do
+  // typed-inject, porque o reporter pedido nao esta entre os plugins carregados. Medido em
+  // 18/08/2026: `pnpm mutation` e `stryker run --mutate <arquivo>` rodam; os mesmos com
+  // `--reporters` falham. Para trocar de reporter, edite `reporters` AQUI, nao na CLI.
 
   // Config de vitest própria da mutação — ver o cabeçalho de `vitest.mutation.config.ts`
   // para os dois motivos (unidade de medida e tempo) e para a direção do erro que ela causa.
