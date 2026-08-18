@@ -237,6 +237,22 @@ def cancel_bill(
     return _out(db, p)
 
 
+@router.post("/bills/{payable_id}/reactivate", response_model=PayableOut)
+def reactivate_bill(
+    payable_id: str,
+    user: CurrentUser = Depends(_guard),
+    db: Session = Depends(get_tenant_db),
+) -> PayableOut:
+    """Conta cancelada volta para 'A pagar'. Rota própria — ver `service.reactivate_payable`."""
+    try:
+        p = service.reactivate_payable(
+            db, payable_id=payable_id, tenant_id=user.tenant_id, actor=user.user_id
+        )
+    except service.PayableError as e:
+        raise _err(e) from e
+    return _out(db, p)
+
+
 @router.post("/bills/{payable_id}/reverse", response_model=PayableOut)
 def reverse_bill(
     payable_id: str,

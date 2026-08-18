@@ -805,6 +805,34 @@ def cancel_payable(db: Session, *, payable_id: str, tenant_id: str, actor: str) 
     return p
 
 
+def reactivate_payable(db: Session, *, payable_id: str, tenant_id: str, actor: str) -> Payable:
+    """Devolve uma conta CANCELADA para 'open', com o vencimento original intacto.
+
+    ⚠️ **Não é `reverse`, e a separação é de significado, não de estilo.** `reverse` quer dizer
+    *"esta saída não vai acontecer"*, e o trabalho dele é APAGAR o movimento bancário. Reativar
+    quer dizer o oposto: *"esta saída volta a ser esperada"*. E como `cancel_payable` só aceita
+    conta em aberto, aqui **não existe movimento bancário nem evento de Agenda para desfazer** —
+    cancelar nunca criou nem removeu nenhum dos dois. Fundir os dois verbos obrigaria um
+    `if status == canceled: pula tudo` no meio da lógica mais delicada do arquivo, e é assim que
+    um dos dois caminhos deixa de receber a próxima correção.
+
+    **O vencimento não se reescreve.** Reativada depois do prazo, a conta volta Atrasada — porque é
+    o que ela é. Empurrar a data para hoje apagaria o vencimento que o dono de fato contratou, e a
+    Projeção e o DRE passariam a contar uma data que nunca existiu. Ela nasce editável (`open`),
+    então corrigir a data continua sendo um gesto disponível, só não imposto.
+    """
+    p = db.scalar(select(Payable).where(Payable.id == payable_id).with_for_update())
+    if p is None:
+        raise PayableError("Conta não encontrada", 404)
+    if p.status != STATUS_CANCELED:
+        raise PayableError("Só contas canceladas podem ser reativadas", 409)
+    p.status = STATUS_OPEN
+    audit.record(db, tenant_id=tenant_id, actor=actor, action="payable.reactivate", target=p.id)
+    db.commit()
+    db.refresh(p)
+    return p
+
+
 def reverse_payable(db: Session, *, payable_id: str, tenant_id: str, actor: str) -> Payable:
     """Estorna uma conta paga **ou agendada**: volta para 'open', limpa paid_at, reabre a edição,
     devolve o evento vinculado na Agenda para pendente (desfaz o `done` de mark_paid) — e
