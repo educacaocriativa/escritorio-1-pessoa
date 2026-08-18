@@ -192,7 +192,7 @@ export function larguraDoCampo(viewport: number, colunas: number): number {
 // NÃO há unit test capaz de fechar isso: este número é uma MEDIDA do DOM renderizado, e a única
 // asserção possível aqui seria copiar a mesma soma para o outro lado do `expect`. O que valeria é
 // medir a barra da `ComprovantePage` com a régua de 360px (`e2e/`, CLAUDE.md §5.1) — e essa tela
-// NÃO está entre as medidas hoje. Dívida registrada no CLAUDE.md §5.2.
+// NÃO está entre as medidas hoje. Dívida registrada no CLAUDE.md §5.3.
 // Stryker disable next-line ArithmeticOperator
 export const ALTURA_DA_BARRA = 40 + 38 + 46 + 12 * 2 + PADDING_DA_BARRA * 2;
 /** `pb-52` = 13rem = 208px. Tem de ser ≥ `ALTURA_DA_BARRA`. */

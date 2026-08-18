@@ -122,7 +122,7 @@ export default {
   // ⚠️ SEM `break`. O gate nasce OBSERVÁVEL, igual a `secret-scan`, `sast-semgrep` e
   // `frontend` no ci.yml — e aqui há um motivo a mais: limiar escrito antes da primeira
   // medição é número sem evidência (Artigo IV da Constitution, "No Invention"). O baseline
-  // medido está no CLAUDE.md §5.2; a promoção a bloqueante vem depois de um período de
+  // medido está no CLAUDE.md §5.3; a promoção a bloqueante vem depois de um período de
   // observação, e é uma edição de uma linha aqui (`break: <n>`).
   // `high`/`low` só colorem o relatório — não reprovam nada.
   thresholds: { high: 80, low: 60, break: null },

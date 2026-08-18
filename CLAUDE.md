@@ -96,7 +96,7 @@ certo, e a tela estava errada. **Nenhum teste de `apps/web/e2e/` pode aferir cla
   checks to pass" (mesmo modelo de `secret-scan`/`sast-semgrep`). Enquanto isso, a régua **mede e não
   barra** — e foi a ausência de barreira, não a de conhecimento, que deixou seis telas passarem.
 
-### 5.2 O teste de mutação (`apps/web/stryker.config.mjs`, desde 2026-08-18)
+### 5.3 O teste de mutação (`apps/web/stryker.config.mjs`, desde 2026-08-18)
 
 **A suíte verde não prova que os testes seguram alguma coisa.** Na PR #119 o QA achou NOVE
 defeitos com 693 testes verdes, 32 medições de 360px e `tsc`/`eslint` limpos. Quem os achou foi

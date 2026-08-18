@@ -28,7 +28,7 @@
 # ── OBSERVÁVEL PRIMEIRO ──────────────────────────────────────────────────────────────────────────
 # Não há limiar de reprovação. `stryker.config.mjs` traz `thresholds.break: null` de propósito:
 # limiar escrito antes da primeira medição é número sem evidência (Artigo IV da Constitution, "No
-# Invention"). O baseline MEDIDO está no CLAUDE.md §5.2 e é dele que sai o primeiro limiar, depois
+# Invention"). O baseline MEDIDO está no CLAUDE.md §5.3 e é dele que sai o primeiro limiar, depois
 # de um período de observação. Mesmo caminho que `secret-scan`, `sast-semgrep` e `frontend` já
 # percorrem no `ci.yml`: mede antes, barra depois.
 name: Mutation (noturno)
@@ -74,7 +74,7 @@ jobs:
       - uses: pnpm/action-setup@v4
 
       # Node 24 pela MESMA razão escrita no job `frontend`, e ela vale em dobro aqui: o baseline do
-      # CLAUDE.md §5.2 foi medido em 24, e `src/lib/shareInbox.test.ts` depende de
+      # CLAUDE.md §5.3 foi medido em 24, e `src/lib/shareInbox.test.ts` depende de
       # `structuredClone` preservar `File` — comportamento que MUDA entre versões do Node. Num Node
       # diferente aquele arquivo fica vermelho, a corrida inteira aborta na dry run e o relatório
       # não sai. Mudar este número exige remedir o baseline.
