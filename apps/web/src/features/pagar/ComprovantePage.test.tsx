@@ -10,6 +10,42 @@ vi.mock("../../lib/api", () => ({
   apiErrorMessage: (e: unknown) => String(e),
 }));
 
+// ── A régua do fuso (CLAUDE.md §5.2, issues #120/#129) ────────────────────────────────────────
+//
+// O fuso do TENANT é trocável por teste (modelo de `EntradaDoDia.test.tsx`). O `vitest.config.ts`
+// fixa o fuso da MÁQUINA em America/Sao_Paulo: enquanto o tenant for esse mesmo valor — e sem o
+// mock abaixo ele É, porque `useFuso()` sem sessão cai no `FUSO_PADRAO` —, `today(fuso)` e o dia
+// montado pelas partes locais do `Date` dão o MESMO resultado por construção. Era assim que "a
+// data padrão é hoje" era afirmado aqui: com um `hoje()` montado a partir de
+// `d.getFullYear()/getMonth()/getDate()`, o dia do NAVEGADOR. A asserção não conseguia falhar.
+let fusoDoTenant = "America/Sao_Paulo";
+/** Tóquio (UTC+9) está 12h à frente do runner — sob ele os dois caminhos discordam sobre o DIA. */
+const FUSO_DISTANTE = "Asia/Tokyo";
+
+vi.mock("../../store/auth", () => ({
+  useFuso: () => fusoDoTenant,
+}));
+
+/**
+ * O instante em que os três relógios discordam do jeito útil para esta tela.
+ *
+ * `2026-08-17T18:00:00Z` → **Tóquio 18/08 03:00** · **São Paulo 17/08 15:00** · **UTC 17/08**.
+ *
+ * Com Tóquio (+9) e São Paulo (−3) é impossível separar os três dias no mesmo instante (exigiria
+ * UTC ≥ 15h *e* < 3h). O que importa é que o dia do TENANT difira dos DOIS candidatos errados —
+ * e aqui difere: trocar a leitura para `localYmd(new Date())` (navegador) **ou** para
+ * `toISOString().slice(0, 10)` (UTC) devolve 17/08 e mata o teste.
+ */
+const INSTANTE = "2026-08-17T18:00:00Z";
+/** O dia do TENANT em `INSTANTE` — o único valor correto para um campo "hoje" desta tela. */
+const DIA_DO_TENANT = "2026-08-18";
+
+/** Congela o relógio em `INSTANTE`. `shouldAdvanceTime` mantém o `userEvent` respirando. */
+function congelarRelogio() {
+  vi.useFakeTimers({ shouldAdvanceTime: true });
+  vi.setSystemTime(new Date(INSTANTE));
+}
+
 const ABERTA = {
   id: "b-aberta", description: "Energia", supplier: "Copel", amount_cents: 30000,
   due_date: "2099-01-10", status: "open", is_overdue: false, paid_at: null,
@@ -25,12 +61,6 @@ const CONTA = {
   opening_balance_cents: 0, opening_date: "2026-01-01",
   saldo_derivado_cents: 0, saldo_derivado_origem: "banco",
 };
-
-/** Hoje como data de calendário LOCAL — a mesma regra de `localToday`/`hojeISO`. */
-function hoje(): string {
-  const d = new Date();
-  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
-}
 
 function mockApi(candidates = [ABERTA, PAGA], contas: unknown[] = [CONTA]) {
   vi.mocked(api.get).mockImplementation((url: string) => {
@@ -60,7 +90,10 @@ function renderPage() {
 }
 
 describe("ComprovantePage", () => {
-  beforeEach(() => vi.clearAllMocks());
+  beforeEach(() => {
+    vi.clearAllMocks();
+    fusoDoTenant = "America/Sao_Paulo";
+  });
   afterEach(() => vi.useRealTimers());
 
   it("lista as contas candidatas com nome, valor e status", async () => {
@@ -130,7 +163,11 @@ describe("ComprovantePage", () => {
     expect(within(footer).getByText("R$ 300,00")).toBeTruthy();
   });
 
-  it("vincula chamando link com o payload correto", async () => {
+  it("vincula chamando link com o payload correto — e o `paid_on` é o dia do TENANT", async () => {
+    // O `paid_on` que viaja é o default da bandeja, `localToday(fuso)`. Com o tenant em Tóquio e o
+    // relógio congelado, ele é 18/08 — o navegador e o UTC diriam 17/08 (ver `INSTANTE`).
+    fusoDoTenant = FUSO_DISTANTE;
+    congelarRelogio();
     mockApi();
     vi.mocked(api.post).mockResolvedValue({ data: { id: "b-aberta" } } as never);
     renderPage();
@@ -143,7 +180,7 @@ describe("ComprovantePage", () => {
     expect(vi.mocked(api.post).mock.calls[0][0]).toBe("/payables/receipts/r-1/link");
     // Story 8.13: a conta bancária e o dia viajam junto — sem eles o backend responde 422.
     expect(vi.mocked(api.post).mock.calls[0][1]).toEqual({
-      bill_id: "b-aberta", mark_paid: true, bank_account_id: "acc-1", paid_on: hoje(),
+      bill_id: "b-aberta", mark_paid: true, bank_account_id: "acc-1", paid_on: DIA_DO_TENANT,
     });
   });
 
@@ -249,14 +286,18 @@ describe("ComprovantePage", () => {
     expect(screen.getByText("Internet")).toBeTruthy();
   });
 
-  // Achado 1 da revisão: toISOString() formata o instante em UTC. À noite no Brasil (UTC-3),
-  // o instante UTC já é o dia seguinte — então a data de vencimento pré-preenchida do
-  // formulário de conta nova viraria "amanhã" silenciosamente. Fixamos o relógio num instante
-  // em que UTC e horário local discordam de dia (23:30 local = já é o dia seguinte em UTC) e
-  // exigimos que o campo mostre o dia LOCAL.
-  it("preenche a data de vencimento padrao com o dia LOCAL, nao UTC, mesmo a noite", async () => {
-    vi.useFakeTimers({ shouldAdvanceTime: true });
-    vi.setSystemTime(new Date("2026-03-10T23:30:00-03:00")); // já é 2026-03-11 em UTC
+  // Achado 1 da revisão: `toISOString()` formata o instante em UTC. À noite no Brasil (UTC−3), o
+  // instante UTC já é o dia seguinte — a data de vencimento pré-preenchida do formulário de conta
+  // nova virava "amanhã" silenciosamente.
+  //
+  // ⚠️ **Este teste já nasceu com relógio congelado e mesmo assim não conseguia falhar** (#129).
+  // Ele congelava em `2026-03-10T23:30:00-03:00` e exigia o dia *local*: como o tenant também era
+  // São Paulo, "dia local" e "dia do tenant" eram a mesma string, e trocar `today(fuso)` por
+  // `localYmd(new Date())` na produção passava batido. Com o tenant em Tóquio, o campo tem de
+  // mostrar o dia DO DONO — que não é o do navegador nem o de UTC.
+  it("preenche a data de vencimento padrão com o dia do TENANT — não o do navegador, nem o de UTC", async () => {
+    fusoDoTenant = FUSO_DISTANTE;
+    congelarRelogio();
 
     mockApi();
     renderPage();
@@ -264,7 +305,7 @@ describe("ComprovantePage", () => {
 
     await userEvent.click(screen.getByRole("button", { name: /criar conta nova/i }));
     const dateInput = screen.getByLabelText(/data de vencimento/i) as HTMLInputElement;
-    expect(dateInput.value).toBe("2026-03-10");
+    expect(dateInput.value).toBe(DIA_DO_TENANT);
   });
 
   // Achado 2 da revisão: nada impedia selecionar uma conta candidata (habilitando o "Anexar"
@@ -334,7 +375,11 @@ describe("ComprovantePage", () => {
  * um deles com uma conta real marcada paga sem o usuário conseguir ver o que confirmava.
  */
 describe("ComprovantePage — a escolha da baixa (Story 8.13)", () => {
-  beforeEach(() => vi.clearAllMocks());
+  beforeEach(() => {
+    vi.clearAllMocks();
+    fusoDoTenant = "America/Sao_Paulo";
+  });
+  afterEach(() => vi.useRealTimers());
 
   const seletor = () => screen.getByLabelText(/conta bancária de onde o dinheiro saiu/i);
   const campoDia = () => screen.getByLabelText(/dia em que o dinheiro saiu/i) as HTMLInputElement;
@@ -368,12 +413,26 @@ describe("ComprovantePage — a escolha da baixa (Story 8.13)", () => {
     expect(screen.getByRole("button", { name: /anexar e dar baixa · sai do Itaú PJ/i })).toBeTruthy();
   });
 
-  it("a data padrão da BANDEJA é hoje (não o vencimento) — e [8.14] não há mais teto", async () => {
+  it("a data padrão da BANDEJA é hoje NO FUSO DO TENANT (não o vencimento) — e [8.14] sem teto", async () => {
+    fusoDoTenant = FUSO_DISTANTE;
+    congelarRelogio();
     await escolherCandidata();
 
     // Aqui, diferente de PagarPage/Fila, o default é HOJE: o comprovante chega pelo share sheet no
     // instante do pagamento. **O default não mudou** — o que mudou foi o teto.
-    expect(campoDia().value).toBe(hoje());
+    //
+    // ⚠️ E "hoje" é o dia do DONO, não o de quem abriu o navegador (#129). Este `expect` afirmava
+    // `hoje()` — o dia montado com `d.getFullYear()/getMonth()/getDate()` — e com tenant e runner
+    // no mesmo fuso os dois lados eram iguais por construção. Agora o tenant está em Tóquio e o
+    // relógio congelado: 18/08 para o dono, 17/08 para o navegador e para o UTC.
+    expect(campoDia().value).toBe(DIA_DO_TENANT);
+    // ⚠️ **Achado que só aparece com os dois fusos separados, e que este teste NÃO afirma de
+    // propósito:** rodando com o tenant em Tóquio, a bandeja abre com o aviso "Esta data é no
+    // futuro… será registrada como AGENDADA" já visível, sem o dono ter tocado em nada. É o mesmo
+    // componente lendo DOIS relógios: o default vem de `localToday(fuso)` (tenant) e o
+    // `avisoDeDataFutura` compara com `hojeISO()` (navegador, via `EscolhaDaBaixa`). Fixar isso é
+    // mudar produção — a mesma dívida do `hojeISO` anotada em `cobrancas/CobrancasPage.test.tsx` e
+    // no CLAUDE.md §5.2 —, e travar o aviso num `expect` aqui pregaria o defeito na parede.
     // ⚠️ **[Story 8.14] mudança de expectativa, e ela é a CORREÇÃO.** Este teste afirmava
     // `max === hoje()`. O teto era faseamento (garantir que não existisse `paid` com data futura
     // enquanto `scheduled` não existisse) e saiu no commit em que `scheduled` nasceu. A bandeja

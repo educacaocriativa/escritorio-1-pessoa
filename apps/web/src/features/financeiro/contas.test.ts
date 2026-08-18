@@ -643,6 +643,17 @@ describe("Story 8.18 — avisoDestinoAplicacao: obrigatório, e silêncio no res
 describe("Story 8.18 — impedimentoDaTransferencia: o que a tela consegue antecipar, e só isso", () => {
   const a = conta({ id: "a", kind: KIND_CHECKING });
   const b = conta({ id: "b", kind: KIND_SAVINGS });
+  // ⚠️ **`hojeISO()` e `Date.now()` ficam aqui de propósito — não é a classe da #120/#129.**
+  // `impedimentoDaTransferencia` compara duas STRINGS `YYYY-MM-DD` e resolve "hoje" chamando
+  // `hojeISO()` ela mesma; não existe fuso de tenant nesta função (nem `useFuso`, nem `today(tz)`),
+  // então não há dois relógios a confundir e um fuso distante não teria o que matar. Congelar o
+  // relógio aqui só amarraria o teste a um literal sem ganhar poder de detecção.
+  //
+  // ⚠️ O que estas asserções NÃO aguentam: se um dia `hojeISO()` virar o dia do TENANT (a dívida
+  // anotada em `cobrancas/CobrancasPage.test.tsx`), o `amanha`/`ontem` derivados de UTC abaixo
+  // passam a poder empatar com o "hoje" da função — num tenant a leste, o dia UTC seguinte JÁ é
+  // hoje. Quem pagar aquela dívida derruba estes dois testes e tem de derivar as bordas do mesmo
+  // relógio que a função passar a usar. É o aviso, não um convite a "consertar" antes da hora.
   const HOJE = hojeISO();
 
   it("sem as duas contas, pede as duas", () => {
