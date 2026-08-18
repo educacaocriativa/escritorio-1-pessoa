@@ -205,3 +205,15 @@ class PaymentQueueOut(BaseModel):
     # 60 dias continua sendo um compromisso, e escondê-lo é a omissão que o AC7 combate.
     agendadas: list[PayableOut] = []
     summary: PaymentQueueSummary
+
+
+class PayablesPageOut(BaseModel):
+    """Uma página da listagem de contas a pagar — `items` + o `total` REAL do recorte.
+
+    O `total` não é enfeite: sem ele a tela não consegue dizer "mostrando 50 de 213", e o
+    truncamento volta a ser silencioso — que foi exatamente o defeito que esta spec corrigiu.
+    Ele conta o recorte inteiro, ignorando `limit`/`offset`.
+    """
+
+    items: list[PayableOut]
+    total: int

@@ -153,7 +153,7 @@ def test_queue_beyond_30_days_excluded(client: TestClient, headers):
     for bucket in ("atrasados", "hoje", "proximos_7_dias", "proximos_30_dias"):
         assert q[bucket] == []
     # segue existente na lista completa de Contas a Pagar (não é a fila que o some)
-    assert len(client.get("/payables/bills", headers=headers).json()) == 1
+    assert len(client.get("/payables/bills", headers=headers).json()["items"]) == 1
 
 
 def test_queue_summary_counts_and_sums(client: TestClient, headers):

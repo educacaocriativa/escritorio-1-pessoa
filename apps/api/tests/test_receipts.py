@@ -406,7 +406,7 @@ def test_new_bill_conta_e_obrigatoria_apenas_quando_da_baixa(
     if mark_paid:
         assert resp.status_code == 422, resp.text
         # A conta NÃO foi criada — a validação acontece antes de qualquer escrita.
-        assert client.get("/payables/bills", headers=headers).json() == []
+        assert client.get("/payables/bills", headers=headers).json()["items"] == []
         assert [i["id"] for i in client.get("/payables/receipts", headers=headers).json()] == [rid]
     else:
         assert resp.status_code == 201, resp.text
@@ -558,7 +558,7 @@ def test_new_bill_recusa_valor_zero(client: TestClient, headers, conta_primaria)
 def test_create_bill_continua_funcionando_apos_refactor(client: TestClient, headers):
     """Guarda de regressão do refactor build_payable/create_payable."""
     b = _bill(client, headers, due_date="2099-06-01", recurrence="monthly", recurrence_count=3)
-    todas = client.get("/payables/bills", headers=headers).json()
+    todas = client.get("/payables/bills", headers=headers).json()["items"]
     assert len([x for x in todas if x["recurrence_group"] == b["recurrence_group"]]) == 3
 
 
