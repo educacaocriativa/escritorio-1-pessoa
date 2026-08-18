@@ -1,10 +1,26 @@
 import type { ApiError, AuthToken, GoogleCalendarStatus } from "@e1p/shared-types";
 import axios, { AxiosError } from "axios";
 
+/**
+ * Serialização de parâmetros de LISTA na forma que o FastAPI lê.
+ *
+ * ⚠️ **`indexes: null` não é preferência de estilo — sem ele o filtro é ignorado em silêncio.**
+ * O padrão do axios serializa `{status: ["open","scheduled"]}` como
+ * `status[]=open&status[]=scheduled`. O FastAPI declara `status: list[str] | None =
+ * Query(default=None)` e só reconhece a forma REPETIDA (`status=open&status=scheduled`); com
+ * colchetes ele não enxerga o parâmetro, recebe `None` e devolve a lista **sem filtro nenhum** —
+ * a tela pede "o que eu devo" e recebe pago e cancelado junto. Sem erro, sem sintoma.
+ *
+ * Medido em `e2e/pagar-contrato.spec.ts`, que é o único lugar onde axios de verdade roda: o pytest
+ * monta a URL crua já na forma certa e o vitest assere o objeto `params` antes de serializar.
+ */
+const PARAMS_REPETIDOS = { indexes: null } as const;
+
 /** Cliente HTTP único da aplicação. Em dev o Vite faz proxy de /api -> :8000. */
 export const api = axios.create({
   baseURL: "/api",
   headers: { "Content-Type": "application/json" },
+  paramsSerializer: PARAMS_REPETIDOS,
 });
 
 // Injeta o token salvo em toda requisição.
@@ -18,6 +34,7 @@ api.interceptors.request.use((config) => {
 export const publicApi = axios.create({
   baseURL: "/api",
   headers: { "Content-Type": "application/json" },
+  paramsSerializer: PARAMS_REPETIDOS,
 });
 
 /**
