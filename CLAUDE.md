@@ -87,7 +87,7 @@ certo, e a tela estava errada. **Nenhum teste de `apps/web/e2e/` pode aferir cla
   prop `testId` do `components/Modal.tsx`, e ela é aplicada na **caixa** — cabeçalho e barra de ação
   inclusive. Recorte no `children` deixa os dois FORA da conta **por construção**: foi assim que
   `textoForaDaTela` devolveu **lista vazia** com o "Fechar" em **x=698** numa tela de 360 (#119).
-  Medidos hoje (**10 modais em 7 arquivos**): `EscolherHorario` (`ficha-marcar-360`),
+  Medidos hoje (**10 modais em 6 arquivos**): `EscolherHorario` (`ficha-marcar-360`),
   `AccountModal` (`modal-conta-360`), o detalhe de evento da Agenda (`agenda-evento-360`),
   "Declarar saldo"/"Lançar movimento" (`contas-modais-360`), "Movimentar: {item.name}" do Estoque
   (`estoque-movimentar-360`), "Vender: {product.name}" dos Produtos (`produtos-vender-360`) e
@@ -119,14 +119,19 @@ certo, e a tela estava errada. **Nenhum teste de `apps/web/e2e/` pode aferir cla
   (c) o rótulo `sr-only` do valor é `position: absolute` e, sem ancestral posicionado, **não era
   recortado** pelo deslizador `overflow-x-auto` da tabela — a PÁGINA rolava de lado até **879px**
   numa viewport de 360, por um rótulo que ninguém vê. Conserto: `relative` no deslizador.
-- **Dívida:** a medição de modal cobre **7 dos 18** arquivos que usam `Modal` (10 dos 35 modais).
-  Os de título digitado pelo dono estão todos medidos; o que falta tem título fixo e risco menor —
-  `PlatformUsers` (4), `PagarPage` (3), `CobrancasPage` (3), `CrmPage` (2), `InvestimentosPage` (2),
-  `SitesPage`, `EscolhaDaBaixa`, `PlanoContasPage`, `FinanceiroPage`, `CentrosCustoPage`,
-  `CockpitPage`, `NewEventModal`, `IdleWarningModal`. Segue de pé a dívida da `ComprovantePage`
-  (#130): o `ALTURA_DA_BARRA` do `baixa.ts` tem seis mutantes sobreviventes que **encolhem** a
-  barra, nenhum unit test fecha (o número é medida do DOM) e aquela tela não está entre as
-  medidas.
+- **Dívida:** a medição de modal cobre **6 dos 19** arquivos que usam `Modal` — **10 dos 35
+  modais**. Os de título **digitado pelo dono** estão todos medidos; os **25 que faltam** têm
+  título fixo e risco menor: `PlatformUsers` (4), `PagarPage` (3), `CobrancasPage` (3), `CrmPage`
+  (2), `InvestimentosPage` (2), `ProdutosPage` (2 dos 3), `EstoquePage` (1 de 2), `SitesPage`,
+  `EscolhaDaBaixa`, `PlanoContasPage`, `FinanceiroPage`, `CentrosCustoPage`, `CockpitPage`,
+  `NewEventModal` e `IdleWarningModal`.
+  ⚠️ **O denominador "18 arquivos" de #123/#130 estava errado, e o erro é reprodutível:**
+  `components/IdleWarningModal.tsx` importa `./Modal` por caminho **relativo** e escapa de um
+  `grep components/Modal`. São **19**. O numerador de 35 modais sempre o incluiu — ou seja, os dois
+  números nunca fecharam entre si. Conte `<Modal` para o total, nunca só o import.
+  Segue de pé a dívida da `ComprovantePage` (#130): o `ALTURA_DA_BARRA` do `baixa.ts` tem seis
+  mutantes sobreviventes que **encolhem** a barra, nenhum unit test fecha (o número é medida do
+  DOM) e aquela tela não está entre as medidas.
 - ⚠️ **O CI não tinha NENHUM job de frontend até esta data** — o `vitest` nunca rodou nele, e nenhuma
   medição de tela era exigida em PR. O job `frontend` (typecheck + vitest + playwright) fecha isso.
 - ⚠️ **O job roda Node 24, e a versão NÃO é detalhe de infraestrutura.** A raiz declara
