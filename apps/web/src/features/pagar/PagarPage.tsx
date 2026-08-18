@@ -1,4 +1,4 @@
-import type { Contract, Payable, PayablesSummary } from "@e1p/shared-types";
+import type { Contract, Payable, PayablesPage, PayablesSummary } from "@e1p/shared-types";
 import { Copy, Paperclip } from "lucide-react";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { Link } from "react-router-dom";
@@ -13,10 +13,15 @@ import CostCenterSelect from "../financeiro/CostCenterSelect";
 import { type ChartAccount, GRUPOS_DRE } from "../financeiro/planoContas";
 import { DialogDeBaixa } from "./EscolhaDaBaixa";
 import { camposDaCopia, type CamposDaConta } from "./duplicar";
-import { formatDay } from "../../lib/datetime";
+import { formatDay, today } from "../../lib/datetime";
+import { useFuso } from "../../store/auth";
+import { type FiltroPagar, filtroPadrao, paraQuery } from "./filtros";
 
 /** Grupos DRE cabíveis numa DESPESA (Contas a Pagar nunca lança em Receita). */
 const EXPENSE_GROUPS = GRUPOS_DRE.filter((g) => g !== "RECEITA");
+
+/** Tamanho da página. 50 cabe numa rolagem curta e mantém o "carregar mais" barato. */
+const PAGINA = 50;
 
 /** Seletor "Vincular a contrato" (Story 5.4) — opcional; vazio = bucket "Empresa" (overhead). */
 function ContractSelect({ value, onChange }: { value: string; onChange: (v: string) => void }) {
@@ -100,14 +105,33 @@ export default function PagarPage() {
   const [pagando, setPagando] = useState<Payable | null>(null);
   // Comprovantes que chegaram pelo celular e ainda não foram vinculados a nenhuma conta.
   const [inbox, setInbox] = useState<{ id: string }[]>([]);
+  const fuso = useFuso();
+  // O `setFiltro` entra na Task 6, junto com a barra de recorte que o aciona.
+  const [filtro] = useState<FiltroPagar>(() => filtroPadrao(today(fuso)));
+  const [total, setTotal] = useState(0);
+  const [offset, setOffset] = useState(0);
+  const [carregando, setCarregando] = useState(false);
 
-  const load = useCallback(async () => {
-    const [s, b] = await Promise.all([
-      api.get<PayablesSummary>("/payables/summary"),
-      api.get<Payable[]>("/payables/bills"),
-    ]);
-    setSummary(s.data);
-    setBills(b.data);
+  const load = useCallback(async (proximoOffset = 0) => {
+    setCarregando(true);
+    let b: { data: PayablesPage };
+    try {
+      const [s, pagina] = await Promise.all([
+        api.get<PayablesSummary>("/payables/summary"),
+        api.get<PayablesPage>("/payables/bills", {
+          params: paraQuery(filtro, PAGINA, proximoOffset),
+        }),
+      ]);
+      b = pagina;
+      setSummary(s.data);
+    } finally {
+      setCarregando(false);
+    }
+    // `proximoOffset > 0` é "carregar mais": ANEXA. Substituir aqui é o erro clássico de
+    // paginação, e ele passa despercebido porque a primeira página sempre parece certa.
+    setBills((antes) => (proximoOffset === 0 ? b.data.items : [...antes, ...b.data.items]));
+    setTotal(b.data.total);
+    setOffset(proximoOffset);
     // Rótulos são só um complemento de exibição — se o usuário não tiver acesso a esses módulos
     // (require_module), a lista de contas a pagar continua funcionando normalmente.
     const [ca, cc] = await Promise.all([
@@ -121,7 +145,7 @@ export default function PagarPage() {
       .get<{ id: string }[]>("/payables/receipts")
       .catch(() => ({ data: [] as { id: string }[] }));
     setInbox(pend.data);
-  }, []);
+  }, [filtro]);
 
   useEffect(() => {
     load();
@@ -304,6 +328,24 @@ export default function PagarPage() {
             </tbody>
           </table>
         )}
+
+        {/* A contagem aparece SEMPRE, não só quando trunca: é ela que torna o corte visível
+            antes de o dono precisar dele. O defeito que esta tela tinha não era ter um teto —
+            era o teto não se anunciar. */}
+        <div className="flex flex-wrap items-center justify-between gap-3 border-t border-neutral-100 px-4 py-3">
+          <p className="text-xs text-neutral-500">
+            Mostrando {bills.length} de {total}
+          </p>
+          {bills.length < total && (
+            <button
+              onClick={() => load(offset + PAGINA)}
+              disabled={carregando}
+              className="min-h-[44px] rounded-pill px-4 text-sm font-medium text-primary-600 hover:bg-primary-50 disabled:opacity-50"
+            >
+              {carregando ? "Carregando…" : "Carregar mais"}
+            </button>
+          )}
+        </div>
       </div>
 
       {/* A baixa passa por aqui desde a Story 8.13: a conta bancária de onde o dinheiro saiu é
