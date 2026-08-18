@@ -87,9 +87,11 @@ certo, e a tela estava errada. **Nenhum teste de `apps/web/e2e/` pode aferir cla
   prop `testId` do `components/Modal.tsx`, e ela é aplicada na **caixa** — cabeçalho e barra de ação
   inclusive. Recorte no `children` deixa os dois FORA da conta **por construção**: foi assim que
   `textoForaDaTela` devolveu **lista vazia** com o "Fechar" em **x=698** numa tela de 360 (#119).
-  Medidos hoje: `EscolherHorario` (`ficha-marcar-360`), `AccountModal` (`modal-conta-360`), o
-  detalhe de evento da Agenda (`agenda-evento-360`) e "Declarar saldo"/"Lançar movimento"
-  (`contas-modais-360`).
+  Medidos hoje (**10 modais em 7 arquivos**): `EscolherHorario` (`ficha-marcar-360`),
+  `AccountModal` (`modal-conta-360`), o detalhe de evento da Agenda (`agenda-evento-360`),
+  "Declarar saldo"/"Lançar movimento" (`contas-modais-360`), "Movimentar: {item.name}" do Estoque
+  (`estoque-movimentar-360`), "Vender: {product.name}" dos Produtos (`produtos-vender-360`) e
+  "Transferir"/"Editar movimento"/"Ignorar movimento" (`contas-movimento-360`).
 - ⚠️ **`scrollWidth` NÃO vê o defeito do título — a BORDA vê.** Sem `min-w-0`, o `<h2>` é item de flex
   com `min-width: auto`: ele **cresce** em vez de transbordar. Com o conserto do #119 revertido e
   medido, `scrollWidth === clientWidth` seguia **verde** enquanto a borda direita do título ia a
@@ -102,9 +104,29 @@ certo, e a tela estava errada. **Nenhum teste de `apps/web/e2e/` pode aferir cla
   de falha oposto (**verde** contra código alheio) seria indistinguível de aprovação. Agora
   `reuseExistingServer` é **`false` sempre**: porta ocupada vira erro alto em vez de medição falsa.
   Para rodar duas worktrees ao mesmo tempo: `E2E_PORT=5373 pnpm --filter @e1p/web e2e`.
-- **Dívida:** a medição de modal cobre **4 dos 18** arquivos que usam `Modal` (5 dos 35 modais). Os
-  dois de maior exposição ainda sem medida são os de título digitado pelo dono: `EstoquePage`
-  (`Movimentar: {item.name}`) e `ProdutosPage` (`Vender: {product.name}`).
+- ⚠️ **O controle positivo é parte do teste, não cortesia — e ele MUDA com o título** (#130).
+  Modal de título **digitado pelo dono**: remover `min-w-0 break-words` do `Modal.tsx` tem de deixar
+  o spec **vermelho**, restaurar (por CÓPIA do arquivo, nunca `git checkout`) tem de devolver o
+  verde. Medido em 18/08: "Movimentar" pôs o "Fechar" em **x+w=837,1** e o título em **785,1**
+  contra uma caixa que acaba em **344,5**; "Vender", **806,2** e **798,4**. Modal de título
+  **constante** NÃO fica vermelho com essa mutação — medido nos três da `ContasSaldosPage`, os
+  quatro testes seguiram verdes —, e ali o controle é outro: **isca plantada no cabeçalho** (e na
+  barra `sticky`, quando houver), exigida na lista de cortes.
+- **A régua achou três defeitos reais na `ContasSaldosPage` ao ser instalada** (#130), e os três já
+  estão consertados: (a) o resumo da transferência põe os dois nomes de conta em `<strong>` — sem
+  `break-words` vazavam **153,8px** e **118,9px** da caixa; (b) a `raw_description` do extrato chega
+  **colada** ("PIXENVIADOCPF12345678900…") e vazava **326px** da caixa do "Editar movimento";
+  (c) o rótulo `sr-only` do valor é `position: absolute` e, sem ancestral posicionado, **não era
+  recortado** pelo deslizador `overflow-x-auto` da tabela — a PÁGINA rolava de lado até **879px**
+  numa viewport de 360, por um rótulo que ninguém vê. Conserto: `relative` no deslizador.
+- **Dívida:** a medição de modal cobre **7 dos 18** arquivos que usam `Modal` (10 dos 35 modais).
+  Os de título digitado pelo dono estão todos medidos; o que falta tem título fixo e risco menor —
+  `PlatformUsers` (4), `PagarPage` (3), `CobrancasPage` (3), `CrmPage` (2), `InvestimentosPage` (2),
+  `SitesPage`, `EscolhaDaBaixa`, `PlanoContasPage`, `FinanceiroPage`, `CentrosCustoPage`,
+  `CockpitPage`, `NewEventModal`, `IdleWarningModal`. Segue de pé a dívida da `ComprovantePage`
+  (#130): o `ALTURA_DA_BARRA` do `baixa.ts` tem seis mutantes sobreviventes que **encolhem** a
+  barra, nenhum unit test fecha (o número é medida do DOM) e aquela tela não está entre as
+  medidas.
 - ⚠️ **O CI não tinha NENHUM job de frontend até esta data** — o `vitest` nunca rodou nele, e nenhuma
   medição de tela era exigida em PR. O job `frontend` (typecheck + vitest + playwright) fecha isso.
 - ⚠️ **O job roda Node 24, e a versão NÃO é detalhe de infraestrutura.** A raiz declara
