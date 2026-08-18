@@ -83,6 +83,28 @@ certo, e a tela estava errada. **Nenhum teste de `apps/web/e2e/` pode aferir cla
 - **As fixtures são de PIOR CASO PLAUSÍVEL** (nome longo de banco, valor de 6 dígitos, título de
   grupo comprido), nas formas reais de `packages/shared-types`. Dado curto sempre cabe: medir com ele
   é medir uma tela que não existe.
+- **Modal medido = `testId` na CAIXA** (#123, desde 2026-08-18). O recorte da varredura entra pela
+  prop `testId` do `components/Modal.tsx`, e ela é aplicada na **caixa** — cabeçalho e barra de ação
+  inclusive. Recorte no `children` deixa os dois FORA da conta **por construção**: foi assim que
+  `textoForaDaTela` devolveu **lista vazia** com o "Fechar" em **x=698** numa tela de 360 (#119).
+  Medidos hoje: `EscolherHorario` (`ficha-marcar-360`), `AccountModal` (`modal-conta-360`), o
+  detalhe de evento da Agenda (`agenda-evento-360`) e "Declarar saldo"/"Lançar movimento"
+  (`contas-modais-360`).
+- ⚠️ **`scrollWidth` NÃO vê o defeito do título — a BORDA vê.** Sem `min-w-0`, o `<h2>` é item de flex
+  com `min-width: auto`: ele **cresce** em vez de transbordar. Com o conserto do #119 revertido e
+  medido, `scrollWidth === clientWidth` seguia **verde** enquanto a borda direita do título ia a
+  **894px** e o "Fechar" a **946px** numa viewport de 360. Mede-se `boundingBox` do título contra a
+  borda da CAIXA; `scrollWidth` fica como segunda metade, nunca como a única.
+- ⚠️ **A 5273 colide entre WORKTREES do próprio e1p, e isso já mediu o branch errado.** Com
+  `reuseExistingServer: !CI`, um Vite de OUTRO checkout na 5273 fazia o Playwright **reusar** aquele
+  servidor e medir o código do outro branch em silêncio: em 18/08/2026, **35 dos 41** testes
+  vermelhos com `getByTestId` "não encontrado" para um `data-testid` escrito no arquivo — e o modo
+  de falha oposto (**verde** contra código alheio) seria indistinguível de aprovação. Agora
+  `reuseExistingServer` é **`false` sempre**: porta ocupada vira erro alto em vez de medição falsa.
+  Para rodar duas worktrees ao mesmo tempo: `E2E_PORT=5373 pnpm --filter @e1p/web e2e`.
+- **Dívida:** a medição de modal cobre **4 dos 18** arquivos que usam `Modal` (5 dos 35 modais). Os
+  dois de maior exposição ainda sem medida são os de título digitado pelo dono: `EstoquePage`
+  (`Movimentar: {item.name}`) e `ProdutosPage` (`Vender: {product.name}`).
 - ⚠️ **O CI não tinha NENHUM job de frontend até esta data** — o `vitest` nunca rodou nele, e nenhuma
   medição de tela era exigida em PR. O job `frontend` (typecheck + vitest + playwright) fecha isso.
 - ⚠️ **O job roda Node 24, e a versão NÃO é detalhe de infraestrutura.** A raiz declara

@@ -1,6 +1,6 @@
 import { expect, test } from "@playwright/test";
 import { mockarApi } from "./support/api";
-import { alvosPequenos } from "./support/medidas";
+import { alvosPequenos, medirPagina, textoForaDaTela } from "./support/medidas";
 import { semearSessao } from "./support/sessao";
 
 /**
@@ -65,4 +65,45 @@ test("nenhum BOTÃO do modal fica abaixo do mínimo tocável", async ({ page }) 
     a.descricao.startsWith("button"),
   );
   expect(pequenos).toEqual([]);
+});
+
+test("nada da CAIXA do cadastro existe só depois de rolar de lado", async ({ page }) => {
+  // Faltava ATÉ O #123: este spec recortava o overlay e só chamava `alvosPequenos` — nunca mediu
+  // vazamento de texto. A varredura agora é recortada pela CAIXA (`testId` do `Modal`), que é o
+  // recorte que inclui o cabeçalho e a barra de ação; recorte no `children` foi o defeito de
+  // origem do #119.
+  expect(await textoForaDaTela(page, '[data-testid="modal-conta"]')).toEqual([]);
+  expect((await medirPagina(page)).larguraDaPagina).toBe(360);
+
+  // E também no estado que faz a caixa crescer: "Não sei o saldo agora" troca o campo de saldo por
+  // um parágrafo de três linhas e é o caminho que a Story 8.21 introduziu.
+  await page.getByText("Não sei o saldo agora").click();
+  expect(await textoForaDaTela(page, '[data-testid="modal-conta"]')).toEqual([]);
+  expect((await medirPagina(page)).larguraDaPagina).toBe(360);
+});
+
+test("a régua enxerga vazamento no CABEÇALHO e na BARRA DE AÇÃO", async ({ page }) => {
+  // O controle positivo deste modal, e ele é diferente do `agenda-evento-360.spec.ts` de
+  // propósito.
+  //
+  // ⚠️ Aqui o título é CONSTANTE ("Nova conta" / "Editar conta"), então remover `min-w-0
+  // break-words` do `Modal.tsx` — o defeito do #119 — **não** deixa este spec vermelho: não há
+  // palavra do dono para não caber. Medido, não suposto. O que este modal precisa provar é a
+  // outra metade do #119: que as duas regiões que o recorte antigo excluía por construção — o
+  // cabeçalho e a barra de ação `sticky` — estão DENTRO da conta. Por isso a isca é plantada nas
+  // duas, e as duas têm de aparecer.
+  const caixa = page.getByTestId("modal-conta");
+  await caixa.evaluate((box) => {
+    const isca = (marca: string) => {
+      const p = document.createElement("p");
+      p.textContent = marca.repeat(120);
+      return p;
+    };
+    box.querySelector("h2")?.after(isca("x"));
+    box.querySelector(".sticky")?.append(isca("y"));
+  });
+
+  const cortes = await textoForaDaTela(page, '[data-testid="modal-conta"]');
+  expect(cortes.filter((c) => c.texto.startsWith("x")).length).toBe(1);
+  expect(cortes.filter((c) => c.texto.startsWith("y")).length).toBe(1);
 });
