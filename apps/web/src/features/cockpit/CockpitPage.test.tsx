@@ -20,11 +20,20 @@ vi.mock("../../lib/api", () => ({
 
 // CockpitPage usa useAuth() (lança sem AuthProvider). Mockamos o store para não montar o provider
 // (que registra um interceptor no `api` real — desnecessário e ruidoso no teste). `user` pode ser null.
+// O fuso do TENANT é trocável por teste (mesmo modelo de `NewEventModal.test.tsx`). O
+// `vitest.config.ts` fixa o fuso da MÁQUINA em America/Sao_Paulo; enquanto o tenant mockado for
+// esse mesmo valor, `today(fuso)` e `localYmd(new Date())` devolvem o MESMO dia por construção, e
+// um teste chamado "no fuso do tenant" passa mesmo com a tela lendo o fuso do NAVEGADOR.
+let fusoDoTenant = "America/Sao_Paulo";
+// Tóquio (UTC+9, sem horário de verão) está 12h à frente do runner: sob ele os dois caminhos
+// discordam, inclusive sobre que DIA é. É o único jeito de a asserção poder falhar.
+const FUSO_DISTANTE = "Asia/Tokyo";
+
 vi.mock("../../store/auth", () => ({
   useAuth: () => ({ user: null }),
   // O Cockpit pede `/cockpit/summary?day=` com o dia NO FUSO DO TENANT — sem isto o mock
   // derruba a tela antes de qualquer asserção.
-  useFuso: () => "America/Sao_Paulo",
+  useFuso: () => fusoDoTenant,
 }));
 
 const EMPTY = {
@@ -52,6 +61,7 @@ function renderPage() {
 beforeEach(() => {
   vi.mocked(api.get).mockReset();
   vi.mocked(api.post).mockReset();
+  fusoDoTenant = "America/Sao_Paulo";
 });
 
 describe("CockpitPage — Cobrar com IA e resiliência (Story 7.15, Task 3)", () => {
@@ -107,10 +117,22 @@ describe("CockpitPage — Cobrar com IA e resiliência (Story 7.15, Task 3)", ()
     expect(screen.getByText("Taxa de Conversão")).toBeInTheDocument();
   });
 
+  /** O `?day=` efetivamente pedido ao servidor. */
+  function diaPedido() {
+    return vi
+      .mocked(api.get)
+      .mock.calls.find(([u]) => String(u).startsWith("/cockpit/summary"))?.[0];
+  }
+
   it("pede o resumo do dia NO FUSO DO TENANT, não do dia UTC", async () => {
     // Às 23:30 em São Paulo já é o dia seguinte em UTC. O código antigo montava o parâmetro com
     // `new Date().toISOString().slice(0, 10)` e pedia ao servidor o resumo do dia SEGUINTE —
     // toda noite, das 21h à meia-noite, o Cockpit mostrava o dia errado.
+    //
+    // ⚠️ Este teste prova TENANT ≠ UTC, e SÓ isso: o tenant aqui é o mesmo fuso do runner, então
+    // ele não distingue "dia do tenant" de "dia do navegador" — o teste irmão logo abaixo é quem
+    // faz essa outra prova. Não "conserte" este trocando o fuso: a asserção UTC precisa de um
+    // tenant a OESTE de Greenwich para existir.
     //
     // A data é deliberadamente distante de hoje: se os fake timers não pegassem, a asserção
     // cairia na data real e o teste falharia em vez de passar por engano.
@@ -121,10 +143,26 @@ describe("CockpitPage — Cobrar com IA e resiliência (Story 7.15, Task 3)", ()
     renderPage();
 
     await waitFor(() => expect(api.get).toHaveBeenCalled());
-    const url = vi
-      .mocked(api.get)
-      .mock.calls.find(([u]) => String(u).startsWith("/cockpit/summary"))?.[0];
-    expect(url).toBe("/cockpit/summary?day=2027-03-14"); // e NÃO ?day=2027-03-15 (o dia UTC)
+    expect(diaPedido()).toBe("/cockpit/summary?day=2027-03-14"); // e NÃO ?day=2027-03-15 (o dia UTC)
+
+    vi.useRealTimers();
+  });
+
+  it("pede o dia do TENANT, não o do NAVEGADOR", async () => {
+    // Tenant em Tóquio (UTC+9), máquina em São Paulo (UTC−3, fixado pelo `vitest.config.ts`).
+    // 14/03/2027 22:30Z é 15/03 07:30 em Tóquio, 14/03 19:30 em São Paulo e 14/03 em UTC — os
+    // três discordam, e só quem lê pelo fuso do TENANT pede o dia 15.
+    fusoDoTenant = FUSO_DISTANTE;
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    vi.setSystemTime(new Date("2027-03-14T22:30:00Z"));
+    vi.mocked(api.get).mockResolvedValue({ data: EMPTY } as never);
+
+    renderPage();
+
+    await waitFor(() => expect(api.get).toHaveBeenCalled());
+    // `localYmd(new Date())` (fuso do navegador) e `toISOString().slice(0,10)` (UTC) dariam
+    // ambos 2027-03-14 aqui: as duas mutações morrem nesta linha.
+    expect(diaPedido()).toBe("/cockpit/summary?day=2027-03-15");
 
     vi.useRealTimers();
   });

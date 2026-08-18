@@ -13,9 +13,16 @@ vi.mock("../../lib/api", () => ({
     "Erro inesperado",
 }));
 
+// O fuso do TENANT é trocável por teste (modelo de `NewEventModal.test.tsx`). O `vitest.config.ts`
+// fixa o fuso da MÁQUINA em America/Sao_Paulo: com os dois iguais, a hora do briefing formatada
+// pelo fuso do tenant e lida pelo relógio do navegador coincidem por construção (issue #120).
+let fusoDoTenant = "America/Sao_Paulo";
+// Tóquio (UTC+9, sem horário de verão) está 12h à frente do runner.
+const FUSO_DISTANTE = "Asia/Tokyo";
+
 vi.mock("../../store/auth", () => ({
   useAuth: () => ({ user: { name: "Flávio Kato" } }),
-  useFuso: () => "America/Sao_Paulo",
+  useFuso: () => fusoDoTenant,
 }));
 
 const BRIEFING = {
@@ -66,6 +73,7 @@ beforeEach(() => {
   vi.mocked(api.get).mockReset();
   vi.mocked(api.post).mockReset();
   vi.mocked(api.patch).mockReset();
+  fusoDoTenant = "America/Sao_Paulo";
 });
 
 describe("BriefingPage", () => {
@@ -118,6 +126,23 @@ describe("BriefingPage", () => {
     renderPage();
     await waitFor(() => expect(screen.getByText(/Entrou um pagamento/)).toBeInTheDocument());
     expect(screen.queryByText(/Escrito pela IA/i)).not.toBeInTheDocument();
+  });
+
+  it("carimba a hora do briefing no fuso do TENANT, não no do navegador", async () => {
+    // A tela mostra a hora em que o briefing foi escrito (`formatTime(briefing.created_at, fuso)`)
+    // e, até a issue #120, nenhum teste daqui afirmava nada sobre ela — o mock de `useFuso`
+    // existia só para a tela não quebrar. Com tenant e runner no mesmo fuso, acrescentar a
+    // asserção também não provaria nada.
+    //
+    // Tenant em Tóquio (UTC+9), máquina em São Paulo (UTC−3): 06/08 10:05Z é 19:05 em Tóquio e
+    // 07:05 em São Paulo — e o briefing é da MANHÃ do dono, então trocar os dois é visível.
+    fusoDoTenant = FUSO_DISTANTE;
+    mockGet(BRIEFING);
+    renderPage();
+
+    await waitFor(() => expect(screen.getByText(/Entrou um pagamento/)).toBeInTheDocument());
+    expect(screen.getByText("19:05")).toBeInTheDocument();
+    expect(screen.queryByText("07:05")).not.toBeInTheDocument();
   });
 
   it("falha de rede não deixa a tela em branco — o caminho para o painel continua", async () => {

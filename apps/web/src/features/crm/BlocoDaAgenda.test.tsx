@@ -14,7 +14,16 @@ vi.mock("../../lib/api", () => ({
   apiErrorMessage: () => "Erro inesperado",
 }));
 
-vi.mock("../../store/auth", () => ({ useFuso: () => "America/Sao_Paulo" }));
+// O fuso do TENANT é trocável por teste (modelo de `NewEventModal.test.tsx`). O `vitest.config.ts`
+// fixa o fuso da MÁQUINA em America/Sao_Paulo: com os dois iguais, converter um instante pelo fuso
+// do tenant e lê-lo pelas partes locais do `Date` dá o MESMO resultado, e a asserção de fuso fica
+// estruturalmente incapaz de falhar (§5.1 do CLAUDE.md, a família do `toContain("flex-wrap")`).
+let fusoDoTenant = "America/Sao_Paulo";
+// Tóquio (UTC+9, sem horário de verão) está 12h à frente do runner — sob ele os dois caminhos
+// discordam até sobre que DIA é.
+const FUSO_DISTANTE = "Asia/Tokyo";
+
+vi.mock("../../store/auth", () => ({ useFuso: () => fusoDoTenant }));
 
 const evento = (over: Record<string, unknown> = {}) => ({
   id: "ev-1", tenant_id: "t1", title: "Atendimento", description: "", kind: "atendimento",
@@ -38,6 +47,7 @@ const renderBloco = () => render(<BlocoDaAgenda clientId="cli-1" nome="Loana" />
 beforeEach(() => {
   vi.mocked(api.get).mockReset();
   vi.mocked(api.post).mockReset();
+  fusoDoTenant = "America/Sao_Paulo";
 });
 
 // Em `afterEach`, não no corpo do teste: se uma asserção falhar antes do `useRealTimers()`, os
@@ -93,6 +103,11 @@ describe("BlocoDaAgenda", () => {
     expect(await screen.findByText("Compromisso de hoje")).toBeInTheDocument();
     // Dia inteiro formata pela STRING (`formatDay`), sem `Date` — nunca `formatDateTime`, que
     // trataria a meia-noite UTC como um instante e converteria para o fuso do tenant.
+    //
+    // ⚠️ Aqui o fuso do tenant é o do runner DE PROPÓSITO, e trocá-lo por Tóquio ENFRAQUECERIA a
+    // asserção: este teste prova que a data de calendário NÃO converte, e quem denuncia a
+    // conversão indevida é um fuso NEGATIVO (UTC−3 puxa a meia-noite UTC para 15/08 21:00). Em
+    // Tóquio, 00:00Z vira 09:00 do MESMO dia 16 e a mutação sobreviveria. Não "conserte".
     expect(screen.getByText("16/08/2026")).toBeInTheDocument();
   });
 
@@ -136,6 +151,12 @@ describe("BlocoDaAgenda", () => {
 
     // O seletor sai de cena e o formulário entra com a escolha já feita — o dono não redigita
     // a data que acabou de apontar no calendário.
+    //
+    // ⚠️ Fuso do runner de propósito: este teste é sobre a COSTURA (a escolha atravessa do
+    // seletor para o formulário), não sobre fuso. A prova de que a hora escolhida é a hora de
+    // PAREDE DO TENANT — `instanteNoFuso` + `paraInputLocal`, com tenant em Tóquio — já vive em
+    // `features/agenda/NewEventModal.test.tsx`, no dono da conversão. Trocar o fuso aqui só
+    // trocaria a string esperada por outra igualmente arbitrária e duplicaria aquela prova.
     expect(screen.getByRole("heading", { name: "Novo evento" })).toBeInTheDocument();
     expect(screen.queryByRole("heading", { name: "Marcar com Loana" })).not.toBeInTheDocument();
     expect(screen.getByLabelText("Início")).toHaveValue("2026-08-20T10:00");
@@ -158,17 +179,17 @@ describe("BlocoDaAgenda", () => {
     expect(screen.queryByRole("heading", { name: "Novo evento" })).not.toBeInTheDocument();
   });
 
-  it("formata o horário no fuso do tenant", async () => {
-    // 13:00 UTC em America/Sao_Paulo (UTC−3, sem horário de verão) é 10:00.
-    // ⚠️ Este teste NÃO distingue fuso do tenant de fuso do navegador, e o comentário anterior
-    // dizia que sim ("headless roda em UTC"): `vitest.config.ts` fixa `TZ: "America/Sao_Paulo"`
-    // para a suíte inteira, e o mock de `useFuso` devolve o mesmo valor — com os dois iguais, os
-    // dois caminhos dão o mesmo resultado. Quem quiser essa prova use um fuso de tenant DIFERENTE
-    // do runner, como `grade.test.ts` faz com `FUSO_DISTANTE`.
-    mockar([evento({ starts_at: "2026-08-20T13:00:00Z" })]);
+  it("formata o horário no fuso do TENANT, não no do navegador", async () => {
+    // Tenant em Tóquio (UTC+9), máquina em São Paulo (UTC−3, fixado pelo `vitest.config.ts`).
+    // 20/08 23:00Z é 21/08 08:00 em Tóquio e 20/08 20:00 em São Paulo: os dois caminhos discordam
+    // na HORA e no DIA, então a asserção abaixo só passa lendo pelo fuso do tenant.
+    fusoDoTenant = FUSO_DISTANTE;
+    mockar([evento({ starts_at: "2026-08-20T23:00:00Z" })]);
     renderBloco();
 
-    expect(await screen.findByText("20/08/2026 10:00")).toBeInTheDocument();
+    expect(await screen.findByText("21/08/2026 08:00")).toBeInTheDocument();
+    // O que `localYmd`/`toLocaleString` sem `timeZone` mostrariam — o relógio de quem abriu a tela.
+    expect(screen.queryByText("20/08/2026 20:00")).not.toBeInTheDocument();
   });
 
   it("falha de rede vira aviso, não derruba a ficha", async () => {

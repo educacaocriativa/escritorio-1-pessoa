@@ -10,7 +10,15 @@ vi.mock("../../lib/api", () => ({
   apiErrorMessage: () => "Erro inesperado",
 }));
 
-vi.mock("../../store/auth", () => ({ useFuso: () => "America/Sao_Paulo" }));
+// O fuso do TENANT é trocável por teste (modelo de `NewEventModal.test.tsx`). O `vitest.config.ts`
+// fixa o fuso da MÁQUINA em America/Sao_Paulo: com os dois iguais, `formatTime(m.created_at, fuso)`
+// e ler o relógio do navegador dão a MESMA hora por construção, e nenhuma asserção consegue
+// distinguir um do outro (issue #120).
+let fusoDoTenant = "America/Sao_Paulo";
+// Tóquio (UTC+9, sem horário de verão) está 12h à frente do runner.
+const FUSO_DISTANTE = "Asia/Tokyo";
+
+vi.mock("../../store/auth", () => ({ useFuso: () => fusoDoTenant }));
 
 const conversa = (chat_id: string, title: string) => ({
   chat_id, kind: "direct", title, phone: "5511999998888",
@@ -55,6 +63,7 @@ const renderBloco = () =>
 // `url.startsWith(...)` no `mockar`. Mesmo padrão de `ConversasPage.test.tsx`/`ClientTimeline.test.tsx`.
 beforeEach(() => {
   vi.mocked(api.get).mockReset();
+  fusoDoTenant = "America/Sao_Paulo";
 });
 
 describe("BlocoDaConversa", () => {
@@ -63,6 +72,23 @@ describe("BlocoDaConversa", () => {
     renderBloco();
     expect(await screen.findByText("Boa noite")).toBeInTheDocument();
     expect(screen.getByText("Oi Ju, tudo bem?")).toBeInTheDocument();
+  });
+
+  it("carimba a hora da mensagem no fuso do TENANT, não no do navegador", async () => {
+    // O bloco mostra a hora de cada bolha (`formatTime(m.created_at, fuso)`) e, até a issue #120,
+    // NENHUM teste daqui afirmava nada sobre ela — o mock de `useFuso` existia só para a tela não
+    // quebrar. Com tenant e runner no mesmo fuso, acrescentar a asserção também não provaria
+    // nada: 23:10Z daria 20:10 pelos dois caminhos.
+    //
+    // Tenant em Tóquio (UTC+9), máquina em São Paulo (UTC−3): 15/08 23:10Z é 08:10 do dia
+    // SEGUINTE em Tóquio e 20:10 do mesmo dia em São Paulo.
+    fusoDoTenant = FUSO_DISTANTE;
+    mockar([conversa("chat-1", "Ju")]);
+    renderBloco();
+
+    await screen.findByText("Boa noite");
+    expect(screen.getByText("08:10")).toBeInTheDocument();
+    expect(screen.queryByText("20:10")).not.toBeInTheDocument();
   });
 
   it("pede a timeline já cortada no servidor (limit=5), não a inteira", async () => {
