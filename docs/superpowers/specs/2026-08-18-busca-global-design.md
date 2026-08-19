@@ -42,7 +42,8 @@ estaria na tela para onde o clique levou.
 
 Quando essas telas passarem a hidratar o filtro a partir da URL — o que também conserta o botão
 "voltar" e o link compartilhável, independentemente de busca —, incluí-las é acrescentar uma entrada
-por tela.
+por tela. Essa dívida virou a **issue #138**, separada de propósito: ela existe desde o #125 e
+incomoda quem só usa a tela, sem passar por busca nenhuma.
 
 Também fora: busca por tags, correção ortográfica, fuzzy, histórico de buscas recentes, e qualquer
 migration de índice — esta última porque a medição provou que não ajudaria (§5).
@@ -215,6 +216,30 @@ O corte é calculado com **`hoje_do_tenant(db)`** (`settings/service.py:112`).
 Uma letra casa com quase tudo e custaria sete varreduras por tecla. A rota devolve grupos vazios sem
 tocar no banco.
 
+### 6.4 RBAC: a busca não pode contornar `require_module`
+
+A RLS garante que o tenant é o certo. Ela **não** garante que este usuário pode ver este módulo —
+isso é `require_module`, que lê `allowed_modules` do token e existe em toda rota de negócio. Uma
+rota que cruza sete módulos com um guard só passaria por cima dele: um sub-usuário sem acesso a
+Jurídico digitaria três letras e leria títulos de petição.
+
+Cada entrada do registro declara o módulo a que pertence, e o serviço **pula** as entidades cujo
+módulo o usuário não pode ver. O mapa segue os guards que já existem:
+
+| Tipo | Módulo | Onde isso já está escrito |
+|---|---|---|
+| Cliente | `crm` | `crm/router.py:34` |
+| Conversa | `crm` | `whatsapp_inbox/router.py:26` — a caixa de entrada é guardada como CRM |
+| Contrato | `contracts` | `contracts/router.py:26` |
+| Orçamento | `quotes` | `quotes/router.py:25` |
+| Jurídico | `juridico` | `juridico/router.py:22` |
+| Site | `pages` | `pages/router.py:24` |
+| Funil | `funnels` | `funnels/router.py:29` |
+
+A regra de liberação é a mesma de `require_module` e não pode divergir dela: `role == "owner"`, ou
+`allowed_modules` vazio, veem tudo. Copiar o critério em vez de reusá-lo criaria duas definições de
+"pode ver", e elas divergiriam na primeira mudança.
+
 ## 7. O registro de entidades
 
 `apps/api/app/modules/search/registro.py` — uma lista declarativa de sete entradas:
@@ -295,7 +320,8 @@ exige zero. Falha em `main`, e é a régua da entrega.
 
 **`pytest -q` (SQLite):** os sete tipos casando pelo campo prometido; conversa casando pelo nome do
 cliente vinculado; `q` curto não consulta nada; a ordenação de dois degraus dentro do grupo; o corte
-de meses avaliado em fuso NÃO-UTC.
+de meses avaliado em fuso NÃO-UTC; e **um sub-usuário com `allowed_modules=["crm"]` recebendo o
+grupo de clientes e NENHUM grupo de jurídico** (§6.4) — RBAC não pode ser contornado por rota nova.
 
 **`pytest -m rls_e2e` (Docker/Postgres):** dois tenants, o B busca o termo que só existe no A e
 recebe zero, nos sete tipos. Isolamento é segurança — não pode viver só em SQLite, onde a RLS nem
