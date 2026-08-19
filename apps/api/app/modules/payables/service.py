@@ -13,6 +13,7 @@ from app.core.recurrence import advance, occurrences
 # O estado é DERIVADO da data, nunca escolhido (Story 8.14 AC2). O helper é **público e neutro**
 # (`app/core/`) porque a Story 8.15 o consome para `Charge` — **importar, nunca copiar**.
 from app.core.scheduling import janela_de_caixa, status_por_data
+from app.core.textsearch import ESCAPE, padrao_ilike
 from app.db.base import _uuid
 
 # ⚠️ **Duas palavras `scheduled` neste arquivo, e elas NÃO são a mesma coisa.** O `scheduled` da
@@ -322,15 +323,6 @@ def update_payable(db: Session, *, payable_id: str, tenant_id: str, actor: str, 
     return p
 
 
-def _escapa_curinga(termo: str) -> str:
-    """Neutraliza `%` e `_` para que o texto do usuário seja tratado como TEXTO no `ilike`.
-
-    Sem isto, buscar `%` casa com todas as linhas e a busca parece funcionar enquanto não filtra
-    nada — o pior tipo de defeito de busca, porque não tem sintoma.
-    """
-    return termo.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
-
-
 def _filtros(
     stmt,
     *,
@@ -357,11 +349,11 @@ def _filtros(
     if due_to is not None:
         stmt = stmt.where(Payable.due_date <= due_to)
     if q:
-        alvo = f"%{_escapa_curinga(q)}%"
+        alvo = padrao_ilike(q)
         stmt = stmt.where(
             or_(
-                Payable.description.ilike(alvo, escape="\\"),
-                Payable.supplier.ilike(alvo, escape="\\"),
+                Payable.description.ilike(alvo, escape=ESCAPE),
+                Payable.supplier.ilike(alvo, escape=ESCAPE),
             )
         )
     if cost_center_id:

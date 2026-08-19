@@ -317,3 +317,21 @@ def test_update_client(client: TestClient, headers):
     assert resp.status_code == 200
     assert resp.json()["name"] == "Depois"
     assert resp.json()["phone"] == "+5511999999999"
+
+
+def test_busca_do_crm_trata_porcento_como_texto(client: TestClient, headers):
+    """`%` sem escape casa com TODAS as linhas: a busca parece funcionar e não filtra nada.
+
+    Mesmo defeito que o #125 consertou em `payables` — e o pior tipo de defeito de busca, porque
+    não tem sintoma: a tela responde, a lista vem cheia, e ninguém desconfia.
+    """
+    client.post("/crm/clients", json={"name": "Ana Souza"}, headers=headers)
+    client.post("/crm/clients", json={"name": "Bruno Lima"}, headers=headers)
+
+    achou_tudo = client.get("/crm/clients", params={"search": "%"}, headers=headers)
+    achou_ana = client.get("/crm/clients", params={"search": "ana"}, headers=headers)
+
+    assert achou_tudo.status_code == 200
+    assert achou_tudo.json() == [], "buscar '%' deve casar com NADA — é texto, não curinga"
+    # A contraprova: a busca continua funcionando para texto de verdade.
+    assert [c["name"] for c in achou_ana.json()] == ["Ana Souza"]

@@ -24,6 +24,7 @@ from app.core.facts import (
     Fact,
 )
 from app.core.phone import normalize_br
+from app.core.textsearch import ESCAPE, padrao_ilike
 from app.modules.crm.models import (
     DEFAULT_STAGES,
     Client,
@@ -390,8 +391,9 @@ def list_clients(
     if gender is not None:
         stmt = stmt.where(Client.gender == gender)
     if search:
-        like = f"%{search}%"
-        stmt = stmt.where(Client.name.ilike(like))
+        # `padrao_ilike` + `escape`: sem os dois, buscar `%` casa com TODAS as linhas e a busca
+        # parece funcionar enquanto não filtra nada. Mesmo defeito que o #125 achou em payables.
+        stmt = stmt.where(Client.name.ilike(padrao_ilike(search), escape=ESCAPE))
     if tag is not None:
         # Filtro por tag em Python (portável entre SQLite/Postgres). stmt já vem ORDENADO,
         # então a paginação sobre o resultado é determinística. TODO: usar operador JSON
