@@ -180,3 +180,82 @@ def test_cross_tenant_isolation_joao_nao_ve_maria() -> None:
         assert _actors_as_superuser(super_url) == ["joao", "maria"], (
             "superuser deveria enxergar as duas linhas (bypass de RLS)"
         )
+
+
+def _insert_cliente(app_url: str, tenant_id: str, nome: str) -> None:
+    """Insere um cliente do CRM com a GUC do tenant setada — espelha `_insert_audit`."""
+    engine = create_engine(app_url, poolclass=NullPool)
+    try:
+        with engine.connect() as conn:
+            conn.execute(
+                text("SELECT set_config('app.current_tenant_id', :tid, false)"),
+                {"tid": tenant_id},
+            )
+            conn.execute(
+                text(
+                    "INSERT INTO clients (id, tenant_id, name, gender, notes, tags, source, "
+                    "stage_entered_at, created_at, updated_at) "
+                    "VALUES (:id, :tid, :nome, 'unspecified', '', '[]', 'manual', "
+                    "now(), now(), now())"
+                ),
+                {"id": str(uuid4()), "tid": tenant_id, "nome": nome},
+            )
+            conn.commit()
+    finally:
+        engine.dispose()
+
+
+def _busca_pela_otica_de(app_url: str, tenant_id: str, termo: str) -> set[str]:
+    """Roda a busca global como `e1p_app` com a GUC do tenant — RLS real, não SQLite.
+
+    A busca cruza sete tabelas; o `pytest -q` roda SQLite, onde a RLS nem existe. Sem este teste,
+    "a busca não vaza entre tenants" seria opinião.
+    """
+    from sqlalchemy.orm import Session
+
+    from app.modules.search.service import buscar
+
+    engine = create_engine(app_url, poolclass=NullPool)
+    try:
+        with engine.connect() as conn:
+            conn.execute(
+                text("SELECT set_config('app.current_tenant_id', :tid, false)"),
+                {"tid": tenant_id},
+            )
+            conn.commit()
+            with Session(bind=conn) as db:
+                grupos = buscar(db, q=termo, modulos_liberados=[])
+                return {item.titulo for grupo in grupos for item in grupo.itens}
+    finally:
+        engine.dispose()
+
+
+def test_busca_global_nao_atravessa_tenant() -> None:
+    """A busca global não devolve dado de outro tenant — no Postgres real, como `e1p_app`."""
+    with PostgresContainer(
+        "postgres:16-alpine",
+        username=_ROOT_USER,
+        password=_ROOT_PASS,
+        dbname=_DB_NAME,
+        driver="psycopg",
+    ) as pg:
+        host = pg.get_container_host_ip()
+        port = pg.get_exposed_port(5432)
+        super_url = f"postgresql+psycopg://{_ROOT_USER}:{_ROOT_PASS}@{host}:{port}/{_DB_NAME}"
+        app_url = f"postgresql+psycopg://e1p_app:{_APP_PASS}@{host}:{port}/{_DB_NAME}"
+
+        _bootstrap_rls_role(super_url)
+        _run_migrations_as_app(app_url)
+
+        joao_tenant = str(uuid4())
+        maria_tenant = str(uuid4())
+        # Nomes que casam com o MESMO termo: se a RLS falhasse, os dois viriam juntos.
+        _insert_cliente(app_url, joao_tenant, "Ana do Joao")
+        _insert_cliente(app_url, maria_tenant, "Ana da Maria")
+
+        assert _busca_pela_otica_de(app_url, joao_tenant, "ana") == {"Ana do Joao"}, (
+            "a busca do João trouxe a cliente da Maria"
+        )
+        assert _busca_pela_otica_de(app_url, maria_tenant, "ana") == {"Ana da Maria"}, (
+            "a busca da Maria trouxe a cliente do João"
+        )

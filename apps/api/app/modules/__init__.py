@@ -36,6 +36,7 @@ from app.modules.products.router import router as products_router
 from app.modules.quotes.router import public_router as quotes_public_router
 from app.modules.quotes.router import router as quotes_router
 from app.modules.receivables.router import router as receivables_router
+from app.modules.search.router import router as search_router
 from app.modules.settings.router import router as settings_router
 from app.modules.stock.router import router as stock_router
 from app.modules.vima.router import router as vima_router
@@ -74,6 +75,7 @@ ALL_ROUTERS: list[APIRouter] = [
     funnels_router,
     stock_router,
     settings_router,
+    search_router,
     whatsapp_templates_router,
     whatsapp_inbox_router,
     whatsapp_inbox_public_router,

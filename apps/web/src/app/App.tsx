@@ -3,6 +3,7 @@ import { Navigate, Outlet, Route, Routes, useLocation } from "react-router-dom";
 import AdminDashboard from "../features/admin/AdminDashboard";
 import AgendaPage from "../features/agenda/AgendaPage";
 import FirstAccessPage from "../features/auth/FirstAccessPage";
+import BuscaPage from "../features/busca/BuscaPage";
 import LoginPage from "../features/auth/LoginPage";
 import CockpitPage from "../features/cockpit/CockpitPage";
 import ConfiguracoesPage from "../features/config/ConfiguracoesPage";
@@ -75,6 +76,7 @@ export default function App() {
             }
           />
           <Route path="/agenda" element={<AgendaPage />} />
+          <Route path="/busca" element={<BuscaPage />} />
           <Route path="/crm" element={<CrmPage />} />
           <Route path="/crm/clients/:id" element={<ClientDetailPage />} />
           <Route path="/conversas" element={<ConversasPage />} />
