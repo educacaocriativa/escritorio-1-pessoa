@@ -107,6 +107,12 @@ function agendaEvent(overrides: Partial<AgendaEvent> = {}): AgendaEvent {
   // "Hoje" no fuso fixo do runner (America/Sao_Paulo, ver vitest.config.ts) — mesmo fuso que
   // `hojeDoTenant` usa quando não há sessão (fallback FUSO_PADRAO), então o evento cai dentro
   // da grade do mês que a AgendaPage abre por padrão.
+  //
+  // ⚠️ **FICA assim de propósito — não migre para relógio congelado + Tóquio (#120/#129).** Este
+  // `new Date()` monta uma FIXTURE (só precisa cair no mês aberto), não uma expectativa: nenhum
+  // `expect` deste arquivo compara este valor com o que a tela calculou. A prova de que a grade
+  // agrupa pelo dia do TENANT mora em `features/agenda/grade.test.ts`, que é onde o fuso distante
+  // tem o que matar. Trocar o fuso aqui só faria a fixture sair do mês que a tela abre.
   const now = new Date();
   const at = (h: number) =>
     new Date(now.getFullYear(), now.getMonth(), now.getDate(), h, 0, 0).toISOString();
