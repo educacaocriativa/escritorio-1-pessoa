@@ -1,9 +1,10 @@
 import { useCallback, useEffect, useState } from "react";
 import Modal from "../../components/Modal";
 import { api, apiErrorMessage } from "../../lib/api";
+import { today } from "../../lib/datetime";
+import { useFuso } from "../../store/auth";
 import AccountModal from "../financeiro/AccountModal";
 import type { BankAccount } from "../financeiro/contas";
-import { hojeISO } from "../financeiro/contas";
 import {
   acaoCadastrarConta,
   type ContaDeBaixa,
@@ -57,6 +58,8 @@ export interface EscolhaDaBaixaState {
   rotulo: (base: string) => string;
   /** Aviso de data futura (não bloqueia — o 422 do backend é quem recusa). */
   aviso: string | null;
+  /** "Hoje" no fuso do TENANT — o ÚNICO relógio desta escolha (#136). Ver `HOJE_DO_TENANT`. */
+  hoje: string;
   /** Corpo pronto para `POST /pay` e para os dois corpos da bandeja. */
   corpo: () => { bank_account_id: string; paid_on: string };
   /** O cadastro embutido está aberto? */
@@ -75,20 +78,45 @@ export interface EscolhaDaBaixaState {
 }
 
 /**
+ * O `dataPadrao` de quem quer que o campo nasça em **hoje**.
+ *
+ * ⚠️ **Não é "sem default": é "o default é hoje, e quem resolve o hoje é este componente"** — que é
+ * o conserto do defeito 2 da #136. Antes, cada tela montava o próprio hoje e o passava pronto,
+ * enquanto a validação (`avisoDeDataFutura`, `tetoDaDataDeBaixa`) resolvia o dela por dentro: dois
+ * relógios num componente só. Com o tenant em Tóquio a bandeja abria já acusando *"Esta data é no
+ * futuro… será registrada como AGENDADA"* sobre o valor que ela mesma acabara de preencher.
+ *
+ * Passar o sentinela em vez de uma string faz com que **exista uma chamada só** de `today(fuso)`
+ * para o default E para a validação. Não é convenção: é impossível divergir, porque não há um
+ * segundo lugar de onde divergir. Quem passa uma STRING está declarando outra coisa (o `due_date`
+ * da conta, em `PagarPage`/`FilaPagamentos`) — e essa continua sendo uma escolha explícita.
+ */
+export const HOJE_DO_TENANT = null;
+
+/**
  * Carrega as contas ativas, pré-seleciona a primária e guarda a data escolhida.
  *
  * @param dataPadrao data inicial do campo. **`PagarPage`/`FilaPagamentos` passam o `due_date` da
  *   conta** (fundador F10: *"deixar habilitado no vencimento, pois se estiver fazendo retroativo,
- *   pq não deu certo no dia"*); **a bandeja passa hoje**, porque o comprovante chega pelo share
- *   sheet no instante do pagamento (ver a nota em `payables/receipts.py::link_receipt`).
+ *   pq não deu certo no dia"*); **a bandeja, as Cobranças e a ficha do cliente passam
+ *   `HOJE_DO_TENANT`**, porque ali o gesto é um fato observado AGORA (o comprovante chega pelo
+ *   share sheet no instante do pagamento — ver a nota em `payables/receipts.py::link_receipt`).
  */
 export function useEscolhaDaBaixa(
-  dataPadrao: string,
+  dataPadrao: string | typeof HOJE_DO_TENANT,
   vocab: VocabularioDaBaixa = VOCAB_SAIDA,
 ): EscolhaDaBaixaState {
+  // ⚠️ **UM relógio, e ele é o do TENANT** (#136, régua do PR #78 e do CLAUDE.md §5.2). Este é o
+  // único ponto do fluxo de baixa que resolve "hoje": o default do campo, o `aviso` e o teto do
+  // `max` bebem todos daqui. Trocar por `new Date()` local, ou por `toISOString()` (UTC), é
+  // regressão — e os testes de `ComprovantePage`/`CobrancasPage` rodam com o tenant em Tóquio
+  // justamente para que essa troca fique VERMELHA em vez de invisível.
+  const hoje = today(useFuso());
+  const inicial = dataPadrao ?? hoje;
+
   const [contas, setContas] = useState<ContaDeBaixa[]>([]);
   const [contaId, setContaId] = useState("");
-  const [data, setData] = useState(dataPadrao);
+  const [data, setData] = useState(inicial);
   const [cadastrando, setCadastrando] = useState(false);
 
   const recarregar = useCallback(async () => {
@@ -110,10 +138,12 @@ export function useEscolhaDaBaixa(
     recarregar();
   }, [recarregar]);
 
-  // A data padrão muda quando a tela troca de conta a pagar (cada uma tem seu vencimento).
+  // A data padrão muda quando a tela troca de conta a pagar (cada uma tem seu vencimento). Com
+  // `HOJE_DO_TENANT`, `inicial` é o próprio `hoje` — string estável dentro do dia, então o efeito
+  // não redispara a cada render.
   useEffect(() => {
-    setData(dataPadrao);
-  }, [dataPadrao]);
+    setData(inicial);
+  }, [inicial]);
 
   const semConta = contas.length === 0;
   const nomeConta = nomeDaConta(contas, contaId);
@@ -129,7 +159,8 @@ export function useEscolhaDaBaixa(
     nomeConta,
     vocab,
     rotulo: (base: string) => rotuloDaAcao(base, nomeConta, vocab.preposicao),
-    aviso: avisoDeDataFutura(data, hojeISO(), vocab),
+    aviso: avisoDeDataFutura(data, hoje, vocab),
+    hoje,
     corpo: () => ({ bank_account_id: contaId, paid_on: data }),
     cadastrando,
     abrirCadastro: () => setCadastrando(true),
@@ -236,7 +267,7 @@ export function EscolhaDaBaixa({
             // grava a conta como `scheduled`. A chamada FICA (em vez de a linha sumir) porque é
             // ela que documenta a decisão e é a ela que se volta se o teto precisar retornar; um
             // `max` apagado do JSX não deixa rastro nenhum.
-            max={tetoDaDataDeBaixa(hojeISO())}
+            max={tetoDaDataDeBaixa(estado.hoje)}
             aria-label={estado.vocab.ariaData}
             className={campo}
           />
@@ -289,8 +320,9 @@ export function DialogDeBaixa({
   descricao: string;
   valor: string;
   /** Default do campo de data: o `due_date` da conta (AC1/AC7), nunca hoje, nunca `now()`.
-   *  No recebimento fora do trilho (8.15) é **hoje** — o dono está olhando o extrato agora. */
-  dataPadrao: string;
+   *  No recebimento fora do trilho (8.15) é **hoje** — o dono está olhando o extrato agora —, e aí
+   *  se passa `HOJE_DO_TENANT`, nunca um hoje montado pela tela (#136). */
+  dataPadrao: string | typeof HOJE_DO_TENANT;
   onClose: () => void;
   /** Faz o POST. Devolve a promise para o dialog tratar erro/estado — inclusive o 409 acionável. */
   onPago: (corpo: { bank_account_id: string; paid_on: string }) => Promise<void>;

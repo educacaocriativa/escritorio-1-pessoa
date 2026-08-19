@@ -16,6 +16,24 @@ vi.mock("../../lib/api", () => ({
     "Erro inesperado",
 }));
 
+// ── A régua do fuso (CLAUDE.md §5.2, issues #120/#129/#136) ───────────────────────────────────
+//
+// ⚠️ **Este mock era INERTE até a #136 — e a razão de ele existir agora é o próprio conserto.**
+// Enquanto `CobrancasPage` montava o dia com `hojeISO()`, ela não tocava em `store/auth` e mocar o
+// fuso do tenant não mudava nada. Agora o dia vem de `today(useFuso())`, dentro do
+// `useEscolhaDaBaixa` — e sem este mock `useFuso()` cairia no `FUSO_PADRAO`
+// (`America/Sao_Paulo`), que é EXATAMENTE o `TZ` que o `vitest.config.ts` fixa para a máquina. Os
+// dois relógios voltariam a dar a mesma string por construção, a asserção de dia voltaria a ser
+// incapaz de falhar, e o defeito poderia ser reintroduzido sem nenhum teste vermelho.
+//
+// Nada mais de `store/auth` é consumido por esta tela (nem por `DialogDeBaixa`/`AccountModal`,
+// que só usam `useFuso`), então o mock total é seguro.
+let fusoDoTenant = "America/Sao_Paulo";
+/** Tóquio (UTC+9) está 12h à frente do runner — sob ele os dois caminhos discordam sobre o DIA. */
+const FUSO_DISTANTE = "Asia/Tokyo";
+
+vi.mock("../../store/auth", () => ({ useFuso: () => fusoDoTenant }));
+
 const emptySummary = {
   open_cents: 0,
   overdue_cents: 0,
@@ -52,7 +70,11 @@ beforeEach(() => {
 });
 
 // Só um teste congela o relógio; o resto da suíte roda no relógio real e não pode herdá-lo.
-afterEach(() => vi.useRealTimers());
+afterEach(() => {
+  vi.useRealTimers();
+  // Volta ao fuso "coincidente" para não contaminar os testes que não falam de fuso.
+  fusoDoTenant = "America/Sao_Paulo";
+});
 
 describe("CobrancasPage — Nova cobrança (Story 7.5, Task 2)", () => {
   it("caminho feliz: cria cobrança com valor + vencimento; POST com amount_cents coerente", async () => {
@@ -120,21 +142,23 @@ const INSTANTE = "2026-08-17T02:30:00Z";
 /**
  * O dia que esta tela usa como default de "recebi direto na conta".
  *
- * ⚠️ **É o dia do NAVEGADOR, e isso é um achado, não uma escolha desta suíte.** `CobrancasPage`
- * passa `dataPadrao={hojeISO()}`, e `hojeISO` (em `financeiro/contas.ts`) monta a data pelas
- * partes locais de um `Date` — o relógio de quem abriu o navegador. Ela **não** consulta
- * `useFuso()`/`today(fuso)`: a tela não importa nada de `store/auth`, então mocar o fuso do tenant
- * aqui seria um mock inerte. Enquanto o teste montava o esperado do mesmo jeito, essa divergência
- * era invisível — os dois lados eram o mesmo relógio.
+ * ✅ **A dívida foi PAGA (#136), e o literal mudou como o aviso anterior mandava.** Este bloco
+ * dizia: *"é o dia do NAVEGADOR, e isso é um achado; quando alguém pagar a dívida este teste fica
+ * VERMELHO com `expected '2026-08-17'` — troque o literal, em vez de 'consertar' de volta"*. É o
+ * que se fez: `CobrancasPage` passava `dataPadrao={hojeISO()}`, que montava a data pelas partes
+ * locais de um `Date` (o relógio de quem abriu o navegador); agora passa `HOJE_DO_TENANT` e quem
+ * resolve o dia é o `useEscolhaDaBaixa`, com `today(useFuso())` — o mesmo ponto que valida a data.
  *
- * A régua do e1p desde o PR #78 é o fuso do TENANT (`hoje_do_tenant`/`today(fuso)`). Se um dono em
- * viagem abrir a tela, o "dia em que o dinheiro caiu" vem do fuso do hotel, não do da empresa.
- * **Dívida registrada, fora do escopo da #129** (que é sobre testes incapazes de falhar; mexer em
- * `hojeISO` mexe em Contas & Saldos, `AccountModal`, `EscolhaDaBaixa` e `ClientDetailPage` junto).
- * Quando alguém a pagar, este teste fica VERMELHO com `expected '2026-08-17'` — e é esse o sinal
- * certo: troque o literal por `"2026-08-17"` e o nome do teste, em vez de "consertar" de volta.
+ * ⚠️ **O mock de `useFuso` abaixo deixou de ser inerte, e sem ele este teste voltaria a ser cego.**
+ * O aviso antigo estava certo ao dizer que mocar o fuso aqui não adiantava: a tela não tocava em
+ * `store/auth`. Agora toca — indiretamente, pelo componente de baixa. Sem o mock, `useFuso()` cai
+ * no `FUSO_PADRAO`, que é o MESMO `America/Sao_Paulo` que o `vitest.config.ts` fixa como fuso da
+ * máquina: os dois relógios voltariam a dar a mesma string por construção e nenhuma mutação
+ * morreria. Foi essa coincidência que escondeu o defeito por meses (CLAUDE.md §5.2).
+ *
+ * No `INSTANTE` congelado: navegador 16/08, UTC 17/08, tenant em Tóquio **17/08**.
  */
-const DIA_DO_NAVEGADOR = "2026-08-16";
+const DIA_DO_TENANT = "2026-08-17";
 
 const CONTA_BANCARIA = {
   id: "acc-1",
@@ -254,9 +278,10 @@ describe("CobrancasPage — recebimento fora do trilho (Story 8.15)", () => {
     expect(within(bloco).getByLabelText(/dia em que o dinheiro caiu na conta/i)).toBeInTheDocument();
   });
 
-  it("envia bank_account_id e received_on; o dia default é HOJE — hoje NO NAVEGADOR (ver `DIA_DO_NAVEGADOR`)", async () => {
+  it("envia bank_account_id e received_on; o dia default é HOJE — hoje NO FUSO DO TENANT (#136)", async () => {
     // Relógio congelado num instante em que navegador (16/08), UTC (17/08) e um tenant em Tóquio
     // (17/08) discordam: sem isso a asserção compara o dia do navegador com o dia do navegador.
+    fusoDoTenant = FUSO_DISTANTE;
     vi.useFakeTimers({ shouldAdvanceTime: true });
     vi.setSystemTime(new Date(INSTANTE));
     mockCobrancas([COBRANCA_ABERTA]);
@@ -267,17 +292,23 @@ describe("CobrancasPage — recebimento fora do trilho (Story 8.15)", () => {
     // O gesto aqui é "caiu na minha conta", um fato observado AGORA — diferente da baixa de Contas
     // a Pagar, que parte do vencimento (fundador F10). A assimetria é deliberada.
     //
-    // ⚠️ O QUE este `expect` agora denuncia: o "agora" desta tela é o do NAVEGADOR (`hojeISO()`),
-    // não o do tenant. Ver o comentário de `DIA_DO_NAVEGADOR` — é dívida registrada, não descuido.
-    expect(dia.value).toBe(DIA_DO_NAVEGADOR);
+    // ⚠️ E o "agora" é o do DONO (#136). Este `expect` afirmava `DIA_DO_NAVEGADOR = "2026-08-16"` e
+    // vinha com a instrução de trocar o literal quando a dívida fosse paga. Foi trocado. Devolver a
+    // leitura para o relógio do navegador (ou para UTC) deixa esta linha VERMELHA — é para isso que
+    // o tenant está em Tóquio e o relógio, congelado.
+    expect(dia.value).toBe(DIA_DO_TENANT);
     expect(dia.value).not.toBe(COBRANCA_ABERTA.due_date);
+    // O dia do navegador neste instante é 16/08. Afirmar que o campo NÃO o mostra é a metade que
+    // impede um "hoje" qualquer de passar por tenant.
+    expect(dia.value).not.toBe("2026-08-16");
 
     await user.click(screen.getByRole("button", { name: /confirmar recebimento/i }));
 
     await waitFor(() => expect(api.post).toHaveBeenCalled());
+    // E o dia do tenant é o que VIAJA — não basta a tela mostrar certo e mandar outra coisa.
     expect(vi.mocked(api.post).mock.calls[0]).toEqual([
       "/receivables/charges/c-1/settle-externally",
-      { bank_account_id: "acc-1", received_on: DIA_DO_NAVEGADOR },
+      { bank_account_id: "acc-1", received_on: DIA_DO_TENANT },
     ]);
   });
 

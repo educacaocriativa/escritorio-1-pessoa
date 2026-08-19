@@ -12,6 +12,8 @@ import { type ReactNode, useCallback, useEffect, useMemo, useState } from "react
 import { Link } from "react-router-dom";
 import Modal, { Field } from "../../components/Modal";
 import { api, apiErrorMessage } from "../../lib/api";
+import { today } from "../../lib/datetime";
+import { useFuso } from "../../store/auth";
 import { usePrimaryAction } from "../../store/pageActions";
 // ⚠️ O cadastro/edição de conta MUDOU DE ARQUIVO na Story 8.13 (`./AccountModal`), sem mudar de
 // comportamento: o fluxo "409 acionável → cadastro embutido → retoma a baixa" das telas de baixa
@@ -28,7 +30,6 @@ import {
   type DuplicataAcionavel,
   formatBRL,
   formatDateBR,
-  hojeISO,
   impedimentoDaTransferencia,
   isIgnored,
   kindDaTransferencia,
@@ -324,6 +325,9 @@ export default function ContasSaldosPage() {
  * Aqui os recortes têm nomes próprios e cada um diz o que inclui.
  */
 function TotaisCard({ resumo }: { resumo: ResumoSaldo[] }) {
+  // ⚠️ **A data de apuração é a do TENANT** (#136). Era `hojeISO()` — o dia do navegador —, e num
+  // dono a leste o card anunciava um saldo "apurado em" um dia que a empresa ainda não vivera.
+  const hoje = today(useFuso());
   return (
     <div className="rounded-2xl bg-white p-5 shadow-sm">
       <div className="flex flex-wrap gap-x-10 gap-y-4">
@@ -340,7 +344,7 @@ function TotaisCard({ resumo }: { resumo: ResumoSaldo[] }) {
         ))}
       </div>
       <p className="mt-4 text-xs text-neutral-400">
-        Somas das contas ativas, apuradas em {formatDateBR(hojeISO())}. A lista abaixo mostra conta
+        Somas das contas ativas, apuradas em {formatDateBR(hoje)}. A lista abaixo mostra conta
         por conta — o total nunca aparece sozinho.
       </p>
     </div>
@@ -375,6 +379,10 @@ function AccountCard({
   children?: ReactNode;
 }) {
   const arquivada = account.archived_at !== null;
+  // "Saldo em {dia}" no fuso do TENANT (#136) — o corte de data do saldo derivado é do backend,
+  // que já usa `hoje_do_tenant`; rotulá-lo com o dia do navegador dizia um dia diferente do que
+  // o número representa.
+  const hoje = today(useFuso());
   return (
     <li
       className={`rounded-2xl bg-white p-5 shadow-sm ${selected ? "ring-2 ring-primary-200" : ""}`}
@@ -421,7 +429,7 @@ function AccountCard({
           {/* Story 8.10 — a DATA em que este número foi apurado, colada nele pelo mesmo motivo que
               a origem: um saldo sem a data em que foi apurado é um número que não dá para conferir.
               Até a 8.10 não havia data a mostrar, porque o saldo era "todo o histórico". */}
-          <p className="text-xs text-neutral-400">{saldoApuradoEm(hojeISO())}</p>
+          <p className="text-xs text-neutral-400">{saldoApuradoEm(hoje)}</p>
           <p className="mt-1 text-xs text-neutral-500">
             {checkpoint
               ? `Saldo declarado em ${formatDateBR(checkpoint.reference_date)}: ${formatBRL(checkpoint.balance_cents)}`
@@ -902,17 +910,19 @@ function DeclararSaldoModal({
   onClose: () => void;
   onSaved: () => void;
 }) {
-  const [referenceDate, setReferenceDate] = useState(hojeISO);
+  // Um relógio só, e é o do tenant (#136): o default do campo e o reset do efeito abaixo.
+  const fuso = useFuso();
+  const [referenceDate, setReferenceDate] = useState(() => today(fuso));
   const [balance, setBalance] = useState("0,00");
   const [error, setError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
 
   useEffect(() => {
     if (!account) return;
-    setReferenceDate(hojeISO());
+    setReferenceDate(today(fuso));
     setBalance(centsToInput(account.saldo_derivado_cents));
     setError(null);
-  }, [account]);
+  }, [account, fuso]);
 
   async function save() {
     if (!account) return;
@@ -974,7 +984,9 @@ function LancarMovimentoModal({
   onClose: () => void;
   onSaved: () => void;
 }) {
-  const [postedAt, setPostedAt] = useState(hojeISO);
+  // Um relógio só, e é o do tenant (#136).
+  const fuso = useFuso();
+  const [postedAt, setPostedAt] = useState(() => today(fuso));
   const [entrada, setEntrada] = useState(false);
   const [value, setValue] = useState("0,00");
   const [description, setDescription] = useState("");
@@ -990,7 +1002,7 @@ function LancarMovimentoModal({
 
   useEffect(() => {
     if (!account) return;
-    setPostedAt(hojeISO());
+    setPostedAt(today(fuso));
     // Saída é o default: o foco declarado do épico é achar SAÍDA não lançada (REQ-14).
     setEntrada(false);
     setValue("0,00");
@@ -1000,7 +1012,7 @@ function LancarMovimentoModal({
     setNaturezaLivre("");
     setError(null);
     setDuplicata(null);
-  }, [account]);
+  }, [account, fuso]);
 
   const cents = parseCentsBRL(value);
   // O valor COM SINAL — calculado uma vez e usado tanto no resumo quanto no envio, para que o que
@@ -1182,7 +1194,12 @@ function TransferirModal({
   const [fromId, setFromId] = useState("");
   const [toId, setToId] = useState("");
   const [value, setValue] = useState("0,00");
-  const [postedAt, setPostedAt] = useState(hojeISO);
+  // ⚠️ **O MESMO relógio preenche o campo e valida o campo** (#136). Antes, o default vinha daqui
+  // (`hojeISO()`, navegador) e a guarda de data futura vinha de DENTRO de
+  // `impedimentoDaTransferencia`, que chamava `hojeISO()` por conta própria: dois relógios numa
+  // função "pura". Agora o hoje do tenant é resolvido uma vez e passado adiante.
+  const fuso = useFuso();
+  const [postedAt, setPostedAt] = useState(() => today(fuso));
   const [description, setDescription] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
@@ -1198,15 +1215,15 @@ function TransferirModal({
     // O destino nasce na primeira conta que NÃO é a origem — nunca igual a ela, que é 422.
     setToId(elegiveis.find((a) => a.id !== origem)?.id ?? "");
     setValue("0,00");
-    setPostedAt(hojeISO());
+    setPostedAt(today(fuso));
     setDescription("");
     setError(null);
-  }, [open, origemInicialId, elegiveis]);
+  }, [open, origemInicialId, elegiveis, fuso]);
 
   const origem = elegiveis.find((a) => a.id === fromId) ?? null;
   const destino = elegiveis.find((a) => a.id === toId) ?? null;
   const cents = parseCentsBRL(value);
-  const impedimento = impedimentoDaTransferencia(origem, destino, cents, postedAt);
+  const impedimento = impedimentoDaTransferencia(origem, destino, cents, postedAt, today(fuso));
   const aviso = avisoDestinoAplicacao(destino);
 
   async function save() {
