@@ -87,9 +87,11 @@ certo, e a tela estava errada. **Nenhum teste de `apps/web/e2e/` pode aferir cla
   prop `testId` do `components/Modal.tsx`, e ela é aplicada na **caixa** — cabeçalho e barra de ação
   inclusive. Recorte no `children` deixa os dois FORA da conta **por construção**: foi assim que
   `textoForaDaTela` devolveu **lista vazia** com o "Fechar" em **x=698** numa tela de 360 (#119).
-  Medidos hoje: `EscolherHorario` (`ficha-marcar-360`), `AccountModal` (`modal-conta-360`), o
-  detalhe de evento da Agenda (`agenda-evento-360`) e "Declarar saldo"/"Lançar movimento"
-  (`contas-modais-360`).
+  Medidos hoje (**10 modais em 6 arquivos**): `EscolherHorario` (`ficha-marcar-360`),
+  `AccountModal` (`modal-conta-360`), o detalhe de evento da Agenda (`agenda-evento-360`),
+  "Declarar saldo"/"Lançar movimento" (`contas-modais-360`), "Movimentar: {item.name}" do Estoque
+  (`estoque-movimentar-360`), "Vender: {product.name}" dos Produtos (`produtos-vender-360`) e
+  "Transferir"/"Editar movimento"/"Ignorar movimento" (`contas-movimento-360`).
 - ⚠️ **`scrollWidth` NÃO vê o defeito do título — a BORDA vê.** Sem `min-w-0`, o `<h2>` é item de flex
   com `min-width: auto`: ele **cresce** em vez de transbordar. Com o conserto do #119 revertido e
   medido, `scrollWidth === clientWidth` seguia **verde** enquanto a borda direita do título ia a
@@ -102,9 +104,34 @@ certo, e a tela estava errada. **Nenhum teste de `apps/web/e2e/` pode aferir cla
   de falha oposto (**verde** contra código alheio) seria indistinguível de aprovação. Agora
   `reuseExistingServer` é **`false` sempre**: porta ocupada vira erro alto em vez de medição falsa.
   Para rodar duas worktrees ao mesmo tempo: `E2E_PORT=5373 pnpm --filter @e1p/web e2e`.
-- **Dívida:** a medição de modal cobre **4 dos 18** arquivos que usam `Modal` (5 dos 35 modais). Os
-  dois de maior exposição ainda sem medida são os de título digitado pelo dono: `EstoquePage`
-  (`Movimentar: {item.name}`) e `ProdutosPage` (`Vender: {product.name}`).
+- ⚠️ **O controle positivo é parte do teste, não cortesia — e ele MUDA com o título** (#130).
+  Modal de título **digitado pelo dono**: remover `min-w-0 break-words` do `Modal.tsx` tem de deixar
+  o spec **vermelho**, restaurar (por CÓPIA do arquivo, nunca `git checkout`) tem de devolver o
+  verde. Medido em 18/08: "Movimentar" pôs o "Fechar" em **x+w=837,1** e o título em **785,1**
+  contra uma caixa que acaba em **344,5**; "Vender", **806,2** e **798,4**. Modal de título
+  **constante** NÃO fica vermelho com essa mutação — medido nos três da `ContasSaldosPage`, os
+  quatro testes seguiram verdes —, e ali o controle é outro: **isca plantada no cabeçalho** (e na
+  barra `sticky`, quando houver), exigida na lista de cortes.
+- **A régua achou três defeitos reais na `ContasSaldosPage` ao ser instalada** (#130), e os três já
+  estão consertados: (a) o resumo da transferência põe os dois nomes de conta em `<strong>` — sem
+  `break-words` vazavam **153,8px** e **118,9px** da caixa; (b) a `raw_description` do extrato chega
+  **colada** ("PIXENVIADOCPF12345678900…") e vazava **326px** da caixa do "Editar movimento";
+  (c) o rótulo `sr-only` do valor é `position: absolute` e, sem ancestral posicionado, **não era
+  recortado** pelo deslizador `overflow-x-auto` da tabela — a PÁGINA rolava de lado até **879px**
+  numa viewport de 360, por um rótulo que ninguém vê. Conserto: `relative` no deslizador.
+- **Dívida:** a medição de modal cobre **6 dos 19** arquivos que usam `Modal` — **10 dos 35
+  modais**. Os de título **digitado pelo dono** estão todos medidos; os **25 que faltam** têm
+  título fixo e risco menor: `PlatformUsers` (4), `PagarPage` (3), `CobrancasPage` (3), `CrmPage`
+  (2), `InvestimentosPage` (2), `ProdutosPage` (2 dos 3), `EstoquePage` (1 de 2), `SitesPage`,
+  `EscolhaDaBaixa`, `PlanoContasPage`, `FinanceiroPage`, `CentrosCustoPage`, `CockpitPage`,
+  `NewEventModal` e `IdleWarningModal`.
+  ⚠️ **O denominador "18 arquivos" de #123/#130 estava errado, e o erro é reprodutível:**
+  `components/IdleWarningModal.tsx` importa `./Modal` por caminho **relativo** e escapa de um
+  `grep components/Modal`. São **19**. O numerador de 35 modais sempre o incluiu — ou seja, os dois
+  números nunca fecharam entre si. Conte `<Modal` para o total, nunca só o import.
+  Segue de pé a dívida da `ComprovantePage` (#130): o `ALTURA_DA_BARRA` do `baixa.ts` tem seis
+  mutantes sobreviventes que **encolhem** a barra, nenhum unit test fecha (o número é medida do
+  DOM) e aquela tela não está entre as medidas.
 - ⚠️ **O CI não tinha NENHUM job de frontend até esta data** — o `vitest` nunca rodou nele, e nenhuma
   medição de tela era exigida em PR. O job `frontend` (typecheck + vitest + playwright) fecha isso.
 - ⚠️ **O job roda Node 24, e a versão NÃO é detalhe de infraestrutura.** A raiz declara
@@ -164,11 +191,38 @@ estava certa; o que faltava era um teste capaz de dizer isso.**
   `formatX(iso, fuso)` → `formatX(iso, Intl.DateTimeFormat().resolvedOptions().timeZone)`) e confirme
   que o teste **morre**. Sem isso a correção é cosmética. Restaure por **cópia do arquivo**, nunca
   por `git checkout` num arquivo com trabalho não commitado.
-- **Dívida que fica:** a mesma classe existe fora da lista de quem mocka `useFuso`. Os testes de
-  `pagar/ComprovantePage`, `pagar/PagarPage` e `cobrancas/CobrancasPage` montam "hoje" com
-  `d.getFullYear()/getMonth()/getDate()` (o dia do **navegador**) e comparam com o `today(fuso)` da
-  tela; com tenant e runner no mesmo fuso, essas asserções também não conseguem falhar. Não foram
-  tocadas nesta passada.
+- ✅ **A mesma classe FORA de quem mocka `useFuso` — fechada pela issue #129.** `grep useFuso` não
+  achava `pagar/ComprovantePage`, `pagar/PagarPage` e `cobrancas/CobrancasPage`: eles montavam
+  "hoje" na mão, com `d.getFullYear()/getMonth()/getDate()`. **A regra que fica é a do recorte:** um
+  teste que monta "hoje" com as partes locais de um `Date` está afirmando sobre o **navegador**,
+  mesmo quando o `expect` fala do tenant — então o grep que caça esta classe é
+  `getFullYear|getMonth\(\)|getDate\(\)|toISOString\(\)\.slice\(0, ?10\)`, não `useFuso`.
+  `ComprovantePage` migrou para Tóquio + relógio congelado (3 asserções, 2 mutações mortas cada);
+  `PagarPage` ficou no fuso do runner **com a razão escrita** (o campo vem de
+  `dataPadrao={pagando.due_date}` — nenhum relógio participa) e ganhou só o relógio congelado, que
+  é o que dá dentes ao `not.toBe(hoje)`.
+- ⚠️ **O achado que só apareceu quando o teste passou a poder falhar: `CobrancasPage` lê o relógio
+  do NAVEGADOR.** Ela passa `dataPadrao={hojeISO()}`, e `hojeISO` (`financeiro/contas.ts`) monta a
+  data pelas partes locais do `Date` — não consulta `useFuso()`. A tela não importa nada de
+  `store/auth`, então **mocar o fuso do tenant nela é mock inerte**. O teste hoje afirma o dia do
+  navegador (`DIA_DO_NAVEGADOR`, com o porquê ao lado) — é o que a tela faz, e agora está dito em
+  voz alta em vez de escondido atrás de dois relógios iguais. **Dívida aberta:** `hojeISO` contraria
+  a régua do PR #78 (o dia é o do tenant) e é compartilhada com `ContasSaldosPage`, `AccountModal`,
+  `EscolhaDaBaixa` (`aviso`/`max`) e `crm/ClientDetailPage` — pagá-la é uma mudança de produção com
+  cinco telas dentro, não um ajuste de teste. Quem pagar derruba também os dois testes de borda de
+  `financeiro/contas.test.ts` (`amanha`/`ontem` derivados de UTC), avisados no lugar.
+- ⚠️ **O segundo achado: um componente, dois relógios.** Com o tenant a leste, a bandeja de
+  `ComprovantePage` abre com o aviso *"Esta data é no futuro… será registrada como AGENDADA"* já
+  visível, sem o dono ter tocado em nada — o default do campo vem de `localToday(fuso)` (**tenant**)
+  e o `avisoDeDataFutura`/`tetoDaDataDeBaixa` da `EscolhaDaBaixa` comparam com `hojeISO()`
+  (**navegador**). Enquanto os dois fusos eram o mesmo valor, nenhum teste podia ver isso. Está
+  anotado no teste e **não** virou `expect`: travar o aviso pregaria o defeito na parede.
+- **Onde o `new Date()` vivo FICA, e por quê:** `agenda/AgendaPage.test.tsx` monta o evento de
+  fixture a partir do relógio só para ele cair no mês que a tela abre — nenhum `expect` compara esse
+  valor com o que a tela calculou, e a prova de agrupamento por dia do tenant mora em `grade.test.ts`.
+  `financeiro/contas.test.ts` compara duas strings numa função pura que resolve "hoje" sozinha: sem
+  dois relógios, um fuso distante não tem o que matar. **Ambos com a razão escrita no arquivo** —
+  sem ela, o próximo leitor que rodar o grep os "conserta" e enfraquece o que já estava certo.
 
 ### 5.3 O teste de mutação (`apps/web/stryker.config.mjs`, desde 2026-08-18)
 
