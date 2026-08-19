@@ -1,0 +1,112 @@
+# Teste de MUTAÇÃO do frontend (Stryker) — a categoria de verificação que faltava (issue #121).
+#
+# Na PR #119 o QA achou NOVE defeitos com a suíte 100% verde: 693 testes, 32 medições de 360px,
+# `tsc` e `eslint` limpos. Quem os achou foi mutação MANUAL — desfazer uma linha da produção e ver
+# se algum teste morre. O CLAUDE.md registra "provado por mutação" em pelo menos cinco lugares (o
+# `>` vs `>=` do `posted_at` que sobreviveu a 58 testes verdes, o `begin_nested()` do ledger de IA,
+# o `_proximo_marco` da Vima, a troca de cores origem × tag do Kanban, os 5 de 5 do `grade.ts`).
+# Ou seja: a prática existia e dependia de alguém LEMBRAR. Este workflow é o fim dessa dependência.
+#
+# ── POR QUE UM ARQUIVO NOVO, E NÃO UM JOB EM `ci.yml` ────────────────────────────────────────────
+# O `ci.yml` dispara em `push`/`pull_request`. Acrescentar `schedule` no `on:` DELE faria os cinco
+# jobs existentes rodarem toda noite também — build de imagem Docker, testcontainers, gitleaks,
+# semgrep, Playwright — ou obrigaria um `if: github.event_name != 'schedule'` em cada um deles, uma
+# guarda por job que alguém esquece de repetir no sexto. Gatilho diferente, arquivo diferente: o
+# `on:` daqui diz a verdade inteira sobre quando este trabalho roda.
+#
+# ── POR QUE NOTURNO, E NUNCA POR PR ──────────────────────────────────────────────────────────────
+# Medido de verdade (2026-08-18, máquina de 12 vCPU, em quatro lotes): ~21 minutos para os 25
+# módulos, 1.605 mutantes. O runner do GitHub tem 2 vCPU — o número lá é maior, e por isso o
+# `timeout-minutes` abaixo é generoso.
+#
+# Pendurar isso em toda PR trocaria um gate AUSENTE por um gate que todo mundo aprende a ignorar:
+# meia hora de espera por PR vira "sobe assim mesmo" na segunda semana, e um check que se aprende a
+# ignorar é pior que nenhum, porque dá a sensação de cobertura. Mutação é diagnóstico periódico da
+# QUALIDADE DA SUÍTE, não portaria de mudança — a suíte não muda de qualidade entre duas PRs de
+# terça-feira. O gate de PR continua sendo o job `frontend` do `ci.yml`.
+#
+# ── OBSERVÁVEL PRIMEIRO ──────────────────────────────────────────────────────────────────────────
+# Não há limiar de reprovação. `stryker.config.mjs` traz `thresholds.break: null` de propósito:
+# limiar escrito antes da primeira medição é número sem evidência (Artigo IV da Constitution, "No
+# Invention"). O baseline MEDIDO está no CLAUDE.md §5.3 e é dele que sai o primeiro limiar, depois
+# de um período de observação. Mesmo caminho que `secret-scan`, `sast-semgrep` e `frontend` já
+# percorrem no `ci.yml`: mede antes, barra depois.
+name: Mutation (noturno)
+
+on:
+  # 06:00 UTC = 03:00 em America/Sao_Paulo (o fuso em que o e1p vive — CLAUDE.md). O cron do
+  # GitHub Actions é SEMPRE em UTC e não tem horário de verão: no verão do hemisfério norte este
+  # horário anda uma hora no relógio de Brasília, e tudo bem — o que importa é ser madrugada.
+  #
+  # ⚠️ Duas regras do GitHub que já surpreenderam gente neste tipo de workflow:
+  #  1. `schedule` só dispara na branch PADRÃO. Este arquivo não roda enquanto viver numa branch
+  #     de feature — o `workflow_dispatch` abaixo é como se testa antes do merge.
+  #  2. O agendamento é DESLIGADO automaticamente após 60 dias sem commit no repositório, com um
+  #     e-mail para quem pode reativar. Se o relatório sumir por semanas, é o primeiro lugar a olhar.
+  schedule:
+    - cron: "0 6 * * *"
+
+  # Execução sob demanda: antes de um merge grande, ou para conferir uma triagem de sobreviventes
+  # sem esperar a madrugada.
+  workflow_dispatch:
+
+# Uma corrida por vez. Duas corridas simultâneas disputariam os mesmos vCPU do runner e a segunda
+# mediria contenção de CPU, não qualidade de teste — e é assim que "timeout" vira falso positivo.
+concurrency:
+  group: mutation-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  mutation:
+    runs-on: ubuntu-latest
+    # ~21 min em 12 vCPU; o runner tem 2. O teto existe para não queimar horas num laço infinito
+    # que escapou do `timeoutMS` do Stryker, não para apertar a medição.
+    timeout-minutes: 120
+    defaults:
+      run:
+        working-directory: apps/web
+    steps:
+      - uses: actions/checkout@v4
+
+      # SEM `version:`, igual ao job `frontend` do ci.yml: a raiz já declara
+      # `"packageManager": "pnpm@9.12.0"` e `pnpm/action-setup@v4` FALHA quando as duas fontes
+      # existem ("Multiple versions of pnpm specified").
+      - uses: pnpm/action-setup@v4
+
+      # Node 24 pela MESMA razão escrita no job `frontend`, e ela vale em dobro aqui: o baseline do
+      # CLAUDE.md §5.3 foi medido em 24, e `src/lib/shareInbox.test.ts` depende de
+      # `structuredClone` preservar `File` — comportamento que MUDA entre versões do Node. Num Node
+      # diferente aquele arquivo fica vermelho, a corrida inteira aborta na dry run e o relatório
+      # não sai. Mudar este número exige remedir o baseline.
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+          cache: pnpm
+
+      # Na raiz: é um workspace pnpm, o lockfile é de lá.
+      - name: Instalar dependências
+        run: pnpm install --frozen-lockfile
+        working-directory: .
+
+      # A dry run do Stryker roda a suíte sem mutação nenhuma. Se ela já estiver vermelha, a
+      # corrida aborta com um erro de dentro do Stryker, e quem lê o log noturno gasta tempo
+      # procurando problema de mutação onde há problema de teste. Rodar o vitest antes separa as
+      # duas notícias, e custa ~15s.
+      - name: Testes de unidade (a suíte tem de estar verde ANTES de mutar)
+        run: pnpm test
+
+      - name: Teste de mutação (Stryker)
+        run: pnpm mutation
+
+      # `if: always()` — o relatório é o PRODUTO deste job, não um anexo de falha. É o oposto do
+      # `playwright-report` do ci.yml (`if: failure()`), e de propósito: lá o artefato serve para
+      # explicar um vermelho; aqui ele é a razão de o job existir. Numa corrida interrompida, o
+      # parcial ainda diz o que foi medido até parar.
+      - if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: mutation-report
+          path: apps/web/reports/mutation/
+          # 30 dias, contra os 7 do playwright-report: este roda uma vez por dia, e comparar o
+          # score de hoje com o de três semanas atrás é justamente o uso que justifica guardá-lo.
+          retention-days: 30

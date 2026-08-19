@@ -416,6 +416,17 @@ describe("Story 8.11 — a frase do aviso: silêncio por default e nenhum saldo 
       ),
     ).toBeNull();
     expect(avisoContasPagasAnteriores(null, "2026-07-30")).toBeNull();
+    // Achado por mutação (#121): o caso `count: 0` acima vem com as DATAS nulas, e quem o derruba
+    // é o `!dados.oldest_paid_on` mais adiante na mesma linha — nunca o `count <= 0`. Trocar por
+    // `count < 0` sobrevivia. Aqui o zero vem com data válida: só a guarda de contagem cala a
+    // frase, e sem ela a tela diria "Você tem 0 contas pagas", que é o aviso vazio que o
+    // docstring da função proíbe em caixa alta.
+    expect(
+      avisoContasPagasAnteriores(
+        { count: 0, total_cents: 0, oldest_paid_on: "2026-05-02", newest_paid_on: "2026-05-02" },
+        "2026-07-30",
+      ),
+    ).toBeNull();
     // Contagem sem data: estado incoerente do backend — cala em vez de montar meia frase.
     expect(
       avisoContasPagasAnteriores(
