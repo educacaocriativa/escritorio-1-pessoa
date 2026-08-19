@@ -109,6 +109,30 @@ async function abrirMovimentosDaPrimeiraConta(page: import("@playwright/test").P
 const acaoDoMovimento = (page: import("@playwright/test").Page, nome: "Editar" | "Ignorar") =>
   page.getByRole("table").getByRole("button", { name: nome, exact: true });
 
+/**
+ * A TABELA de movimentos aberta, sem nenhum modal por cima (#135).
+ *
+ * Esta asserção parece redundante com as dos modais abaixo — e não é. Os 879px do #130 foram
+ * medidos por ACASO: quem media o "Editar movimento" viu a PÁGINA rolar e foi atrás. A causa nunca
+ * esteve no modal; está nesta tabela, no rótulo `sr-only` da coluna Valor, que é `position:
+ * absolute` SEM offsets — logo ancorado na sua posição estática, lá dentro do deslizador de
+ * `min-w-[40rem]`. Sem `relative` no deslizador, o bloco contêiner dele passa a ser a PÁGINA: o
+ * rótulo escapa do recorte e conta no `scrollWidth` do documento.
+ *
+ * Enquanto a única testemunha for um modal, a cobertura depende de o modal continuar existindo e
+ * de alguém continuar medindo a página inteira lá dentro — duas coisas que um refactor apaga sem
+ * aviso, e o defeito volta invisível (é `sr-only`: nenhuma inspeção visual o denuncia). Aqui a
+ * asserção fica onde a causa mora.
+ */
+test("a tabela de movimentos aberta não faz a PÁGINA rolar de lado", async ({ page }) => {
+  await abrirMovimentosDaPrimeiraConta(page);
+
+  // Nenhum modal aberto: o que estiver medindo é a tabela, e só ela.
+  await expect(page.getByTestId("modal-editar-movimento")).toHaveCount(0);
+
+  expect((await medirPagina(page)).larguraDaPagina).toBe(360);
+});
+
 test("o 'Transferir entre contas' cabe em 360px, com nome de conta do dono nos seletores", async ({
   page,
 }) => {
