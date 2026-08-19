@@ -27,11 +27,21 @@ def _modulos(user: CurrentUser) -> list[str]:
 @router.get("", response_model=SearchOut)
 def search(
     q: str = Query(default=""),
+    depth: str = Query(default="shallow", pattern="^(shallow|deep)$"),
+    # `0` = sem recorte. O teto de 120 é guarda contra pedido absurdo, não regra de negócio.
+    months: int = Query(default=12, ge=0, le=120),
     limit: int = Query(default=3, ge=1, le=50),
     user: CurrentUser = Depends(get_current_user),
     db: Session = Depends(get_tenant_db),
 ) -> SearchOut:
-    grupos = service.buscar(db, q=q, modulos_liberados=_modulos(user), limite=limit)
+    grupos = service.buscar(
+        db,
+        q=q,
+        modulos_liberados=_modulos(user),
+        profundidade=depth,
+        meses=months,
+        limite=limit,
+    )
     return SearchOut(
         groups=[
             SearchGroupOut(

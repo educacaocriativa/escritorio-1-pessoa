@@ -59,3 +59,28 @@ def test_porcento_nao_devolve_tudo(client: TestClient, headers):
 
 def test_sem_token_e_401(client: TestClient):
     assert client.get("/search", params={"q": "ana"}).status_code == 401
+
+
+def test_depth_deep_conta_e_traz_trecho(client: TestClient, headers):
+    client.post(
+        "/crm/clients",
+        json={"name": "Zulmira", "notes": "prefere ser chamada de Zu"},
+        headers=headers,
+    )
+
+    raso = client.get("/search", params={"q": "chamada"}, headers=headers).json()
+    fundo = client.get(
+        "/search", params={"q": "chamada", "depth": "deep"}, headers=headers
+    ).json()
+
+    assert raso == {"groups": []}, "notas não são lidas na camada rasa"
+    grupo = fundo["groups"][0]
+    assert grupo["total"] == 1
+    assert "chamada" in grupo["items"][0]["snippet"]
+
+
+def test_depth_invalido_e_422(client: TestClient, headers):
+    """O contrato é fechado: `depth` só aceita os dois valores que o serviço entende."""
+    r = client.get("/search", params={"q": "ana", "depth": "profundissimo"}, headers=headers)
+
+    assert r.status_code == 422
