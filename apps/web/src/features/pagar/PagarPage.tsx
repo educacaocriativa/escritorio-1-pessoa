@@ -1,7 +1,7 @@
 import type { Contract, Payable, PayablesPage, PayablesSummary } from "@e1p/shared-types";
 import { Copy, Paperclip } from "lucide-react";
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { Link } from "react-router-dom";
+import { Link, useSearchParams } from "react-router-dom";
 import Attachments from "../../components/Attachments";
 import Modal, { Field } from "../../components/Modal";
 import { api, apiErrorMessage } from "../../lib/api";
@@ -16,7 +16,7 @@ import FiltrosDaLista from "./FiltrosDaLista";
 import { camposDaCopia, type CamposDaConta } from "./duplicar";
 import { formatDay, today } from "../../lib/datetime";
 import { useFuso } from "../../store/auth";
-import { type FiltroPagar, filtroPadrao, paraQuery } from "./filtros";
+import { apenasTexto, daUrl, type FiltroPagar, filtroPadrao, paraQuery, paraUrl } from "./filtros";
 
 /** Grupos DRE cabíveis numa DESPESA (Contas a Pagar nunca lança em Receita). */
 const EXPENSE_GROUPS = GRUPOS_DRE.filter((g) => g !== "RECEITA");
@@ -107,7 +107,25 @@ export default function PagarPage() {
   // Comprovantes que chegaram pelo celular e ainda não foram vinculados a nenhuma conta.
   const [inbox, setInbox] = useState<{ id: string }[]>([]);
   const fuso = useFuso();
-  const [filtro, setFiltro] = useState<FiltroPagar>(() => filtroPadrao(today(fuso)));
+  // ⚠️ **O recorte mora na URL, não em `useState` (#138).** Enquanto ele era estado de React,
+  // `/pagar?q=anthropic` era um endereço INERTE (parecia filtrar e não filtrava), F5 apagava o
+  // recorte, não havia link para mandar a outra pessoa, e "voltar" saía da tela inteira em vez de
+  // desfazer o filtro — porque filtrar nunca criava entrada no histórico. Mesmo padrão de
+  // `busca/BuscaPage.tsx`: a barra de endereço é a ÚNICA fonte da verdade, então o botão "voltar"
+  // do navegador funciona de graça (ele muda `location.search`, e a lista rerenderiza).
+  const [params, setParams] = useSearchParams();
+  const padrao = useMemo(() => filtroPadrao(today(fuso)), [fuso]);
+  const filtro = useMemo(() => daUrl(params, padrao), [params, padrao]);
+
+  const trocarFiltro = useCallback(
+    (novo: FiltroPagar) => {
+      // `replace` só quando NADA além do texto mudou: uma entrada de histórico por tecla digitada
+      // encheria o "voltar" de estados intermediários. Trocar status ou aplicar período é gesto
+      // deliberado e EMPILHA — é ele que dá ao botão "voltar" o que desfazer.
+      setParams(paraUrl(novo, padrao), { replace: apenasTexto(filtro, novo) });
+    },
+    [filtro, padrao, setParams],
+  );
   const [total, setTotal] = useState(0);
   const [offset, setOffset] = useState(0);
   const [carregando, setCarregando] = useState(false);
@@ -252,7 +270,7 @@ export default function PagarPage() {
 
       <FiltrosDaLista
         valor={filtro}
-        onChange={setFiltro}
+        onChange={trocarFiltro}
         categorias={chartAccounts}
         centros={costCenters}
       />
