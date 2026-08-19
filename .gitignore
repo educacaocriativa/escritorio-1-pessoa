@@ -58,3 +58,7 @@ test-results/
 
 # Superpowers subagent-driven-development scratch (progress ledger, review packages)
 .superpowers/
+
+# Teste de mutação (Stryker, issue #121) — diretório de trabalho e relatório, ambos efêmeros
+.stryker-tmp/
+apps/web/reports/

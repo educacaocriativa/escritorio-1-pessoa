@@ -170,6 +170,124 @@ estava certa; o que faltava era um teste capaz de dizer isso.**
   tela; com tenant e runner no mesmo fuso, essas asserções também não conseguem falhar. Não foram
   tocadas nesta passada.
 
+### 5.3 O teste de mutação (`apps/web/stryker.config.mjs`, desde 2026-08-18)
+
+**A suíte verde não prova que os testes seguram alguma coisa.** Na PR #119 o QA achou NOVE
+defeitos com 693 testes verdes, 32 medições de 360px e `tsc`/`eslint` limpos. Quem os achou foi
+**mutação**: desfazer uma linha da produção e ver se algum teste morre. Este arquivo já registrava
+"provado por mutação" em cinco lugares (o `>` vs `>=` do `posted_at` que sobreviveu a 58 testes
+verdes, o `begin_nested()` do ledger de IA, o `_proximo_marco` da Vima, as cores origem × tag do
+Kanban, os 5 de 5 do `grade.ts`) — sempre à mão, sempre dependendo de alguém lembrar. Deixou de
+depender (issue #121).
+
+- **Como roda:** `pnpm --filter @e1p/web mutation` (tudo) ou `… mutation --mutate <arquivo>` (um
+  módulo). No CI: `.github/workflows/mutation.yml`, **noturno (`schedule`) e `workflow_dispatch`,
+  NUNCA por PR** — meia hora de espera por PR vira "sobe assim mesmo" na segunda semana, e um check
+  que se aprende a ignorar é pior que nenhum. O relatório HTML sai como artefato `mutation-report`.
+- **O escopo é DESCOBERTO, não listado:** todo `src/**/*.ts` com um irmão `<nome>.test.ts` do lado
+  — **26 módulos hoje**, ~3.470 linhas. Mesma escolha do filtro por marker `rls_e2e` no `ci.yml`:
+  o módulo seguinte entra sozinho. `.tsx` está **fora** (mutação em React é lenta e ruidosa).
+  ↳ Isto **já aconteceu, na mesma tarde**: o merge da `main` (PR #125) trouxe
+  `features/pagar/filtros.ts` com teste irmão, e o escopo passou de 25 para 26 sem ninguém editar
+  a config. É o comportamento desejado — mas note a contrapartida: **a tabela de baseline abaixo
+  não se atualiza sozinha**. Módulo novo entra na medição e fica fora do registro até alguém
+  medir. Ao ver um módulo no relatório que não está na tabela, meça e acrescente.
+- ⚠️ **A corrida exclui os testes `.test.tsx`** (`vitest.mutation.config.ts`). É a diferença entre
+  "o teste DEDICADO prende a lógica" e "algum teste de componente passou por ali de raspão" — e
+  vale 5,5x em tempo (74s → 13,5s no ciclo base). O erro que isso introduz tem direção conhecida:
+  a régua pode pedir teste **a mais**, nunca a menos.
+- **Não há limiar de reprovação** (`thresholds.break: null`). Limiar antes da primeira medição é
+  número sem evidência. Observável primeiro, bloqueante depois — mesmo caminho de
+  `secret-scan`/`sast-semgrep`/`frontend`.
+
+**Baseline MEDIDO** (2026-08-18, Node 24, 12 vCPU, `--concurrency` default; ~21 min em quatro
+lotes para os 1.605 mutantes; **os 25 módulos de então foram medidos, nenhum ficou de fora** — o
+26º, `filtros.ts`, chegou depois pelo merge e foi medido à parte, na mesma data). "Antes" é a
+primeira corrida; "depois" é a mesma medição após a triagem desta issue. Global: **79,25% →
+82,73%**.
+
+| Módulo | Mutantes | Antes | Depois | Sobrev. | Sem cob. |
+|---|---:|---:|---:|---:|---:|
+| `lib/theme.ts` | 13 | 84,62 | **100,00** | 0 | 0 |
+| `crm/origem.ts` | 8 | 100,00 | 100,00 | 0 | 0 |
+| `financeiro/costCenters.ts` | 10 | 100,00 | 100,00 | 0 | 0 |
+| `financeiro/dre.ts` | 13 | 100,00 | 100,00 | 0 | 0 |
+| `financeiro/lucratividade.ts` | 21 | 100,00 | 100,00 | 0 | 0 |
+| `financeiro/dreMatrix.ts` | 48 | 97,92 | 97,92 | 1 | 0 |
+| `agenda/grade.ts` | 177 | 73,45 | **95,45** | 8 | 0 |
+| `pagar/duplicar.ts` | 68 | 91,18 | 91,18 | 6 | 0 |
+| `financeiro/ledger.ts` | 19 | 78,95 | **89,47** | 2 | 0 |
+| `financeiro/contas.ts` | 320 | 87,50 | 87,19 | 39 | 2 |
+| `financeiro/periodRange.ts` | 67 | 80,60 | **86,57** | 9 | 0 |
+| `financeiro/contratoDre.ts` | 20 | 85,00 | 85,00 | 3 | 0 |
+| `financeiro/dreMatrixEntries.ts` | 13 | 69,23 | **84,62** | 2 | 0 |
+| `financeiro/investimentos.ts` | 58 | 84,48 | 84,48 | 9 | 0 |
+| `lib/idleTimer.ts` | 37 | 83,78 | 83,78 | 6 | 0 |
+| `financeiro/conferencia.ts` | 174 | 82,18 | 82,76 | 29 | 1 |
+| `cobrancas/rota.ts` | 36 | 80,56 | 80,56 | 4 | 3 |
+| `lib/uploadPublicImage.ts` | 10 | 80,00 | 80,00 | 1 | 1 |
+| `financeiro/diagnostico.ts` | 84 | 78,57 | 78,57 | 14 | 4 |
+| `financeiro/projecao.ts` | 101 | 74,26 | 76,24 | 23 | 1 |
+| `lib/datetime.ts` | 66 | 75,76 | 75,76 | 8 | 8 |
+| `financeiro/planoContas.ts` | 19 | 73,68 | 73,68 | 5 | 0 |
+| `pagar/baixa.ts` | 82 | 60,98 | 65,79 | 25 | 1 |
+| `lib/shareInbox.ts` | 26 | 61,54 | 61,54 | 9 | 1 |
+| `app/navigation.ts` | 115 | 55,65 | **55,65** | 51 | 0 |
+| `pagar/filtros.ts` ¹ | 77 | 77,92 | 77,92 | 17 | 0 |
+
+**O que a primeira medição achou, e o que virou teste.** Nenhum destes era visível com a suíte
+verde:
+
+- **`grade.ts` tinha 28 mutantes SEM COBERTURA** — `addDays`, `startOfWeek`, `sameDay`,
+  `hojeDoTenant`, `gradeDoMes`, `eventYmd`, `eventsOfDay` e `paramsDaGrade` não tinham nenhum teste
+  dedicado. A ironia: o docstring do módulo diz que essa aritmética foi extraída **exatamente** para
+  os dois calendários não divergirem. A regra estava escrita; o teste, não. Trocar `+ n` por `- n`
+  em `addDays` não quebrava nada.
+- **`runwayLabel(days: 0)` passava com os DOIS programas.** `toContain("0 dias")` é verdade tanto na
+  frase de alarme ("Caixa no limite (0 dias)") quanto no caminho de baixo, onde `parts` vazio cai no
+  `|| "0 dias"`. Família do `toContain("flex-wrap")` da §5.1, num número de caixa.
+- **O empate de data invertia o extrato.** `a.date > b.date` → `>=` REVERTE lançamentos do mesmo dia
+  em `ledger.ts` e `dreMatrixEntries.ts`. Todos os testes usavam datas distintas — e um dia com dois
+  pagamentos é o caso comum, não a borda.
+- **Julho é um mês cego para `this_quarter`.** `Math.floor((m - 1) / 3)` → `(m + 1) / 3` dá o MESMO
+  trimestre em julho. Em março dá um trimestre inteiro no futuro. Julho era o único mês testado.
+- **As âncoras do `HEX_RE` não eram validadas.** Sem o `$`, `"#112233ff"` (RGBA de 8 dígitos, o que
+  um seletor de cor de verdade devolve) entraria no `generateScale` como se fosse RGB.
+- **`avisoContasPagasAnteriores` com `count: 0`** só era testado com as datas também nulas — quem
+  derrubava era o `!oldest_paid_on`, nunca a guarda de contagem.
+- **`last_month` fora de janeiro nunca executava.**
+
+**Os dois `// Stryker disable`, e por que cada um.** Não são atalho: a razão está escrita ao lado no
+código.
+
+1. `grade.ts` — o `-1` de `corte` é **mutante equivalente** (o exemplo que a própria #121 cita).
+   `corte` só aparece em `if (inicio <= corte)`, e `inicio` começa em `HORA_ABERTURA * 60` = 480:
+   −1, 0 e +1 produzem a mesma grade. Não há teste possível — são o mesmo programa.
+2. `baixa.ts` — `ALTURA_DA_BARRA` é uma **medida do DOM**, e as duas asserções que existem são de
+   um lado só (`< 320` e `pb >= altura`): pegam a barra crescendo, não encolhendo. Unit test aqui
+   só copiaria a soma para o outro lado do `expect`.
+
+**Dívida (medida, não estimada):**
+¹ Entrou no escopo pelo merge do PR #125 (2026-08-18), depois da corrida das quatro lotes; medido
+isoladamente na mesma data, sem triagem — os 17 sobreviventes dele estão no total abaixo.
+
+- ⚠️ **271 sobreviventes e 22 sem cobertura continuam de pé** (254 da primeira corrida + 17 do
+  `filtros.ts`), e a triagem acima cobriu a ponta de
+  maior sinal, não o conjunto. Os três piores por score são `app/navigation.ts` (55,65% — **51
+  sobreviventes, o maior débito único do frontend**), `lib/shareInbox.ts` (61,54%) e `pagar/baixa.ts`
+  (65,79%). Dos 333 sobreviventes originais, **153 eram `StringLiteral`** — rótulos e constantes de
+  contrato com o backend, que unit test nenhum confere; separar esse ruído do sinal (via
+  `mutator.excludedMutations`) é pré-requisito para qualquer limiar honesto.
+- ⚠️ **A barra da `ComprovantePage` não é medida em `e2e/`.** É o que fecharia o disable do
+  `ALTURA_DA_BARRA` de verdade — hoje o número não é verificado por nada.
+- ⚠️ **`contas.ts` tem mutantes que oscilam entre `Timeout` e `Survived`** conforme a carga da
+  máquina (4 timeouts na primeira corrida, 1 na segunda). Timeout conta como morto no score, então
+  o número desse módulo balança ~0,3 ponto entre corridas. Ler variação pequena como regressão é
+  o primeiro jeito de o job noturno perder credibilidade.
+- ⚠️ **O limiar ainda não existe.** Com o baseline acima medido, o próximo passo é um `break` por
+  módulo em `stryker.config.mjs` — depois de um período de observação, e nunca acima do que a
+  tabela mostra.
+
 ## 6. Estado atual / roadmap
 - [x] Fundação do monorepo, docs, agentes de QA, CI local.
 - [x] Core do backend: tenancy (RLS) + anonimizador + camada de IA + auditoria.

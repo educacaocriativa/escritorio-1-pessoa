@@ -1,12 +1,22 @@
 import { describe, expect, it } from "vitest";
-import { formatTime, localYmd } from "../../lib/datetime";
+import { formatTime, localYmd, today } from "../../lib/datetime";
 import {
   HORA_ABERTURA,
   HORA_FECHAMENTO,
+  WEEKDAYS,
+  addDays,
   densidadePorDia,
+  eventYmd,
   eventosDoDia,
+  eventsOfDay,
   faixasLivres,
+  gradeDoMes,
+  hojeDoTenant,
   instanteNoFuso,
+  paramsDaGrade,
+  sameDay,
+  startOfDay,
+  startOfWeek,
 } from "./grade";
 import { agendaEvent as evento } from "../../test/fixtures/agenda";
 
@@ -312,5 +322,171 @@ describe("instanteNoFuso", () => {
         }
       }
     }
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// A aritmética da GRADE — achada pelo teste de mutação (issue #121).
+//
+// Antes desta data, `grade.test.ts` importava seis símbolos e a metade "posições na grade" do
+// módulo (`startOfDay`, `addDays`, `startOfWeek`, `sameDay`, `hojeDoTenant`, `gradeDoMes`,
+// `eventYmd`, `eventsOfDay`, `paramsDaGrade`, `WEEKDAYS`) não tinha NENHUM teste dedicado: 28
+// mutantes sem cobertura. Passavam pelos testes de `AgendaPage.tsx` de raspão — o suficiente para
+// a suíte ficar verde, não para alguém perceber que trocar `+ n` por `- n` em `addDays` não
+// quebra nada.
+//
+// A ironia é que o docstring do módulo diz, com todas as letras, POR QUE essa aritmética foi
+// extraída: "duplicar `startOfWeek`/`addDays` em dois lugares é como um dos dois calendários
+// acaba começando a semana num dia diferente do outro". A regra estava escrita; o teste que a
+// segura, não.
+// ─────────────────────────────────────────────────────────────────────────────
+
+// 10/10/2026 é um SÁBADO (getDay() === 6). Toda a aritmética abaixo depende disso.
+const SABADO = new Date(2026, 9, 10, 15, 47, 33, 456);
+
+describe("posições na grade", () => {
+  it("startOfDay zera a hora e mantém o dia", () => {
+    const zerado = startOfDay(SABADO);
+
+    expect(localYmd(zerado)).toBe("2026-10-10");
+    expect([zerado.getHours(), zerado.getMinutes(), zerado.getSeconds(), zerado.getMilliseconds()]).toEqual([
+      0, 0, 0, 0,
+    ]);
+  });
+
+  it("addDays anda para FRENTE com n positivo e para trás com n negativo", () => {
+    // Direção e magnitude no mesmo teste: `+ n` → `- n` erra a direção, e um `setTime` no lugar
+    // do `setDate` joga a data para 1970 — ambos morrem aqui.
+    expect(localYmd(addDays(SABADO, 5))).toBe("2026-10-15");
+    expect(localYmd(addDays(SABADO, -3))).toBe("2026-10-07");
+    expect(localYmd(addDays(SABADO, 0))).toBe("2026-10-10");
+  });
+
+  it("addDays atravessa a virada do mês e do ano", () => {
+    expect(localYmd(addDays(new Date(2026, 9, 31), 1))).toBe("2026-11-01");
+    expect(localYmd(addDays(new Date(2026, 11, 31), 1))).toBe("2027-01-01");
+    expect(localYmd(addDays(new Date(2027, 0, 1), -1))).toBe("2026-12-31");
+  });
+
+  it("startOfWeek volta ao DOMINGO anterior — nunca avança", () => {
+    // O comentário do módulo é "semana começa no domingo". Sábado 10/10 pertence à semana que
+    // abriu no domingo 04/10; sem o sinal negativo o cálculo pula para 16/10 — uma semana que
+    // ainda não começou.
+    expect(localYmd(startOfWeek(SABADO))).toBe("2026-10-04");
+    // Domingo é ponto fixo: já é o começo da própria semana.
+    const domingo = new Date(2026, 9, 4);
+    expect(localYmd(startOfWeek(domingo))).toBe("2026-10-04");
+  });
+
+  it("sameDay ignora a hora e distingue dias vizinhos", () => {
+    expect(sameDay(SABADO, new Date(2026, 9, 10, 0, 0, 0))).toBe(true);
+    expect(sameDay(SABADO, new Date(2026, 9, 11))).toBe(false);
+    expect(sameDay(SABADO, new Date(2026, 9, 9))).toBe(false);
+  });
+
+  it("WEEKDAYS está alinhado ao índice de `getDay()`", () => {
+    // A asserção que importa não é "o array contém Dom..Sáb" e sim que a POSIÇÃO de cada rótulo
+    // bate com o índice que o `Date` devolve: uma rotação de uma casa deixaria o cabeçalho do
+    // calendário inteiro deslocado, com o array ainda "correto" de olho nu.
+    expect(WEEKDAYS[new Date(2026, 9, 4).getDay()]).toBe("Dom");
+    expect(WEEKDAYS[new Date(2026, 9, 7).getDay()]).toBe("Qua");
+    expect(WEEKDAYS[SABADO.getDay()]).toBe("Sáb");
+    expect(WEEKDAYS).toHaveLength(7);
+  });
+
+  it("hojeDoTenant devolve a meia-noite LOCAL do dia do tenant", () => {
+    // Sem instante fixo de propósito: o que se afirma é a identidade `localYmd(hojeDoTenant(tz))
+    // === today(tz)`, verdadeira em qualquer dia. Um `m + 1` no lugar do `m - 1` (o `Date` conta
+    // mês a partir de zero) quebra a identidade sem depender de que dia é hoje.
+    for (const zona of [FUSO, FUSO_DISTANTE, "Pacific/Auckland"]) {
+      const inicio = hojeDoTenant(zona);
+      expect(`${zona}: ${localYmd(inicio)}`).toBe(`${zona}: ${today(zona)}`);
+      expect(inicio.getHours()).toBe(0);
+    }
+  });
+});
+
+describe("eventosDoDia (ordenação)", () => {
+  it("ordena por horário mesmo recebendo a lista embaralhada", () => {
+    // Achado por mutação (#121): trocar `+new Date(a) - +new Date(b)` por
+    // `-new Date(a) - +new Date(b)` faz o comparador devolver sempre um número NEGATIVO — o
+    // `sort` então preserva a ordem de entrada e sobrevive a qualquer teste cuja lista já
+    // chegue ordenada. É por isso que esta entra fora de ordem.
+    const tarde = evento({ id: "tarde", starts_at: "2026-10-10T18:00:00Z", ends_at: "2026-10-10T19:00:00Z" });
+    const manha = evento({ id: "manha", starts_at: "2026-10-10T12:00:00Z", ends_at: "2026-10-10T13:00:00Z" });
+    const meio = evento({ id: "meio", starts_at: "2026-10-10T15:00:00Z", ends_at: "2026-10-10T16:00:00Z" });
+
+    expect(eventosDoDia([tarde, manha, meio], DIA, FUSO).map((e) => e.id)).toEqual(["manha", "meio", "tarde"]);
+  });
+});
+
+describe("gradeDoMes", () => {
+  it("são 42 células, do domingo anterior ao dia 1 em diante", () => {
+    const { start, end, days } = gradeDoMes(new Date(2026, 9, 20));
+
+    expect(days).toHaveLength(42);
+    // 01/10/2026 é quinta; o domingo anterior é 27/09.
+    expect(localYmd(start)).toBe("2026-09-27");
+    expect(localYmd(days[0])).toBe("2026-09-27");
+    expect(localYmd(days[41])).toBe("2026-11-07");
+    // `end` é a fronteira EXCLUSIVA — o dia seguinte à última célula.
+    expect(localYmd(end)).toBe("2026-11-08");
+  });
+
+  it("quando o dia 1 já é domingo, a grade começa nele — não uma semana antes", () => {
+    // 01/11/2026 é domingo. `startOfWeek` de um domingo tem de ser ponto fixo, senão o mês
+    // inteiro aparece deslocado sete dias.
+    const { start } = gradeDoMes(new Date(2026, 10, 15));
+    expect(localYmd(start)).toBe("2026-11-01");
+  });
+});
+
+describe("paramsDaGrade", () => {
+  it("pede o range em meia-noite UTC da DATA do grid", () => {
+    const { start, end, days } = gradeDoMes(new Date(2026, 9, 20));
+
+    expect(paramsDaGrade(start, end)).toEqual({
+      start: "2026-09-27T00:00:00.000Z",
+      end: "2026-11-08T00:00:00.000Z",
+      limit: 500,
+    });
+    expect(days).toHaveLength(42);
+  });
+});
+
+describe("eventYmd / eventsOfDay", () => {
+  it("evento de dia inteiro é lido pela DATA crua, sem passar por fuso", () => {
+    // Gravados à meia-noite UTC: convertê-los "volta" um dia em fuso negativo. O `slice(0, 10)`
+    // é o que impede isso — e sem ele o retorno seria o ISO inteiro.
+    const feriado = evento({ all_day: true, starts_at: "2026-10-10T00:00:00Z", ends_at: "2026-10-11T00:00:00Z" });
+    expect(eventYmd(feriado)).toBe("2026-10-10");
+  });
+
+  it("evento com horário é lido pelo fuso do NAVEGADOR (convenção antiga do AgendaPage)", () => {
+    // 02:00Z de 11/10 é 23:00 de 10/10 em UTC−3, que é o TZ que a suíte fixa.
+    const noturno = evento({ starts_at: "2026-10-11T02:00:00Z", ends_at: "2026-10-11T03:00:00Z" });
+    expect(eventYmd(noturno)).toBe("2026-10-10");
+  });
+
+  it("eventsOfDay filtra pelo dia e ORDENA por horário de início", () => {
+    const tarde = evento({ id: "tarde", starts_at: "2026-10-10T18:00:00Z", ends_at: "2026-10-10T19:00:00Z" });
+    const manha = evento({ id: "manha", starts_at: "2026-10-10T12:00:00Z", ends_at: "2026-10-10T13:00:00Z" });
+    const outroDia = evento({ id: "outro", starts_at: "2026-10-12T12:00:00Z", ends_at: "2026-10-12T13:00:00Z" });
+
+    // A lista entra FORA de ordem de propósito: com ela já ordenada, um comparador quebrado
+    // devolve a mesma saída e o teste passa sem exercer a ordenação.
+    const doDia = eventsOfDay([tarde, manha, outroDia], DIA);
+
+    expect(doDia.map((e) => e.id)).toEqual(["manha", "tarde"]);
+  });
+
+  it("eventsOfDay não modifica a lista recebida", () => {
+    const tarde = evento({ id: "tarde", starts_at: "2026-10-10T18:00:00Z", ends_at: "2026-10-10T19:00:00Z" });
+    const manha = evento({ id: "manha", starts_at: "2026-10-10T12:00:00Z", ends_at: "2026-10-10T13:00:00Z" });
+    const entrada = [tarde, manha];
+
+    eventsOfDay(entrada, DIA);
+
+    expect(entrada.map((e) => e.id)).toEqual(["tarde", "manha"]);
   });
 });
