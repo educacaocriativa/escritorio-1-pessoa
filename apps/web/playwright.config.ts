@@ -24,7 +24,7 @@ const PORTA = Number(process.env.E2E_PORT ?? 5273);
 export default defineConfig({
   testDir: "./e2e",
   fullyParallel: true,
-  // ⚠️ **`workers: 1` é o PADRÃO de propósito (#147), e custa 87s.** Com a concorrência default
+  // ⚠️ **`workers: 1` é o PADRÃO de propósito (#147), e custa ~41s.** Com a concorrência default
   // (metade dos núcleos), a suíte INVENTA falhas: medindo uma mutação em 18/08/2026, o paralelo
   // deu **14 vermelhos** espalhados por specs sem relação — agenda, busca, pagar, shell —
   // contra os **2** que a mesma mutação produz serialmente. Baseline 66/66 verde nos dois casos.
@@ -33,7 +33,13 @@ export default defineConfig({
   // lê 14 mortos onde há 2 conclui que a mutação alcança o que ela não alcança — e desenha o teste
   // errado. O modo de falha oposto, ruído que ESCONDE um mutante sobrevivente, seria pior ainda.
   //
-  // Medido (12 núcleos, 66 specs): **39,1s** em paralelo · **2,1min** com 1 worker.
+  // Medido em máquina OCIOSA (12 núcleos, 92 specs, uma medição após a outra):
+  // **49,0s** com 6 workers · **1,5min** com 1. Cerca de 1,8×, ~41s a mais.
+  //
+  // ⚠️ Meça isto com a máquina PARADA. A primeira medição saiu 3× (87s) porque foi tomada com
+  // outros processos pesados rodando, e a contenção pune o serial muito mais que o paralelo
+  // (1,9s/spec sob carga contra 0,98s/spec ocioso). Sob carga, o custo parece o dobro do que é.
+  //
   // O opt-out é explícito, para quem sabe o que está trocando: `pnpm e2e -- --workers=6`.
   // No CI o efeito é nulo — o runner tem 2 vCPU, então metade já era 1.
   workers: 1,
