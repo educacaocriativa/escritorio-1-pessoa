@@ -29,10 +29,23 @@ que escopo menor.
 na barra de cima, a página `/busca`, o acesso no celular, e a promoção do `_escapa_curinga` do #125
 a utilitário compartilhado — com a dívida equivalente do CRM paga de passagem (§8).
 
-**Fora:** contas a pagar, cobranças e produtos. São listas sem tela de detalhe; entram depois como
-entradas no registro (§7), não como reescrita. Também fora: busca por tags, correção ortográfica,
-fuzzy, histórico de buscas recentes, e qualquer migration de índice — esta última porque a medição
-provou que não ajudaria (§5).
+**Fora:** contas a pagar, cobranças e produtos. Entram depois como entradas no registro (§7), não
+como reescrita.
+
+O motivo não é "não têm tela de detalhe" — é mais específico, e foi verificado: **nenhuma das três
+tem endereço que saiba receber uma busca.** O #125 deu um `q` a Contas a Pagar, mas ele é estado
+React: `filtros.ts` serializa para os `params` do axios, e `PagarPage.tsx` não usa
+`useSearchParams` — o único do módulo está em `CompartilharPage.tsx`. Hoje `/pagar?q=anthropic` é
+inerte. E mandar o resultado para `/pagar` sem filtro seria pior que não tê-lo: a visão padrão é
+`status ∈ (open, scheduled)` dentro do horizonte, então uma conta **paga** encontrada pela busca não
+estaria na tela para onde o clique levou.
+
+Quando essas telas passarem a hidratar o filtro a partir da URL — o que também conserta o botão
+"voltar" e o link compartilhável, independentemente de busca —, incluí-las é acrescentar uma entrada
+por tela.
+
+Também fora: busca por tags, correção ortográfica, fuzzy, histórico de buscas recentes, e qualquer
+migration de índice — esta última porque a medição provou que não ajudaria (§5).
 
 ## 3. As duas camadas — a decisão central
 
