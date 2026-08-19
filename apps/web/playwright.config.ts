@@ -24,6 +24,19 @@ const PORTA = Number(process.env.E2E_PORT ?? 5273);
 export default defineConfig({
   testDir: "./e2e",
   fullyParallel: true,
+  // ⚠️ **`workers: 1` é o PADRÃO de propósito (#147), e custa 87s.** Com a concorrência default
+  // (metade dos núcleos), a suíte INVENTA falhas: medindo uma mutação em 18/08/2026, o paralelo
+  // deu **14 vermelhos** espalhados por specs sem relação — agenda, busca, pagar, shell —
+  // contra os **2** que a mesma mutação produz serialmente. Baseline 66/66 verde nos dois casos.
+  //
+  // Não é lentidão trocada por nada: a prova por mutação é o critério de aceite deste repo, e quem
+  // lê 14 mortos onde há 2 conclui que a mutação alcança o que ela não alcança — e desenha o teste
+  // errado. O modo de falha oposto, ruído que ESCONDE um mutante sobrevivente, seria pior ainda.
+  //
+  // Medido (12 núcleos, 66 specs): **39,1s** em paralelo · **2,1min** com 1 worker.
+  // O opt-out é explícito, para quem sabe o que está trocando: `pnpm e2e -- --workers=6`.
+  // No CI o efeito é nulo — o runner tem 2 vCPU, então metade já era 1.
+  workers: 1,
   forbidOnly: Boolean(process.env.CI),
   retries: 0,
   // O `html` no CI NÃO é enfeite: sem ele o diretório `playwright-report/` nunca é criado, e o
