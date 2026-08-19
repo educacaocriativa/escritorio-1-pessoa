@@ -930,6 +930,9 @@ function DeclararSaldoModal({
       title={account ? `Declarar saldo — ${account.name}` : "Declarar saldo"}
       open={account !== null}
       onClose={onClose}
+      // Na CAIXA (#123). O nome da conta é digitado pelo dono e entra no título: é a exposição
+      // do #119, e recorte no conteúdo deixaria justamente o título fora da medição.
+      testId="modal-declarar-saldo"
     >
       <div className="space-y-3">
         <p className="text-sm text-neutral-600">
@@ -1039,6 +1042,8 @@ function LancarMovimentoModal({
       title={account ? `Lançar movimento — ${account.name}` : "Lançar movimento"}
       open={account !== null}
       onClose={onClose}
+      // Na CAIXA (#123) — mesmo motivo do `DeclararSaldoModal` acima.
+      testId="modal-lancar-movimento"
     >
       <div className="space-y-3">
         <Field label="Data" value={postedAt} onChange={setPostedAt} type="date" />

@@ -390,7 +390,8 @@ function EventDetailModal({ event, onClose }: { event: AgendaEvent; onClose: () 
     : `${formatDateTime(event.starts_at, fuso)} – ${hhmm(event.ends_at, fuso)}`;
 
   return (
-    <Modal title={event.title} open onClose={onClose}>
+    // `testId` na CAIXA (#123): o título aqui é DIGITADO pelo dono, a mesma exposição do #119.
+    <Modal title={event.title} open onClose={onClose} testId="modal-evento">
       <div className="space-y-3 text-sm">
         <div className="flex flex-wrap items-center gap-2 text-neutral-600">
           <span className="tabular-nums">{when}</span>
