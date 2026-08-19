@@ -13,8 +13,29 @@ describe("resolvePeriod", () => {
     expect(resolvePeriod("last_month", jan)).toEqual({ start: "2025-12-01", end: "2025-12-31" });
   });
 
+  it("last_month dentro do mesmo ano (julho -> junho)", () => {
+    // Achado por mutação (#121): o único teste de `last_month` era o de janeiro, que cai no ramo
+    // `m === 1 ? 12`. O `m - 1` do outro ramo NUNCA era executado — trocar por `m + 1` sobrevivia.
+    expect(resolvePeriod("last_month", TODAY)).toEqual({ start: "2026-06-01", end: "2026-06-30" });
+  });
+
   it("this_quarter (julho cai no 3º trimestre: jul-set)", () => {
     expect(resolvePeriod("this_quarter", TODAY)).toEqual({ start: "2026-07-01", end: "2026-09-30" });
+  });
+
+  it("this_quarter nos outros três trimestres", () => {
+    // ⚠️ Julho sozinho é um mês CEGO para este cálculo, e a mutação (#121) mostrou: trocar
+    // `Math.floor((m - 1) / 3)` por `Math.floor((m + 1) / 3)` dá o MESMO 3º trimestre em julho
+    // (`floor(6/3) = floor(8/3) = 2`) e sobrevivia à suíte. Em março os dois discordam: o certo
+    // é jan-mar, o mutante diz abr-jun — um trimestre inteiro no futuro.
+    const marco = new Date(Date.UTC(2026, 2, 31));
+    expect(resolvePeriod("this_quarter", marco)).toEqual({ start: "2026-01-01", end: "2026-03-31" });
+
+    const maio = new Date(Date.UTC(2026, 4, 9));
+    expect(resolvePeriod("this_quarter", maio)).toEqual({ start: "2026-04-01", end: "2026-06-30" });
+
+    const dezembro = new Date(Date.UTC(2026, 11, 1));
+    expect(resolvePeriod("this_quarter", dezembro)).toEqual({ start: "2026-10-01", end: "2026-12-31" });
   });
 
   it("this_year", () => {
