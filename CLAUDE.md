@@ -163,8 +163,13 @@ depender (issue #121).
   NUNCA por PR** — meia hora de espera por PR vira "sobe assim mesmo" na segunda semana, e um check
   que se aprende a ignorar é pior que nenhum. O relatório HTML sai como artefato `mutation-report`.
 - **O escopo é DESCOBERTO, não listado:** todo `src/**/*.ts` com um irmão `<nome>.test.ts` do lado
-  — 25 módulos hoje, ~3.400 linhas. Mesma escolha do filtro por marker `rls_e2e` no `ci.yml`: o
-  26º módulo entra sozinho. `.tsx` está **fora** (mutação em React é lenta e ruidosa).
+  — **26 módulos hoje**, ~3.470 linhas. Mesma escolha do filtro por marker `rls_e2e` no `ci.yml`:
+  o módulo seguinte entra sozinho. `.tsx` está **fora** (mutação em React é lenta e ruidosa).
+  ↳ Isto **já aconteceu, na mesma tarde**: o merge da `main` (PR #125) trouxe
+  `features/pagar/filtros.ts` com teste irmão, e o escopo passou de 25 para 26 sem ninguém editar
+  a config. É o comportamento desejado — mas note a contrapartida: **a tabela de baseline abaixo
+  não se atualiza sozinha**. Módulo novo entra na medição e fica fora do registro até alguém
+  medir. Ao ver um módulo no relatório que não está na tabela, meça e acrescente.
 - ⚠️ **A corrida exclui os testes `.test.tsx`** (`vitest.mutation.config.ts`). É a diferença entre
   "o teste DEDICADO prende a lógica" e "algum teste de componente passou por ali de raspão" — e
   vale 5,5x em tempo (74s → 13,5s no ciclo base). O erro que isso introduz tem direção conhecida:
@@ -174,7 +179,8 @@ depender (issue #121).
   `secret-scan`/`sast-semgrep`/`frontend`.
 
 **Baseline MEDIDO** (2026-08-18, Node 24, 12 vCPU, `--concurrency` default; ~21 min em quatro
-lotes para os 1.605 mutantes; **os 25 módulos foram medidos, nenhum ficou de fora**). "Antes" é a
+lotes para os 1.605 mutantes; **os 25 módulos de então foram medidos, nenhum ficou de fora** — o
+26º, `filtros.ts`, chegou depois pelo merge e foi medido à parte, na mesma data). "Antes" é a
 primeira corrida; "depois" é a mesma medição após a triagem desta issue. Global: **79,25% →
 82,73%**.
 
@@ -205,6 +211,7 @@ primeira corrida; "depois" é a mesma medição após a triagem desta issue. Glo
 | `pagar/baixa.ts` | 82 | 60,98 | 65,79 | 25 | 1 |
 | `lib/shareInbox.ts` | 26 | 61,54 | 61,54 | 9 | 1 |
 | `app/navigation.ts` | 115 | 55,65 | **55,65** | 51 | 0 |
+| `pagar/filtros.ts` ¹ | 77 | 77,92 | 77,92 | 17 | 0 |
 
 **O que a primeira medição achou, e o que virou teste.** Nenhum destes era visível com a suíte
 verde:
@@ -239,7 +246,11 @@ código.
    só copiaria a soma para o outro lado do `expect`.
 
 **Dívida (medida, não estimada):**
-- ⚠️ **254 sobreviventes e 22 sem cobertura continuam de pé**, e a triagem acima cobriu a ponta de
+¹ Entrou no escopo pelo merge do PR #125 (2026-08-18), depois da corrida das quatro lotes; medido
+isoladamente na mesma data, sem triagem — os 17 sobreviventes dele estão no total abaixo.
+
+- ⚠️ **271 sobreviventes e 22 sem cobertura continuam de pé** (254 da primeira corrida + 17 do
+  `filtros.ts`), e a triagem acima cobriu a ponta de
   maior sinal, não o conjunto. Os três piores por score são `app/navigation.ts` (55,65% — **51
   sobreviventes, o maior débito único do frontend**), `lib/shareInbox.ts` (61,54%) e `pagar/baixa.ts`
   (65,79%). Dos 333 sobreviventes originais, **153 eram `StringLiteral`** — rótulos e constantes de
