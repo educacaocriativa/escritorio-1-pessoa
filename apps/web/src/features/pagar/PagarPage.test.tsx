@@ -1,7 +1,7 @@
 import { render, screen, fireEvent, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter } from "react-router-dom";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { api } from "../../lib/api";
 import { PageActionsProvider, usePageActions } from "../../store/pageActions";
 import PagarPage from "./PagarPage";
@@ -19,11 +19,25 @@ vi.mock("../../lib/api", () => ({
     "Erro inesperado",
 }));
 
-/** Hoje como data de calendário local — a mesma regra de `contas.hojeISO`. */
-function hoje(): string {
-  const d = new Date();
-  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
-}
+// ── A régua do fuso (CLAUDE.md §5.2, issues #120/#129) ────────────────────────────────────────
+//
+// Havia aqui um `hoje()` montado com `d.getFullYear()/getMonth()/getDate()` — o dia do NAVEGADOR —
+// usado para afirmar que a data da baixa **não** é hoje. Além de comparar contra um relógio vivo
+// (bomba-relógio: bastava o dia real bater com o vencimento da fixture), ele lia o relógio errado.
+//
+// ⚠️ **Esta tela NÃO fica em Tóquio, e isso é deliberado.** `PagarPage` passa
+// `dataPadrao={pagando.due_date}` para a `EscolhaDaBaixa`: o campo é preenchido com o VENCIMENTO
+// da conta, e nenhum relógio — nem o do tenant, nem o do navegador — participa desse valor. A
+// asserção existe para provar essa origem, não para provar fuso. Mocar `useFuso` aqui seria um
+// mock inerte, e trocar o fuso não fortaleceria nada. O que a torna capaz de falhar é o relógio
+// CONGELADO: com ele, "hoje" vira uma string conhecida em todos os fusos plausíveis, e substituir
+// `pagando.due_date` por qualquer leitura de relógio na produção derruba o teste.
+//
+// `2026-08-17T18:00:00Z` → São Paulo (fuso do runner) e UTC: **17/08**; Tóquio: **18/08**.
+const INSTANTE = "2026-08-17T18:00:00Z";
+/** Os dias que "hoje" pode valer em `INSTANTE`. Nenhum deles é o vencimento da fixture. */
+const HOJE_NO_NAVEGADOR_E_EM_UTC = "2026-08-17";
+const HOJE_EM_TOQUIO = "2026-08-18";
 
 const CONTA = {
   id: "acc-1",
@@ -97,6 +111,9 @@ beforeEach(() => {
   });
   vi.mocked(api.post).mockReset();
 });
+
+// Só um teste congela o relógio; o resto da suíte roda no relógio real e não pode herdá-lo.
+afterEach(() => vi.useRealTimers());
 
 describe("PagarPage — Nova conta a pagar (Story 7.5, Task 1)", () => {
   it("caminho feliz: cria conta a pagar com valor + vencimento; POST com amount_cents coerente", async () => {
@@ -239,6 +256,10 @@ describe("PagarPage — dar baixa (Story 8.13)", () => {
   });
 
   it("envia bank_account_id e paid_on; o dia vem do VENCIMENTO, não de hoje", async () => {
+    // O relógio congelado é o que dá dentes ao `not.toBe` abaixo: sem ele, "hoje" era lido do
+    // relógio vivo da máquina e a asserção só teria alguma chance de falhar no dia 10/06/2026.
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    vi.setSystemTime(new Date(INSTANTE));
     mockComConta([CONTA]);
     vi.mocked(api.post).mockResolvedValue({ data: {} } as never);
     const user = await abrirBaixa();
@@ -247,7 +268,11 @@ describe("PagarPage — dar baixa (Story 8.13)", () => {
     // Fundador F10: "deixar habilitado no vencimento, pois se estiver fazendo retroativo, pq não
     // deu certo no dia". NÃO é hoje, e não é `now()`.
     expect(dia.value).toBe("2026-06-10");
-    expect(dia.value).not.toBe(hoje());
+    // ...e não é hoje em relógio NENHUM: nem o do navegador/UTC, nem o de um tenant distante. É
+    // esta linha que morre se alguém trocar `dataPadrao={pagando.due_date}` por `hojeISO()` ou
+    // `today(fuso)` na `PagarPage` — o modo exato como esta tela poderia regredir.
+    expect(dia.value).not.toBe(HOJE_NO_NAVEGADOR_E_EM_UTC);
+    expect(dia.value).not.toBe(HOJE_EM_TOQUIO);
 
     await user.click(screen.getByRole("button", { name: /confirmar baixa/i }));
 

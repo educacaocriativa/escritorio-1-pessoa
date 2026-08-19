@@ -164,11 +164,38 @@ estava certa; o que faltava era um teste capaz de dizer isso.**
   `formatX(iso, fuso)` → `formatX(iso, Intl.DateTimeFormat().resolvedOptions().timeZone)`) e confirme
   que o teste **morre**. Sem isso a correção é cosmética. Restaure por **cópia do arquivo**, nunca
   por `git checkout` num arquivo com trabalho não commitado.
-- **Dívida que fica:** a mesma classe existe fora da lista de quem mocka `useFuso`. Os testes de
-  `pagar/ComprovantePage`, `pagar/PagarPage` e `cobrancas/CobrancasPage` montam "hoje" com
-  `d.getFullYear()/getMonth()/getDate()` (o dia do **navegador**) e comparam com o `today(fuso)` da
-  tela; com tenant e runner no mesmo fuso, essas asserções também não conseguem falhar. Não foram
-  tocadas nesta passada.
+- ✅ **A mesma classe FORA de quem mocka `useFuso` — fechada pela issue #129.** `grep useFuso` não
+  achava `pagar/ComprovantePage`, `pagar/PagarPage` e `cobrancas/CobrancasPage`: eles montavam
+  "hoje" na mão, com `d.getFullYear()/getMonth()/getDate()`. **A regra que fica é a do recorte:** um
+  teste que monta "hoje" com as partes locais de um `Date` está afirmando sobre o **navegador**,
+  mesmo quando o `expect` fala do tenant — então o grep que caça esta classe é
+  `getFullYear|getMonth\(\)|getDate\(\)|toISOString\(\)\.slice\(0, ?10\)`, não `useFuso`.
+  `ComprovantePage` migrou para Tóquio + relógio congelado (3 asserções, 2 mutações mortas cada);
+  `PagarPage` ficou no fuso do runner **com a razão escrita** (o campo vem de
+  `dataPadrao={pagando.due_date}` — nenhum relógio participa) e ganhou só o relógio congelado, que
+  é o que dá dentes ao `not.toBe(hoje)`.
+- ⚠️ **O achado que só apareceu quando o teste passou a poder falhar: `CobrancasPage` lê o relógio
+  do NAVEGADOR.** Ela passa `dataPadrao={hojeISO()}`, e `hojeISO` (`financeiro/contas.ts`) monta a
+  data pelas partes locais do `Date` — não consulta `useFuso()`. A tela não importa nada de
+  `store/auth`, então **mocar o fuso do tenant nela é mock inerte**. O teste hoje afirma o dia do
+  navegador (`DIA_DO_NAVEGADOR`, com o porquê ao lado) — é o que a tela faz, e agora está dito em
+  voz alta em vez de escondido atrás de dois relógios iguais. **Dívida aberta:** `hojeISO` contraria
+  a régua do PR #78 (o dia é o do tenant) e é compartilhada com `ContasSaldosPage`, `AccountModal`,
+  `EscolhaDaBaixa` (`aviso`/`max`) e `crm/ClientDetailPage` — pagá-la é uma mudança de produção com
+  cinco telas dentro, não um ajuste de teste. Quem pagar derruba também os dois testes de borda de
+  `financeiro/contas.test.ts` (`amanha`/`ontem` derivados de UTC), avisados no lugar.
+- ⚠️ **O segundo achado: um componente, dois relógios.** Com o tenant a leste, a bandeja de
+  `ComprovantePage` abre com o aviso *"Esta data é no futuro… será registrada como AGENDADA"* já
+  visível, sem o dono ter tocado em nada — o default do campo vem de `localToday(fuso)` (**tenant**)
+  e o `avisoDeDataFutura`/`tetoDaDataDeBaixa` da `EscolhaDaBaixa` comparam com `hojeISO()`
+  (**navegador**). Enquanto os dois fusos eram o mesmo valor, nenhum teste podia ver isso. Está
+  anotado no teste e **não** virou `expect`: travar o aviso pregaria o defeito na parede.
+- **Onde o `new Date()` vivo FICA, e por quê:** `agenda/AgendaPage.test.tsx` monta o evento de
+  fixture a partir do relógio só para ele cair no mês que a tela abre — nenhum `expect` compara esse
+  valor com o que a tela calculou, e a prova de agrupamento por dia do tenant mora em `grade.test.ts`.
+  `financeiro/contas.test.ts` compara duas strings numa função pura que resolve "hoje" sozinha: sem
+  dois relógios, um fuso distante não tem o que matar. **Ambos com a razão escrita no arquivo** —
+  sem ela, o próximo leitor que rodar o grep os "conserta" e enfraquece o que já estava certo.
 
 ### 5.3 O teste de mutação (`apps/web/stryker.config.mjs`, desde 2026-08-18)
 

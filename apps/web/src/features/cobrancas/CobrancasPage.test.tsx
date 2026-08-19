@@ -1,6 +1,6 @@
 import { render, screen, fireEvent, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { api } from "../../lib/api";
 import { PageActionsProvider, usePageActions } from "../../store/pageActions";
 import CobrancasPage from "./CobrancasPage";
@@ -51,6 +51,9 @@ beforeEach(() => {
   vi.mocked(api.post).mockReset();
 });
 
+// Só um teste congela o relógio; o resto da suíte roda no relógio real e não pode herdá-lo.
+afterEach(() => vi.useRealTimers());
+
 describe("CobrancasPage — Nova cobrança (Story 7.5, Task 2)", () => {
   it("caminho feliz: cria cobrança com valor + vencimento; POST com amount_cents coerente", async () => {
     const user = userEvent.setup();
@@ -98,26 +101,40 @@ describe("CobrancasPage — Nova cobrança (Story 7.5, Task 2)", () => {
 // foi removido de propósito (só o webhook do gateway marca pago), e a cobrança paga por fora fica
 // em aberto para sempre — com a régua mandando lembrete a quem já pagou.
 
-/** Hoje como data de calendário local — a mesma regra de `contas.hojeISO`. */
-function hoje(): string {
-  const d = new Date();
-  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
-}
+// ── A régua do fuso (CLAUDE.md §5.2, issues #120/#129) ────────────────────────────────────────
+//
+// O que havia aqui: um `hoje()` montado com `d.getFullYear()/getMonth()/getDate()` (o dia do
+// NAVEGADOR) e um `daquiADias(n)` derivado do relógio VIVO da máquina. O `vitest.config.ts` fixa
+// `TZ: "America/Sao_Paulo"`, o mesmo fuso do tenant de teste — então "o dia default é HOJE" era
+// verdadeiro por construção, dissesse a tela o que dissesse. Agora o relógio é congelado e os
+// dias são strings literais: o teste passou a afirmar sobre a TELA, não sobre si mesmo.
+//
+// `2026-08-17T02:30:00Z` separa os três relógios do jeito que interessa aqui:
+//   · **navegador** (America/Sao_Paulo, o runner) → 16/08 23:30 → **2026-08-16**
+//   · **UTC**                                     → **2026-08-17**
+//   · **tenant em Asia/Tokyo**                    → 17/08 11:30 → **2026-08-17**
+// Com o esperado em 16/08, morre tanto quem passar a ler UTC quanto quem passar a ler o fuso do
+// tenant — e é exatamente essa segunda morte que expõe o que a tela faz hoje (ver abaixo).
+const INSTANTE = "2026-08-17T02:30:00Z";
 
 /**
- * Uma data de calendário local a N dias de hoje.
+ * O dia que esta tela usa como default de "recebi direto na conta".
  *
- * ⚠️ O vencimento da fixture PRECISA ser derivado do relógio, não escrito à mão. Ele era
- * `"2026-08-10"` fixo, e o teste "o dia default é HOJE (não o vencimento)" afirma justamente que
- * os dois DIFEREM — então em 10/08/2026, e só nesse dia, a suíte ficava vermelha por coincidência
- * de calendário. Bomba-relógio de um dia: não quebra em nenhuma execução antes, não quebra em
- * nenhuma depois, e quem a encontra está sempre depurando outra coisa.
+ * ⚠️ **É o dia do NAVEGADOR, e isso é um achado, não uma escolha desta suíte.** `CobrancasPage`
+ * passa `dataPadrao={hojeISO()}`, e `hojeISO` (em `financeiro/contas.ts`) monta a data pelas
+ * partes locais de um `Date` — o relógio de quem abriu o navegador. Ela **não** consulta
+ * `useFuso()`/`today(fuso)`: a tela não importa nada de `store/auth`, então mocar o fuso do tenant
+ * aqui seria um mock inerte. Enquanto o teste montava o esperado do mesmo jeito, essa divergência
+ * era invisível — os dois lados eram o mesmo relógio.
+ *
+ * A régua do e1p desde o PR #78 é o fuso do TENANT (`hoje_do_tenant`/`today(fuso)`). Se um dono em
+ * viagem abrir a tela, o "dia em que o dinheiro caiu" vem do fuso do hotel, não do da empresa.
+ * **Dívida registrada, fora do escopo da #129** (que é sobre testes incapazes de falhar; mexer em
+ * `hojeISO` mexe em Contas & Saldos, `AccountModal`, `EscolhaDaBaixa` e `ClientDetailPage` junto).
+ * Quando alguém a pagar, este teste fica VERMELHO com `expected '2026-08-17'` — e é esse o sinal
+ * certo: troque o literal por `"2026-08-17"` e o nome do teste, em vez de "consertar" de volta.
  */
-function daquiADias(n: number): string {
-  const d = new Date();
-  d.setDate(d.getDate() + n);
-  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
-}
+const DIA_DO_NAVEGADOR = "2026-08-16";
 
 const CONTA_BANCARIA = {
   id: "acc-1",
@@ -140,9 +157,13 @@ const COBRANCA_ABERTA = {
   kind: "service",
   method: "pix",
   amount_cents: 100000,
-  // A vencer, nunca hoje — ver `daquiADias`. `is_overdue: false` abaixo continua coerente.
-  due_date: daquiADias(30),
-  competence_date: daquiADias(30),
+  // A vencer, nunca hoje — o teste "o dia default é HOJE (não o vencimento)" afirma que os dois
+  // DIFEREM. Era `daquiADias(30)`, derivado do relógio vivo, porque um literal fixo virava bomba
+  // de um dia só: em 10/08/2026 a fixture `"2026-08-10"` coincidia com "hoje" e a suíte ficava
+  // vermelha por acaso de calendário. O que desarma a bomba é o **relógio congelado**, não a
+  // derivação — com ele "hoje" é sempre 16/08/2026 e um literal distante é seguro para sempre.
+  due_date: "2026-09-16",
+  competence_date: "2026-09-16",
   paid_at: null,
   chart_account_id: null,
   contract_id: null,
@@ -233,7 +254,11 @@ describe("CobrancasPage — recebimento fora do trilho (Story 8.15)", () => {
     expect(within(bloco).getByLabelText(/dia em que o dinheiro caiu na conta/i)).toBeInTheDocument();
   });
 
-  it("envia bank_account_id e received_on; o dia default é HOJE (não o vencimento)", async () => {
+  it("envia bank_account_id e received_on; o dia default é HOJE — hoje NO NAVEGADOR (ver `DIA_DO_NAVEGADOR`)", async () => {
+    // Relógio congelado num instante em que navegador (16/08), UTC (17/08) e um tenant em Tóquio
+    // (17/08) discordam: sem isso a asserção compara o dia do navegador com o dia do navegador.
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    vi.setSystemTime(new Date(INSTANTE));
     mockCobrancas([COBRANCA_ABERTA]);
     vi.mocked(api.post).mockResolvedValue({ data: {} } as never);
     const user = await abrirRegistro();
@@ -241,7 +266,10 @@ describe("CobrancasPage — recebimento fora do trilho (Story 8.15)", () => {
     const dia = (await screen.findByLabelText(/dia em que o dinheiro caiu na conta/i)) as HTMLInputElement;
     // O gesto aqui é "caiu na minha conta", um fato observado AGORA — diferente da baixa de Contas
     // a Pagar, que parte do vencimento (fundador F10). A assimetria é deliberada.
-    expect(dia.value).toBe(hoje());
+    //
+    // ⚠️ O QUE este `expect` agora denuncia: o "agora" desta tela é o do NAVEGADOR (`hojeISO()`),
+    // não o do tenant. Ver o comentário de `DIA_DO_NAVEGADOR` — é dívida registrada, não descuido.
+    expect(dia.value).toBe(DIA_DO_NAVEGADOR);
     expect(dia.value).not.toBe(COBRANCA_ABERTA.due_date);
 
     await user.click(screen.getByRole("button", { name: /confirmar recebimento/i }));
@@ -249,7 +277,7 @@ describe("CobrancasPage — recebimento fora do trilho (Story 8.15)", () => {
     await waitFor(() => expect(api.post).toHaveBeenCalled());
     expect(vi.mocked(api.post).mock.calls[0]).toEqual([
       "/receivables/charges/c-1/settle-externally",
-      { bank_account_id: "acc-1", received_on: hoje() },
+      { bank_account_id: "acc-1", received_on: DIA_DO_NAVEGADOR },
     ]);
   });
 
