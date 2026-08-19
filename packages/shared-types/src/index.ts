@@ -1205,3 +1205,43 @@ export interface BriefingPreferences {
   /** Texto pronto para a tela quando indisponível; `null` quando disponível. */
   briefing_whatsapp_indisponivel_motivo: string | null;
 }
+
+// ── Busca global ──────────────────────────────────────────────────────────────
+//
+// Sete tipos, e o critério de quem entra é ter tela de destino. Contas a pagar, cobranças e
+// produtos ficaram de fora porque nenhuma das três sabe receber uma busca pela URL — ver a
+// issue #138 e a spec `2026-08-18-busca-global-design.md` §2.
+
+export type SearchType =
+  | "client"
+  | "conversation"
+  | "contract"
+  | "quote"
+  | "legal_document"
+  | "page"
+  | "funnel";
+
+export interface SearchItem {
+  id: UUID;
+  title: string;
+  subtitle: string;
+  /** Caminho pronto para o router. Quem decide o destino é o backend, no registro. */
+  route: string;
+  /** Só em `depth=deep`: na camada rasa não há corpo de onde extrair trecho. */
+  snippet: string | null;
+}
+
+export interface SearchGroup {
+  type: SearchType;
+  has_more: boolean;
+  /**
+   * Só em `depth=deep`. Na camada rasa a contagem exata custaria sete `count()` por tecla — e
+   * `has_more` não tem como mentir sobre um número que não anuncia.
+   */
+  total: number | null;
+  items: SearchItem[];
+}
+
+export interface SearchResponse {
+  groups: SearchGroup[];
+}
