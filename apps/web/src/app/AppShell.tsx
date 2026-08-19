@@ -1,8 +1,9 @@
 import type { TenantProfile } from "@e1p/shared-types";
 import clsx from "clsx";
-import { Bell, ChevronDown, LogOut, Plus, Search, ShieldCheck, X } from "lucide-react";
+import { Bell, ChevronDown, LogOut, Menu, Plus, Search, ShieldCheck, X } from "lucide-react";
 import { type ReactNode, useEffect, useState } from "react";
-import { NavLink } from "react-router-dom";
+import { NavLink, useNavigate } from "react-router-dom";
+import BuscaGlobal from "../features/busca/BuscaGlobal";
 import { api } from "../lib/api";
 import { applyBrandTheme } from "../lib/theme";
 import { useAuth } from "../store/auth";
@@ -163,6 +164,7 @@ function Sidebar({ onClose }: { onClose: () => void }) {
 function Topbar({ onOpen, sidebarOpen }: { onOpen: () => void; sidebarOpen: boolean }) {
   const { user, tenant, logout } = useAuth();
   const { action } = usePageActions();
+  const navigate = useNavigate();
 
   return (
     // `flex-wrap` + `order-last` abaixo de `sm`: a ação primária desce para uma linha própria, de
@@ -178,20 +180,25 @@ function Topbar({ onOpen, sidebarOpen }: { onOpen: () => void; sidebarOpen: bool
           // que o polegar não acerta.
           className="flex h-11 w-11 shrink-0 items-center justify-center rounded-pill bg-primary-50 text-primary-600"
         >
-          <Search size={16} />
+          {/* `Menu`, e não `Search`: este botão sempre abriu o menu (`aria-label` acima), mas
+              usava uma lupa. Com a lupa DE VERDADE agora ao lado dele, seriam dois ícones iguais
+              com significados diferentes — e o de baixo é o que o polegar procura no celular. */}
+          <Menu size={16} />
         </button>
       )}
 
-      {/* A busca não tem handler nenhum — é decoração até alguém ligá-la. Abaixo de `md` ela sai da
-          frente e devolve 152px à linha, em vez de virar um bolo cinza de 52px sem placeholder
-          legível, que foi o que a medição encontrou. */}
-      <div className="relative hidden min-w-0 max-w-md flex-1 md:block">
-        <Search size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-neutral-400" />
-        <input
-          placeholder="Buscar cliente, projeto ou processo"
-          className="w-full rounded-pill bg-neutral-50 py-2 pl-9 pr-4 text-sm outline-none focus:ring-2 focus:ring-primary-300"
-        />
-      </div>
+      {/* Abaixo de `md` o campo sai da frente e devolve 152px à linha: a medição do PR #58 achou
+          que ali ele vira um bolo cinza de 52px sem placeholder legível. O acesso no celular é a
+          lupa abaixo, que leva à página `/busca` — já desenhada para caber num telefone. */}
+      <BuscaGlobal />
+
+      <button
+        onClick={() => navigate("/busca")}
+        aria-label="Buscar"
+        className="flex h-11 w-11 shrink-0 items-center justify-center rounded-pill text-neutral-500 hover:text-neutral-800 md:hidden"
+      >
+        <Search size={20} />
+      </button>
 
       {/* `min-h-[44px]`: com `py-2` puro a altura dava 40px e o teste desta task pegaria. */}
       {action && (
