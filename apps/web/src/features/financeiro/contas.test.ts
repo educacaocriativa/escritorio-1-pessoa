@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import {
   ACAO_BAIXAR_PAYABLE,
   acaoBaixarPayable,
@@ -13,7 +13,6 @@ import {
   diaAnteriorISO,
   DISPONIVEL_CAIXA_LABEL,
   formatDateBR,
-  hojeISO,
   impedimentoDaTransferencia,
   isIgnored,
   isOrigemDoSistema,
@@ -654,45 +653,80 @@ describe("Story 8.18 — avisoDestinoAplicacao: obrigatório, e silêncio no res
 describe("Story 8.18 — impedimentoDaTransferencia: o que a tela consegue antecipar, e só isso", () => {
   const a = conta({ id: "a", kind: KIND_CHECKING });
   const b = conta({ id: "b", kind: KIND_SAVINGS });
-  // ⚠️ **`hojeISO()` e `Date.now()` ficam aqui de propósito — não é a classe da #120/#129.**
-  // `impedimentoDaTransferencia` compara duas STRINGS `YYYY-MM-DD` e resolve "hoje" chamando
-  // `hojeISO()` ela mesma; não existe fuso de tenant nesta função (nem `useFuso`, nem `today(tz)`),
-  // então não há dois relógios a confundir e um fuso distante não teria o que matar. Congelar o
-  // relógio aqui só amarraria o teste a um literal sem ganhar poder de detecção.
+
+  // ⚠️ **A dívida anotada aqui pelo PR #133 foi PAGA (#136), e por isso os literais mudaram.**
+  // Até então esta função resolvia "hoje" chamando `hojeISO()` por DENTRO — uma função anunciada
+  // como PURA lendo o relógio do navegador escondida atrás da assinatura. O aviso antigo dizia que
+  // um fuso distante "não teria o que matar" e que congelar o relógio "só amarraria o teste a um
+  // literal sem ganhar poder de detecção": as duas frases eram verdade enquanto o hoje era interno,
+  // e as duas deixaram de ser quando ele virou o 5º parâmetro. Agora o hoje entra de fora, do mesmo
+  // `today(useFuso())` que preenche o campo na `TransferirModal` — e é exatamente isso que estas
+  // asserções passam a conseguir afirmar.
   //
-  // ⚠️ O que estas asserções NÃO aguentam: se um dia `hojeISO()` virar o dia do TENANT (a dívida
-  // anotada em `cobrancas/CobrancasPage.test.tsx`), o `amanha`/`ontem` derivados de UTC abaixo
-  // passam a poder empatar com o "hoje" da função — num tenant a leste, o dia UTC seguinte JÁ é
-  // hoje. Quem pagar aquela dívida derruba estes dois testes e tem de derivar as bordas do mesmo
-  // relógio que a função passar a usar. É o aviso, não um convite a "consertar" antes da hora.
-  const HOJE = hojeISO();
+  // As bordas NÃO são mais derivadas de `Date.now()`/UTC — são literais do calendário do TENANT.
+  // `2026-08-17T02:30:00Z` separa os três relógios:
+  //   · **navegador** (America/Sao_Paulo, o runner do vitest) → 16/08 23:30 → `2026-08-16`
+  //   · **UTC**                                               → `2026-08-17`
+  //   · **tenant em Asia/Tokyo**                              → 17/08 11:30 → `2026-08-17`
+  // O relógio fica congelado nesse instante **de propósito**: assim, quem devolver a leitura do
+  // hoje para dentro da função (pelas partes locais de um `new Date()` ou por `toISOString()`)
+  // muda o resultado e fica VERMELHO. Sem o congelamento, o dia real da máquina ficaria longe
+  // destes literais e a divergência seria acidente de calendário, não medição.
+  const INSTANTE = "2026-08-17T02:30:00Z";
+  const HOJE = "2026-08-17"; // o dia do TENANT (Tóquio) — que é o AMANHÃ do navegador
+  const AMANHA = "2026-08-18";
+  const ONTEM = "2026-08-16"; // o HOJE do navegador — que para o tenant já é ontem
+
+  beforeAll(() => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date(INSTANTE));
+  });
+  afterAll(() => {
+    vi.useRealTimers();
+  });
 
   it("sem as duas contas, pede as duas", () => {
-    expect(impedimentoDaTransferencia(null, b, 100, HOJE)).toMatch(/origem e a de destino/);
-    expect(impedimentoDaTransferencia(a, null, 100, HOJE)).toMatch(/origem e a de destino/);
+    expect(impedimentoDaTransferencia(null, b, 100, HOJE, HOJE)).toMatch(/origem e a de destino/);
+    expect(impedimentoDaTransferencia(a, null, 100, HOJE, HOJE)).toMatch(/origem e a de destino/);
   });
 
   it("mesma conta nos dois lados é impedimento — não moveria dinheiro nenhum", () => {
-    expect(impedimentoDaTransferencia(a, a, 100, HOJE)).toMatch(/a mesma/);
+    expect(impedimentoDaTransferencia(a, a, 100, HOJE, HOJE)).toMatch(/a mesma/);
   });
 
   it("valor zero ou negativo é impedimento — o sinal vive nas pernas", () => {
-    expect(impedimentoDaTransferencia(a, b, 0, HOJE)).toMatch(/maior que zero/);
-    expect(impedimentoDaTransferencia(a, b, -100, HOJE)).toMatch(/maior que zero/);
+    expect(impedimentoDaTransferencia(a, b, 0, HOJE, HOJE)).toMatch(/maior que zero/);
+    expect(impedimentoDaTransferencia(a, b, -100, HOJE, HOJE)).toMatch(/maior que zero/);
   });
 
   it("data futura é impedimento — o mesmo 422 que `create_transfer` aplica no backend", () => {
     // A tela antecipa a guarda para não montar uma parede um clique adiante; quem a APLICA é o
     // backend (achado A-3: ela não pode viver na guarda genérica do módulo, que aceita futuro para
     // origem de sistema desde a Story 8.14).
-    const amanha = new Date(Date.now() + 86_400_000).toISOString().slice(0, 10);
-    expect(impedimentoDaTransferencia(a, b, 100, amanha)).toMatch(/não pode ser futura/);
+    expect(impedimentoDaTransferencia(a, b, 100, AMANHA, HOJE)).toMatch(/não pode ser futura/);
   });
 
   it("tudo certo → `null`, inclusive HOJE (a borda aceita)", () => {
-    expect(impedimentoDaTransferencia(a, b, 100_00, HOJE)).toBeNull();
-    const ontem = new Date(Date.now() - 86_400_000).toISOString().slice(0, 10);
-    expect(impedimentoDaTransferencia(a, b, 100_00, ontem)).toBeNull();
+    expect(impedimentoDaTransferencia(a, b, 100_00, HOJE, HOJE)).toBeNull();
+    expect(impedimentoDaTransferencia(a, b, 100_00, ONTEM, HOJE)).toBeNull();
+  });
+
+  it("o hoje é o do TENANT e vem de FORA: o dia que o navegador ainda não viveu é aceito", () => {
+    // A asserção que a #136 acrescenta, e a única daqui que morre se o hoje voltar para dentro da
+    // função. Com o relógio congelado em `INSTANTE`, o navegador do runner está em 16/08 e o tenant
+    // de Tóquio já está em 17/08. Um dono em Tóquio registrando a transferência do dia DELE manda
+    // `postedAt = "2026-08-17"`.
+    //
+    // · hoje vindo de fora (o do tenant) → isso é HOJE → passa.
+    // · hoje lido por dentro pelo relógio do NAVEGADOR (o defeito) → isso é FUTURO → a tela
+    //   barraria com "a data não pode ser futura" o valor que ela mesma acabou de preencher.
+    expect(impedimentoDaTransferencia(a, b, 100_00, "2026-08-17", HOJE)).toBeNull();
+    // O par contrário fecha a tenaz: com o hoje do NAVEGADOR o MESMO dia é recusado. Sem ele, a
+    // asserção acima passaria com qualquer hoje grande o bastante, e não provaria de qual relógio
+    // o valor veio.
+    expect(impedimentoDaTransferencia(a, b, 100_00, "2026-08-17", "2026-08-16")).toMatch(
+      /não pode ser futura/,
+    );
   });
 });
 

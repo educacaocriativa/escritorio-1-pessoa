@@ -9,6 +9,7 @@ import {
   CadastroDeContaEmbutido,
   EscolhaDaBaixa,
   type EscolhaDaBaixaState,
+  HOJE_DO_TENANT,
   useEscolhaDaBaixa,
 } from "./EscolhaDaBaixa";
 
@@ -56,7 +57,9 @@ function chip(p: Payable): { label: string; cls: string } {
  * toque por conta, e a ação principal fixa no rodapé.
  */
 export default function ComprovantePage() {
-  const fuso = useFuso();
+  // ⚠️ **Esta tela não resolve mais "hoje" por conta própria** (#136): o `useEscolhaDaBaixa` abaixo
+  // é quem o faz, no fuso do tenant, no mesmo ponto em que valida a data. `useFuso()` continua
+  // sendo usado por `NovaContaEmbutida` (o `due_date` de uma conta NOVA, que é outra pergunta).
   const { id = "" } = useParams();
   const navigate = useNavigate();
   const [candidates, setCandidates] = useState<Payable[]>([]);
@@ -82,7 +85,12 @@ export default function ComprovantePage() {
    * O que mudou é que "hoje" deixou de ser decisão invisível do backend: virou um campo **visível
    * e editável**, dentro da barra fixa, ao lado do botão. O usuário confirma; não constrói.
    */
-  const escolha = useEscolhaDaBaixa(localToday(fuso));
+  // ⚠️ **`HOJE_DO_TENANT`, e não `localToday(fuso)`** (#136). O valor é o mesmo — o dia do tenant —,
+  // mas a ORIGEM passou a ser uma só: quem preenche o campo é o mesmo ponto que valida a data
+  // (`avisoDeDataFutura`/`tetoDaDataDeBaixa`). Era essa duplicação que fazia a bandeja abrir, com o
+  // tenant em Tóquio, já acusando "Esta data é no futuro… será registrada como AGENDADA" sobre o
+  // valor que ela mesma acabara de escrever.
+  const escolha = useEscolhaDaBaixa(HOJE_DO_TENANT);
 
   // Identifica QUAL comprovante está na tela. Não existe `GET /payables/receipts/{id}`, mas a
   // bandeja é curta por construção (teto de 30), então filtrar a lista basta e evita rota nova.
