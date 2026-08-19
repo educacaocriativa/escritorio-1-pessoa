@@ -414,19 +414,28 @@ export function avisoDestinoAplicacao(destino: BankAccount | null): string | nul
  * não futura) — e **só** essas. As demais (conta arquivada, data anterior à abertura) dependem de
  * dado que a tela tem, mas cuja mensagem o backend escreve melhor: duplicar a redação aqui criaria
  * duas frases para a mesma regra, e a daqui envelheceria primeiro.
+ *
+ * ⚠️ **`hojeYmd` é PARÂMETRO, e isso é o conserto da #136.** Até então esta função chamava
+ * `hojeISO()` por dentro — ou seja, uma função "pura" lia o relógio do NAVEGADOR escondida atrás da
+ * assinatura. O `postedAt` que a tela oferece já nasce no fuso do tenant; comparar contra o dia da
+ * máquina de quem abriu a página é o mesmo defeito de dois relógios da bandeja de comprovantes, só
+ * que na camada de baixo — e, num tenant a leste, ele barra com "a data não pode ser futura" o
+ * valor que a própria tela acabou de preencher. Recebendo o hoje de fora, o teste consegue afirmar
+ * sobre fuso. Mesmo precedente de `filtroPadrao(hojeYmd)` em `pagar/filtros.ts`.
  */
 export function impedimentoDaTransferencia(
   origem: BankAccount | null,
   destino: BankAccount | null,
   cents: number,
   postedAt: string,
+  hojeYmd: string,
 ): string | null {
   if (!origem || !destino) return "Escolha a conta de origem e a de destino.";
   if (origem.id === destino.id) {
     return "A conta de origem e a de destino são a mesma — isso não moveria dinheiro nenhum.";
   }
   if (cents <= 0) return "Informe um valor maior que zero.";
-  if (postedAt > hojeISO()) {
+  if (postedAt > hojeYmd) {
     return "A data não pode ser futura: registre a transferência no dia em que ela cair.";
   }
   return null;
@@ -664,19 +673,26 @@ export function centsToInput(cents: number): string {
   return (cents / 100).toFixed(2).replace(".", ",");
 }
 
-/**
- * Hoje como data de CALENDÁRIO local (`YYYY-MM-DD`), para default de campo de data.
- *
- * Local (e não UTC) de propósito: o usuário está declarando "o saldo de hoje" olhando para o
- * calendário dele. Isto é default de FORMULÁRIO — não tem nada a ver com o casamento de evento
- * all-day do `CLAUDE.md` §6.0, que compara datas já gravadas e continua sendo feito por string.
- */
-export function hojeISO(): string {
-  const d = new Date();
-  const mm = String(d.getMonth() + 1).padStart(2, "0");
-  const dd = String(d.getDate()).padStart(2, "0");
-  return `${d.getFullYear()}-${mm}-${dd}`;
-}
+// ── `hojeISO()` foi REMOVIDA (#136) — a explicação que ela carregava ficou falsa ──────────────
+//
+// A função montava `YYYY-MM-DD` pelas partes locais de um `new Date()`, e o comentário dela dizia
+// que "local (e não UTC)" era de propósito, porque "o usuário está declarando o saldo de HOJE
+// olhando para o calendário DELE". Essa frase foi escrita antes do PR #78 e opunha as duas únicas
+// opções que existiam então: o relógio do navegador e o UTC cru. Ela nunca considerou a terceira,
+// que desde o #78 é a régua do e1p — o relógio do **tenant** (`hoje_do_tenant(db)` no backend,
+// `today(fuso)` de `lib/datetime.ts` no frontend).
+//
+// Com a régua nova, "o calendário DELE" deixou de ser o do navegador: o dono viajando lê o dia do
+// hotel, e o dia da empresa é o do fuso do tenant. Por isso a função não vira `@deprecated` nem
+// sobra "para usos legítimos": não restou nenhum. Todos os seus 15 call sites eram default ou
+// validação de campo de data em tela de dinheiro — exatamente a classe que o #78 moveu. Um alias
+// depreciado seria um convite a reintroduzir o defeito com o autocomplete, e o defeito 2 da #136
+// (default preenchido por um relógio e validado por outro) nasceu de exatamente esse tipo de
+// segunda porta.
+//
+// Quem precisar de "hoje" numa tela: `today(useFuso())`. Quem precisar dele numa função PURA:
+// receba-o como argumento (ver `impedimentoDaTransferencia` acima e `filtroPadrao(hojeYmd)` em
+// `pagar/filtros.ts`), nunca o busque por dentro.
 
 // ── Story 8.10 — a data em que o saldo foi apurado ───────────────────────────────────────────
 
