@@ -1,0 +1,38 @@
+{
+  "_leiame": [
+    "Config do issue-wt — 'uma issue, uma worktree'. O SCRIPT NAO MORA NESTE REPO:",
+    "ele e global, em ~/.claude/scripts/issue-wt.sh, e a disciplina que o acompanha esta",
+    "na skill ~/.claude/skills/issue-worktrees/. Este arquivo e so o que e especifico do e1p.",
+    "Rode 'issue-wt config' para ver o exemplo completo com todos os campos."
+  ],
+
+  "worktreeDir": ".claude/worktrees",
+  "baseRef": "origin/main",
+  "install": "pnpm install --frozen-lockfile",
+
+  "_portas": [
+    "A porta de cada issue e portBase + (numero % 90) — deterministica, e por isso duas",
+    "worktrees vivas nunca disputam a mesma. Isto NAO e conveniencia: com porta",
+    "compartilhada o Playwright reusa o Vite de outra worktree e mede o branch ERRADO em",
+    "silencio (achado da issue #123; ver o cabecalho de apps/web/playwright.config.ts).",
+    "5300 e nao 5100/5200 para nao esbarrar na 5173 do Vite nem na 5273 do gate."
+  ],
+  "portEnv": "E2E_PORT",
+  "portBase": 5300,
+
+  "branchPrefixes": {
+    "bug": "fix",
+    "enhancement": "feat",
+    "test": "test",
+    "qa-e2e": "test",
+    "docs": "docs",
+    "default": "chore"
+  },
+
+  "gates": [
+    { "name": "lint", "cmd": "pnpm lint", "dir": "apps/web" },
+    { "name": "typecheck", "cmd": "pnpm typecheck", "dir": "apps/web" },
+    { "name": "test", "cmd": "pnpm test", "dir": "apps/web" },
+    { "name": "e2e", "cmd": "pnpm e2e", "dir": "apps/web" }
+  ]
+}
