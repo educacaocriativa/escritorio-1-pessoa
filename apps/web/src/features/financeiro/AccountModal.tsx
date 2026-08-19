@@ -228,6 +228,10 @@ export default function AccountModal({
       title={editing ? "Editar conta" : "Nova conta"}
       open={open}
       onClose={onClose}
+      // Na CAIXA, via a prop do `Modal` — nunca num `<div>` do conteúdo. Recorte no miolo deixa
+      // o título e a barra de ação fora de `textoForaDaTela`, que foi como um "Fechar" a 698px
+      // numa tela de 360 passou por uma medição que devolveu lista vazia (#119).
+      testId="modal-conta"
       // A ação vai para a barra fixa do `Modal`: em 360×740 este formulário tem 1010px numa caixa
       // de 629px, e no corpo o botão nascia 303px abaixo da borda da tela — 467px abaixo da
       // escolha "não sei o saldo" que ele efetiva (a forma do PR #56).
