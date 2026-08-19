@@ -19,9 +19,8 @@ import { rotaDaCobranca } from "../cobrancas/rota";
 import BlocoDaAgenda from "./BlocoDaAgenda";
 import BlocoDaConversa from "./BlocoDaConversa";
 import ClientTimeline from "./ClientTimeline";
-import { hojeISO } from "../financeiro/contas";
 import { VOCAB_ENTRADA } from "../pagar/baixa";
-import { DialogDeBaixa } from "../pagar/EscolhaDaBaixa";
+import { DialogDeBaixa, HOJE_DO_TENANT } from "../pagar/EscolhaDaBaixa";
 
 const brl = (c: number) => (c / 100).toLocaleString("pt-BR", { style: "currency", currency: "BRL" });
 /** Aceita as DUAS espécies: `"2026-08-05"` (data de calendário) e ISO completo (instante). */
@@ -247,7 +246,9 @@ export default function ClientDetailPage() {
           titulo="Recebi direto na conta"
           descricao={recebendo.description || client.name}
           valor={`${brl(recebendo.amount_cents)} · vence ${dt(recebendo.due_date, fuso)}`}
-          dataPadrao={hojeISO()}
+          // `HOJE_DO_TENANT`: o hoje é resolvido (e validado) no fuso do tenant, dentro do
+          // `useEscolhaDaBaixa` — não montado aqui pelo relógio do navegador (#136).
+          dataPadrao={HOJE_DO_TENANT}
           vocab={VOCAB_ENTRADA}
           acao="Confirmar recebimento"
           acaoEmCurso="Registrando…"

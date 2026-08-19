@@ -8,12 +8,12 @@ import { pluralize } from "../../lib/pluralize";
 import GanchoDaVima from "../dna/GanchoDaVima";
 import { usePrimaryAction } from "../../store/pageActions";
 import ChartAccountSelect from "../financeiro/ChartAccountSelect";
-import { type BankAccount, hojeISO } from "../financeiro/contas";
+import type { BankAccount } from "../financeiro/contas";
 import type { CostCenter } from "../financeiro/costCenters";
 import CostCenterSelect from "../financeiro/CostCenterSelect";
 import { type ChartAccount, GRUPOS_DRE } from "../financeiro/planoContas";
 import { VOCAB_ENTRADA } from "../pagar/baixa";
-import { DialogDeBaixa } from "../pagar/EscolhaDaBaixa";
+import { DialogDeBaixa, HOJE_DO_TENANT } from "../pagar/EscolhaDaBaixa";
 import { rotuloDaRota } from "./rota";
 import { formatDay } from "../../lib/datetime";
 
@@ -279,7 +279,12 @@ export default function CobrancasPage() {
           valor={`${brl(recebendo.amount_cents)} · vence ${formatDay(recebendo.due_date)}`}
           // Default = HOJE (não o vencimento): o gesto aqui é "caiu na minha conta", um fato que o
           // dono está observando agora — a assimetria com a baixa de Contas a Pagar é deliberada.
-          dataPadrao={hojeISO()}
+          // ⚠️ **`HOJE_DO_TENANT`, não um hoje montado aqui** (#136). Esta tela passava
+          // `hojeISO()`, que monta a data pelas partes locais de um `new Date()` — o dia de quem
+          // abriu o NAVEGADOR. Para um dono em viagem, o "dia em que o dinheiro caiu" vinha do
+          // fuso do hotel, e perto da virada sempre vinha errado. Quem resolve o hoje agora é o
+          // `useEscolhaDaBaixa`, no fuso do tenant e no MESMO ponto em que valida a data.
+          dataPadrao={HOJE_DO_TENANT}
           vocab={VOCAB_ENTRADA}
           acao="Confirmar recebimento"
           acaoEmCurso="Registrando…"

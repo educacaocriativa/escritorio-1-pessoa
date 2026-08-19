@@ -1,6 +1,8 @@
 import { useEffect, useState } from "react";
 import Modal, { Field } from "../../components/Modal";
 import { api, apiErrorMessage } from "../../lib/api";
+import { today } from "../../lib/datetime";
+import { useFuso } from "../../store/auth";
 import {
   avisoContasPagasAnteriores,
   type BankAccount,
@@ -8,7 +10,6 @@ import {
   centsToInput,
   diaAnteriorISO,
   formatDateBR,
-  hojeISO,
   KIND_CHECKING,
   parseCentsBRL,
   type PayablesPaidBefore,
@@ -75,7 +76,10 @@ export default function AccountModal({
   // Story 8.21 — o ATO. `null` significa **ainda não escolheu** e só existe no CADASTRO:
   // é ele que mantém o salvar desabilitado até o dono dizer se sabe o saldo ou não.
   const [saldoConhecido, setSaldoConhecido] = useState<boolean | null>(null);
-  const [openingDate, setOpeningDate] = useState(hojeISO);
+  // ⚠️ **O fuso do TENANT, não o do navegador** (#136): a data de abertura é um fato da EMPRESA,
+  // e até a #136 nascia do relógio da máquina de quem abriu a tela (`hojeISO()`).
+  const fuso = useFuso();
+  const [openingDate, setOpeningDate] = useState(() => today(fuso));
   const [isPrimary, setIsPrimary] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
@@ -94,11 +98,11 @@ export default function AccountModal({
     setOpening(editing ? centsToInput(editing.opening_balance_cents) : "");
     // Edição carrega o estado atual (vem do AC5b); cadastro exige escolha explícita.
     setSaldoConhecido(editing ? editing.opening_balance_is_known : null);
-    setOpeningDate(editing?.opening_date ?? hojeISO());
+    setOpeningDate(editing?.opening_date ?? today(fuso));
     setIsPrimary(editing?.is_primary ?? false);
     setError(null);
     setPagasAntes(null);
-  }, [open, editing]);
+  }, [open, editing, fuso]);
 
   // **Recuo** = a data escolhida é ANTERIOR à data de abertura atual da conta. Estritamente: data
   // igual não é recuo (o formulário reenvia o corpo inteiro a cada salvamento, e exigir

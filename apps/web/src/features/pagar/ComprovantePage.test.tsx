@@ -426,19 +426,46 @@ describe("ComprovantePage — a escolha da baixa (Story 8.13)", () => {
     // no mesmo fuso os dois lados eram iguais por construção. Agora o tenant está em Tóquio e o
     // relógio congelado: 18/08 para o dono, 17/08 para o navegador e para o UTC.
     expect(campoDia().value).toBe(DIA_DO_TENANT);
-    // ⚠️ **Achado que só aparece com os dois fusos separados, e que este teste NÃO afirma de
-    // propósito:** rodando com o tenant em Tóquio, a bandeja abre com o aviso "Esta data é no
-    // futuro… será registrada como AGENDADA" já visível, sem o dono ter tocado em nada. É o mesmo
-    // componente lendo DOIS relógios: o default vem de `localToday(fuso)` (tenant) e o
-    // `avisoDeDataFutura` compara com `hojeISO()` (navegador, via `EscolhaDaBaixa`). Fixar isso é
-    // mudar produção — a mesma dívida do `hojeISO` anotada em `cobrancas/CobrancasPage.test.tsx` e
-    // no CLAUDE.md §5.2 —, e travar o aviso num `expect` aqui pregaria o defeito na parede.
     // ⚠️ **[Story 8.14] mudança de expectativa, e ela é a CORREÇÃO.** Este teste afirmava
     // `max === hoje()`. O teto era faseamento (garantir que não existisse `paid` com data futura
     // enquanto `scheduled` não existisse) e saiu no commit em que `scheduled` nasceu. A bandeja
     // herdou a mudança **sem ser editada**: as três telas de baixa compartilham `baixa.ts`, e é
     // esse o retorno de ter uma implementação só.
     expect(campoDia().getAttribute("max")).toBeNull();
+  });
+
+  it("⚠️ a bandeja NÃO abre acusando de futuro o dia que ela mesma preencheu (#136)", async () => {
+    // ── O defeito 2 da #136, agora fixado num `expect` ────────────────────────────────────────
+    //
+    // O PR #133 ACHOU isto e deliberadamente não afirmou nada: com o tenant em Tóquio, a bandeja
+    // abria com "Esta data é no futuro… será registrada como AGENDADA" **já visível, sem o dono
+    // tocar em nada**. Um componente, dois relógios: o default vinha de `localToday(fuso)` (o
+    // tenant, 18/08) e o `avisoDeDataFutura` comparava com `hojeISO()` (o navegador, 17/08) — a
+    // tela acusava de errado o valor que ela mesma acabara de escrever. Travar o aviso num
+    // `expect` naquele momento pregaria o defeito na parede; agora que a dívida foi paga, o que
+    // se prega é a AUSÊNCIA dele.
+    //
+    // Este teste é o guardião do invariante: **default e validação bebem do mesmo relógio.** Ele
+    // morre se alguém devolver um segundo "hoje" ao fluxo da baixa — e morre com o defeito exato
+    // que existia em produção, não com um proxy dele.
+    fusoDoTenant = FUSO_DISTANTE;
+    congelarRelogio();
+    await escolherCandidata();
+
+    // Ponto de partida: o campo está no dia do tenant, intocado.
+    expect(campoDia().value).toBe(DIA_DO_TENANT);
+    expect(screen.queryByText(/esta data é no futuro/i)).toBeNull();
+
+    // E o aviso continua FUNCIONANDO — ele não sumiu, só parou de mentir. Um dia realmente à
+    // frente do hoje DO TENANT ainda avisa. Sem esta metade, apagar `avisoDeDataFutura` inteiro
+    // deixaria a primeira metade verde.
+    fireEvent.change(campoDia(), { target: { value: "2026-08-19" } });
+    expect(screen.getByText(/esta data é no futuro/i)).toBeTruthy();
+
+    // E o dia que é futuro só para o NAVEGADOR (18/08 é amanhã em São Paulo, hoje em Tóquio) NÃO
+    // avisa: é aqui que se lê de qual relógio a validação bebe.
+    fireEvent.change(campoDia(), { target: { value: DIA_DO_TENANT } });
+    expect(screen.queryByText(/esta data é no futuro/i)).toBeNull();
   });
 
   it("o dia é EDITÁVEL e é o valor editado que viaja", async () => {
