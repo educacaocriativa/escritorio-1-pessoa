@@ -37,6 +37,20 @@ vi.mock("../../lib/api", () => ({
   apiErrorMessage: () => "Erro inesperado",
 }));
 
+// ── A régua do fuso (CLAUDE.md §5.2, issues #120/#129/#136) ───────────────────────────────────
+//
+// ⚠️ **Este mock nasceu com a #136, e sem ele metade das asserções de data desta suíte seria
+// incapaz de falhar.** A tela tinha OITO leituras de `hojeISO()` — o relógio do NAVEGADOR — e
+// agora tem uma só origem, `today(useFuso())`. Sem mocar, `useFuso()` cai no `FUSO_PADRAO`
+// (`America/Sao_Paulo`), que é EXATAMENTE o `TZ` que o `vitest.config.ts` fixa para a máquina:
+// os dois relógios voltariam a dar a mesma string por construção. Nada mais de `store/auth` é
+// consumido por esta tela nem pelo `AccountModal`, então o mock total é seguro.
+let fusoDoTenant = "America/Sao_Paulo";
+/** Tóquio (UTC+9) está 12h à frente do runner — sob ele os dois caminhos discordam sobre o DIA. */
+const FUSO_DISTANTE = "Asia/Tokyo";
+
+vi.mock("../../store/auth", () => ({ useFuso: () => fusoDoTenant }));
+
 function conta(over: Partial<BankAccount> = {}): BankAccount {
   return {
     id: "acc-1",
@@ -132,6 +146,7 @@ function renderPage() {
 
 beforeEach(() => {
   vi.mocked(api.get).mockReset();
+  fusoDoTenant = "America/Sao_Paulo";
 });
 
 describe("⚠️ D-6 — os dois totais de saldo bancário do produto não podem ter o mesmo nome", () => {
@@ -1104,5 +1119,145 @@ describe("Onda 3 — a conta principal passa a poder ser escolhida", () => {
     await waitFor(() =>
       expect(api.post).toHaveBeenCalledWith("/bank/accounts/a/set-primary"),
     );
+  });
+});
+
+
+// ── #136 — os quatro campos de data desta tela leem UM relógio, e é o do TENANT ───────────────
+
+/**
+ * A tela tinha **oito** leituras de `hojeISO()` — mais do que qualquer outro arquivo do
+ * frontend —, e todas montavam o dia pelas partes locais de um `new Date()`: o relógio de quem
+ * abriu o NAVEGADOR. Nenhuma delas era coberta por asserção capaz de falhar, porque a suíte
+ * rodava com o fuso do tenant igual ao da máquina (CLAUDE.md §5.2).
+ *
+ * A oitava era a pior: `impedimentoDaTransferencia` — uma função anunciada como PURA — chamava
+ * `hojeISO()` por DENTRO. Ou seja, o campo "Data" da transferência era **preenchido** por um
+ * relógio e **validado** por outro. Num tenant a leste isso não é teórico: o dia do dono já é o
+ * amanhã do navegador, e a tela nascia com a transferência BARRADA por "a data não pode ser
+ * futura" — recusando o valor que ela mesma acabara de escrever. É o defeito 2 da #136 na camada
+ * de baixo, e é o que o último teste deste bloco mede.
+ */
+describe("#136 — o dia desta tela é o do TENANT, e é UM só", () => {
+  /**
+   * `2026-08-17T18:00:00Z` → **Tóquio 18/08 03:00** · **São Paulo (runner) 17/08 15:00** · **UTC
+   * 17/08**. Com Tóquio (+9) e São Paulo (−3) não dá para separar os três dias no mesmo instante;
+   * o que importa é que o dia do TENANT difira dos dois candidatos errados — e difere: tanto
+   * voltar para o relógio do navegador quanto para `toISOString()` devolve 17/08 e mata o teste.
+   */
+  const INSTANTE = "2026-08-17T18:00:00Z";
+  const DIA_DO_TENANT = "2026-08-18";
+  const DIA_DO_NAVEGADOR = "2026-08-17";
+
+  const duasContas = [
+    conta({ id: "a", name: "Itaú PJ", kind: "checking", saldo_derivado_cents: 4_000_000 }),
+    conta({ id: "b", name: "Poupança", kind: "savings", saldo_derivado_cents: 2_000_000 }),
+  ];
+
+  beforeEach(() => {
+    fusoDoTenant = FUSO_DISTANTE;
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    vi.setSystemTime(new Date(INSTANTE));
+    vi.mocked(api.post).mockReset();
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it("o cartão e os totais são apurados no dia do DONO, não no de quem abriu o navegador", async () => {
+    mockApi([conta({ id: "a", name: "Itaú PJ", saldo_derivado_cents: 4_000_000 })]);
+    renderPage();
+
+    await waitFor(() => expect(screen.getByText("Itaú PJ")).toBeInTheDocument());
+    // 18/08 é o dia do tenant; 17/08 é o do navegador E o de UTC. Só um dos três passa.
+    expect(screen.getByText("Saldo em 18/08")).toBeInTheDocument();
+    expect(screen.getByText(/apuradas em 18\/08\/2026/)).toBeInTheDocument();
+    expect(screen.queryByText("Saldo em 17/08")).toBeNull();
+  });
+
+  it("'Declarar saldo' nasce no dia do tenant — e é ele que viaja no corpo", async () => {
+    const user = userEvent.setup();
+    mockApi([conta({ id: "acc-1" })]);
+    vi.mocked(api.post).mockResolvedValue({ data: {} } as never);
+    renderPage();
+
+    await user.click(await screen.findByText("Declarar saldo"));
+    const dia = (await screen.findByLabelText("Dia")) as HTMLInputElement;
+    expect(dia.value).toBe(DIA_DO_TENANT);
+    expect(dia.value).not.toBe(DIA_DO_NAVEGADOR);
+
+    // "Declarar saldo" é o rótulo do gatilho no cartão E do botão dentro do modal — `getByRole`
+    // global acharia os dois (mesma armadilha documentada em `botaoLancar`, mais acima).
+    const titulo = screen.getByText("Declarar saldo — Itaú PJ");
+    const painel = titulo.parentElement?.parentElement as HTMLElement;
+    await user.click(within(painel).getByRole("button", { name: "Declarar saldo" }));
+    await waitFor(() => expect(api.post).toHaveBeenCalled());
+    expect(vi.mocked(api.post).mock.calls[0][1]).toMatchObject({
+      reference_date: DIA_DO_TENANT,
+    });
+  });
+
+  it("'Lançar movimento' nasce no dia do tenant", async () => {
+    const user = userEvent.setup();
+    mockApi([conta({ id: "acc-1" })]);
+    renderPage();
+
+    await user.click(await screen.findByText("Lançar movimento"));
+    await waitFor(() =>
+      expect(screen.getByText("Lançar movimento — Itaú PJ")).toBeInTheDocument(),
+    );
+    const data = screen.getByLabelText("Data") as HTMLInputElement;
+    expect(data.value).toBe(DIA_DO_TENANT);
+    expect(data.value).not.toBe(DIA_DO_NAVEGADOR);
+  });
+
+  it("'Nova conta' abre com a data de abertura no dia do tenant", async () => {
+    // A data de abertura é um fato da EMPRESA — e até a #136 nascia do relógio da máquina de quem
+    // abriu a tela. O `AccountModal` é o mesmo componente que a `EscolhaDaBaixa` embute no cadastro
+    // de conta durante uma baixa, então este default vale para as cinco telas de dinheiro.
+    const user = userEvent.setup();
+    mockApi([]);
+    renderPage();
+
+    await user.click(await screen.findByRole("button", { name: "Cadastrar primeira conta" }));
+    await waitFor(() => expect(screen.getByText("Nova conta")).toBeInTheDocument());
+
+    const abertura = screen.getByLabelText("Data de abertura") as HTMLInputElement;
+    expect(abertura.value).toBe(DIA_DO_TENANT);
+    expect(abertura.value).not.toBe(DIA_DO_NAVEGADOR);
+  });
+
+  it("⚠️ 'Transferir' NÃO nasce barrada: o mesmo relógio preenche o campo e valida o campo", async () => {
+    // ── O coração da #136 nesta tela ─────────────────────────────────────────────────────────
+    // Com o default vindo do tenant (18/08) e a guarda de data futura lendo o navegador (17/08),
+    // `impedimentoDaTransferencia` devolvia "A data não pode ser futura…" **na abertura do
+    // modal**, com o botão desabilitado, sobre um dia que para o dono é simplesmente hoje.
+    const user = userEvent.setup();
+    mockApi(duasContas);
+    renderPage();
+    await screen.findByText("Itaú PJ");
+
+    await user.click(screen.getAllByRole("button", { name: TRANSFERIR_LABEL })[0]);
+    const data = (await screen.findByLabelText("Data")) as HTMLInputElement;
+    expect(data.value).toBe(DIA_DO_TENANT);
+
+    fireEvent.change(screen.getByLabelText("Valor (R$)"), { target: { value: "1.000,00" } });
+
+    const botao = screen.getByRole("button", { name: "Registrar transferência" });
+    expect(screen.queryByText(/não pode ser futura/i)).toBeNull();
+    expect(botao).toBeEnabled();
+
+    // E a guarda continua VIVA — ela não sumiu, parou de mentir. Um dia à frente do hoje DO
+    // TENANT ainda barra. Sem esta metade, apagar a guarda inteira deixaria o teste verde.
+    fireEvent.change(data, { target: { value: "2026-08-19" } });
+    expect(screen.getByText(/não pode ser futura/i)).toBeInTheDocument();
+    expect(botao).toBeDisabled();
+
+    // E o dia que é futuro só para o NAVEGADOR (18/08) segue liberado: é aqui que se lê de qual
+    // relógio a VALIDAÇÃO bebe, e não só o default.
+    fireEvent.change(data, { target: { value: DIA_DO_TENANT } });
+    expect(screen.queryByText(/não pode ser futura/i)).toBeNull();
+    expect(botao).toBeEnabled();
   });
 });
