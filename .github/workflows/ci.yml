@@ -95,11 +95,16 @@ jobs:
 
   # Story 6.2 / AC1: secret scan com gitleaks (OSS, MIT — custo zero, Regra de Ouro nº 4).
   # Usamos o CLI gitleaks via container pinado por DIGEST (supply-chain), NÃO a
-  # gitleaks-action: desde a v2 a Action exige um GITLEAKS_LICENSE para contas de
-  # ORGANIZAÇÃO (este repo é da org educacaocriativa). Essa chave é gratuita, MAS
-  # exige registro externo (form) e está sob EULA proprietário — a Action NÃO é MIT.
-  # O CLI/binário gitleaks é MIT, sem registro nem EULA (mesma engine, cobertura
-  # idêntica): custo zero de verdade + zero fricção operacional/legal (Regra de Ouro nº 4).
+  # gitleaks-action: desde a v2.0.0 a Action deixou de ser MIT e passou a um EULA
+  # PROPRIETÁRIO da Gitleaks LLC (LICENSE.txt do próprio repo da Action; a API do GitHub
+  # devolve `Other`/NOASSERTION). É source-available, não open source: o EULA vincula pelo
+  # simples uso e proíbe modificar/derivar. O CLI/binário gitleaks continua MIT, sem EULA
+  # (mesma engine, cobertura de detecção idêntica — a Action só embrulha o binário):
+  # custo zero de verdade + zero fricção legal (Regra de Ouro nº 4).
+  # O motivo NÃO é a chave: o `GITLEAKS_LICENSE` só é exigido para repos de conta de
+  # ORGANIZAÇÃO, e este repo é de conta de USUÁRIO — `gh api repos/educacaocriativa/
+  # escritorio-1-pessoa --jq .owner.type` → "User" (conferido em 2026-08-18). Aqui a Action
+  # rodaria sem chave e sem registro; o que pesa é a licença do wrapper (issue #131).
   # O padrão `docker run` é o mesmo já usado por `test-in-prod-image` neste arquivo.
   # Required check em `main` (verificado em 2026-08-18) — chegou lá pela promoção do cabeçalho.
   secret-scan:

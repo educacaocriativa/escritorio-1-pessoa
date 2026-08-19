@@ -87,6 +87,21 @@ describe("fraseConferencia — os quatro casos do AC4", () => {
     expect(f.texto).toContain("faltam lançamentos de entrada");
   });
 
+  it("diferença ZERO fora da banda não é 'abaixo' — zero não falta dinheiro nenhum", () => {
+    // Achado por mutação (#121): `c.divergencia_cents < 0` sobrevivia à troca por `<= 0`. Os
+    // testes cercavam −234.000 e +120.000, e o único zero da suíte vinha `dentro_da_tolerancia`,
+    // saindo pelo `return` de cima sem chegar nesta linha. Um backend que mande
+    // `dentro_da_tolerancia: false` com divergência zero (tolerância negativa, arredondamento,
+    // bug) faria a tela acusar "faltam lançamentos de saída" — mandar caçar dinheiro que não
+    // sumiu é o mesmo tipo de dano que o épico pagou para evitar.
+    const f = fraseConferencia(
+      conta({ divergencia_cents: 0, dentro_da_tolerancia: false, tolerancia_cents: 12_500 }),
+    );
+    expect(f.tom).toBe("atencao");
+    expect(f.texto).not.toContain("abaixo");
+    expect(f.texto).not.toContain("faltam lançamentos de saída");
+  });
+
   it("dentro da banda: 'está tudo batendo', com a diferença E a tolerância explícitas", () => {
     const f = fraseConferencia(
       conta({ divergencia_cents: 350, dentro_da_tolerancia: true, tolerancia_cents: 12_500 }),

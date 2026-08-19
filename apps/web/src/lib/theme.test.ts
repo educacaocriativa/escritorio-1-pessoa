@@ -69,6 +69,19 @@ describe("applyBrandTheme — Story 5.11", () => {
     expect(document.documentElement.style.getPropertyValue(cssVarName("accent", 500))).toBe("");
   });
 
+  it("hex com lixo antes ou depois é recusado — as âncoras do regex são a validação", () => {
+    // Achado por mutação (#121): remover o `^` ou o `$` de `/^#[0-9a-fA-F]{6}$/` sobrevivia à
+    // suíte inteira. Os testes existentes usavam só hex válido ("#112233") e lixo que não contém
+    // hex nenhum ("não-é-hex") — nenhum dos dois passa perto das âncoras. O caso que passa é um
+    // valor que CONTÉM um hex válido no meio: com `$` fora, "#112233ff" (RGBA de 8 dígitos, o que
+    // um seletor de cor de verdade devolve) entraria no `generateScale` como se fosse RGB.
+    expect(() =>
+      applyBrandTheme({ primary_color: "#112233ff", accent_color: "cor: #445566" }),
+    ).not.toThrow();
+    expect(document.documentElement.style.getPropertyValue(cssVarName("primary", 500))).toBe("");
+    expect(document.documentElement.style.getPropertyValue(cssVarName("accent", 500))).toBe("");
+  });
+
   it("campos parciais só aplicam o que veio (primary sem accent, por exemplo)", () => {
     applyBrandTheme({ primary_color: "#0a0a0a" });
     expect(document.documentElement.style.getPropertyValue(cssVarName("primary", 500)).trim()).toBe(
