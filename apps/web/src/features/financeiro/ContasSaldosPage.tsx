@@ -678,7 +678,14 @@ function AccountDetail({
       ) : (
         // ⚠️ `overflow-x-auto`, NUNCA `overflow-hidden` (AC8): em tela estreita, cortar a tabela
         // esconde a coluna de ações — foi assim que "Estornar" ficou inalcançável no PR #58.
-        <div className="overflow-x-auto">
+        //
+        // ⚠️ `relative` NÃO é enfeite (#130). O rótulo `sr-only` do valor ("Saída: ") é
+        // `position: absolute`, e sem ancestral posicionado o seu bloco contêiner é a página —
+        // então ele NÃO é recortado por este deslizador e passa a contar no `scrollWidth` do
+        // documento. Medido: a PÁGINA inteira rolando de lado até **879px** numa viewport de 360,
+        // por causa de um rótulo que ninguém vê. Com `relative`, o recorte volta a ser este `div`,
+        // que é o único lugar onde a rolagem lateral é legítima.
+        <div className="relative overflow-x-auto">
           <table className="w-full min-w-[40rem] text-sm">
             <thead>
               <tr className="border-b border-neutral-100 text-left text-xs uppercase text-neutral-400">
@@ -1226,7 +1233,15 @@ function TransferirModal({
   }
 
   return (
-    <Modal title={TRANSFERIR_LABEL} open={open} onClose={onClose}>
+    <Modal
+      title={TRANSFERIR_LABEL}
+      open={open}
+      onClose={onClose}
+      // Na CAIXA (#123/#130). Aqui o título é CONSTANTE, então o controle positivo deste modal
+      // NÃO é a mutação do `min-w-0` — é a isca no cabeçalho (ver `contas-modais-360.spec.ts`).
+      // O que o dono digita e chega à tela são os nomes de conta nos dois seletores.
+      testId="modal-transferir"
+    >
       <div className="space-y-3">
         <p className="text-sm text-neutral-600">
           Dinheiro que foi de uma conta sua para outra. <strong>Não é receita nem despesa</strong> —
@@ -1271,7 +1286,11 @@ function TransferirModal({
           placeholder="Ex.: reserva de emergência"
         />
         {/* ── O bloco fixo: resumo + aviso + impedimento + botão, fisicamente inseparáveis ── */}
-        <p className="rounded-lg bg-neutral-50 p-2 text-xs text-neutral-600">
+        {/* `break-words`: os dois nomes de conta são DIGITADOS pelo dono (120 chars em
+            `bank/schemas.py`) e entram aqui em negrito. Sem ele, um nome colado sem espaço não
+            tem onde quebrar e a tinta vaza da caixa — medido em 153.8px fora numa viewport de
+            360 (#130). É o defeito do #119 pela porta do CORPO do modal, e não do cabeçalho. */}
+        <p className="break-words rounded-lg bg-neutral-50 p-2 text-xs text-neutral-600">
           {origem && destino ? (
             <>
               Sai <strong>{formatBRL(cents)}</strong> de <strong>{origem.name}</strong> e entra em{" "}
@@ -1349,7 +1368,14 @@ function EditarMovimentoModal({
   }
 
   return (
-    <Modal title="Editar movimento" open={tx !== null} onClose={onClose}>
+    <Modal
+      title="Editar movimento"
+      open={tx !== null}
+      onClose={onClose}
+      // Na CAIXA (#123/#130). Título constante; o texto livre aqui é a `raw_description` vinda do
+      // banco — que chega COLADA ("PIXENVIADOCPF…") e é o que este modal precisa provar que cabe.
+      testId="modal-editar-movimento"
+    >
       <div className="space-y-3">
         <Field label="Data" value={postedAt} onChange={setPostedAt} type="date" />
         <label className="block">
@@ -1368,7 +1394,11 @@ function EditarMovimentoModal({
         <Field label="Descrição" value={userDescription} onChange={setUserDescription} />
         {/* `raw_description` é imutável — é a prova documental do que o banco (ou você) disse. */}
         {tx?.raw_description && (
-          <p className="rounded-lg bg-neutral-50 p-2 text-xs text-neutral-500">
+          // `break-words`: a descrição vem do BANCO e chega COLADA ("PIXENVIADOCPF12345678900…").
+          // Sem ele não há candidato a quebra, o `<p>` não alarga a caixa e a TINTA vaza — medido
+          // em 326px fora numa viewport de 360 (#130). `getBoundingClientRect` não vê tinta;
+          // `textoForaDaTela` vê, pelo `scrollWidth`.
+          <p className="break-words rounded-lg bg-neutral-50 p-2 text-xs text-neutral-500">
             Descrição original (não editável): {tx.raw_description}
           </p>
         )}
@@ -1402,7 +1432,13 @@ function IgnorarModal({
   }, [tx]);
 
   return (
-    <Modal title="Ignorar movimento" open={tx !== null} onClose={onClose}>
+    <Modal
+      title="Ignorar movimento"
+      open={tx !== null}
+      onClose={onClose}
+      // Na CAIXA (#123/#130) — título constante, controle positivo por isca no cabeçalho.
+      testId="modal-ignorar-movimento"
+    >
       <div className="space-y-3">
         <p className="text-sm text-neutral-600">
           O movimento sai do saldo calculado, mas <strong>continua no histórico</strong>. Dá para

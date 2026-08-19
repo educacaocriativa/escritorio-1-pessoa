@@ -403,7 +403,15 @@ function SellModal({
   }
 
   return (
-    <Modal title={`Vender: ${product.name}`} open onClose={onClose}>
+    <Modal
+      title={`Vender: ${product.name}`}
+      open
+      onClose={onClose}
+      // Na CAIXA (#123/#130) — mesmo motivo do "Movimentar" do Estoque: `ProductCreate.name`
+      // aceita 255 chars em `products/schemas.py`, o dono digita, e o título é a via pela qual o
+      // #119 empurrou o "Fechar" para fora dos 360.
+      testId="modal-vender-produto"
+    >
       <div className="space-y-3">
         <p className="text-sm text-neutral-500">Preço: {brl(product.price_cents)}</p>
         <Field label="Nome do comprador" value={name} onChange={setName} />

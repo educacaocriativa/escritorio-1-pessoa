@@ -249,7 +249,16 @@ function AdjustModal({
   }
 
   return (
-    <Modal title={`Movimentar: ${item.name}`} open onClose={onClose}>
+    <Modal
+      title={`Movimentar: ${item.name}`}
+      open
+      onClose={onClose}
+      // Na CAIXA (#123/#130). O nome do item é digitado pelo dono (`ItemCreate.name` aceita 255
+      // chars em `stock/schemas.py`) e entra no título: é a exposição do #119, em que um nome sem
+      // espaço empurrou o "Fechar" para x=698 numa tela de 360. Recorte no conteúdo deixaria
+      // cabeçalho e barra de ação fora da medição — justamente onde o defeito mora.
+      testId="modal-movimentar-item"
+    >
       <div className="space-y-3">
         <p className="text-sm text-neutral-500">
           Atual: <b>{item.quantity} {item.unit}</b>
