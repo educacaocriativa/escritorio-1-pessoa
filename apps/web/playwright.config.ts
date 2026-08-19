@@ -26,7 +26,16 @@ export default defineConfig({
   fullyParallel: true,
   forbidOnly: Boolean(process.env.CI),
   retries: 0,
-  reporter: process.env.CI ? [["github"], ["list"]] : [["list"]],
+  // O `html` no CI NÃO é enfeite: sem ele o diretório `playwright-report/` nunca é criado, e o
+  // passo `upload-artifact` do ci.yml — que aponta para exatamente esse caminho — subia NADA. O
+  // sintoma só aparece quando o gate quebra: o job fica vermelho, o artefato prometido não existe,
+  // e quem for investigar não tem screenshot, nem trace, nem error-context. Medido em 18/08/2026
+  // num flake real do `agenda-evento-360`: `runs/32200297688/artifacts` devolveu lista VAZIA.
+  // `open: "never"` porque runner não tem navegador para abrir. O reporter HTML EMBUTE os anexos
+  // (screenshot/trace) que o `use` abaixo já gerava em `test-results/` e que ninguém publicava.
+  reporter: process.env.CI
+    ? [["github"], ["list"], ["html", { open: "never" }]]
+    : [["list"]],
   use: {
     baseURL: `http://127.0.0.1:${PORTA}`,
     locale: "pt-BR",
