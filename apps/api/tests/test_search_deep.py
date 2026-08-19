@@ -136,7 +136,8 @@ def test_trecho_mostra_o_contexto_e_nao_o_documento_inteiro(db):
     db.add(LegalDocument(tenant_id=TENANT, skill="peticao", title="Doc", content=corpo))
     db.commit()
 
-    trecho = buscar(db, q="rescisao", modulos_liberados=TODOS, profundidade="deep")[0].itens[0].trecho
+    grupos = buscar(db, q="rescisao", modulos_liberados=TODOS, profundidade="deep")
+    trecho = grupos[0].itens[0].trecho
 
     assert "rescisao" in trecho
     assert len(trecho) < len(corpo), "o trecho é um recorte, não o documento inteiro"
