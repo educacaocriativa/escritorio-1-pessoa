@@ -3030,9 +3030,20 @@ segue normal)"* — uma degradação graciosa que **não existia**. Derrubou a p
   silenciosa perfeita, a família da `capabilities.py` sem consumidor. Com controle positivo, para o
   gate não passar por vacuidade se alguém apagar os dois arquivos. Provado por mutação: devolver o
   wildcard ao arquivo base deixa o gate **vermelho**.
+  - ⚠️ **Ele roda no job `cross-tenant-rls`, NÃO no `test-in-prod-image`, e isso não é arbitrário.**
+    Aquele job roda a suíte **dentro da imagem da API**, onde só `apps/api` foi copiado: `infra/`
+    não existe lá. Na primeira versão o teste resolvia a raiz com `parents[3]` fixo e estourou
+    `IndexError` **na COLETA** — 66 testes deselecionados, exit 2, o job inteiro vermelho por um
+    gate que nem era sobre a API. Hoje ele **sobe procurando `infra/Caddyfile`** e se pula quando
+    não o acha.
+  - ⚠️ **E o SKIP é REPROVADO no job que importa.** A etapa do `ci.yml` confere `executados >= 1`
+    pelo junit, igual à guarda do `rls_e2e`: um gate que se pula sozinho fica verde sem proteger
+    nada, e silêncio é indistinguível de aprovação. **Regra que fica: teste que lê arquivo FORA
+    de `apps/api` não pode viver só no `pytest` da imagem — ou ele se pula, ou ele quebra a
+    coleta.**
 
 - **Dívida:** a validação de verdade (build da imagem + `caddy validate` nos cinco cenários) é
-  **manual, com Docker, e não roda no CI** — o gate que roda é de texto. Um job que buildasse a
+  **manual, com Docker, e não roda no CI** — o que roda é o gate de TEXTO. Um job que buildasse a
   imagem por PR pagaria ~2 min de `xcaddy` em toda mudança do repo; a troca não foi feita, e fica
   registrada em vez de escondida.
 - **Dívida:** o `docker-compose.override.yml` da AWS pode perder o bloco `caddy:` depois que isto

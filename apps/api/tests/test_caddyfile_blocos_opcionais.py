@@ -13,14 +13,43 @@ devolve `Valid configuration` com um `warn`, não erro).
 Este gate é de TEXTO, e é o que impede alguém de mover um bloco de volta para dentro do arquivo
 principal — a validação de verdade (build da imagem + `caddy validate` nos cinco cenários) é
 manual, com Docker, e não roda no CI. Ver a dívida no CLAUDE.md.
+
+Ele roda no job **`cross-tenant-rls`** do `ci.yml` (checkout completo, required em `main`), e a
+etapa de lá REPROVA o skip: um gate que se pula sozinho fica verde sem proteger nada.
 """
 import pathlib
 
 import pytest
 
-INFRA = pathlib.Path(__file__).resolve().parents[3] / "infra"
-CADDYFILE = INFRA / "Caddyfile"
-OPCIONAIS = INFRA / "caddy" / "optional"
+
+def _acha_infra() -> pathlib.Path | None:
+    """Sobe a partir deste arquivo procurando `infra/Caddyfile`.
+
+    NÃO use `parents[3]`: o job `test-in-prod-image` roda a suíte DENTRO da imagem da API, onde
+    só `apps/api` foi copiado — a árvore é mais rasa e o índice fixo estoura com `IndexError`,
+    derrubando a COLETA inteira (66 testes deselecionados, exit 2). Aconteceu no primeiro CI
+    deste gate.
+    """
+    for pai in pathlib.Path(__file__).resolve().parents:
+        candidato = pai / "infra"
+        if (candidato / "Caddyfile").is_file():
+            return candidato
+    return None
+
+
+INFRA = _acha_infra()
+
+# Sem `infra/` alcançável estamos dentro da imagem de produção, e não há o que aferir. O gate
+# roda de verdade no job `cross-tenant-rls` do ci.yml, que tem o checkout completo — lá um
+# skip DERRUBA o job (guarda anti-vacuidade, mesmo padrão do `rls_e2e`). Se este skip começar a
+# aparecer naquele job, o gate parou de gatear e é isso que se conserta, não o skip.
+pytestmark = pytest.mark.skipif(
+    INFRA is None,
+    reason="infra/ fora do alcance (imagem de produção) — este gate roda no job cross-tenant-rls",
+)
+
+CADDYFILE = (INFRA or pathlib.Path(".")) / "Caddyfile"
+OPCIONAIS = (INFRA or pathlib.Path(".")) / "caddy" / "optional"
 
 # Diretivas que EXIGEM configuração externa para adaptar. Nenhuma pode estar no arquivo base.
 # `dns <provider>` cobre o caso real (cloudflare) e o próximo provedor de DNS que aparecer.
