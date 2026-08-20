@@ -435,13 +435,47 @@ arquivar um centro de custo num celular de 360px**. O `<a>` do bloco "botão" va
 **página pública** (`PageBlocks.tsx` é o mesmo componente), onde ele é a única conversão que existe:
 rótulo longo sem espaço media **626px** de largura.
 
-**Cobertura: 29 das 43 rotas protegidas de `App.tsx`.** As 14 de fora, com o motivo:
-`/`, `/config`, `/crm`, `/financeiro/conferencia` **quebram com o mock default `[]`** (endpoint que
-devolve objeto) e precisam de fixture própria — medido: as quatro renderizam **em branco**, e a
+**Cobertura: 29 das 47 rotas não-públicas de `App.tsx`** — **43 no `ProtectedLayout`** (com shell:
+sidebar + topbar) **+ 4 no `ProtectedBareLayout`** (sem shell). **18 de fora**, e as duas caixas
+falham por motivos diferentes:
+
+**14 do `ProtectedLayout`.** `/`, `/config`, `/crm`, `/financeiro/conferencia` **quebram com o mock
+default `[]`** (endpoint que devolve objeto) e precisam de fixture própria — medido: as quatro
+renderizam **em branco** (`pageerror` real: `reading 'some'`/`'trim'`/`'filter'`/`'map'`), e a
 `marca` as reprovaria, que é o comportamento certo. `/agenda`, `/crm/clients/:id`,
 `/conversas/:chatId`, `/financeiro/contratos/:id/dre`, `/orcamentos/:id`, `/contratos/:id`,
 `/juridico/novo`, `/juridico/:id` (as duas últimas exigem `?skill=`) e `/admin` (exige
 `is_platform_admin`) pedem fixture ou sessão própria. `*` (ComingSoon) não tem controle.
+
+**4 do `ProtectedBareLayout`, e estas são a categoria INTEIRA:** `/vima`, `/dna/nucleo`,
+`/compartilhar`, `/comprovante/:id`. **Nenhuma está no catálogo** — não por triagem, por omissão do
+denominador. E não são periferia: os comentários do próprio `App.tsx` dizem que `/vima` e
+`/dna/nucleo` são **"desenhados para 360px"**, e `/comprovante/:id` é **tela de dinheiro** que já
+carrega dívida de medição registrada no §5.1 (*"Segue de pé a dívida da `ComprovantePage` … aquela
+tela não está entre as medidas"*) — o `ALTURA_DA_BARRA` do `baixa.ts` tem seis mutantes
+sobreviventes justamente porque o número é medida do DOM e ninguém mede aquela tela. **Não foram
+medidas nesta issue de propósito** (o pedido era o número honesto, não mais cobertura): se
+alguma tiver defeito, vira issue própria com o número medido.
+
+⚠️ **COMO RECONTAR — a régua que impede o próximo erro deste parágrafo, que já aconteceu DUAS
+vezes seguidas.** Conte `<Route path=` nas **DUAS** caixas de layout (`ProtectedLayout` **e**
+`ProtectedBareLayout`), e conte também a forma **multilinha**, no espírito do *"Conte `<Modal` para
+o total, nunca só o import"* acima:
+
+```bash
+grep -c '<Route path=' apps/web/src/app/App.tsx   # 50 — só a forma de UMA linha
+grep -cE '^\s*path="' apps/web/src/app/App.tsx    # 1  — a rota `/` quebrada em 8 linhas
+# 50 + 1 = 51 rotas com path; menos as 4 públicas (/login, /orcamento/:slug,
+# /contrato/:slug, /p/:slug) = 47 não-públicas.
+```
+
+Os dois modos de errar, os dois medidos em 2026-08-19 ao escrever esta seção: **(a)** contar só o
+`ProtectedLayout` e perder as 4 sem shell — 43 em vez de 47; **(b)** contar só `<Route path=` de
+uma linha e perder a rota **`/`**, que é escrita em 8 linhas por causa do embrulho
+`<EntradaDoDia>` — 42 em vez de 43. É a mesma família do *"18 arquivos que eram 19"* do §5.1
+(`IdleWarningModal` escapando do `grep components/Modal` por importar por caminho relativo): o
+elemento que **se escreve diferente** some da conta, o numerador e o denominador param de fechar
+entre si, e ninguém percebe porque o número parece alto.
 
 **Achado fora do escopo, não consertado:** `/financeiro/centros-custo` corta **texto** em 13
 lugares — o nome do centro sobra **215,5px** e a tabela "Resultado por centro de custo" sobra de
