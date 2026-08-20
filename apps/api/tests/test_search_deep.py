@@ -66,7 +66,7 @@ def test_funda_conta_o_total_exato(db):
 def test_uma_conversa_e_um_resultado_mesmo_com_quarenta_mensagens(db):
     """Spec §3: quarenta mensagens do mesmo chat saem como UMA linha.
 
-    O contrário afogaria os outros seis tipos com repetição do mesmo diálogo — que é exatamente o
+    O contrário afogaria os outros sete tipos com repetição do mesmo diálogo — que é exatamente o
     risco levantado ao decidir incluir mensagens na busca.
     """
     chat = WhatsappChat(tenant_id=TENANT, chat_jid="5511999998888@s.whatsapp.net", title="Ana")

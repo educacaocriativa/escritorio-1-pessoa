@@ -1208,15 +1208,22 @@ export interface BriefingPreferences {
 
 // ── Busca global ──────────────────────────────────────────────────────────────
 //
-// Sete tipos, e o critério de quem entra é ter tela de destino. Contas a pagar, cobranças e
-// produtos ficaram de fora porque nenhuma das três sabe receber uma busca pela URL — ver a
-// issue #138 e a spec `2026-08-18-busca-global-design.md` §2.
+// Oito tipos, e o critério de quem entra é ter endereço que saiba RECEBER uma busca — não é "ter
+// tela de detalhe". Cobranças e produtos seguem de fora porque nenhuma das duas hidrata o próprio
+// recorte a partir da URL: o clique cairia numa lista que ignora o filtro, que a spec
+// `2026-08-18-busca-global-design.md` §2 (+ errata de 2026-08-19) considera pior que não oferecer
+// o resultado. Contas a pagar entrou na issue #146: o PR #143 (issue #138) fez `/pagar` ler `q`,
+// `status`, `de`/`ate`, `centro` e `categoria` do endereço, e o bloqueio dela deixou de existir.
+//
+// A ORDEM desta união é decorativa; quem manda na ordem dos grupos é o registro do backend
+// (`app/modules/search/registro.py`).
 
 export type SearchType =
   | "client"
   | "conversation"
   | "contract"
   | "quote"
+  | "payable"
   | "legal_document"
   | "page"
   | "funnel";
@@ -1235,7 +1242,7 @@ export interface SearchGroup {
   type: SearchType;
   has_more: boolean;
   /**
-   * Só em `depth=deep`. Na camada rasa a contagem exata custaria sete `count()` por tecla — e
+   * Só em `depth=deep`. Na camada rasa a contagem exata custaria oito `count()` por tecla — e
    * `has_more` não tem como mentir sobre um número que não anuncia.
    */
   total: number | null;
