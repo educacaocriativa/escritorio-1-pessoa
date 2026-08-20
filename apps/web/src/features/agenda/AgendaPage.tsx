@@ -223,6 +223,14 @@ function MonthGrid({
                 {dayEvents.slice(0, 3).map((e) => (
                   <div
                     key={e.id}
+                    // ⚠️ O chip mora DENTRO do `<button>` da célula do dia, e os dois abrem modais
+                    // DIFERENTES (chip → detalhe · célula → "Novo evento"). Mirar o chip por TEXTO
+                    // não basta: o alvo certo é preciso, mas o `click` do Playwright é por PONTO, e
+                    // um deslocamento vertical de ~10px entre o `mousedown` e o `mouseup` faz o
+                    // navegador emitir o `click` no ANCESTRAL COMUM — a célula — abrindo o modal
+                    // errado sem erro de hit-target (#149). O `testId` torna o alvo inequívoco e o
+                    // spec passa a exigir que o modal ERRADO não tenha aberto.
+                    data-testid={`chip-evento-${e.id}`}
                     onClick={(ev) => {
                       ev.stopPropagation();
                       onEventClick(e);

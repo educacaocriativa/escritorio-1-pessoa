@@ -24,6 +24,7 @@ import { semearSessao } from "./support/sessao";
 // hífen e sem barra, o único formato em que o navegador não tem candidato a quebra.
 const TITULO_SEM_ESPACO =
   "AlinhamentoFinalDoCasamentoDaJulianaComTodosOsFornecedoresBuffetFotografiaEDecoracao2026";
+const EVENTO_ID = "ev-longo";
 
 test.beforeEach(async ({ page }) => {
   // Relógio congelado em 18/08/2026 (fuso do tenant): a grade abre no mês CORRENTE, e sem isto o
@@ -33,7 +34,7 @@ test.beforeEach(async ({ page }) => {
   await mockarApi(page, {
     "/agenda/events": [
       evento({
-        id: "ev-longo",
+        id: EVENTO_ID,
         title: TITULO_SEM_ESPACO,
         starts_at: "2026-08-18T13:00:00Z",
         ends_at: "2026-08-18T14:00:00Z",
@@ -43,9 +44,25 @@ test.beforeEach(async ({ page }) => {
     ],
   });
   await page.goto("/agenda");
-  // O chip do mês tem `truncate` — o que se mede aqui é o MODAL que ele abre.
-  await page.getByText(TITULO_SEM_ESPACO.slice(0, 24), { exact: false }).first().click();
+
+  // ⚠️ **Por testId, nunca por texto** (#149). O chip do mês fica DENTRO do `<button>` da célula
+  // do dia, e os dois abrem modais diferentes: o chip abre o detalhe, a célula abre "Novo evento".
+  // O `getByText` casava com UM elemento só — o chip (medido: `count() === 1`) —, então o alvo
+  // nunca foi ambíguo; ambíguo era o PONTO. O `click` do Playwright mira o centro do alvo, e se a
+  // página desloca entre o `mousedown` e o `mouseup`, o navegador emite o `click` no ancestral
+  // comum dos dois alvos — a célula do dia. Medido: **10px de deslocamento já bastam**, e nada
+  // reclama, porque o `mousedown` acertou o chip. Quem punha o chip a 10px da dobra era o card
+  // fantasma do `GanchoDaVima` (+101px: folga de 7,8px em vez de 116,8px), hoje neutralizado no
+  // default de `support/api.ts` — é lá que mora a explicação inteira.
+  await page.getByTestId(`chip-evento-${EVENTO_ID}`).click();
   await expect(page.getByTestId("modal-evento")).toBeVisible();
+
+  // A METADE QUE FALTAVA. "O detalhe abriu" não é a mesma afirmação que "o clique no chip fez o
+  // que devia": com o `stopPropagation` do chip removido, os DOIS handlers disparam e os DOIS
+  // modais ficam de pé — e a asserção acima passa verde. Esta linha é a que separa as duas, e é
+  // ela que transforma o sintoma do #149 (o modal errado no lugar do certo) num diagnóstico
+  // imediato em vez de um "element(s) not found" sem explicação.
+  await expect(page.getByRole("heading", { name: "Novo evento" })).toHaveCount(0);
 });
 
 test("o título digitado pelo dono não empurra o 'Fechar' para fora da tela", async ({ page }) => {
