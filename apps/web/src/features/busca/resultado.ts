@@ -12,6 +12,7 @@ export const ROTULOS: Record<SearchType, string> = {
   conversation: "Conversas",
   contract: "Contratos",
   quote: "Orçamentos",
+  payable: "Contas a Pagar",
   legal_document: "Jurídico",
   page: "Sites",
   funnel: "Funis",

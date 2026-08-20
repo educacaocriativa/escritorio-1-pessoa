@@ -18,7 +18,7 @@ class SearchItemOut(BaseModel):
 class SearchGroupOut(BaseModel):
     type: str
     has_more: bool
-    #: Só em `depth=deep`. Contar na camada rasa custaria sete `count()` por tecla — e `has_more`
+    #: Só em `depth=deep`. Contar na camada rasa custaria oito `count()` por tecla — e `has_more`
     #: não tem como mentir sobre um número que não anuncia (spec §6.1).
     total: int | None = None
     items: list[SearchItemOut]
