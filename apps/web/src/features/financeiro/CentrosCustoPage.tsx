@@ -98,7 +98,17 @@ export default function CentrosCustoPage() {
         <div className="overflow-hidden rounded-2xl bg-white shadow-sm">
           <ul className="divide-y divide-neutral-50">
             {centers.map((c) => (
-              <li key={c.id} className="flex items-center justify-between px-5 py-3">
+              // Sem o `flex-wrap` desta linha, um nome longo empurrava as duas acoes para fora
+              // do cartao: «Editar» comecava em x=637 e «Arquivar» em x=699 numa tela de 360px —
+              // INTEIRAMENTE fora, sem rolagem de escape. Nao dava para editar nem arquivar um
+              // centro de custo no celular. Medido em #144.
+              //
+              // O NOME em si continua cortado (215,5px sobrando, e a tabela comparativa abaixo
+              // corta ate 699,5px): e a outra classe, a de `textoForaDaTela`, e nao ha regua
+              // verde para ela nesta rota. Tentar consertar aqui de carona ficaria sem medicao —
+              // `break-words` no rotulo, medido, NAO muda o numero (o span e item de flex com
+              // `min-width: auto`), e mudanca que nenhuma regua ve e peso morto.
+              <li key={c.id} className="flex flex-wrap items-center justify-between gap-2 px-5 py-3">
                 <span className="flex items-center gap-2">
                   <span
                     className={

@@ -135,7 +135,9 @@ export default function PageBuilderPage() {
           <ArrowLeft size={16} /> Sites
         </button>
         <input value={page.title} onChange={(e) => setStyle({ title: e.target.value })} className="rounded-lg border border-neutral-200 px-3 py-1.5 text-sm font-medium outline-none focus:border-primary-400" />
-        <div className="flex items-center gap-2">
+        {/* Ver o comentario gemeo em FunnelBuilderPage: fila unica de acoes recortada pelo
+            `main`. Aqui «Salvar» terminava em x=400 numa tela de 360px (#144). */}
+        <div className="flex flex-wrap items-center gap-2">
           {savedAt && <span className="text-xs text-neutral-400">{savedAt === "publicada" ? "Publicada" : `Salvo ${savedAt}`}</span>}
           <button onClick={view} className="flex items-center gap-1.5 rounded-pill bg-neutral-100 px-3 py-2 text-sm font-semibold text-neutral-600 hover:bg-neutral-200">
             <Eye size={14} /> Ver

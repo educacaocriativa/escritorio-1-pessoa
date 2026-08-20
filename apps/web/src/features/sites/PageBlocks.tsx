@@ -71,9 +71,13 @@ function Block({
     case "button":
       return (
         <div className="text-center">
+          {/* `max-w-full` + `break-words`: um rotulo longo SEM espaco — o pior caso plausivel de
+              quem escreve a propria pagina — fazia o <a> medir 626px e sair da tela. Medido em
+              #144: 65 -> 691 numa tela de 360px, no construtor E na pagina publica, onde este
+              botao e a unica conversao que existe. */}
           <a
             href={safeSrc(block.url) || "#"}
-            className="inline-block rounded-pill px-8 py-3 text-base font-bold text-white"
+            className="inline-block max-w-full break-words rounded-pill px-8 py-3 text-base font-bold text-white"
             style={{ background: style.accent_color }}
           >
             {s("label") || "Botão"}
