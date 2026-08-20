@@ -1,7 +1,7 @@
 """Busca global — a rota.
 
-**Sem `require_module` como guarda da rota, e isso é deliberado.** A busca cruza sete módulos; um
-guard só teria de escolher um deles e estaria errado nos outros seis. O RBAC entra como FILTRO por
+**Sem `require_module` como guarda da rota, e isso é deliberado.** A busca cruza oito módulos; um
+guard só teria de escolher um deles e estaria errado nos outros sete. O RBAC entra como FILTRO por
 entidade, dentro do serviço, com o MESMO critério de `require_module` — dono, ou `allowed_modules`
 vazio, vê tudo (spec §6.4).
 """
