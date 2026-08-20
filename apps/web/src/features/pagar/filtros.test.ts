@@ -242,3 +242,35 @@ describe("apenasTexto — quem decide se o botao voltar tem o que desfazer", () 
     expect(apenasTexto(sujo, limpo)).toBe(false);
   });
 });
+
+describe("o destino que a busca global monta (#146)", () => {
+  /**
+   * A OUTRA METADE do contrato. O backend (`search/registro.py::_rota_da_conta`) monta a string;
+   * quem a interpreta é o `daUrl` daqui. Se as duas metades divergirem, nada quebra — o clique
+   * só passa a cair numa lista que não contém a conta clicada, que é exatamente o defeito mudo
+   * que manteve Contas a Pagar fora da busca até o PR #143.
+   */
+  const DA_BUSCA = "q=IOF%20sobre%20emprestimo&status=&ate=";
+
+  it("o termo volta inteiro, com espaços e tudo", () => {
+    expect(daUrl(new URLSearchParams(DA_BUSCA), PADRAO).q).toBe("IOF sobre emprestimo");
+  });
+
+  it("`status=` vazio significa TODOS os status — inclusive a conta já paga", () => {
+    // Sem isto, a visão padrão (`open`+`scheduled`) esconderia a conta paga que a busca achou.
+    expect(daUrl(new URLSearchParams(DA_BUSCA), PADRAO).status).toEqual([]);
+  });
+
+  it("`ate=` vazio significa SEM horizonte — a conta de vencimento distante aparece", () => {
+    expect(daUrl(new URLSearchParams(DA_BUSCA), PADRAO).ate).toBeNull();
+  });
+
+  it("e nada além disso é recortado: sem piso de data, sem centro, sem categoria", () => {
+    const f = daUrl(new URLSearchParams(DA_BUSCA), PADRAO);
+    const query = paraQuery(f, 50, 0);
+    expect(query.status).toBeUndefined();
+    expect(query.from).toBeUndefined();
+    expect(query.to).toBeUndefined();
+    expect(query.q).toBe("IOF sobre emprestimo");
+  });
+});
