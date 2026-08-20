@@ -349,7 +349,11 @@ function Builder() {
             <ArrowLeft size={16} /> Funis
           </button>
           <input value={name} onChange={(e) => setName(e.target.value)} className="rounded-lg border border-neutral-200 px-3 py-1.5 text-sm font-medium outline-none focus:border-primary-400" />
-          <div className="flex items-center gap-2">
+          {/* `flex-wrap` aqui, e nao so no pai: sem ele os cinco botoes ficam numa fila unica
+              de 586px que o `main` (overflow-x-hidden) RECORTA — «Automação» comecava em x=389 e
+              «Salvar» em x=514, ambos inteiramente fora de uma tela de 360px, e sem rolagem de
+              escape para alcanca-los. Medido em #144. */}
+          <div className="flex flex-wrap items-center gap-2">
             <button onClick={downloadPng} className="flex items-center gap-1.5 rounded-pill bg-neutral-100 px-3 py-2 text-sm font-semibold text-neutral-600 hover:bg-neutral-200">
               <Download size={14} /> Baixar PNG
             </button>
