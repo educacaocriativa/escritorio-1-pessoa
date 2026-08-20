@@ -247,7 +247,9 @@ export default function QuoteBuilderPage() {
         <button onClick={() => navigate("/orcamentos")} className="flex items-center gap-1 text-sm text-neutral-500 hover:text-neutral-700">
           <ArrowLeft size={16} /> Orçamentos
         </button>
-        <div className="flex items-center gap-3">
+        {/* Mesma classe do #144: o bloco Total + «Enviar»/«Ver»/«Salvar» nao quebrava, e o
+            «Salvar» terminava em x=376 numa tela de 360px. */}
+        <div className="flex flex-wrap items-center justify-end gap-3">
           <div className="text-right">
             <p className="text-xs text-neutral-400">Total</p>
             <p className="text-lg font-bold text-neutral-800">{brl(total)}</p>

@@ -405,6 +405,126 @@ isoladamente na mesma data, sem triagem — os 17 sobreviventes dele estão no t
   módulo em `stryker.config.mjs` — depois de um período de observação, e nunca acima do que a
   tabela mostra.
 
+### 5.4 A régua de ALCANÇABILIDADE de controle (`e2e/alcance-360.spec.ts`, issue #144, 2026-08-19)
+
+**A régua do #135 é cega para a metade oposta do problema, e é cega por construção — não por
+fresta.** `main` é `overflow-x-hidden` (`AppShell.tsx:64`): um botão que não cabe **não empurra o
+documento**, ele é **RECORTADO**. `document.documentElement.scrollWidth` continua devolvendo 360,
+verdinho, com o botão inalcançável. As duas classes se parecem no sintoma e são opostas no
+mecanismo:
+
+| | #135 (`rotas-360.spec.ts`) | #58 / #144 (`alcance-360.spec.ts`) |
+|---|---|---|
+| O que acontece | o elemento **escapa** do recorte e empurra o documento | o elemento é **recortado** e fica preso atrás dele |
+| Como se detecta | `scrollWidth` do documento > 360 | posição do controle vs. a borda alcançável |
+| Sintoma | a página rola de lado | o botão não existe para o dedo |
+
+Foi assim que o #144 se escondeu: a varredura de 18 rotas do PR #141 visitou `/funis/f1`, a `marca`
+provou que a tela renderizou, a largura deu **360** — e o «Salvar» começava em **x=514** numa tela
+de 360px, **inteiramente** fora. Num celular não havia como salvar um funil.
+
+- **A régua** é `controlesInalcancaveis` em `e2e/support/medidas.ts`. Ela pergunta, de cada
+  `button`/`a[href]`/campo **visível**: a borda direita passa da borda alcançável (a menor entre a
+  viewport e a de **todo** ancestral que recorta) **e** não há ancestral que **role** na horizontal
+  para trazê-lo de volta?
+- ⚠️ **O critério NÃO é "termina depois de 360" — e a diferença não é acadêmica.** Medido nestas
+  rotas, "termina depois de 360" acusa **13 controles que estão certos**: os **12** botões de valor
+  da DRE de 12 meses (dentro de um `overflow-x-auto` que rola — o deslizador existir e funcionar) e
+  o «Gerar com IA» do carrossel (dentro do painel de edição com `overflow: auto`, a **20px** da
+  borda). Régua com 13 falsos positivos é descartada na primeira semana, e leva junto os defeitos
+  de verdade que ela carrega. **Prova por mutação:** tirar a cláusula do deslizador deixa **5
+  testes vermelhos** — 4 rotas (`/financeiro/dre`, `/marketing/m1`, `/marketing/novo`,
+  `/orcamentos/novo`) e o controle negativo.
+- **UMA coleta, dois filtros.** `alvosPequenos` (44px) e `controlesInalcancaveis` são duas
+  perguntas sobre o **mesmo** conjunto de elementos, e passam pelo mesmo `medirControles` — o
+  seletor de controle e a função `visivel` existem uma vez só. Duas cópias divergiriam no primeiro
+  dia em que alguém corrigisse apenas uma.
+- **O catálogo de rotas mudou de casa:** `e2e/support/rotas.ts` (fixtures de pior caso + `marca` +
+  mocks), percorrido pelas **duas** réguas. Duas cópias garantiriam que uma medisse uma tela que a
+  outra não mede.
+- ⚠️ **Os DOIS controles no fim do spec são o que impede o arquivo de virar enfeite**, e nenhum é
+  cortesia. O **positivo** planta um botão recortado pelo `main` e exige que a régua o veja
+  (mutação "régua cega" → morre); o **negativo** planta um botão igualmente fora da tela **dentro
+  do deslizador da DRE**, prova pelo número que ele está além dos 360px, e exige que a régua **NÃO**
+  o acuse. Sem o primeiro ninguém sabe se ela enxerga; sem o segundo, se ela sabe parar.
+- **A ÚNICA exclusão, com a razão e o número:** `EXCECOES_DE_ALCANCE = [".react-flow"]`. A lona do
+  construtor de funis é movida por `transform` (pan/zoom no dedo): não há `overflow-x` nenhum para
+  a régua encontrar, e ela é **maior que qualquer tela por construção** (a fixture tem um nó em
+  x=900). Medido: sem a exceção, `/funis/f1` acusa **2** falsos positivos — a aresta
+  `g [Edge from n1 to n2]` (direita **531**) e a `div` do nó (**493,5 → 568,5**) — que nenhum
+  conserto de layout resolve. Os **controles de tela** do construtor (cabeçalho, paleta, painel)
+  ficam FORA de `.react-flow` e continuam medidos: é lá que morava o #144.
+
+**Os defeitos que ela achou sozinha** — a issue reclamava de `/funis`; três dos cinco a régua
+descobriu por conta própria, e todos estão consertados neste PR (medidos em 360×740, fixtures de
+pior caso):
+
+| Rota | Controle | x → x | |
+|---|---|---|---|
+| `/funis/novo` e `/funis/:id` | «Automação» | 389,2 → 506 | **inteiramente fora** |
+| `/funis/novo` e `/funis/:id` | «Salvar» | 514 → 604 | **inteiramente fora** |
+| `/funis/novo` e `/funis/:id` | «Apresentação» | 250,6 → 381,2 | parcial |
+| `/financeiro/centros-custo` | «Editar» | 637,4 → 687 | **inteiramente fora** (novo) |
+| `/financeiro/centros-custo` | «Arquivar» | 699 → 763,3 | **inteiramente fora** (novo) |
+| `/sites/:id` | «Salvar» | 310 → 400 | parcial (novo) |
+| `/sites/:id` | `<a>` do bloco "botão" | 65 → 691,3 | parcial (novo) |
+| `/orcamentos/novo` | «Salvar» | 286,4 → 376,4 | parcial (novo) |
+
+Em `/financeiro/centros-custo` os dois estavam **inteiramente** fora: **não dava para editar nem
+arquivar um centro de custo num celular de 360px**. O `<a>` do bloco "botão" vale também na
+**página pública** (`PageBlocks.tsx` é o mesmo componente), onde ele é a única conversão que existe:
+rótulo longo sem espaço media **626px** de largura.
+
+**Cobertura: 29 das 47 rotas não-públicas de `App.tsx`** — **43 no `ProtectedLayout`** (com shell:
+sidebar + topbar) **+ 4 no `ProtectedBareLayout`** (sem shell). **18 de fora**, e as duas caixas
+falham por motivos diferentes:
+
+**14 do `ProtectedLayout`.** `/`, `/config`, `/crm`, `/financeiro/conferencia` **quebram com o mock
+default `[]`** (endpoint que devolve objeto) e precisam de fixture própria — medido: as quatro
+renderizam **em branco** (`pageerror` real: `reading 'some'`/`'trim'`/`'filter'`/`'map'`), e a
+`marca` as reprovaria, que é o comportamento certo. `/agenda`, `/crm/clients/:id`,
+`/conversas/:chatId`, `/financeiro/contratos/:id/dre`, `/orcamentos/:id`, `/contratos/:id`,
+`/juridico/novo`, `/juridico/:id` (as duas últimas exigem `?skill=`) e `/admin` (exige
+`is_platform_admin`) pedem fixture ou sessão própria. `*` (ComingSoon) não tem controle.
+
+**4 do `ProtectedBareLayout`, e estas são a categoria INTEIRA:** `/vima`, `/dna/nucleo`,
+`/compartilhar`, `/comprovante/:id`. **Nenhuma está no catálogo** — não por triagem, por omissão do
+denominador. E não são periferia: os comentários do próprio `App.tsx` dizem que `/vima` e
+`/dna/nucleo` são **"desenhados para 360px"**, e `/comprovante/:id` é **tela de dinheiro** que já
+carrega dívida de medição registrada no §5.1 (*"Segue de pé a dívida da `ComprovantePage` … aquela
+tela não está entre as medidas"*) — o `ALTURA_DA_BARRA` do `baixa.ts` tem seis mutantes
+sobreviventes justamente porque o número é medida do DOM e ninguém mede aquela tela. **Não foram
+medidas nesta issue de propósito** (o pedido era o número honesto, não mais cobertura): se
+alguma tiver defeito, vira issue própria com o número medido.
+
+⚠️ **COMO RECONTAR — a régua que impede o próximo erro deste parágrafo, que já aconteceu DUAS
+vezes seguidas.** Conte `<Route path=` nas **DUAS** caixas de layout (`ProtectedLayout` **e**
+`ProtectedBareLayout`), e conte também a forma **multilinha**, no espírito do *"Conte `<Modal` para
+o total, nunca só o import"* acima:
+
+```bash
+grep -c '<Route path=' apps/web/src/app/App.tsx   # 50 — só a forma de UMA linha
+grep -cE '^\s*path="' apps/web/src/app/App.tsx    # 1  — a rota `/` quebrada em 8 linhas
+# 50 + 1 = 51 rotas com path; menos as 4 públicas (/login, /orcamento/:slug,
+# /contrato/:slug, /p/:slug) = 47 não-públicas.
+```
+
+Os dois modos de errar, os dois medidos em 2026-08-19 ao escrever esta seção: **(a)** contar só o
+`ProtectedLayout` e perder as 4 sem shell — 43 em vez de 47; **(b)** contar só `<Route path=` de
+uma linha e perder a rota **`/`**, que é escrita em 8 linhas por causa do embrulho
+`<EntradaDoDia>` — 42 em vez de 43. É a mesma família do *"18 arquivos que eram 19"* do §5.1
+(`IdleWarningModal` escapando do `grep components/Modal` por importar por caminho relativo): o
+elemento que **se escreve diferente** some da conta, o numerador e o denominador param de fechar
+entre si, e ninguém percebe porque o número parece alto.
+
+**Achado fora do escopo, não consertado:** `/financeiro/centros-custo` corta **texto** em 13
+lugares — o nome do centro sobra **215,5px** e a tabela "Resultado por centro de custo" sobra de
+**306,5px** a **699,5px** (cabeçalhos e todas as células). É a classe de `textoForaDaTela`, não a de
+alcançabilidade, e não há régua verde para ela nesta rota. Medido também que `break-words` no rótulo
+do nome **não muda o número** (o `span` é item de flex com `min-width: auto`, então nunca chega a
+quebrar) — mudança que nenhuma régua vê é peso morto, e por isso ela não entrou.
+
+
 ## 6. Estado atual / roadmap
 - [x] Fundação do monorepo, docs, agentes de QA, CI local.
 - [x] Core do backend: tenancy (RLS) + anonimizador + camada de IA + auditoria.
