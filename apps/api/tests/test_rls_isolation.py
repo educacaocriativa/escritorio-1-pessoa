@@ -205,10 +205,38 @@ def _insert_cliente(app_url: str, tenant_id: str, nome: str) -> None:
         engine.dispose()
 
 
+def _insert_conta_a_pagar(app_url: str, tenant_id: str, descricao: str) -> None:
+    """Insere uma conta a pagar com a GUC do tenant setada — espelha `_insert_cliente`.
+
+    Contas a Pagar entrou na busca no #146. Uma conta vazada mostra fornecedor e valor devido de
+    outro escritório: é vazamento financeiro, não cosmético. Por isso ela é seedada aqui e não só
+    no SQLite, onde a RLS não existe. Todas as demais colunas NOT NULL têm `server_default` desde
+    as migrations 0011/0024/0026 — este INSERT é deliberadamente mínimo para não fixar schema.
+    """
+    engine = create_engine(app_url, poolclass=NullPool)
+    try:
+        with engine.connect() as conn:
+            conn.execute(
+                text("SELECT set_config('app.current_tenant_id', :tid, false)"),
+                {"tid": tenant_id},
+            )
+            conn.execute(
+                text(
+                    "INSERT INTO payables (id, tenant_id, description, amount_cents, due_date, "
+                    "created_at, updated_at) "
+                    "VALUES (:id, :tid, :desc, 9900, DATE '2026-09-10', now(), now())"
+                ),
+                {"id": str(uuid4()), "tid": tenant_id, "desc": descricao},
+            )
+            conn.commit()
+    finally:
+        engine.dispose()
+
+
 def _busca_pela_otica_de(app_url: str, tenant_id: str, termo: str) -> set[str]:
     """Roda a busca global como `e1p_app` com a GUC do tenant — RLS real, não SQLite.
 
-    A busca cruza sete tabelas; o `pytest -q` roda SQLite, onde a RLS nem existe. Sem este teste,
+    A busca cruza oito tabelas; o `pytest -q` roda SQLite, onde a RLS nem existe. Sem este teste,
     "a busca não vaza entre tenants" seria opinião.
     """
     from sqlalchemy.orm import Session
@@ -252,10 +280,16 @@ def test_busca_global_nao_atravessa_tenant() -> None:
         # Nomes que casam com o MESMO termo: se a RLS falhasse, os dois viriam juntos.
         _insert_cliente(app_url, joao_tenant, "Ana do Joao")
         _insert_cliente(app_url, maria_tenant, "Ana da Maria")
+        # Duas TABELAS diferentes casando com o mesmo termo: a RLS tem de valer para as duas
+        # políticas, e não só para a de `clients` que já estava coberta.
+        _insert_conta_a_pagar(app_url, joao_tenant, "Anuidade do Joao")
+        _insert_conta_a_pagar(app_url, maria_tenant, "Anuidade da Maria")
 
-        assert _busca_pela_otica_de(app_url, joao_tenant, "ana") == {"Ana do Joao"}, (
-            "a busca do João trouxe a cliente da Maria"
-        )
-        assert _busca_pela_otica_de(app_url, maria_tenant, "ana") == {"Ana da Maria"}, (
-            "a busca da Maria trouxe a cliente do João"
-        )
+        assert _busca_pela_otica_de(app_url, joao_tenant, "an") == {
+            "Ana do Joao",
+            "Anuidade do Joao",
+        }, "a busca do João trouxe dado da Maria"
+        assert _busca_pela_otica_de(app_url, maria_tenant, "an") == {
+            "Ana da Maria",
+            "Anuidade da Maria",
+        }, "a busca da Maria trouxe dado do João"

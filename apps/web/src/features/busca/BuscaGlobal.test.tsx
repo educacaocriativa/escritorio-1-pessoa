@@ -101,7 +101,7 @@ describe("BuscaGlobal", () => {
     montar();
     await userEvent.type(screen.getByRole("combobox"), "a");
 
-    // Uma letra casa com quase tudo: sete varreduras por tecla, para devolver ruído.
+    // Uma letra casa com quase tudo: oito varreduras por tecla, para devolver ruído.
     expect(get).not.toHaveBeenCalled();
   });
 
