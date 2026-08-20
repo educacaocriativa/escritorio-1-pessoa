@@ -115,6 +115,23 @@ pro IP da VPS (`dig +short app.seudominio.com`) e se a porta 80 está mesmo aces
     exige uma conta/número aprovados na Meta Cloud API (não coberto por testes automatizados).
 
 ## 5. Atualizações (deploy de uma nova versão)
+
+> ### Use o script — o passo a passo abaixo é a referência do que ele faz
+>
+> ```bash
+> ssh -t root@<host> "cd /opt/e1p && ./infra/scripts/deploy.sh"
+> ```
+>
+> `infra/scripts/deploy.sh` **detecta o ambiente** pelo label
+> `com.docker.compose.project.config_files` da stack em pé — que é exatamente a conferência que a
+> nota "Qual compose file?" abaixo manda fazer à mão — e daí deriva o compose, o `--env-file` e o
+> domínio. Ele também: exige os 4 jobs de CI verdes no SHA alvo, faz backup, reconstrói **sem
+> nomear serviço** e **prova** o resultado (health, alembic, e o hash do bundle servido, que
+> precisa ter mudado se e somente se o diff tocou `apps/web`). `--dry-run` imprime o plano.
+>
+> **Esta VPS é dev/teste desde 2026-08-20**; a produção é a AWS (`docs/AWS-DEPLOYMENT.md`). O mesmo
+> script serve as duas — muda só o host. Em produção ele exige confirmação digitada.
+
 > **Antes de dar `git pull` + rebuild em produção, confirme que o CI está VERDE** no
 > commit/branch que será deployado (`.github/workflows/ci.yml` — jobs `test-in-prod-image`
 > e `cross-tenant-rls`). O CI roda a suíte DENTRO da imagem de produção (pega drift
