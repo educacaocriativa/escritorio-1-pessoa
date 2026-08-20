@@ -35,6 +35,23 @@ backup, reconstrói e então **prova** o resultado (health, alembic e hash do bu
 produção ele exige confirmação digitada. `--dry-run` mostra o plano sem executar. É o mesmo script
 em dev e em prod — só muda o host de destino.
 
+⚠️ **Ele deriva os compose files do label da stack em pé, e isso NÃO é detalhe.** Esta instância
+tem um `infra/docker-compose.override.yml` **não versionado** (monta um `Caddyfile.single`, sem o
+bloco wildcard) e um runbook local em `/opt/e1p/DEPLOY-AWS.md`. Rodar o compose à mão com um `-f`
+só **descarta o override**: o Caddy volta com o `infra/Caddyfile` versionado, exige o
+`CLOUDFLARE_API_TOKEN` que aqui é vazio de propósito, **recusa a config inteira** e derruba também
+o domínio único — aconteceu em 2026-08-20, ~40 min fora do ar. Ver issue #151.
+
+**À mão, os DOIS `-f` são obrigatórios**, e o `--env-file` também (o `docker-compose.prod.yml` usa
+`${VAR}` para as senhas, e interpolação não vem do `env_file:` de serviço):
+
+```bash
+cd /opt/e1p/infra && docker compose --env-file .env.prod   -f docker-compose.prod.yml -f docker-compose.override.yml up -d
+```
+
+Antes de qualquer comando de deploy à mão: `git status` no `/opt/e1p` e leia o runbook local — o
+que está no repositório é o deploy canônico, não necessariamente o desta máquina.
+
 ---
 
 Filosofia: **começar barato e portável, escalar quando o tráfego justificar.** Tudo é container 12-factor,

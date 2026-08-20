@@ -2921,6 +2921,49 @@ migration.
 - **Dívida (a que NÃO fecha):** as 46 perguntas seguem nunca validadas com dono real. Não é
   instrumentável; é conversa com dono.
 
+## Deploy: o script detecta o ambiente — e a lista de compose files vem do LABEL
+
+`infra/scripts/deploy.sh` sobe uma versão nova no ambiente em que o host roda, sem flag de
+ambiente: ele lê o label `com.docker.compose.project.config_files` do `infra-api-1`, que registra
+**todos** os arquivos com que a stack foi criada. Escolher o compose errado no host errado deixa
+de existir quando ninguém escolhe.
+
+- ⚠️ **A lista de compose files era CRAVADA no script, e isso derrubou a produção em 2026-08-20.**
+  A instância da AWS tem três arquivos **não versionados** (assim `git pull` nunca conflita):
+  `DEPLOY-AWS.md` (o runbook real daquela máquina), `infra/docker-compose.override.yml` e
+  `infra/Caddyfile.single`. O override monta o `Caddyfile.single` no lugar do `infra/Caddyfile`
+  versionado, que tem o bloco wildcard `*.{$ROOT_DOMAIN}` exigindo `CLOUDFLARE_API_TOKEN` — **vazio
+  ali de propósito**. Recriar o `caddy` sem o override fez o Caddy **recusar a config INTEIRA**
+  (`missing API token`) e derrubar **também o domínio único**, com o certificado dele intacto em
+  disco. ~40 min fora do ar. É a **issue #151**.
+  - Um placeholder não salva: o plugin da Cloudflare valida o **formato** do token (40 chars
+    `[A-Za-z0-9_-]`), e passando no formato a sobreposição do wildcard com o domínio principal
+    (`DOMAIN=e1p.criativaeduca.com.br` é subdomínio de `ROOT_DOMAIN=criativaeduca.com.br`) continua
+    impedindo o TLS. Medido, nos dois passos.
+- ⚠️ **`--env-file` é obrigatório nos DOIS perfis, e a exceção que existia era falsa.** O script
+  dizia que a AWS *"resolve o env por env_file: interno, nao precisa da flag"*. Os dois compose
+  files usam `${VAR}` para as senhas, e **interpolação não vem do `env_file:` de serviço** — sem a
+  flag o compose morre em `required variable APP_DB_PASSWORD is missing` antes de listar um
+  serviço sequer.
+- **`COMPOSE_ARQ` (o arquivo primário) sobreviveu**, e só para o `COMPOSE_FILE` que o `backup.sh`
+  consome; tudo que roda compose usa `COMPOSE_ARGS`, derivado do label.
+
+> **A regra que fica, e ela é maior que este script:** **o repositório descreve o deploy
+> CANÔNICO; a máquina carrega os desvios que ninguém commitou.** Esses desvios são invisíveis a
+> qualquer leitura do repo, e um container rodando há dias pode estar servindo uma config que
+> **não existe mais em disco** — o defeito só aparece na recriação, longe da mudança que o causou.
+> Antes de qualquer comando que recrie container: `git status` no checkout do servidor e procure
+> um `DEPLOY*.md` local. É a mesma família do comentário inline no `.env.prod` (§Anexos) e da
+> config do webhook da Evolution em memória (§WhatsApp): **estado em memória divergindo do estado
+> em disco**, três vezes no mesmo repositório.
+
+- **Dívida:** nada no repo REPROVA um deploy que ignore o override — a garantia é o script, e quem
+  rodar compose à mão continua exposto. O conserto de verdade é a **issue #151**: enquanto o
+  `infra/Caddyfile` tiver o bloco wildcard incondicional, aquela instância depende de um arquivo
+  local para subir.
+- **Dívida:** o `CLOUDFLARE_API_TOKEN` segue vazio na AWS. Correto hoje (sem wildcard, sem DNS-01);
+  vira problema no dia em que subdomínio por tenant entrar em uso.
+
 ## 6.0 Correções importantes
 - **[CORRIGIDO 2026-08-05] O sistema inteiro passou a viver no fuso do tenant (era UTC).** O sintoma que o fundador viu foi a linha do tempo do Funil exibindo `Aguardando até 2026-08-05T11:11:32.812731+00:00` — formato de máquina e 3h adiantado. A investigação achou **três** defeitos com a mesma raiz: existia infra de fuso (`core/tz.py` + `tenant.timezone`, migration 0044) mas só 3 módulos a consumiam.
   1. **Texto para humano com UTC cru.** `funnels/engine.py` interpolava `resume_at.isoformat()` na mensagem; `contracts/service.py` montava a variável `{{DATA}}` com `datetime.now(UTC)` — um contrato criado às 22h saía datado do dia seguinte, e essa é a data que vale juridicamente.

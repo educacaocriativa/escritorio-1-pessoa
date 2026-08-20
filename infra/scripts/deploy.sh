@@ -57,27 +57,48 @@ tem_prod=0
 if (( tem_traefik )); then
   PERFIL="hostinger"
   COMPOSE_ARQ="docker-compose.traefik.yml"
-  # o .traefik.yml usa ${VAR:?}; sem --env-file o compose nem consegue listar os servicos
-  COMPOSE_FLAGS=(--env-file .env.prod)
   DOMINIO="e1p.doroeventos.com.br"
   EH_PROD=0
   PAPEL="desenvolvimento/teste"
 else
   PERFIL="aws"
   COMPOSE_ARQ="docker-compose.prod.yml"
-  # este resolve o env por env_file: interno, nao precisa da flag
-  COMPOSE_FLAGS=()
   DOMINIO="e1p.criativaeduca.com.br"
   EH_PROD=1
   PAPEL="PRODUCAO"
 fi
-ok "perfil $PERFIL ($PAPEL) - $COMPOSE_ARQ - https://$DOMINIO"
+
+# Os compose files vem do PROPRIO label, nao de uma lista escrita aqui: a stack em pe registra
+# TODOS os arquivos com que foi criada, override local incluso. Detectar em vez de escolher e a
+# premissa deste script, e este era o unico ponto em que ela nao valia.
+#
+# Cravar a lista custou a producao em 2026-08-20: a AWS tem um `docker-compose.override.yml`
+# NAO versionado (monta um Caddyfile sem o bloco wildcard, que exige um CLOUDFLARE_API_TOKEN
+# vazio ali de proposito). Recriar sem ele fez o Caddy recusar a config INTEIRA -- `missing API
+# token` -- e derrubar ate o dominio unico, com o certificado dele intacto em disco. ~40 min
+# fora do ar. Ver issue #151 e /opt/e1p/DEPLOY-AWS.md (runbook local, nao versionado).
+COMPOSE_ARGS=()
+IFS=',' read -ra _arqs <<< "$LABELS"
+for _a in "${_arqs[@]}"; do
+  _a="${_a#"${_a%%[![:space:]]*}"}"; _a="${_a%"${_a##*[![:space:]]}"}"
+  [[ -n "$_a" ]] && COMPOSE_ARGS+=(-f "$_a")
+done
+(( ${#COMPOSE_ARGS[@]} )) || morre "nao consegui derivar os compose files de: $LABELS"
+
+# --env-file e obrigatorio nos DOIS perfis, e a excecao que existia aqui era falsa: os dois
+# compose files usam ${VAR} para as senhas, e interpolacao NAO vem do `env_file:` de servico.
+# Sem a flag o compose morre em "required variable APP_DB_PASSWORD is missing" antes de
+# conseguir listar um servico sequer (medido na AWS em 2026-08-20).
+COMPOSE_FLAGS=(--env-file .env.prod)
+
+ok "perfil $PERFIL ($PAPEL) - https://$DOMINIO"
+ok "compose: ${COMPOSE_ARGS[*]}"
 
 # O superusuario do Postgres nao e "postgres" aqui; perguntar ao container evita chutar.
 PG_USER="$(docker exec infra-postgres-1 printenv POSTGRES_USER)"
 PG_DB="$(docker exec infra-postgres-1 printenv POSTGRES_DB)"
 psql_() { docker exec infra-postgres-1 psql -U "$PG_USER" -d "$PG_DB" -tAc "$1"; }
-compose_() { (cd "$RAIZ/infra" && docker compose "${COMPOSE_FLAGS[@]}" -f "$COMPOSE_ARQ" "$@"); }
+compose_() { (cd "$RAIZ/infra" && docker compose "${COMPOSE_FLAGS[@]}" "${COMPOSE_ARGS[@]}" "$@"); }
 bundle_servido() {
   curl -sS --max-time 20 "https://$DOMINIO/" 2>/dev/null \
     | grep -oE '/assets/index-[A-Za-z0-9_-]+[.]js' | head -1 || true
@@ -156,7 +177,7 @@ ok "bundle:  ${BUNDLE_ANTES:-(nao identificado)}"
 
 if (( DRY_RUN )); then
   titulo "DRY-RUN - nada foi alterado"
-  echo "  faria: docker compose ${COMPOSE_FLAGS[*]} -f $COMPOSE_ARQ up -d --build"
+  echo "  faria: docker compose ${COMPOSE_FLAGS[*]} ${COMPOSE_ARGS[*]} up -d --build"
   if (( EH_PROD || MIGRATION )); then echo "  faria: backup antes"; fi
   exit 0
 fi
