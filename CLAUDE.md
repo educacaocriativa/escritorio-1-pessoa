@@ -252,6 +252,26 @@ estava certa; o que faltava era um teste capaz de dizer isso.**
   tinha teste: `dataPadrao={HOJE_DO_TENANT}` → `localYmd(new Date())` morre com
   `expected '2026-08-16' to be '2026-08-17'` (tenant em Tóquio, relógio congelado em
   `2026-08-17T02:30:00Z`), e `received_on: corpo.paid_on` → `paid_on:` morre no payload do POST.
+- ⚠️ **Um instante congelado que separa só DOIS relógios deixa o terceiro sem medição — escolha
+  o que isola o do TENANT, nunca o que isola o do navegador** (#145). São **três** relógios nesta
+  casa, não dois: tenant, navegador e **UTC** (o terceiro é histórico real — é o
+  `toISOString().slice(0, 10)` que o #78 tirou das telas de dinheiro). Medido nos dois instantes:
+
+  | Instante | tenant (Asia/Tokyo) | UTC | navegador (America/Sao_Paulo) | quem fica sozinho |
+  |---|---|---|---|---|
+  | `2026-08-17T02:30:00Z` | 2026-08-17 | 2026-08-17 | 2026-08-16 | o **navegador** — cego para UTC |
+  | `2026-08-17T16:00:00Z` | 2026-08-18 | 2026-08-17 | 2026-08-17 | o **tenant** — mata os dois |
+
+  Com o de 02:30Z (herdado da `CobrancasPage`), mutar `dataPadrao={HOJE_DO_TENANT}` para
+  `new Date().toISOString().slice(0, 10)` **SOBREVIVEU** aos 32 testes de `ClientDetailPage`: o
+  `expect` do dia comparava 17/08 com 17/08. Com o de 16:00Z as duas regressões possíveis morrem na
+  MESMA linha, com a mesma mensagem (`expected '2026-08-17' to be '2026-08-18'`).
+  ⚠️ **Dois-contra-um é o máximo alcançável — não tente "melhorar".** Tóquio só passa do dia de UTC
+  a partir das 15:00Z e São Paulo só fica atrás do dia de UTC antes das 03:00Z; as condições são
+  mutuamente exclusivas. Varredura dos 48 instantes de meia em meia hora de um dia: **0** separam
+  os três em três dias, **18** isolam o do tenant. `CobrancasPage.test.tsx` e
+  `ComprovantePage.test.tsx` ainda usam o de 02:30Z e têm o mesmo ponto cego — **dívida aberta**,
+  não medida aqui.
 - ⚠️ **Destino de rota com texto FIXO não mede navegação — ele tem de ecoar o parâmetro** (#145).
   Medido: com `<Route path="/funis/:id" element={<p>Tela do funil fun-1</p>} />`, trocar
   `navigate(/funis/${j.funnel_id})` por `${j.id}` **sobreviveu** aos 32 testes — o destino

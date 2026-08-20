@@ -36,17 +36,36 @@ const FUSO_DISTANTE = "Asia/Tokyo";
 
 vi.mock("../../store/auth", () => ({ useFuso: () => fusoDoTenant }));
 
-// ── O instante congelado (mesmo de `CobrancasPage.test.tsx`) ──────────────────────────────────
+// ── O instante congelado ────────────────────────────────────────────────────
 //
-// `2026-08-17T02:30:00Z` separa os três relógios do jeito que interessa:
-//   · **navegador** (America/Sao_Paulo, o runner) → 16/08 23:30 → **2026-08-16**
+// ⚠️ **Um instante que separa só DOIS relógios deixa o terceiro sem medição — e quem fica de fora
+// tem de ser o do navegador, nunca o do tenant.** Este arquivo nasceu com o instante da
+// `CobrancasPage`, `2026-08-17T02:30:00Z`, e ali o tenant e o **UTC caem no MESMO dia** (17/08):
+// trocar `HOJE_DO_TENANT` por `new Date().toISOString().slice(0, 10)` — o relógio **UTC**, que
+// este repositório já teve de verdade (§5.2: *"opunha as duas únicas opções que existiam então —
+// navegador e UTC"*) — **sobrevivia** aos 32 testes. Medido, não suposto.
+//
+// `2026-08-17T16:00:00Z` põe o TENANT sozinho, que é o lado certo de estar sozinho:
+//   · **tenant** (Asia/Tokyo, UTC+9)              → 18/08 01:00 → **2026-08-18**
 //   · **UTC**                                     → **2026-08-17**
-//   · **tenant em Asia/Tokyo**                    → 17/08 11:30 → **2026-08-17**
-const INSTANTE = "2026-08-17T02:30:00Z";
+//   · **navegador** (America/Sao_Paulo, o runner) → 17/08 13:00 → **2026-08-17**
+// As DUAS regressões possíveis (ler o navegador, ler UTC) produzem 17/08 e morrem na MESMA
+// asserção — nenhuma delas precisa de um segundo teste.
+//
+// ⚠️ **Dois-contra-um é o MÁXIMO alcançável; não "melhore" este instante.** Tóquio só passa do dia
+// de UTC a partir das **15:00Z**, e São Paulo só fica atrás do dia de UTC antes das **03:00Z**: as
+// duas condições são mutuamente exclusivas, então **nenhum** instante separa os três em três dias.
+// Varredura dos 48 instantes de meia em meia hora ao longo de 24h: **0** com os três dias
+// distintos, **18** que isolam o dia do tenant. Trocar por um que isole o NAVEGADOR (como o de
+// 02:30Z fazia) devolve o ponto cego de UTC de graça.
+const INSTANTE = "2026-08-17T16:00:00Z";
 /** O dia do TENANT no `INSTANTE` — o que a tela deve mostrar e mandar (#136). */
-const DIA_DO_TENANT = "2026-08-17";
-/** O dia do NAVEGADOR no mesmo instante. Afirmar que ele NÃO aparece é a metade com dentes. */
-const DIA_DO_NAVEGADOR = "2026-08-16";
+const DIA_DO_TENANT = "2026-08-18";
+/**
+ * O dia do navegador **E o de UTC** no mesmo instante — os dois lados errados, de uma vez.
+ * Afirmar que ele NÃO aparece é a metade que impede um "hoje" qualquer de passar por tenant.
+ */
+const DIA_FORA_DO_TENANT = "2026-08-17";
 
 // `toLocaleString("pt-BR", { style: "currency" })` separa "R$" do número com um **NBSP**
 // (U+00A0), não com espaço comum. Comparar contra um literal com espaço comum falharia por um
@@ -523,9 +542,10 @@ describe("ClientDetailPage — recebimento fora do trilho (Story 8.15, issue #14
   it("o dia default é HOJE **no fuso do TENANT** (#136) e é ele que VIAJA no received_on", async () => {
     // ⚠️ Tóquio + relógio congelado, e as duas coisas são necessárias. A tela passa
     // `dataPadrao={HOJE_DO_TENANT}` (a sentinela `null`) e quem resolve o dia é o
-    // `useEscolhaDaBaixa`, com `today(useFuso())`. Trocar a sentinela por um "hoje" montado aqui —
-    // `localYmd(new Date())`, o relógio do NAVEGADOR — daria 16/08 e as três linhas abaixo morrem.
-    // No fuso do runner nenhuma delas conseguiria falhar: os dois relógios coincidem.
+    // `useEscolhaDaBaixa`, com `today(useFuso())`. Qualquer "hoje" montado AQUI na tela dá 17/08 e
+    // mata as linhas abaixo: `localYmd(new Date())` (navegador) e
+    // `new Date().toISOString().slice(0, 10)` (UTC) — as duas regressões históricas deste repo,
+    // pegas pelo MESMO instante. No fuso do runner nenhuma das duas conseguiria falhar.
     fusoDoTenant = FUSO_DISTANTE;
     vi.useFakeTimers({ shouldAdvanceTime: true });
     vi.setSystemTime(new Date(INSTANTE));
@@ -540,9 +560,8 @@ describe("ClientDetailPage — recebimento fora do trilho (Story 8.15, issue #14
     // O gesto é "caiu na minha conta", um fato observado AGORA — nunca o vencimento (que é a
     // regra da baixa de Contas a Pagar, fundador F10). A assimetria é deliberada.
     expect(dia.value).not.toBe(ABERTA.due_date);
-    // E o dia do NAVEGADOR neste instante é 16/08: afirmar que ele não aparece é a metade que
-    // impede um "hoje" qualquer de passar por "hoje do tenant".
-    expect(dia.value).not.toBe(DIA_DO_NAVEGADOR);
+    // Neste instante o navegador E o UTC dão 17/08 — uma linha só fecha as duas portas.
+    expect(dia.value).not.toBe(DIA_FORA_DO_TENANT);
 
     await user.click(screen.getByRole("button", { name: /caiu no Itaú PJ/i }));
 
