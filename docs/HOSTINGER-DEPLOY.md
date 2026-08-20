@@ -125,7 +125,8 @@ pro IP da VPS (`dig +short app.seudominio.com`) e se a porta 80 está mesmo aces
 > `infra/scripts/deploy.sh` **detecta o ambiente** pelo label
 > `com.docker.compose.project.config_files` da stack em pé — que é exatamente a conferência que a
 > nota "Qual compose file?" abaixo manda fazer à mão — e daí deriva o compose, o `--env-file` e o
-> domínio. Ele também: exige os 4 jobs de CI verdes no SHA alvo, faz backup, reconstrói **sem
+> domínio. Ele também: exige **todos** os checks de CI verdes no SHA alvo (por lista de exclusão —
+> só `mutation`, que é noturno, fica de fora; um check novo bloqueia até ser decidido), faz backup, reconstrói **sem
 > nomear serviço** e **prova** o resultado (health, alembic, e o hash do bundle servido, que
 > precisa ter mudado se e somente se o diff tocou `apps/web`). `--dry-run` imprime o plano.
 >

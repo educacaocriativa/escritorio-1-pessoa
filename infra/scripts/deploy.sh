@@ -16,7 +16,6 @@
 set -euo pipefail
 
 REPO_GH="educacaocriativa/escritorio-1-pessoa"
-JOBS_EXIGIDOS=(secret-scan frontend test-in-prod-image cross-tenant-rls)
 # Normalmente a raiz e deduzida da posicao do proprio script. E1P_RAIZ existe para rodar uma
 # copia de fora do checkout (validar uma versao do script antes de ela estar mergeada, p.ex.).
 RAIZ="${E1P_RAIZ:-$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)}"
@@ -89,7 +88,11 @@ bundle_servido() {
 
 git fetch origin --quiet
 SHA_ANTES="$(git rev-parse HEAD)"
-SHA_ALVO="$(git rev-parse "origin/$REF" 2>/dev/null || git rev-parse "$REF" 2>/dev/null || true)"
+# --verify --quiet e obrigatorio aqui: `git rev-parse <ref-inexistente>` ECOA o argumento no
+# stdout antes de falhar, entao um `a || b` sem ele concatena as duas saidas e devolve um
+# "SHA" de duas linhas que envenena todo comando seguinte.
+SHA_ALVO="$(git rev-parse --verify --quiet "origin/$REF^{commit}" \
+  || git rev-parse --verify --quiet "$REF^{commit}" || true)"
 [[ -n "$SHA_ALVO" ]] || morre "nao consegui resolver a ref '$REF'"
 
 if [[ "$SHA_ANTES" == "$SHA_ALVO" ]]; then
@@ -120,12 +123,28 @@ else
   CI_URL="https://api.github.com/repos/$REPO_GH/commits/$SHA_ALVO/check-runs"
   CI_JSON="$(curl -sS --max-time 30 "$CI_URL" 2>/dev/null || true)"
   [[ -n "$CI_JSON" ]] || morre "nao consegui consultar o CI (rede?). Use --skip-ci se souber o que esta fazendo."
-  FILTRO='[.check_runs[]? | select(.name==$n)] | last | .conclusion // "ausente"'
-  for job in "${JOBS_EXIGIDOS[@]}"; do
-    concl="$(printf '%s' "$CI_JSON" | jq -r --arg n "$job" "$FILTRO")"
-    [[ "$concl" == "success" ]] || morre "o job $job esta '$concl' em ${SHA_ALVO:0:7} - so subimos versao com CI verde."
-    ok "$job"
-  done
+
+  # Exigimos TODOS os checks do commit, MENOS os listados em IGNORADOS. E uma lista de exclusao
+  # de proposito, nao de inclusao: uma lista de inclusao desatualiza CALADA (quando `sast-semgrep`
+  # entrou no ci.yml, um gate por inclusao teria seguido aprovando sem ele). Por exclusao o erro
+  # aparece: um check novo BLOQUEIA o deploy uma vez, e ai se decide conscientemente o que fazer.
+  #
+  # `mutation` esta fora porque o mutation.yml roda por agendamento noturno (`on: schedule`), nao
+  # em PR — o resultado dele e sinal para investigar, nunca condicao para deployar.
+  IGNORADOS='^(mutation)$'
+  ULTIMO_POR_NOME="[.check_runs[]? | select(.name | test(\"$IGNORADOS\") | not)] | group_by(.name) | map(max_by(.started_at))"
+  VERDE='(.conclusion=="success" or .conclusion=="skipped" or .conclusion=="neutral")'
+
+  qtd="$(printf '%s' "$CI_JSON" | jq -r "$ULTIMO_POR_NOME | length")"
+  (( qtd > 0 )) || morre "nenhum check encontrado para ${SHA_ALVO:0:7} - o CI chegou a rodar nesse commit?"
+
+  rodando="$(printf '%s' "$CI_JSON" | jq -r "$ULTIMO_POR_NOME | [.[] | select(.status!=\"completed\") | .name] | join(\", \")")"
+  [[ -z "$rodando" ]] || morre "o CI ainda esta rodando em ${SHA_ALVO:0:7}: $rodando"
+
+  ruins="$(printf '%s' "$CI_JSON" | jq -r "$ULTIMO_POR_NOME | [.[] | select($VERDE | not) | .name + \"=\" + (.conclusion // \"?\")] | join(\", \")")"
+  [[ -z "$ruins" ]] || morre "check reprovado em ${SHA_ALVO:0:7}: $ruins - so subimos versao com CI verde."
+
+  ok "$qtd checks verdes: $(printf '%s' "$CI_JSON" | jq -r "$ULTIMO_POR_NOME | [.[].name] | sort | join(\", \")")"
 fi
 
 # --- 4. Retrato do "antes" ----------------------------------------------------
