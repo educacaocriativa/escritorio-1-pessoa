@@ -98,13 +98,17 @@ export default function CentrosCustoPage() {
         <div className="overflow-hidden rounded-2xl bg-white shadow-sm">
           <ul className="divide-y divide-neutral-50">
             {centers.map((c) => (
-              <li key={c.id} className="flex items-center justify-between px-5 py-3">
-                <span className="flex items-center gap-2">
+              // Sem `flex-wrap`/`min-w-0`, um nome longo empurrava as duas acoes para fora do
+              // cartao: «Editar» comecava em x=637 e «Arquivar» em x=699 numa tela de 360px —
+              // INTEIRAMENTE fora, sem rolagem de escape. Nao dava para editar nem arquivar um
+              // centro de custo no celular. Medido em #144.
+              <li key={c.id} className="flex flex-wrap items-center justify-between gap-2 px-5 py-3">
+                <span className="flex min-w-0 flex-wrap items-center gap-2">
                   <span
                     className={
                       c.archived_at
-                        ? "text-sm text-neutral-400 line-through"
-                        : "text-sm font-medium text-neutral-800"
+                        ? "break-words text-sm text-neutral-400 line-through"
+                        : "break-words text-sm font-medium text-neutral-800"
                     }
                   >
                     {c.name}
