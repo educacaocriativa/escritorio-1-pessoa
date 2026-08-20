@@ -245,13 +245,20 @@ estava certa; o que faltava era um teste capaz de dizer isso.**
 - ✅ **A dívida da `crm/ClientDetailPage` está PAGA (issue #145, 2026-08-19).** Ela era a única das
   seis telas tocadas pela #136 sem arquivo de teste nenhum — e não é tela de leitura: dispara
   `POST /receivables/charges/{id}/settle-externally` com `bank_account_id` e `received_on`, a mesma
-  ação de dinheiro da `CobrancasPage`. Agora são **26 testes** em `ClientDetailPage.test.tsx`
-  cobrindo os dez blocos próprios da tela, e **24 de 24 mutações morreram** — nenhum sobrevivente,
+  ação de dinheiro da `CobrancasPage`. Agora são **32 testes** em `ClientDetailPage.test.tsx`
+  cobrindo doze blocos de comportamento, e **30 de 30 mutações morreram** — nenhum sobrevivente,
   todas com `tsc` limpo (mutação que não compila mata o teste por erro de módulo, não pela
   asserção, e não conta). As duas que valem registro, porque eram invisíveis enquanto a tela não
   tinha teste: `dataPadrao={HOJE_DO_TENANT}` → `localYmd(new Date())` morre com
   `expected '2026-08-16' to be '2026-08-17'` (tenant em Tóquio, relógio congelado em
   `2026-08-17T02:30:00Z`), e `received_on: corpo.paid_on` → `paid_on:` morre no payload do POST.
+- ⚠️ **Destino de rota com texto FIXO não mede navegação — ele tem de ecoar o parâmetro** (#145).
+  Medido: com `<Route path="/funis/:id" element={<p>Tela do funil fun-1</p>} />`, trocar
+  `navigate(/funis/${j.funnel_id})` por `${j.id}` **sobreviveu** aos 32 testes — o destino
+  renderiza igual para qualquer id. Com o destino lendo `useParams()`, a mesma mutação morre. É a
+  família do `toContain("flex-wrap")` do §5.1 aplicada a rota: a asserção existia e não tinha como
+  falhar. Vale para os cinco `navigate()` desta tela, cujos prefixos (`/contratos`, `/orcamentos`,
+  `/juridico`, `/funis`) são escritos à mão e parecidos entre si.
 - ⚠️ **Uma linha pode precisar dos DOIS fusos — um por ramo — e o `dt()` desta tela é o caso.**
   `const dt = (s, tz) => (s.length === 10 ? formatDay(s) : formatDate(s, tz))`: mutá-la para
   `formatDate` sempre só morre no fuso **negativo** do runner (`due_date` `"2026-09-16"` vira 15/09

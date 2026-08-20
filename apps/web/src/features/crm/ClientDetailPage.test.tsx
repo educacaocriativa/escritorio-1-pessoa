@@ -1,7 +1,7 @@
 import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { MemoryRouter, Route, Routes } from "react-router-dom";
+import { MemoryRouter, Route, Routes, useParams } from "react-router-dom";
 import { api } from "../../lib/api";
 import ClientDetailPage from "./ClientDetailPage";
 
@@ -212,12 +212,27 @@ afterEach(() => {
   fusoDoTenant = "America/Sao_Paulo";
 });
 
+/** Destino de navegação que ECOA o `:id` recebido — ver a nota nas rotas abaixo. */
+function Destino({ rotulo }: { rotulo: string }) {
+  const { id = "" } = useParams();
+  return <p>{`${rotulo} ${id}`}</p>;
+}
+
 function renderFicha() {
   return render(
     <MemoryRouter initialEntries={["/crm/cli-1"]}>
       <Routes>
         <Route path="/crm/:id" element={<ClientDetailPage />} />
+        {/* ⚠️ Os destinos ECOAM o `:id` da rota, e isso não é enfeite: com um texto fixo
+            (`<p>Tela do funil fun-1</p>`) o destino renderiza igual para qualquer parâmetro, e
+            a mutação que troca `j.funnel_id` por `j.id` SOBREVIVE — medido, ela sobreviveu aos
+            32 testes na primeira versão deste arquivo. O que separa o id certo do errado é o
+            parâmetro chegar até a asserção. */}
         <Route path="/crm" element={<p>Quadro do CRM</p>} />
+        <Route path="/contratos/:id" element={<Destino rotulo="Tela do contrato" />} />
+        <Route path="/orcamentos/:id" element={<Destino rotulo="Tela do orçamento" />} />
+        <Route path="/juridico/:id" element={<Destino rotulo="Tela do documento" />} />
+        <Route path="/funis/:id" element={<Destino rotulo="Tela do funil" />} />
       </Routes>
     </MemoryRouter>,
   );
@@ -756,5 +771,68 @@ describe("ClientDetailPage — as duas espécies de data do `dt()` (CLAUDE.md §
     // A jornada no funil lê o MESMO instante pelo MESMO `dt()` — se um dos dois call sites
     // divergir, este par de linhas separa qual.
     expect(screen.getByText(/3 passo\(s\) · 21\/08\/2026/)).toBeInTheDocument();
+  });
+});
+
+// ══════════════════════════════════════════════════════════════════════════════════════════════
+// 11. A navegação da ficha e o `StatusBadge` — os dois blocos que a contagem do enunciado não
+//     tinha, e que também não estavam medidos em lugar nenhum
+// ══════════════════════════════════════════════════════════════════════════════════════════════
+
+describe("ClientDetailPage — para onde a ficha leva (issue #145)", () => {
+  it("o contrato leva à tela do CONTRATO (quatro prefixos parecidos, escritos na mão)", async () => {
+    // Quatro `navigate()` com quatro prefixos parecidos escritos na mão, um do lado do outro.
+    // Trocar `/contratos/${c.id}` por `/orcamentos/${c.id}` é a mutação que ninguém percebe
+    // lendo, e o único jeito de vê-la é seguir a rota até o destino.
+    const user = userEvent.setup();
+    renderFicha();
+
+    await user.click(await screen.findByRole("button", { name: /Contrato de consultoria/ }));
+    expect(await screen.findByText("Tela do contrato ct-1")).toBeInTheDocument();
+  });
+
+  it("o orçamento leva à tela do ORÇAMENTO", async () => {
+    const user = userEvent.setup();
+    renderFicha();
+
+    await user.click(await screen.findByRole("button", { name: /Orçamento do site/ }));
+    expect(await screen.findByText("Tela do orçamento q-1")).toBeInTheDocument();
+  });
+
+  it("o documento jurídico leva à tela do DOCUMENTO", async () => {
+    const user = userEvent.setup();
+    renderFicha();
+
+    await user.click(await screen.findByRole("button", { name: /Notificação extrajudicial/ }));
+    expect(await screen.findByText("Tela do documento doc-1")).toBeInTheDocument();
+  });
+
+  it("a jornada leva ao FUNIL (`funnel_id`), não à corrida (`id`) — dois UUIDs no mesmo objeto", async () => {
+    // `j.id` e `j.funnel_id` são ambos ids válidos e ambos compilam: só a rota diz qual é o certo.
+    const user = userEvent.setup();
+    renderFicha();
+
+    await user.click(await screen.findByRole("button", { name: /3 passo/ }));
+    expect(await screen.findByText("Tela do funil fun-1")).toBeInTheDocument();
+  });
+
+  it("o voltar leva ao quadro do CRM", async () => {
+    const user = userEvent.setup();
+    renderFicha();
+
+    await user.click(await screen.findByRole("button", { name: /CRM & Kanban/ }));
+    expect(await screen.findByText("Quadro do CRM")).toBeInTheDocument();
+  });
+
+  it("o StatusBadge TRADUZ o que conhece e mostra CRU o que não conhece (nunca vazio)", async () => {
+    // O `?? status` do fallback é o que impede um status novo do backend de virar uma pílula em
+    // branco na tela — o dono veria a cobrança/contrato sem estado nenhum em vez de um rótulo
+    // que ele pode perguntar o que é. `running` não está no mapa; `draft` está.
+    renderFicha();
+
+    expect(await screen.findByText("Assinado")).toBeInTheDocument(); // contrato `signed`
+    expect(screen.getByText("Enviado")).toBeInTheDocument(); // orçamento `sent`
+    expect(screen.getByText("Rascunho")).toBeInTheDocument(); // documento `draft`
+    expect(screen.getByText("running")).toBeInTheDocument(); // jornada — fora do mapa, sai crua
   });
 });
