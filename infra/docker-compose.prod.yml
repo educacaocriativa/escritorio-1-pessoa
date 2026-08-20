@@ -96,6 +96,13 @@ services:
     build:
       context: ..
       dockerfile: apps/web/Dockerfile
+      args:
+        # Embutido no bundle em build-time (ver apps/web/Dockerfile) — usado para exibir o
+        # endereço de subdomínio do tenant na tela do Master (Story 4.4). O
+        # docker-compose.traefik.yml já passava este arg; aqui faltava, então um deploy com
+        # Caddy próprio embutia o default "e1p.com" no bundle, mesmo com ROOT_DOMAIN correto
+        # no .env.prod (que só chega ao backend/Caddy, nunca ao front — Vite lê em build-time).
+        VITE_ROOT_DOMAIN: ${ROOT_DOMAIN}
     restart: always
     depends_on:
       - api
