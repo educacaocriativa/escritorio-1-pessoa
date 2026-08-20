@@ -166,7 +166,7 @@ export interface Inalcancavel {
  * por `transform`, com pan e zoom no dedo: não há `overflow-x` nenhum para esta régua encontrar,
  * e a lona é MAIOR que qualquer tela por construção (a fixture do funil tem um nó em x=900).
  * Medido: sem esta exceção, `/funis/f1` acusa 2 falsos positivos — `g [Edge from n1 to n2]`
- * (direita 606,5) e a `div` do nó de x=900 — que nenhum conserto de layout resolve, porque a lona
+ * (81 -> 531) e a `div` do nó de x=900 (493,5 -> 568,5) — que nenhum conserto de layout resolve, porque a lona
  * é para ser navegada e não para caber. Os CONTROLES DE TELA do construtor (cabeçalho, paleta,
  * painel lateral) ficam FORA de `.react-flow` e continuam medidos — é lá que mora o #144.
  */
