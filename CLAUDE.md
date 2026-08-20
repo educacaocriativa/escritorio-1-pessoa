@@ -242,10 +242,50 @@ estava certa; o que faltava era um teste capaz de dizer isso.**
   duas strings numa função pura que resolve 'hoje' sozinha; sem dois relógios, um fuso distante não
   tem o que matar"* — era verdade **enquanto o hoje era interno**, e deixou de ser quando virou
   parâmetro. Hoje o bloco roda com o relógio congelado e bordas literais do calendário do tenant.
-- **Dívida:** `crm/ClientDetailPage` **não tem arquivo de teste nenhum** — é a única das seis telas
-  tocadas pela #136 sem cobertura própria. O dia dela vem do mesmo `useEscolhaDaBaixa` provado por
-  `CobrancasPage`/`ComprovantePage`, então a leitura do relógio está coberta pela porta compartilhada;
-  o que falta é a tela.
+- ✅ **A dívida da `crm/ClientDetailPage` está PAGA (issue #145, 2026-08-19).** Ela era a única das
+  seis telas tocadas pela #136 sem arquivo de teste nenhum — e não é tela de leitura: dispara
+  `POST /receivables/charges/{id}/settle-externally` com `bank_account_id` e `received_on`, a mesma
+  ação de dinheiro da `CobrancasPage`. Agora são **32 testes** em `ClientDetailPage.test.tsx`
+  cobrindo doze blocos de comportamento, e **30 de 30 mutações morreram** — nenhum sobrevivente,
+  todas com `tsc` limpo (mutação que não compila mata o teste por erro de módulo, não pela
+  asserção, e não conta). As duas que valem registro, porque eram invisíveis enquanto a tela não
+  tinha teste: `dataPadrao={HOJE_DO_TENANT}` → `localYmd(new Date())` morre com
+  `expected '2026-08-16' to be '2026-08-17'` (tenant em Tóquio, relógio congelado em
+  `2026-08-17T02:30:00Z`), e `received_on: corpo.paid_on` → `paid_on:` morre no payload do POST.
+- ⚠️ **Um instante congelado que separa só DOIS relógios deixa o terceiro sem medição — escolha
+  o que isola o do TENANT, nunca o que isola o do navegador** (#145). São **três** relógios nesta
+  casa, não dois: tenant, navegador e **UTC** (o terceiro é histórico real — é o
+  `toISOString().slice(0, 10)` que o #78 tirou das telas de dinheiro). Medido nos dois instantes:
+
+  | Instante | tenant (Asia/Tokyo) | UTC | navegador (America/Sao_Paulo) | quem fica sozinho |
+  |---|---|---|---|---|
+  | `2026-08-17T02:30:00Z` | 2026-08-17 | 2026-08-17 | 2026-08-16 | o **navegador** — cego para UTC |
+  | `2026-08-17T16:00:00Z` | 2026-08-18 | 2026-08-17 | 2026-08-17 | o **tenant** — mata os dois |
+
+  Com o de 02:30Z (herdado da `CobrancasPage`), mutar `dataPadrao={HOJE_DO_TENANT}` para
+  `new Date().toISOString().slice(0, 10)` **SOBREVIVEU** aos 32 testes de `ClientDetailPage`: o
+  `expect` do dia comparava 17/08 com 17/08. Com o de 16:00Z as duas regressões possíveis morrem na
+  MESMA linha, com a mesma mensagem (`expected '2026-08-17' to be '2026-08-18'`).
+  ⚠️ **Dois-contra-um é o máximo alcançável — não tente "melhorar".** Tóquio só passa do dia de UTC
+  a partir das 15:00Z e São Paulo só fica atrás do dia de UTC antes das 03:00Z; as condições são
+  mutuamente exclusivas. Varredura dos 48 instantes de meia em meia hora de um dia: **0** separam
+  os três em três dias, **18** isolam o do tenant. `CobrancasPage.test.tsx` e
+  `ComprovantePage.test.tsx` ainda usam o de 02:30Z e têm o mesmo ponto cego — **dívida aberta**,
+  não medida aqui.
+- ⚠️ **Destino de rota com texto FIXO não mede navegação — ele tem de ecoar o parâmetro** (#145).
+  Medido: com `<Route path="/funis/:id" element={<p>Tela do funil fun-1</p>} />`, trocar
+  `navigate(/funis/${j.funnel_id})` por `${j.id}` **sobreviveu** aos 32 testes — o destino
+  renderiza igual para qualquer id. Com o destino lendo `useParams()`, a mesma mutação morre. É a
+  família do `toContain("flex-wrap")` do §5.1 aplicada a rota: a asserção existia e não tinha como
+  falhar. Vale para os cinco `navigate()` desta tela, cujos prefixos (`/contratos`, `/orcamentos`,
+  `/juridico`, `/funis`) são escritos à mão e parecidos entre si.
+- ⚠️ **Uma linha pode precisar dos DOIS fusos — um por ramo — e o `dt()` desta tela é o caso.**
+  `const dt = (s, tz) => (s.length === 10 ? formatDay(s) : formatDate(s, tz))`: mutá-la para
+  `formatDate` sempre só morre no fuso **negativo** do runner (`due_date` `"2026-09-16"` vira 15/09
+  em UTC−3; em Tóquio vira o mesmo dia 16 e o mutante **sobrevive**), e mutá-la para `formatDay`
+  sempre só morre em **Tóquio** (`created_at` `"2026-08-20T23:00:00Z"` é 21/08 lá e 20/08 aqui).
+  Escolher um fuso só para o arquivo inteiro deixaria metade da linha sem medição — é a régua "nem
+  toda asserção com data deve trocar de fuso" aplicada dentro de uma expressão só.
 
 ### 5.3 O teste de mutação (`apps/web/stryker.config.mjs`, desde 2026-08-18)
 
@@ -364,6 +404,126 @@ isoladamente na mesma data, sem triagem — os 17 sobreviventes dele estão no t
 - ⚠️ **O limiar ainda não existe.** Com o baseline acima medido, o próximo passo é um `break` por
   módulo em `stryker.config.mjs` — depois de um período de observação, e nunca acima do que a
   tabela mostra.
+
+### 5.4 A régua de ALCANÇABILIDADE de controle (`e2e/alcance-360.spec.ts`, issue #144, 2026-08-19)
+
+**A régua do #135 é cega para a metade oposta do problema, e é cega por construção — não por
+fresta.** `main` é `overflow-x-hidden` (`AppShell.tsx:64`): um botão que não cabe **não empurra o
+documento**, ele é **RECORTADO**. `document.documentElement.scrollWidth` continua devolvendo 360,
+verdinho, com o botão inalcançável. As duas classes se parecem no sintoma e são opostas no
+mecanismo:
+
+| | #135 (`rotas-360.spec.ts`) | #58 / #144 (`alcance-360.spec.ts`) |
+|---|---|---|
+| O que acontece | o elemento **escapa** do recorte e empurra o documento | o elemento é **recortado** e fica preso atrás dele |
+| Como se detecta | `scrollWidth` do documento > 360 | posição do controle vs. a borda alcançável |
+| Sintoma | a página rola de lado | o botão não existe para o dedo |
+
+Foi assim que o #144 se escondeu: a varredura de 18 rotas do PR #141 visitou `/funis/f1`, a `marca`
+provou que a tela renderizou, a largura deu **360** — e o «Salvar» começava em **x=514** numa tela
+de 360px, **inteiramente** fora. Num celular não havia como salvar um funil.
+
+- **A régua** é `controlesInalcancaveis` em `e2e/support/medidas.ts`. Ela pergunta, de cada
+  `button`/`a[href]`/campo **visível**: a borda direita passa da borda alcançável (a menor entre a
+  viewport e a de **todo** ancestral que recorta) **e** não há ancestral que **role** na horizontal
+  para trazê-lo de volta?
+- ⚠️ **O critério NÃO é "termina depois de 360" — e a diferença não é acadêmica.** Medido nestas
+  rotas, "termina depois de 360" acusa **13 controles que estão certos**: os **12** botões de valor
+  da DRE de 12 meses (dentro de um `overflow-x-auto` que rola — o deslizador existir e funcionar) e
+  o «Gerar com IA» do carrossel (dentro do painel de edição com `overflow: auto`, a **20px** da
+  borda). Régua com 13 falsos positivos é descartada na primeira semana, e leva junto os defeitos
+  de verdade que ela carrega. **Prova por mutação:** tirar a cláusula do deslizador deixa **5
+  testes vermelhos** — 4 rotas (`/financeiro/dre`, `/marketing/m1`, `/marketing/novo`,
+  `/orcamentos/novo`) e o controle negativo.
+- **UMA coleta, dois filtros.** `alvosPequenos` (44px) e `controlesInalcancaveis` são duas
+  perguntas sobre o **mesmo** conjunto de elementos, e passam pelo mesmo `medirControles` — o
+  seletor de controle e a função `visivel` existem uma vez só. Duas cópias divergiriam no primeiro
+  dia em que alguém corrigisse apenas uma.
+- **O catálogo de rotas mudou de casa:** `e2e/support/rotas.ts` (fixtures de pior caso + `marca` +
+  mocks), percorrido pelas **duas** réguas. Duas cópias garantiriam que uma medisse uma tela que a
+  outra não mede.
+- ⚠️ **Os DOIS controles no fim do spec são o que impede o arquivo de virar enfeite**, e nenhum é
+  cortesia. O **positivo** planta um botão recortado pelo `main` e exige que a régua o veja
+  (mutação "régua cega" → morre); o **negativo** planta um botão igualmente fora da tela **dentro
+  do deslizador da DRE**, prova pelo número que ele está além dos 360px, e exige que a régua **NÃO**
+  o acuse. Sem o primeiro ninguém sabe se ela enxerga; sem o segundo, se ela sabe parar.
+- **A ÚNICA exclusão, com a razão e o número:** `EXCECOES_DE_ALCANCE = [".react-flow"]`. A lona do
+  construtor de funis é movida por `transform` (pan/zoom no dedo): não há `overflow-x` nenhum para
+  a régua encontrar, e ela é **maior que qualquer tela por construção** (a fixture tem um nó em
+  x=900). Medido: sem a exceção, `/funis/f1` acusa **2** falsos positivos — a aresta
+  `g [Edge from n1 to n2]` (direita **531**) e a `div` do nó (**493,5 → 568,5**) — que nenhum
+  conserto de layout resolve. Os **controles de tela** do construtor (cabeçalho, paleta, painel)
+  ficam FORA de `.react-flow` e continuam medidos: é lá que morava o #144.
+
+**Os defeitos que ela achou sozinha** — a issue reclamava de `/funis`; três dos cinco a régua
+descobriu por conta própria, e todos estão consertados neste PR (medidos em 360×740, fixtures de
+pior caso):
+
+| Rota | Controle | x → x | |
+|---|---|---|---|
+| `/funis/novo` e `/funis/:id` | «Automação» | 389,2 → 506 | **inteiramente fora** |
+| `/funis/novo` e `/funis/:id` | «Salvar» | 514 → 604 | **inteiramente fora** |
+| `/funis/novo` e `/funis/:id` | «Apresentação» | 250,6 → 381,2 | parcial |
+| `/financeiro/centros-custo` | «Editar» | 637,4 → 687 | **inteiramente fora** (novo) |
+| `/financeiro/centros-custo` | «Arquivar» | 699 → 763,3 | **inteiramente fora** (novo) |
+| `/sites/:id` | «Salvar» | 310 → 400 | parcial (novo) |
+| `/sites/:id` | `<a>` do bloco "botão" | 65 → 691,3 | parcial (novo) |
+| `/orcamentos/novo` | «Salvar» | 286,4 → 376,4 | parcial (novo) |
+
+Em `/financeiro/centros-custo` os dois estavam **inteiramente** fora: **não dava para editar nem
+arquivar um centro de custo num celular de 360px**. O `<a>` do bloco "botão" vale também na
+**página pública** (`PageBlocks.tsx` é o mesmo componente), onde ele é a única conversão que existe:
+rótulo longo sem espaço media **626px** de largura.
+
+**Cobertura: 29 das 47 rotas não-públicas de `App.tsx`** — **43 no `ProtectedLayout`** (com shell:
+sidebar + topbar) **+ 4 no `ProtectedBareLayout`** (sem shell). **18 de fora**, e as duas caixas
+falham por motivos diferentes:
+
+**14 do `ProtectedLayout`.** `/`, `/config`, `/crm`, `/financeiro/conferencia` **quebram com o mock
+default `[]`** (endpoint que devolve objeto) e precisam de fixture própria — medido: as quatro
+renderizam **em branco** (`pageerror` real: `reading 'some'`/`'trim'`/`'filter'`/`'map'`), e a
+`marca` as reprovaria, que é o comportamento certo. `/agenda`, `/crm/clients/:id`,
+`/conversas/:chatId`, `/financeiro/contratos/:id/dre`, `/orcamentos/:id`, `/contratos/:id`,
+`/juridico/novo`, `/juridico/:id` (as duas últimas exigem `?skill=`) e `/admin` (exige
+`is_platform_admin`) pedem fixture ou sessão própria. `*` (ComingSoon) não tem controle.
+
+**4 do `ProtectedBareLayout`, e estas são a categoria INTEIRA:** `/vima`, `/dna/nucleo`,
+`/compartilhar`, `/comprovante/:id`. **Nenhuma está no catálogo** — não por triagem, por omissão do
+denominador. E não são periferia: os comentários do próprio `App.tsx` dizem que `/vima` e
+`/dna/nucleo` são **"desenhados para 360px"**, e `/comprovante/:id` é **tela de dinheiro** que já
+carrega dívida de medição registrada no §5.1 (*"Segue de pé a dívida da `ComprovantePage` … aquela
+tela não está entre as medidas"*) — o `ALTURA_DA_BARRA` do `baixa.ts` tem seis mutantes
+sobreviventes justamente porque o número é medida do DOM e ninguém mede aquela tela. **Não foram
+medidas nesta issue de propósito** (o pedido era o número honesto, não mais cobertura): se
+alguma tiver defeito, vira issue própria com o número medido.
+
+⚠️ **COMO RECONTAR — a régua que impede o próximo erro deste parágrafo, que já aconteceu DUAS
+vezes seguidas.** Conte `<Route path=` nas **DUAS** caixas de layout (`ProtectedLayout` **e**
+`ProtectedBareLayout`), e conte também a forma **multilinha**, no espírito do *"Conte `<Modal` para
+o total, nunca só o import"* acima:
+
+```bash
+grep -c '<Route path=' apps/web/src/app/App.tsx   # 50 — só a forma de UMA linha
+grep -cE '^\s*path="' apps/web/src/app/App.tsx    # 1  — a rota `/` quebrada em 8 linhas
+# 50 + 1 = 51 rotas com path; menos as 4 públicas (/login, /orcamento/:slug,
+# /contrato/:slug, /p/:slug) = 47 não-públicas.
+```
+
+Os dois modos de errar, os dois medidos em 2026-08-19 ao escrever esta seção: **(a)** contar só o
+`ProtectedLayout` e perder as 4 sem shell — 43 em vez de 47; **(b)** contar só `<Route path=` de
+uma linha e perder a rota **`/`**, que é escrita em 8 linhas por causa do embrulho
+`<EntradaDoDia>` — 42 em vez de 43. É a mesma família do *"18 arquivos que eram 19"* do §5.1
+(`IdleWarningModal` escapando do `grep components/Modal` por importar por caminho relativo): o
+elemento que **se escreve diferente** some da conta, o numerador e o denominador param de fechar
+entre si, e ninguém percebe porque o número parece alto.
+
+**Achado fora do escopo, não consertado:** `/financeiro/centros-custo` corta **texto** em 13
+lugares — o nome do centro sobra **215,5px** e a tabela "Resultado por centro de custo" sobra de
+**306,5px** a **699,5px** (cabeçalhos e todas as células). É a classe de `textoForaDaTela`, não a de
+alcançabilidade, e não há régua verde para ela nesta rota. Medido também que `break-words` no rótulo
+do nome **não muda o número** (o `span` é item de flex com `min-width: auto`, então nunca chega a
+quebrar) — mudança que nenhuma régua vê é peso morto, e por isso ela não entrou.
+
 
 ## 6. Estado atual / roadmap
 - [x] Fundação do monorepo, docs, agentes de QA, CI local.

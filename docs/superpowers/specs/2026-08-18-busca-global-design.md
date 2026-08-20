@@ -48,6 +48,22 @@ incomoda quem só usa a tela, sem passar por busca nenhuma.
 Também fora: busca por tags, correção ortográfica, fuzzy, histórico de buscas recentes, e qualquer
 migration de índice — esta última porque a medição provou que não ajudaria (§5).
 
+> **ERRATA — 2026-08-19 (issue #146).** O parágrafo acima continua descrevendo fielmente o que se
+> sabia em 18/08, e por isso não foi reescrito. Mas a premissa dele caiu **no dia seguinte**: o
+> **PR #143** (issue #138) fez `PagarPage.tsx` usar `useSearchParams` e hidratar `q`, `status`,
+> `de`/`ate`, `centro` e `categoria` a partir do endereço. `/pagar?q=anthropic` **não é mais
+> inerte**, e a barra de endereço virou a fonte única do recorte da tela.
+>
+> Com isso **Contas a Pagar entrou na busca**, como a §7 previa: uma entrada no registro, sem
+> reescrita. São **oito** entidades, e não sete. O destino do resultado é
+> `/pagar?q=<descrição>&status=&ate=` — as duas chaves vazias existem exatamente para desarmar a
+> objeção que este parágrafo levanta: `status=` significa "todos os status" e `ate=` significa "sem
+> horizonte", de modo que a conta **paga** encontrada pela busca está, sim, na tela para onde o
+> clique leva.
+>
+> **Cobranças e produtos seguem fora**, e pelo motivo original intacto: nenhuma das duas lê o
+> próprio recorte da URL. O critério de admissão não mudou — só o placar.
+
 ## 3. As duas camadas — a decisão central
 
 São duas perguntas diferentes, e juntá-las numa superfície só é o que faz busca global ficar lenta

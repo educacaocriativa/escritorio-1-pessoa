@@ -10,7 +10,7 @@ const MIN_CARACTERES = 2;
 /**
  * A busca da barra de cima — camada rasa.
  *
- * Sete tipos, até 3 por grupo, agrupados na ordem que o backend manda. O objetivo aqui é "me leva
+ * Oito tipos, até 3 por grupo, agrupados na ordem que o backend manda. O objetivo aqui é "me leva
  * até a Ana" em uma tecla, sem ler nada. Procurar DENTRO de documento e mensagem é a página
  * `/busca`, e o rodapé (e o estado vazio) levam até ela.
  */

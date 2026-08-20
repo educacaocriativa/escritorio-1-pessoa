@@ -2,7 +2,7 @@
 
 **Sem `UNION`, e isso é decisão.** Como o resultado é agrupado por tipo (spec §9), não existe
 ranking global a calcular — não há nada para o banco juntar. Cada consulta fica trivial, sem cast
-entre sete modelos de formatos diferentes, e idêntica em SQLite e Postgres. É o que mantém isto
+entre oito modelos de formatos diferentes, e idêntica em SQLite e Postgres. É o que mantém isto
 coberto pelo `pytest -q` inteiro, que roda SQLite.
 
 **Sem índice de texto, e isso também é decisão medida.** Sob RLS, o Postgres não usa índice
@@ -22,7 +22,7 @@ from app.core.textsearch import ESCAPE, escapa_curinga, padrao_ilike
 from app.modules.search.registro import REGISTRO, Entidade
 from app.modules.settings.service import hoje_do_tenant
 
-#: Abaixo disto a busca não consulta o banco. Uma letra casa com quase tudo e custaria sete
+#: Abaixo disto a busca não consulta o banco. Uma letra casa com quase tudo e custaria oito
 #: varreduras por tecla — e o resultado seria ruído, não resposta.
 MIN_CARACTERES = 2
 

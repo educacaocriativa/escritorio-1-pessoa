@@ -23,10 +23,12 @@ describe("resultado da busca", () => {
     expect(grupos.map((g) => g.type)).toEqual(["client", "funnel"]);
   });
 
-  it("tem rótulo em português para os sete tipos", () => {
-    expect(Object.keys(ROTULOS)).toHaveLength(7);
+  it("tem rótulo em português para os oito tipos", () => {
+    expect(Object.keys(ROTULOS)).toHaveLength(8);
     expect(ROTULOS.legal_document).toBe("Jurídico");
     expect(ROTULOS.conversation).toBe("Conversas");
+    // Contas a Pagar entrou no #146, quando o PR #143 fez `/pagar` hidratar o recorte da URL.
+    expect(ROTULOS.payable).toBe("Contas a Pagar");
   });
 
   it("a sequência do teclado atravessa grupos", () => {
