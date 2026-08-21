@@ -38,6 +38,15 @@ else
 	echo "caddy/entrypoint: monitor DESLIGADO (MONITORING_ENABLED != true)"
 fi
 
-# O CMD da imagem oficial (`caddy run --config /etc/caddy/Caddyfile --adapter caddyfile`)
-# chega aqui como "$@" — repassar em vez de reescrever evita divergir da imagem base.
+# Sem comando nao ha o que executar, e SAIR COM 0 aqui e o pior desfecho possivel: o container
+# termina "com sucesso", o `restart: always` o reinicia, e o loop nao aparece como falha em lugar
+# nenhum -- foi assim que a producao ficou fora do ar em 2026-08-21 com exit code 0.
+# Isto acontece quando o Dockerfile declara ENTRYPOINT e NAO declara CMD (o ENTRYPOINT zera o CMD
+# herdado da imagem base). Falhar alto e o unico desfecho honesto.
+if [ "$#" -eq 0 ]; then
+	echo "caddy/entrypoint: ERRO - nenhum comando recebido. O Dockerfile precisa declarar CMD" >&2
+	echo "caddy/entrypoint: (declarar ENTRYPOINT zera o CMD da imagem base -- ele nao e herdado)" >&2
+	exit 1
+fi
+
 exec "$@"

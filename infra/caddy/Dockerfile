@@ -22,7 +22,17 @@ COPY optional/ /etc/caddy/optional/
 COPY entrypoint.sh /usr/local/bin/entrypoint.sh
 RUN chmod +x /usr/local/bin/entrypoint.sh
 
-# A imagem oficial tem ENTRYPOINT null e o CMD completo (`caddy run --config ... --adapter
-# caddyfile`). Pondo o entrypoint aqui, esse CMD chega ao script como "$@" e e repassado com
-# `exec` — nada da imagem base precisa ser reescrito.
+# O entrypoint monta os blocos opcionais e repassa o comando com `exec "$@"`. O comando vem do
+# CMD declarado LOGO ABAIXO -- nao do CMD da imagem base, que o ENTRYPOINT zera (ver o aviso).
 ENTRYPOINT ["/usr/local/bin/entrypoint.sh"]
+
+# ⚠️ O CMD PRECISA estar aqui, e nao herdado. Declarar ENTRYPOINT num Dockerfile **ZERA** o CMD
+# da imagem base -- `docker inspect` mostrou `CMD=null` nesta imagem contra
+# `CMD=["caddy","run",...]` na `caddy:2-alpine`. Sem ele o entrypoint chega no `exec "$@"` sem
+# argumento nenhum, o script termina com sucesso, e o `restart: always` reinicia em loop: o
+# container "saudavel" que nunca serve nada. Derrubou a producao em 2026-08-21, com exit code 0.
+#
+# O comentario anterior aqui dizia que "o CMD da imagem oficial chega ao script como $@" -- era
+# FALSO, e nenhum dos cinco cenarios validados o pegava, porque todos passavam um comando
+# explicito (`sh -c ...`) e portanto forneciam o $@ que faltava no caminho real.
+CMD ["caddy", "run", "--config", "/etc/caddy/Caddyfile", "--adapter", "caddyfile"]
