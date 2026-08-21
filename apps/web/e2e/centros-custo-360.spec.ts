@@ -126,6 +126,20 @@ test("o comparativo mostra o valor INTEIRO, com o separador de milhar", async ({
   expect(caixa!.x + caixa!.width).toBeLessThanOrEqual(360);
 });
 
+test("no desktop quem aparece é a TABELA, e ela sozinha", async ({ page }) => {
+  // A OUTRA METADE do par `sm:hidden` / `hidden sm:table` — e ela é invisível para um gate que só
+  // mede 360px. Medido em 20/08/2026: tirar o `sm:hidden` do `<ul>` dos cartões não move um pixel
+  // aqui, o mutante SOBREVIVE aos cinco testes acima, e ainda assim põe cartão e tabela na mesma
+  // tela a partir de 640px. Por isso esta é a única linha do arquivo que troca a viewport: sem
+  // ela, metade do conserto ficaria sem régua.
+  await page.setViewportSize({ width: 900, height: 740 });
+  await expect(page.getByTestId("comparativo-centros").getByRole("table")).toBeVisible();
+  await expect(page.getByTestId("comparativo-centros").locator("ul")).toBeHidden();
+  // `linha-centro` marca a linha nos DOIS desenhos. Duas visíveis = as duas `<tr>` da tabela e
+  // nenhum cartão; quatro seria o defeito.
+  await expect(page.getByTestId("linha-centro").locator("visible=true")).toHaveCount(2);
+});
+
 test("a régua enxerga uma isca plantada DENTRO de cada uma das duas superfícies", async ({
   page,
 }) => {
