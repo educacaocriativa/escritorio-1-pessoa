@@ -18,6 +18,12 @@ import { defineConfig, devices } from "@playwright/test";
  * código alheio — é indistinguível de aprovação, e por isso `reuseExistingServer` é `false`
  * sempre: porta ocupada passa a ser erro alto ("port is already used") em vez de medição falsa.
  * Para rodar duas worktrees ao mesmo tempo: `E2E_PORT=5373 pnpm e2e`.
+ *
+ * ⚠️ **Mas a porta própria só resolve a colisão de PORTA, não a de MÁQUINA** (#162). Duas suítes
+ * pesadas rodando de fato ao mesmo tempo — dois Playwright, ou um Playwright e um `pytest -m
+ * rls_e2e` — se contaminam por CPU/disco/Docker, e o que sai é `locator not found`, indistinguível
+ * de regressão real. Falha obtida assim NÃO conta como sinal: descarte e refaça em série, pelo
+ * alvo único `bash scripts/gates.sh`. Ver CLAUDE.md §5.5.
  */
 const PORTA = Number(process.env.E2E_PORT ?? 5273);
 
