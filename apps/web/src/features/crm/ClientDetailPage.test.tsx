@@ -338,29 +338,48 @@ describe("ClientDetailPage — a montagem (issue #145)", () => {
 });
 
 // ══════════════════════════════════════════════════════════════════════════════════════════════
-// 2. O resumo financeiro — TRÊS somas com recortes DIFERENTES sobre a MESMA lista
+// 2. O resumo financeiro — QUATRO somas com recortes DIFERENTES sobre a MESMA lista
+//
+// ⚠️ **Eram TRÊS até a issue #154, e as três não cobriam a lista.** `ChargeStatus` tem quatro
+// valores (`open` | `scheduled` | `paid` | `canceled`) e os três recortes originais só alcançavam
+// três deles: a cobrança `scheduled` sumia da ficha inteira. O quarto cartão é o espelho do que a
+// `CobrancasPage` já fazia desde a Story 8.15 — mesmo rótulo, mesma semântica, mesmo sumiço no
+// zero. Ver a nota em `CobrancasPage.tsx`.
+//
+// ⚠️ **O teste que "congelava" o defeito só congelava os TRÊS números, não a AUSÊNCIA do quarto.**
+// Medido na issue #154: com o cartão novo em pé, as três asserções antigas continuavam VERDES —
+// o defeito estava preso pelo NOME do teste, não pelas asserções dele. É por isso que o bloco
+// abaixo afirma o cartão que EXISTE e o que NÃO existe, nunca só as somas.
 // ══════════════════════════════════════════════════════════════════════════════════════════════
 
-describe("ClientDetailPage — as três somas do resumo (issue #145)", () => {
+describe("ClientDetailPage — as quatro somas do resumo (issues #145, #154)", () => {
   it("'a vencer' EXCLUI a vencida; 'Vencido' é só ela; 'Recebido' é só o que foi pago", async () => {
-    // Os três recortes andam sobre a mesma lista de seis cobranças e têm de dar TRÊS números
+    // Os quatro recortes andam sobre a mesma lista de seis cobranças e têm de dar QUATRO números
     // diferentes. Por isso as fixtures têm valores distintos: se `openSum` passasse a somar
     // também a vencida (`!c.is_overdue` → `true`) daria R$ 1.500,00, e a linha abaixo morre.
     renderFicha();
     await screen.findByRole("heading", { name: "Joana Ré" });
 
     // Aberta (R$ 1.000,00) — sem a vencida, sem a agendada, sem a cancelada.
+    // ⚠️ O valor EXATO é o que mata a mutação que joga a agendada neste cartão: R$ 1.300,00.
     expect(valorDoCartao("A receber (a vencer)")).toBe("R$ 1.000,00");
     // Só a vencida (R$ 500,00). O recorte aqui é `is_overdue`, e NÃO `status === "open"`.
     expect(valorDoCartao("Vencido")).toBe("R$ 500,00");
     // As duas pagas (R$ 200,00 + R$ 700,00), pelas DUAS rotas: a de banco e a do trilho.
+    // Somar a agendada aqui daria R$ 1.200,00 — o outro cartão errado possível.
     expect(valorDoCartao("Recebido")).toBe("R$ 900,00");
+    // [#154] E a agendada (R$ 300,00) tem o SEU: quatro números, quatro recortes.
+    expect(valorDoCartao("Agendado para entrar")).toBe("R$ 300,00");
   });
 
-  it("a cobrança AGENDADA e a CANCELADA não entram em soma nenhuma", async () => {
-    // O caso que expõe o recorte `status === "open"` do `openSum`: `scheduled` e `canceled` não
-    // são "a vencer", não são "vencido" e não são "recebido". Trocar o recorte por
-    // `status !== "paid"` somaria R$ 700,00 aqui e a primeira linha morre.
+  it("[#154] a AGENDADA tem cartão PRÓPRIO; a CANCELADA continua fora de TUDO", async () => {
+    // O caso que expõe os recortes por status: `scheduled` não é "a vencer" (exige `status ===
+    // "open"`), não é "vencido" e não é "recebido" — e por não caber em nenhum dos três é que ela
+    // precisou de cartão próprio, exatamente como na `CobrancasPage`.
+    //
+    // `canceled` é DIFERENTE e continua fora dos quatro: não é dinheiro que vai entrar. Este teste
+    // é o que impede o conserto de #154 de arrastar a cancelada junto — os R$ 400,00 dela não
+    // aparecem em cartão nenhum, e o cartão novo lê R$ 300,00, nunca R$ 700,00.
     ficha.charges = [ABERTA, AGENDADA, CANCELADA];
     renderFicha();
     await screen.findByRole("heading", { name: "Joana Ré" });
@@ -368,6 +387,25 @@ describe("ClientDetailPage — as três somas do resumo (issue #145)", () => {
     expect(valorDoCartao("A receber (a vencer)")).toBe("R$ 1.000,00");
     expect(valorDoCartao("Vencido")).toBe("R$ 0,00");
     expect(valorDoCartao("Recebido")).toBe("R$ 0,00");
+    expect(valorDoCartao("Agendado para entrar")).toBe("R$ 300,00");
+
+    // A cancelada (R$ 400,00) não é o valor de NENHUM dos quatro cartões. Um `queryByText` solto
+    // não serviria: o valor também vive na linha da cobrança, e o teste passaria por acidente.
+    const cartoes = ["A receber (a vencer)", "Vencido", "Recebido", "Agendado para entrar"];
+    expect(cartoes.map(valorDoCartao)).not.toContain("R$ 400,00");
+  });
+
+  it("[#154] o cartão 'Agendado para entrar' SOME quando é zero (espelho da CobrancasPage)", async () => {
+    // Mesma disciplina anti-ruído da 8.14/8.15: na ficha do dono que nunca recebeu com data
+    // futura, um cartão eternamente zerado é peso de ERP. Sem o `scheduledSum > 0`, o rótulo
+    // apareceria aqui com R$ 0,00.
+    ficha.charges = [ABERTA, PAGA_TRILHO, CANCELADA];
+    renderFicha();
+    await screen.findByRole("heading", { name: "Joana Ré" });
+
+    // Os três de sempre continuam em pé — o sumiço é SÓ do quarto.
+    expect(valorDoCartao("A receber (a vencer)")).toBe("R$ 1.000,00");
+    expect(screen.queryByText("Agendado para entrar")).toBeNull();
   });
 });
 
