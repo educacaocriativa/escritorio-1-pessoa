@@ -510,6 +510,168 @@ describe("ClientDetailPage — trocar vencimento (issue #145)", () => {
 });
 
 // ══════════════════════════════════════════════════════════════════════════════════════════════
+// 6b. O vencimento que o `load()` traz e o campo que não o vê (issue #155)
+// ══════════════════════════════════════════════════════════════════════════════════════════════
+
+describe("ClientDetailPage — 'Trocar venc.' depois de um reagendamento do backend (issue #155)", () => {
+  /** Uma SEGUNDA cobrança aberta: é o reagendamento DELA que dispara o `load()` da ficha. */
+  const OUTRA = {
+    ...COBRANCA_BASE,
+    id: "c-outra",
+    description: "Retainer mensal",
+    amount_cents: 60000,
+    status: "open",
+  };
+
+  /** O `<input type="date">` de uma linha — `null` quando o campo está FECHADO. */
+  function campoDeData(descricao: string): HTMLInputElement | null {
+    return linhaDaCobranca(descricao).querySelector('input[type="date"]');
+  }
+
+  /**
+   * O valor do campo, ou um sentinela legível quando ele nem está aberto.
+   *
+   * `getByDisplayValue` esconderia o valor real na mensagem de erro, e um `!` cru faria o conserto
+   * por `key` — que remonta a linha e fecha o campo junto — falhar com "Cannot read properties of
+   * null" em vez de dizer o que aconteceu. Medido: é exatamente assim que ele falha.
+   */
+  function valorDoCampo(descricao: string): string {
+    return campoDeData(descricao)?.value ?? "<campo fechado pela remontagem da linha>";
+  }
+
+  /**
+   * Reagenda a `Retainer mensal` enquanto o "servidor" muda TAMBÉM o vencimento da `Consultoria`
+   * — o reagendamento vindo de fora (outra aba, rotina do backend) do enunciado. A linha da
+   * `Consultoria` nunca desmonta no meio: `key={c.id}` não depende do vencimento.
+   */
+  async function reagendarAOutraComAConsultoriaMudandoPorFora() {
+    const user = userEvent.setup();
+    ficha.charges = [ABERTA, OUTRA];
+    vi.mocked(api.post).mockImplementation(() => {
+      ficha.charges = [
+        { ...ABERTA, due_date: "2026-11-05", competence_date: "2026-11-05" },
+        { ...OUTRA, due_date: "2026-10-31", competence_date: "2026-10-31" },
+      ];
+      return Promise.resolve({ data: {} } as never);
+    });
+    renderFicha();
+    await screen.findByRole("heading", { name: "Joana Ré" });
+
+    const outra = linhaDaCobranca("Retainer mensal");
+    await user.click(within(outra).getByRole("button", { name: "Trocar venc." }));
+    fireEvent.change(within(outra).getByDisplayValue("2026-09-16"), {
+      target: { value: "2026-10-31" },
+    });
+    await user.click(within(outra).getByRole("button", { name: "OK" }));
+
+    // A recarga JÁ chegou à linha da `Consultoria` — o texto dela mostra 05/11. Sem esta espera,
+    // "campo com data velha" poderia ser apenas o `load()` que ainda não voltou, e o teste
+    // mediria a corrida em vez do estado preso.
+    expect(await screen.findByText(/vence 05\/11\/2026/)).toBeInTheDocument();
+    return user;
+  }
+
+  it("o campo abre com o vencimento que o backend mandou, não com o da montagem", async () => {
+    const user = await reagendarAOutraComAConsultoriaMudandoPorFora();
+
+    await user.click(
+      within(linhaDaCobranca("Consultoria")).getByRole("button", { name: "Trocar venc." }),
+    );
+
+    expect(valorDoCampo("Consultoria")).toBe("2026-11-05");
+  });
+
+  it("confirmar sem reparar NÃO reenvia o vencimento velho", async () => {
+    // A metade que custa dinheiro: o campo errado só é visível para quem olhar, mas o `OK` manda.
+    const user = await reagendarAOutraComAConsultoriaMudandoPorFora();
+
+    await user.click(
+      within(linhaDaCobranca("Consultoria")).getByRole("button", { name: "Trocar venc." }),
+    );
+    await user.click(within(linhaDaCobranca("Consultoria")).getByRole("button", { name: "OK" }));
+
+    expect(vi.mocked(api.post).mock.calls.map(([u, b]) => [String(u), b])).toEqual([
+      ["/receivables/charges/c-outra/reschedule", { due_date: "2026-10-31" }],
+      ["/receivables/charges/c-aberta/reschedule", { due_date: "2026-11-05" }],
+    ]);
+  });
+
+  it("uma recarga no meio da digitação NÃO apaga o que o dono já escreveu", async () => {
+    // Este é o teste que decide ENTRE os dois consertos possíveis do enunciado. Pôr o vencimento
+    // na `key` da linha (`key={`${c.id}:${c.due_date}`}`) também faz o campo reabrir com a data
+    // certa — remontando a linha inteira. O preço é este: a remontagem joga fora o rascunho, e
+    // quem estava digitando quando a recarga chegou perde a data pela metade. Derivar o valor do
+    // prop custa zero remontagens, então é este o conserto.
+    const user = userEvent.setup();
+    ficha.charges = [ABERTA, OUTRA];
+    vi.mocked(api.post).mockImplementation(() => {
+      // O reagendamento da OUTRA muda, de quebra, o vencimento da Consultoria lá no servidor.
+      ficha.charges = [
+        { ...ABERTA, due_date: "2026-11-05", competence_date: "2026-11-05" },
+        { ...OUTRA, due_date: "2026-10-31", competence_date: "2026-10-31" },
+      ];
+      return Promise.resolve({ data: {} } as never);
+    });
+    renderFicha();
+    await screen.findByRole("heading", { name: "Joana Ré" });
+
+    // O dono abre o campo da Consultoria e digita ANTES de qualquer recarga.
+    await user.click(
+      within(linhaDaCobranca("Consultoria")).getByRole("button", { name: "Trocar venc." }),
+    );
+    fireEvent.change(campoDeData("Consultoria") as HTMLInputElement, {
+      target: { value: "2026-12-24" },
+    });
+
+    // ...e só então a recarga chega, disparada pelo reagendamento da outra cobrança.
+    const outra = linhaDaCobranca("Retainer mensal");
+    await user.click(within(outra).getByRole("button", { name: "Trocar venc." }));
+    fireEvent.change(within(outra).getByDisplayValue("2026-09-16"), {
+      target: { value: "2026-10-31" },
+    });
+    await user.click(within(outra).getByRole("button", { name: "OK" }));
+    expect(await screen.findByText(/vence 05\/11\/2026/)).toBeInTheDocument();
+
+    // O que o dono digitou continua lá, e é ele que o `OK` manda — não o do servidor.
+    expect(valorDoCampo("Consultoria")).toBe("2026-12-24");
+    await user.click(within(linhaDaCobranca("Consultoria")).getByRole("button", { name: "OK" }));
+    expect(vi.mocked(api.post).mock.calls.at(-1)).toEqual([
+      "/receivables/charges/c-aberta/reschedule",
+      { due_date: "2026-12-24" },
+    ]);
+  });
+  it("depois do OK o rascunho MORRE: o campo volta a seguir o servidor", async () => {
+    // Quem grava o vencimento é o servidor, e ele pode gravar um dia DIFERENTE do pedido (dia
+    // útil, normalização, uma alteração concorrente que chegou primeiro). Se o rascunho
+    // sobrevivesse ao `OK`, o campo seguiria mostrando o que o dono DIGITOU em vez do que ficou
+    // gravado — e o `OK` seguinte reenviaria isso. É a mesma falha da issue, um passo depois.
+    const user = userEvent.setup();
+    ficha.charges = [ABERTA];
+    vi.mocked(api.post).mockImplementation(() => {
+      ficha.charges = [{ ...ABERTA, due_date: "2026-11-05", competence_date: "2026-11-05" }];
+      return Promise.resolve({ data: {} } as never);
+    });
+    renderFicha();
+    await screen.findByRole("heading", { name: "Joana Ré" });
+
+    await user.click(
+      within(linhaDaCobranca("Consultoria")).getByRole("button", { name: "Trocar venc." }),
+    );
+    fireEvent.change(campoDeData("Consultoria") as HTMLInputElement, {
+      target: { value: "2026-12-24" },
+    });
+    await user.click(within(linhaDaCobranca("Consultoria")).getByRole("button", { name: "OK" }));
+    expect(await screen.findByText(/vence 05\/11\/2026/)).toBeInTheDocument();
+
+    await user.click(
+      within(linhaDaCobranca("Consultoria")).getByRole("button", { name: "Trocar venc." }),
+    );
+
+    expect(valorDoCampo("Consultoria")).toBe("2026-11-05");
+  });
+});
+
+// ══════════════════════════════════════════════════════════════════════════════════════════════
 // 7. "Recebi direto na conta" — a MESMA porta da `CobrancasPage`, e o dia é o do TENANT (#136)
 // ══════════════════════════════════════════════════════════════════════════════════════════════
 

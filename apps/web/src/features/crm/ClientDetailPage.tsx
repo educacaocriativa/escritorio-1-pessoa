@@ -281,7 +281,20 @@ function ChargeRow({
   onReceberForaDoTrilho: (c: Charge) => void;
 }) {
   const fuso = useFuso();
-  const [due, setDue] = useState(c.due_date);
+  /**
+   * O que o dono DIGITOU no campo de vencimento — `null` enquanto ele não digitou nada (#155).
+   *
+   * ⚠️ **O valor exibido é DERIVADO do prop, não uma cópia dele.** `useState(c.due_date)` lê o
+   * argumento só na MONTAGEM, e esta linha não desmonta quando o vencimento muda: `key={c.id}`
+   * não depende dele. Um `load()` que trouxesse a cobrança reagendada por fora (outra aba, rotina
+   * do backend) deixava o "Trocar venc." pré-preenchido com a data VELHA — e o `OK` a reenviava.
+   *
+   * A alternativa era pôr o vencimento na `key` da linha, remontando-a a cada mudança. Custa
+   * caro: uma recarga no meio da digitação apagaria o que o dono acabou de escrever. Com o
+   * rascunho, o prop manda enquanto ninguém digitou e o dono manda depois que digitou.
+   */
+  const [rascunho, setRascunho] = useState<string | null>(null);
+  const due = rascunho ?? c.due_date;
   const [showDate, setShowDate] = useState(false);
   return (
     <li className="flex flex-wrap items-center justify-between gap-2 py-3">
@@ -316,8 +329,8 @@ function ChargeRow({
             {c.is_overdue && <span className="rounded-pill bg-red-50 px-2 py-0.5 text-xs text-danger">Vencida</span>}
             {showDate ? (
               <span className="flex items-center gap-1">
-                <input type="date" value={due} onChange={(e) => setDue(e.target.value)} className="rounded-lg border border-neutral-200 px-2 py-1 text-xs outline-none" />
-                <button onClick={() => { onReschedule(c.id, due); setShowDate(false); }} className="text-xs font-medium text-primary-600">OK</button>
+                <input type="date" value={due} onChange={(e) => setRascunho(e.target.value)} className="rounded-lg border border-neutral-200 px-2 py-1 text-xs outline-none" />
+                <button onClick={() => { onReschedule(c.id, due); setRascunho(null); setShowDate(false); }} className="text-xs font-medium text-primary-600">OK</button>
               </span>
             ) : (
               <button onClick={() => setShowDate(true)} className="text-xs font-medium text-neutral-500 hover:text-primary-600">Trocar venc.</button>
