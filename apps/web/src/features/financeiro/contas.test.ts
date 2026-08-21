@@ -664,10 +664,18 @@ describe("Story 8.18 — impedimentoDaTransferencia: o que a tela consegue antec
   // asserções passam a conseguir afirmar.
   //
   // As bordas NÃO são mais derivadas de `Date.now()`/UTC — são literais do calendário do TENANT.
-  // `2026-08-17T02:30:00Z` separa os três relógios:
+  // `2026-08-17T02:30:00Z` isola o NAVEGADOR; o tenant e o UTC caem no MESMO dia:
   //   · **navegador** (America/Sao_Paulo, o runner do vitest) → 16/08 23:30 → `2026-08-16`
   //   · **UTC**                                               → `2026-08-17`
   //   · **tenant em Asia/Tokyo**                              → 17/08 11:30 → `2026-08-17`
+  //
+  // ⚠️ **Não copie este instante para uma tela que LÊ o relógio** (#153). Aqui ele é inofensivo:
+  // `impedimentoDaTransferencia` é PURA e recebe o hoje como 5º parâmetro, então a prova de fuso
+  // não depende do instante — quem a faz é o par de chamadas do último teste, que passa os dois
+  // "hoje" como literais explícitos. Medido: com o hoje lido POR DENTRO, tanto pelo navegador
+  // quanto por `toISOString()`, este arquivo fica vermelho. Num teste de TELA, porém, um instante
+  // que cola tenant e UTC no mesmo dia deixa a regressão para UTC passar verde por construção —
+  // foi o que aconteceu na `CobrancasPage`, que herdou justamente este literal.
   // O relógio fica congelado nesse instante **de propósito**: assim, quem devolver a leitura do
   // hoje para dentro da função (pelas partes locais de um `new Date()` ou por `toISOString()`)
   // muda o resultado e fica VERMELHO. Sem o congelamento, o dia real da máquina ficaria longe
