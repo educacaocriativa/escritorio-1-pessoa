@@ -1,5 +1,5 @@
 import { Archive, Pencil } from "lucide-react";
-import { useCallback, useEffect, useState } from "react";
+import { type ReactNode, useCallback, useEffect, useState } from "react";
 import Modal, { Field } from "../../components/Modal";
 import { api, apiErrorMessage } from "../../lib/api";
 import { usePrimaryAction } from "../../store/pageActions";
@@ -103,31 +103,37 @@ export default function CentrosCustoPage() {
               // INTEIRAMENTE fora, sem rolagem de escape. Nao dava para editar nem arquivar um
               // centro de custo no celular. Medido em #144.
               //
-              // O NOME em si continua cortado (215,5px sobrando, e a tabela comparativa abaixo
-              // corta ate 699,5px): e a outra classe, a de `textoForaDaTela`, e nao ha regua
-              // verde para ela nesta rota. Tentar consertar aqui de carona ficaria sem medicao —
-              // `break-words` no rotulo, medido, NAO muda o numero (o span e item de flex com
-              // `min-width: auto`), e mudanca que nenhuma regua ve e peso morto.
+              // ⚠️ **O `min-w-0` dos dois `<span>` abaixo é que faz o `break-words` valer algo**
+              // (#157). Item de flex nasce com `min-width: auto`, ou seja, não encolhe abaixo do
+              // seu min-content — e o min-content de um nome de 74 chars SEM espaço é o nome
+              // inteiro. Enquanto isso valer, o span CRESCE em vez de transbordar: o
+              // `scrollWidth` dele continua igual ao `clientWidth`, e a régua que lê `scrollWidth`
+              // não acusa nada. Quem via o defeito era a BORDA do cartão — 215,5px de nome e
+              // 301,4px do pill terminando fora dela, com a página inteira ainda medindo 360
+              // porque o `overflow-hidden` do cartão engolia o excesso em silêncio.
+              //
+              // `min-w-0` sozinho também não basta: encolhida a caixa, o texto sem espaço não tem
+              // onde quebrar e vaza como tinta. Os dois juntos, medidos, zeram os dois cortes.
               <li
                 key={c.id}
                 data-testid="item-centro"
                 className="flex flex-wrap items-center justify-between gap-2 px-5 py-3"
               >
-                <span className="flex items-center gap-2">
+                <span className="flex min-w-0 items-center gap-2">
                   <span
                     className={
                       c.archived_at
-                        ? "text-sm text-neutral-400 line-through"
-                        : "text-sm font-medium text-neutral-800"
+                        ? "min-w-0 break-words text-sm text-neutral-400 line-through"
+                        : "min-w-0 break-words text-sm font-medium text-neutral-800"
                     }
                   >
                     {c.name}
                   </span>
-                  <span className="rounded-pill bg-neutral-100 px-2 py-0.5 text-xs text-neutral-500">
+                  <span className="whitespace-nowrap rounded-pill bg-neutral-100 px-2 py-0.5 text-xs text-neutral-500">
                     {kindLabel(c.kind)}
                   </span>
                   {c.archived_at && (
-                    <span className="rounded-pill bg-neutral-100 px-2 py-0.5 text-xs text-neutral-500">
+                    <span className="whitespace-nowrap rounded-pill bg-neutral-100 px-2 py-0.5 text-xs text-neutral-500">
                       Arquivado
                     </span>
                   )}
@@ -171,7 +177,26 @@ export default function CentrosCustoPage() {
   );
 }
 
-/** Comparativo do mês: resultado por centro de custo lado a lado (inclui "Não atribuído"). */
+/**
+ * Comparativo do mês: resultado por centro de custo lado a lado (inclui "Não atribuído").
+ *
+ * ⚠️ **DOIS desenhos do mesmo dado, e a escolha foi MEDIDA (#157), não preferida.** Abaixo de
+ * `sm` saem cartões; de `sm` para cima, a tabela — que é o formato certo no desktop, onde o ponto
+ * deste card é justamente comparar sócio com sócio lado a lado.
+ *
+ * O caminho óbvio seria dar deslizador à tabela, como a DRE (`DrePage.tsx:131`). **Medido em
+ * 20/08/2026: não resolve.** Trocando o `overflow-hidden` por `overflow-x-auto` + `min-w-[36rem]`,
+ * a régua de `textoForaDaTela` continua acusando os MESMOS 12 cortes, com os MESMOS números
+ * (306,5 / 443,3 / 572,3 / 699,5). E não é fresta da régua: ela compara a borda do texto com a do
+ * ancestral que RECORTA, e um deslizador recorta. O que o `overflow-x-auto` muda é que o dono
+ * PODE alcançar o valor — não que ele o LEIA. Num comparativo o valor é *a* informação, e
+ * informação que exige rolagem lateral para existir é informação que o dono não lê.
+ *
+ * É a mesma conclusão que a `InvestimentosPage` já escreveu com outras palavras ("a lição do #58
+ * era role, não corte; a daqui é mais funda: em 360px uma tabela de 3 colunas não cabe, e a saída
+ * não é fazer a rolagem funcionar melhor — é não precisar dela"). Aqui são 4 colunas, uma delas um
+ * nome livre de até 120 chars.
+ */
 function ComparativeCard({ report }: { report: CostCenterReport }) {
   return (
     <div data-testid="comparativo-centros" className="overflow-hidden rounded-2xl bg-white shadow-sm">
@@ -181,7 +206,17 @@ function ComparativeCard({ report }: { report: CostCenterReport }) {
           Mesma fórmula/exclusões da DRE (regime de competência). Compare sócios/áreas lado a lado.
         </p>
       </div>
-      <table className="w-full text-sm">
+
+      {/* Abaixo de `sm`: um cartão por centro. Este `sm:hidden` e o `hidden sm:table` da tabela
+          são um PAR — quebrar um só põe os dois desenhos na tela ao mesmo tempo, e a régua acusa
+          os 12 cortes de volta. */}
+      <ul className="divide-y divide-neutral-50 sm:hidden">
+        {report.buckets.map((b) => (
+          <Cartao key={b.cost_center_id ?? "__nao_atribuido__"} bucket={b} />
+        ))}
+      </ul>
+
+      <table className="hidden w-full text-sm sm:table">
         <thead>
           <tr className="border-b border-neutral-100 text-left text-xs uppercase text-neutral-400">
             <th className="px-5 py-2 font-medium">Centro de custo</th>
@@ -200,9 +235,59 @@ function ComparativeCard({ report }: { report: CostCenterReport }) {
   );
 }
 
+/** Tom do resultado — uma definição só, para o cartão e a linha não divergirem no 1º ajuste. */
+const tomDoResultado = (bucket: CostCenterBucket) =>
+  bucket.resultado_cents < 0 ? "text-danger" : "text-emerald-600";
+
+/**
+ * O mesmo bucket em 360px. Rótulo à esquerda, valor à direita com `whitespace-nowrap` — o padrão
+ * que a `InvestimentosPage` fixou depois do "R$ 3." no lugar de "R$ 3.000,00".
+ *
+ * `min-w-0` no nome pelo mesmo motivo do cartão da lista: sem ele o item de flex não encolhe
+ * abaixo do min-content, e o `break-words` ao lado vira peso morto.
+ */
+function Cartao({ bucket }: { bucket: CostCenterBucket }) {
+  const unassigned = bucket.cost_center_id === null;
+  return (
+    <li data-testid="linha-centro" className={`px-5 py-3 ${unassigned ? "bg-amber-50" : ""}`}>
+      <div className="flex flex-wrap items-center gap-2">
+        <span className="min-w-0 break-words text-sm font-medium text-neutral-800">
+          {bucket.name}
+        </span>
+        {bucket.kind && !unassigned && (
+          <span className="whitespace-nowrap rounded-pill bg-neutral-100 px-2 py-0.5 text-xs text-neutral-500">
+            {kindLabel(bucket.kind)}
+          </span>
+        )}
+      </div>
+      <dl className="mt-2 space-y-1 text-xs">
+        <LinhaDoCartao rotulo="Receita">
+          <span className="tabular-nums text-neutral-600">{formatBRL(bucket.receita_cents)}</span>
+        </LinhaDoCartao>
+        <LinhaDoCartao rotulo="Resultado">
+          <span className={`font-medium tabular-nums ${tomDoResultado(bucket)}`}>
+            {formatBRL(bucket.resultado_cents)}
+          </span>
+        </LinhaDoCartao>
+        <LinhaDoCartao rotulo="Lançamentos">
+          <span className="tabular-nums text-neutral-500">{bucket.lancamentos}</span>
+        </LinhaDoCartao>
+      </dl>
+    </li>
+  );
+}
+
+function LinhaDoCartao({ rotulo, children }: { rotulo: string; children: ReactNode }) {
+  return (
+    <div className="flex items-baseline justify-between gap-3">
+      <dt className="text-neutral-400">{rotulo}</dt>
+      <dd className="whitespace-nowrap">{children}</dd>
+    </div>
+  );
+}
+
 function Row({ bucket }: { bucket: CostCenterBucket }) {
   const unassigned = bucket.cost_center_id === null;
-  const negative = bucket.resultado_cents < 0;
   return (
     <tr
       data-testid="linha-centro"
@@ -217,7 +302,7 @@ function Row({ bucket }: { bucket: CostCenterBucket }) {
         )}
       </td>
       <td className="px-5 py-2.5 tabular-nums text-neutral-600">{formatBRL(bucket.receita_cents)}</td>
-      <td className={`px-5 py-2.5 tabular-nums font-medium ${negative ? "text-danger" : "text-emerald-600"}`}>
+      <td className={`px-5 py-2.5 font-medium tabular-nums ${tomDoResultado(bucket)}`}>
         {formatBRL(bucket.resultado_cents)}
       </td>
       <td className="px-5 py-2.5 tabular-nums text-neutral-500">{bucket.lancamentos}</td>

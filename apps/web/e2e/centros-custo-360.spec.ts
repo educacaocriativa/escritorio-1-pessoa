@@ -109,8 +109,17 @@ test("o comparativo mostra o valor INTEIRO, com o separador de milhar", async ({
   // O defeito da 2b-ii em uma asserção, e ela é sobre TINTA: o texto "R$ 1.234.567,89" está no
   // DOM mesmo recortado, então `toContainText` sozinho não prova nada. O que prova é a caixa do
   // elemento que o contém terminar dentro dos 360px.
-  const valor = page.getByTestId("comparativo-centros").getByText("R$ 1.234.567,89", { exact: true });
-  await expect(valor).toBeVisible();
+  //
+  // `visible=true` porque o comparativo tem DOIS desenhos do mesmo dado no DOM (cartão < `sm`,
+  // tabela >= `sm`) e o valor casa nos dois. Medir o que está `display: none` daria `null` e o
+  // teste morreria pelo motivo errado. Depois de filtrar tem de sobrar EXATAMENTE um: dois
+  // visíveis significaria que os dois desenhos estão na tela ao mesmo tempo — o defeito que o
+  // par `sm:hidden` / `hidden sm:table` existe para evitar.
+  const valor = page
+    .getByTestId("comparativo-centros")
+    .getByText("R$ 1.234.567,89", { exact: true })
+    .locator("visible=true");
+  await expect(valor).toHaveCount(1);
   const caixa = await valor.boundingBox();
   expect(caixa).not.toBeNull();
   expect(caixa!.x).toBeGreaterThanOrEqual(0);
