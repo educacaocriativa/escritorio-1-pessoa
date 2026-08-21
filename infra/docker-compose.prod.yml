@@ -115,9 +115,10 @@ services:
     # HTTP-01 automático, sem regressão (IV1).
     build: ./caddy
     restart: always
-    # env_file: injeta DOMAIN, ROOT_DOMAIN e CLOUDFLARE_API_TOKEN (lidos pelo Caddyfile via
-    # {$DOMAIN}/{$ROOT_DOMAIN}/{$CLOUDFLARE_API_TOKEN}). Preencha ROOT_DOMAIN e o token no
-    # .env.prod (ver .env.prod.example) — sem o token, o bloco wildcard não emite o cert.
+    # env_file: injeta DOMAIN, ROOT_DOMAIN, CLOUDFLARE_API_TOKEN e MONITORING_ENABLED. Os três
+    # últimos são lidos pelo `caddy/entrypoint.sh`, que decide quais blocos OPCIONAIS entram em
+    # /etc/caddy/conf.d/ (issue #151): sem token o wildcard nem entra na config, e o domínio
+    # único segue normal — antes, token vazio derrubava a config INTEIRA do Caddy.
     env_file:
       - .env.prod
     ports:

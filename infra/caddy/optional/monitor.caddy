@@ -1,0 +1,14 @@
+# Painel de monitoramento (Uptime Kuma) — Story 3.4, topologia Caddy próprio (opção B).
+# ATIVADO pelo entrypoint quando MONITORING_ENABLED=true.
+#
+# Sem o `docker-compose.monitoring.yml` no ar, o container `uptime-kuma` NÃO existe e
+# `monitor.<domínio>` normalmente não tem registro DNS — o Caddy tentaria emitir certificado
+# para ele em loop (NXDOMAIN a cada tentativa), enchendo o log e queimando rate limit do
+# Let's Encrypt sem nunca conseguir. Por isso é opt-in, não default.
+#
+# Na topologia de produção com Traefik compartilhado quem publica `monitor.<domínio>` é o
+# Traefik, via labels do compose de monitoramento — lá este arquivo nem é usado.
+monitor.{$DOMAIN} {
+	encode gzip
+	reverse_proxy uptime-kuma:3001
+}
