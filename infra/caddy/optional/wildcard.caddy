@@ -1,0 +1,31 @@
+# Wildcard por tenant (`*.{$ROOT_DOMAIN}`, ex.: `*.e1p.com`) — white-label por subdomínio.
+# ATIVADO pelo entrypoint quando CLOUDFLARE_API_TOKEN **e** ROOT_DOMAIN estão preenchidos.
+#
+# TLS via desafio DNS-01 (Cloudflare): OBRIGATÓRIO para certificado curinga — o Let's Encrypt
+# NÃO emite wildcard via HTTP-01, só via DNS-01. Só ESTE bloco usa DNS-01; o domínio único
+# continua com HTTP-01 automático (sem regressão, IV1).
+# Pré-requisito: DNS de ROOT_DOMAIN gerido pela Cloudflare (ver docs/HOSTINGER-DEPLOY.md §8),
+# e o token com escopo Zone.DNS -> Edit na zona.
+#
+# Mesmo roteamento do domínio único (/api → api:8000, resto → web:80). A resolução de tenant
+# por subdomínio acontece no BACKEND a partir do JWT (RLS) — nunca do Host header, que é
+# controlável pelo cliente (ver apps/api/app/core/subdomain.py, Regra de Ouro nº 1).
+#
+# ⚠️ Se ROOT_DOMAIN for domínio-PAI de DOMAIN (ex.: DOMAIN=app.exemplo.com,
+# ROOT_DOMAIN=exemplo.com), este bloco COBRE o domínio único — e com o token inválido nem o
+# principal recebe certificado. Foi o que aconteceu em produção em 2026-08-20.
+*.{$ROOT_DOMAIN} {
+	encode gzip
+
+	tls {
+		dns cloudflare {$CLOUDFLARE_API_TOKEN}
+	}
+
+	handle_path /api/* {
+		reverse_proxy api:8000
+	}
+
+	handle {
+		reverse_proxy web:80
+	}
+}

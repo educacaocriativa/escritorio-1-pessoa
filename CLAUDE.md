@@ -2988,6 +2988,69 @@ migration.
 
 > Já corrigidos na fundação: guarda de boot p/ JWT_SECRET fraco em produção; RLS fail-closed (valida tenant_id); IntegrityError→409 no register (race); /me revalida is_active e não reemite token; e-mail case-insensitive; alinhamento de `created_at`/`role` com shared-types.
 
+## Infra: o Caddyfile parou de ser tudo-ou-nada (issue #151, 2026-08-20)
+
+**O parse do Caddyfile é ALL-OR-NOTHING, e o `.env.prod.example` prometia o contrário.** O bloco
+wildcard usa `dns cloudflare {$CLOUDFLARE_API_TOKEN}`; com o token vazio o Caddy recusa o arquivo
+**INTEIRO** (`missing API token`) e **nem o domínio único sobe**, com o certificado dele intacto em
+disco. O comentário do template dizia *"vazio = wildcard não emite o certificado (domínio único
+segue normal)"* — uma degradação graciosa que **não existia**. Derrubou a produção por ~40 min em
+2026-08-20, e o contorno tinha sido um Caddyfile local não versionado, que some no primeiro
+`git pull`.
+
+- [x] **`infra/Caddyfile` guarda só o que SEMPRE funciona** (domínio único, HTTP-01) e termina em
+  `import /etc/caddy/conf.d/*.caddy`. Os blocos que dependem de configuração externa mudaram para
+  `infra/caddy/optional/` — `wildcard.caddy` e `monitor.caddy`.
+- [x] **A ativação é por ENV, nunca por arquivo criado à mão no servidor.** `infra/caddy/entrypoint.sh`
+  copia para `conf.d/` só o que a env pede: wildcard exige `CLOUDFLARE_API_TOKEN` **e**
+  `ROOT_DOMAIN` (sem o segundo o endereço vira `*.`, inválido); monitor exige
+  `MONITORING_ENABLED=true`. **A opção 1 da issue, ao pé da letra, pedia que o operador criasse os
+  arquivos** — seria trocar esta armadilha pela classe que custou os 40 minutos: config que vive
+  só na máquina, invisível a qualquer leitura do repo.
+  - O entrypoint **apaga e recria** `conf.d/` a cada arranque (recriar container não pode herdar
+    bloco de antes) e **anuncia em log** o que ligou e o que não ligou. Desligar em silêncio é como
+    o defeito irmão do `.env` sobreviveu a um deploy inteiro.
+  - `caddy:2-alpine` tem `ENTRYPOINT` **null** e o `CMD` completo, então o script recebe o comando
+    oficial como `"$@"` e faz `exec "$@"` — nada da imagem base é reescrito.
+- ⚠️ **Glob de `import` sem correspondência é NO-OP, e isso foi MEDIDO, não suposto.**
+  `caddy validate` com `conf.d` vazio devolve `Valid configuration` e um `warn` (*"No files matching
+  import glob pattern"*). É esse fato que torna a degradação real em vez de documental — e o repo
+  já pagou seis vezes por supor comportamento de terceiro (§WhatsApp Evolution).
+- **Validado com o binário real, na imagem com o plugin**, em cinco cenários: sem token · token +
+  `ROOT_DOMAIN` (wildcard entra) · token **sem** `ROOT_DOMAIN` (guarda) · só `ROOT_DOMAIN` ·
+  `MONITORING_ENABLED=true`. Os cinco: `Valid configuration`. **Controle positivo:** alimentar o
+  formato ANTIGO (wildcard inline) com token vazio reproduz o erro de produção palavra por palavra.
+- ⚠️ **`ROOT_DOMAIN` pode ser domínio-PAI de `DOMAIN`, e aí o wildcard COBRE o domínio único.** Em
+  produção `DOMAIN=e1p.criativaeduca.com.br` e `ROOT_DOMAIN=criativaeduca.com.br`: com um token
+  inválido, o principal deixa de receber certificado mesmo tendo o dele em disco. Um placeholder
+  com formato válido (40 chars) **passa** na validação do plugin e não salva — medido.
+- [x] **Gate de texto** (`tests/test_caddyfile_blocos_opcionais.py`, 5 asserções): o arquivo base não
+  pode conter diretiva que exija config externa, precisa ter o `import`, e **todo arquivo em
+  `optional/` precisa de um ramo no entrypoint** — bloco versionado que nenhuma env alcança é falha
+  silenciosa perfeita, a família da `capabilities.py` sem consumidor. Com controle positivo, para o
+  gate não passar por vacuidade se alguém apagar os dois arquivos. Provado por mutação: devolver o
+  wildcard ao arquivo base deixa o gate **vermelho**.
+  - ⚠️ **Ele roda no job `cross-tenant-rls`, NÃO no `test-in-prod-image`, e isso não é arbitrário.**
+    Aquele job roda a suíte **dentro da imagem da API**, onde só `apps/api` foi copiado: `infra/`
+    não existe lá. Na primeira versão o teste resolvia a raiz com `parents[3]` fixo e estourou
+    `IndexError` **na COLETA** — 66 testes deselecionados, exit 2, o job inteiro vermelho por um
+    gate que nem era sobre a API. Hoje ele **sobe procurando `infra/Caddyfile`** e se pula quando
+    não o acha.
+  - ⚠️ **E o SKIP é REPROVADO no job que importa.** A etapa do `ci.yml` confere `executados >= 1`
+    pelo junit, igual à guarda do `rls_e2e`: um gate que se pula sozinho fica verde sem proteger
+    nada, e silêncio é indistinguível de aprovação. **Regra que fica: teste que lê arquivo FORA
+    de `apps/api` não pode viver só no `pytest` da imagem — ou ele se pula, ou ele quebra a
+    coleta.**
+
+- **Dívida:** a validação de verdade (build da imagem + `caddy validate` nos cinco cenários) é
+  **manual, com Docker, e não roda no CI** — o que roda é o gate de TEXTO. Um job que buildasse a
+  imagem por PR pagaria ~2 min de `xcaddy` em toda mudança do repo; a troca não foi feita, e fica
+  registrada em vez de escondida.
+- **Dívida:** o `docker-compose.override.yml` da AWS pode perder o bloco `caddy:` depois que isto
+  for deployado — mas só **depois**, e conferindo que o wildcard segue desligado lá
+  (`CLOUDFLARE_API_TOKEN` vazio de propósito). Enquanto o override existir, ele vence: monta o
+  `Caddyfile.single`, que não tem o `import` e portanto ignora os opcionais — **seguro, só redundante**.
+
 ## 7. Materiais de referência (fora do repo)
 - Spec mestre: `/Volumes/Extreme SSD/2026_e1p/Configuração do software.docx`
 - Design Figma exportado: `/Volumes/Extreme SSD/2026_Downloads de JUNHO/crm_export/` (PNGs do "Portal")
