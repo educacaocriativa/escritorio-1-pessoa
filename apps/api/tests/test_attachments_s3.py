@@ -10,6 +10,7 @@ import io
 import pytest
 from fastapi.testclient import TestClient
 
+from app.config import Settings
 from app.core import storage
 
 REGISTER = {
@@ -141,3 +142,44 @@ def test_build_key_sanitizes_filename():
     key = storage.build_key("tenant-xxxx", "att-9", "../../etc/passwd")
     assert key.startswith("tenants/tenant-xxxx/attachments/att-9/")
     assert "/../" not in key
+
+
+# --- Regressão de produção (2026-08-20): comentário inline no .env ligou o S3 na AWS ---
+#
+# `env_file` do Docker Compose NÃO remove comentário na mesma linha do valor: tudo depois do `=`
+# vira o valor. O `.env.prod.example` trazia `S3_BUCKET=   # vazio = storage S3 desligado`, então
+# dentro do container o bucket era a própria frase — NÃO-vazia — e `is_configured()` respondia
+# True. O upload seguia para o S3 com um `S3_ENDPOINT_URL` igualmente comentado e morria em
+# `ValueError: Invalid endpoint`, devolvendo 500 em TODO anexo (comprovante, boleto, mídia de
+# WhatsApp). A frase que dizia "storage S3 desligado" era exatamente o que ligava o storage.
+
+_COMENTARIO_BUCKET = "# vazio = storage S3 desligado (fallback Postgres)"
+_COMENTARIO_ENDPOINT = "# vazio = endpoint padrão da AWS; defina p/ MinIO/B2/Wasabi"
+
+
+def test_bucket_que_e_so_comentario_mantem_o_storage_desligado(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Um bucket que é só o comentário do template = intenção de DESLIGADO, não de ligado."""
+    monkeypatch.setattr(storage, "settings", Settings(s3_bucket=_COMENTARIO_BUCKET))
+    assert storage.is_configured() is False
+
+
+def test_endpoint_que_e_so_comentario_nao_chega_ao_boto3() -> None:
+    """Bucket real + endpoint comentado: o endpoint é neutralizado, não repassado ao boto3.
+
+    Sem isto, `boto3.client(endpoint_url="# vazio = ...")` levanta ValueError e derruba o
+    upload inteiro mesmo com o S3 legitimamente configurado.
+    """
+    s = Settings(s3_bucket="e1p-anexos", s3_endpoint_url=_COMENTARIO_ENDPOINT)
+    assert s.s3_endpoint_url == ""
+
+
+def test_o_descarte_do_comentario_nao_e_silencioso(caplog: pytest.LogCaptureFixture) -> None:
+    """Degradar para o Postgres em silêncio é como o defeito sobrevive a um deploy inteiro.
+
+    Quem QUERIA o S3 ligado precisa achar a linha no log; quem não queria não perde nada.
+    """
+    with caplog.at_level("WARNING", logger="e1p.config"):
+        Settings(s3_bucket=_COMENTARIO_BUCKET)
+    assert any("S3_BUCKET" in r.message for r in caplog.records)
