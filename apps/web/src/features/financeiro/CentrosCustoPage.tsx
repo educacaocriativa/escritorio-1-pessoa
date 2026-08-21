@@ -95,7 +95,7 @@ export default function CentrosCustoPage() {
           Nenhum centro de custo ainda. Clique em "Novo centro de custo".
         </p>
       ) : (
-        <div className="overflow-hidden rounded-2xl bg-white shadow-sm">
+        <div data-testid="lista-centros" className="overflow-hidden rounded-2xl bg-white shadow-sm">
           <ul className="divide-y divide-neutral-50">
             {centers.map((c) => (
               // Sem o `flex-wrap` desta linha, um nome longo empurrava as duas acoes para fora
@@ -108,7 +108,11 @@ export default function CentrosCustoPage() {
               // verde para ela nesta rota. Tentar consertar aqui de carona ficaria sem medicao —
               // `break-words` no rotulo, medido, NAO muda o numero (o span e item de flex com
               // `min-width: auto`), e mudanca que nenhuma regua ve e peso morto.
-              <li key={c.id} className="flex flex-wrap items-center justify-between gap-2 px-5 py-3">
+              <li
+                key={c.id}
+                data-testid="item-centro"
+                className="flex flex-wrap items-center justify-between gap-2 px-5 py-3"
+              >
                 <span className="flex items-center gap-2">
                   <span
                     className={
@@ -170,7 +174,7 @@ export default function CentrosCustoPage() {
 /** Comparativo do mês: resultado por centro de custo lado a lado (inclui "Não atribuído"). */
 function ComparativeCard({ report }: { report: CostCenterReport }) {
   return (
-    <div className="overflow-hidden rounded-2xl bg-white shadow-sm">
+    <div data-testid="comparativo-centros" className="overflow-hidden rounded-2xl bg-white shadow-sm">
       <div className="border-b border-neutral-100 px-5 py-3">
         <h2 className="font-semibold text-neutral-800">Resultado por centro de custo (este mês)</h2>
         <p className="text-xs text-neutral-400">
@@ -200,7 +204,10 @@ function Row({ bucket }: { bucket: CostCenterBucket }) {
   const unassigned = bucket.cost_center_id === null;
   const negative = bucket.resultado_cents < 0;
   return (
-    <tr className={`border-b border-neutral-50 last:border-0 ${unassigned ? "bg-amber-50" : ""}`}>
+    <tr
+      data-testid="linha-centro"
+      className={`border-b border-neutral-50 last:border-0 ${unassigned ? "bg-amber-50" : ""}`}
+    >
       <td className="px-5 py-2.5 text-neutral-800">
         {bucket.name}
         {bucket.kind && !unassigned && (
