@@ -63,6 +63,21 @@ jobs:
     # que escapou do `timeoutMS` do Stryker, não para apertar a medição.
     timeout-minutes: 120
 
+    # ── PERMISSOES, NO NIVEL DO JOB ─────────────────────────────────────────────────────────────
+    # O default deste repositorio da ao GITHUB_TOKEN apenas `contents/metadata/packages: read` — o
+    # proprio log de execucao imprime isso no grupo "GITHUB_TOKEN Permissions". Os dois passos de
+    # relatorio abaixo precisam de mais:
+    #
+    #   actions: read  -> baixar o `mutation-report` da corrida ANTERIOR (a tendencia depende dele)
+    #   issues: write  -> abrir/comentar o aviso quando o score cai
+    #
+    # Declarar o bloco inteiro e obrigatorio: assim que `permissions:` existe, o que nao esta
+    # listado passa a ser `none` — por isso `contents: read` aparece aqui, mesmo sendo default.
+    permissions:
+      contents: read
+      actions: read
+      issues: write
+
     # ── FUSO, NO NIVEL DO JOB (issue #169) ──────────────────────────────────────────────────────
     # O runner do GitHub roda em UTC. Este job abortou nas suas DUAS unicas execucoes (19 e
     # 20/08/2026), sempre no dry run do Stryker, e sempre com a mesma notícia:
@@ -138,6 +153,54 @@ jobs:
       - name: Teste de mutação (Stryker)
         run: pnpm mutation
 
+      # ── A TENDENCIA: baixar a medicao ANTERIOR ────────────────────────────────────────────────
+      # O `mutation.json` guarda mutantes, nao historico. Para dizer "caiu 1,4 desde ontem" e
+      # preciso o relatorio da corrida passada, e o unico lugar onde ele existe e o artefato dela.
+      #
+      # Procura a corrida COMPLETA mais recente que nao seja esta — deliberadamente sem filtrar por
+      # `--status success`: uma corrida reprovada pelo `thresholds.break` mediu, e o numero dela e
+      # justamente o que se quer comparar. Ignorar as reprovadas compararia hoje com a ultima noite
+      # BOA e reportaria a queda inteira de novo, toda noite, ate alguem consertar.
+      #
+      # `continue-on-error` e a parte importante: sem relatorio anterior o resumo ainda sai, so que
+      # sem delta. Tendencia indisponivel nao pode derrubar a medicao.
+      - name: Relatório da corrida anterior (para a tendência)
+        if: always()
+        continue-on-error: true
+        working-directory: .
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          for id in $(gh run list --workflow=mutation.yml --status=completed --limit=8 \
+                        --json databaseId --jq '.[].databaseId'); do
+            [ "$id" = "$GITHUB_RUN_ID" ] && continue
+            if gh run download "$id" -n mutation-report -D anterior 2>/dev/null; then
+              echo "RUN_ANTERIOR=$id" >> "$GITHUB_ENV"
+              echo "Comparando com a corrida $id."
+              exit 0
+            fi
+          done
+          echo "Nenhuma corrida anterior com relatório — o resumo sai sem delta."
+
+      # ── O RESUMO NA PAGINA DA CORRIDA ─────────────────────────────────────────────────────────
+      # `$GITHUB_STEP_SUMMARY` renderiza markdown na propria pagina do run. E o conserto do que
+      # tornava a noite verde SILENCIOSA: antes disto o score so existia dentro do log e de um
+      # artefato de 990 KB, entao ninguem via 83,52 virar 81,2 — a primeira noticia seria o build
+      # quebrando no dia em que cruzasse o `break`.
+      - name: Resumo do score na página da corrida
+        id: resumo
+        if: always()
+        working-directory: .
+        run: |
+          node scripts/resumo-mutacao.mjs \
+            apps/web/reports/mutation/mutation.json \
+            anterior/mutation.json >> "$GITHUB_STEP_SUMMARY"
+          if [ -n "${RUN_ANTERIOR:-}" ]; then
+            echo "" >> "$GITHUB_STEP_SUMMARY"
+            echo "_Comparado com a corrida [\`$RUN_ANTERIOR\`](${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${RUN_ANTERIOR})._" >> "$GITHUB_STEP_SUMMARY"
+          fi
+          cat "$GITHUB_STEP_SUMMARY"
+
       # `if: always()` — o relatório é o PRODUTO deste job, não um anexo de falha. É o oposto do
       # `playwright-report` do ci.yml (`if: failure()`), e de propósito: lá o artefato serve para
       # explicar um vermelho; aqui ele é a razão de o job existir. Numa corrida interrompida, o
@@ -150,3 +213,54 @@ jobs:
           # 30 dias, contra os 7 do playwright-report: este roda uma vez por dia, e comparar o
           # score de hoje com o de três semanas atrás é justamente o uso que justifica guardá-lo.
           retention-days: 30
+
+      # ── O AVISO — a unica parte que CHEGA ATE ALGUEM ──────────────────────────────────────────
+      # O resumo acima resolve "onde eu vejo o numero", nao "como eu fico sabendo". Corrida verde
+      # nao notifica ninguem: o GitHub so manda e-mail de `schedule` quando o job FALHA. Sem este
+      # passo, uma queda de 83,5 para 80,4 ao longo de semanas seria invisivel ate cruzar o
+      # `break`, e a primeira noticia seria a reprovacao — tarde demais para ser tendencia.
+      #
+      # Abrir/comentar uma issue e o unico canal de PUSH disponivel para um job que passou. A outra
+      # opcao seria reprovar o job na queda, e ela foi rejeitada: misturaria "a suite piorou um
+      # pouco" com "a suite esta abaixo do minimo", que sao decisoes diferentes e ja tem donos
+      # diferentes (este aviso e o `thresholds.break`).
+      #
+      # A condicao vem do script (`alerta`), que so diz `true` numa QUEDA de >= 1,0 ponto contra a
+      # corrida anterior — evento, nao estado. O porque de nao ser estado esta no cabecalho do
+      # `scripts/resumo-mutacao.mjs`.
+      #
+      # `continue-on-error`: falha ao abrir issue nao pode reprovar uma medicao que deu certo.
+      - name: Avisar quando o score cair
+        if: always() && steps.resumo.outputs.alerta == 'true'
+        continue-on-error: true
+        working-directory: .
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SCORE: ${{ steps.resumo.outputs.score }}
+          DELTA: ${{ steps.resumo.outputs.delta }}
+        run: |
+          set -euo pipefail
+          CORRIDA="${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
+          CORPO="O mutation score caiu **${DELTA} ponto(s)**, para **${SCORE}%**.
+
+          O resumo da corrida — incluindo **quais módulos pioraram** e se algum módulo novo entrou pelo escopo descoberto — está na página do run: ${CORRIDA}
+
+          Queda não é reprovação: o \`thresholds.break\` segue sendo o piso, e o job passou. Isto é o aviso de TENDÊNCIA, que existe porque noite verde não notifica ninguém.
+
+          Antes de procurar teste que piorou, descarte a causa mais comum: **módulo novo no escopo**. O \`stryker.config.mjs\` descobre todo \`.ts\` com teste irmão, então um módulo recém-testado entra sozinho e derruba o total sem que nenhum teste existente tenha regredido — o resumo do run diz se foi isso."
+
+          # A label serve de chave de deduplicacao: um aviso aberto recebe COMENTARIO, nao uma
+          # segunda issue. Sem isto, uma queda em tres noites seguidas viraria tres issues.
+          gh label create mutacao-tendencia --color FBCA04 \
+            --description "Aviso automático de queda no mutation score" 2>/dev/null || true
+
+          ABERTA=$(gh issue list --label mutacao-tendencia --state open \
+                     --json number --jq '.[0].number // empty')
+
+          if [ -n "$ABERTA" ]; then
+            gh issue comment "$ABERTA" --body "$CORPO"
+            echo "Comentado na issue #$ABERTA."
+          else
+            gh issue create --label mutacao-tendencia \
+              --title "Mutation score caiu ${DELTA} ponto(s), para ${SCORE}%"               --body "$CORPO"
+          fi
