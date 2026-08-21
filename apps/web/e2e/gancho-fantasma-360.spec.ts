@@ -12,14 +12,22 @@ import { semearSessao } from "./support/sessao";
  * **nada guardava essa linha**: medido no #164, removê-la deixava `agenda-evento-360` inteiro verde
  * (12 passed, `--repeat-each=3`), com as réguas de 360px medindo 101px de tela que não existe.
  *
- * ⚠️ **QUAL MUTAÇÃO ESTE ARQUIVO MATA, E SOB QUAL CONDIÇÃO.** Ele mata "apagar
- * `"/dna/pendente": null` do `PADROES`" — mas isso vale **enquanto a guarda do componente for
- * frouxa** (`data ?? null`). Medido nesta branch, com a guarda frouxa: a mutação mata os DOIS
- * testes abaixo. Com a guarda apertada do #161 aplicada (o componente passa a exigir a FORMA de
- * `DnaPergunta` e rejeita `[]`), essa mesma mutação vira **mutante equivalente** — o `[]` deixa de
- * virar card e não há empurrão para medir. O que sobra guardado depois do #161, e não é pouco, é a
- * outra metade: que a fixture PADRÃO não monte card nenhum, qualquer que seja o caminho — um
- * default trocado por payload de forma válida continua morrendo aqui.
+ * ⚠️ **QUAL MUTAÇÃO ESTE ARQUIVO MATA — e qual ele DEIXOU de matar quando o #161 entrou.**
+ *
+ * | mutação no `PADROES` | antes do #161 | HOJE (guarda apertada em `main`) |
+ * |---|---|---|
+ * | apagar `"/dna/pendente": null` | mata os 2 | **SOBREVIVE — mutante equivalente** |
+ * | trocar por payload de FORMA VÁLIDA | mata os 2 | **mata os 2** |
+ *
+ * Ambas as linhas foram MEDIDAS: a primeira contra a branch do #164 com a guarda ainda frouxa, e as
+ * duas de novo em 2026-08-21 contra o `main` que já contém o #161 (PR #176). O `[]` deixou de virar
+ * card porque `ehPergunta` o rejeita, então não há mais empurrão de 101px para medir por esse
+ * caminho — e exigir morte de mutante equivalente só produziria teste que fixa literal sem
+ * consequência.
+ *
+ * O que este arquivo guarda HOJE, e não é pouco: **a fixture PADRÃO não monta card do Gancho,
+ * qualquer que seja o caminho**. O mock deixou de ser a única linha de defesa (o componente virou a
+ * primeira), mas continua sendo o que faz as réguas de 360px medirem a tela que a produção produz.
  *
  * ⚠️ **UMA rota, não as seis.** O alvo é UMA linha de UM arquivo compartilhado, e as seis telas
  * chamam o MESMO endpoint (`/dna/pendente`, casado por prefixo de caminho, não por rota). Não
@@ -78,7 +86,7 @@ test("a fixture padrão não monta o card do Gancho na /agenda", async ({ page }
   await abrirAgenda(page);
   await expect(
     cardDoGancho(page),
-    "o default `/dna/pendente: null` de support/api.ts caiu: `[]` voltou a virar card e as réguas de 360px passaram a medir 101px de tela que a produção não produz (#164)",
+    "a fixture padrão passou a montar o card do Gancho na /agenda. O default `/dna/pendente: null` de `support/api.ts` caiu, ou foi trocado por um payload de forma válida — e as réguas de 360px destas seis telas voltaram a medir ~101px de tela que a produção não produz (#164). NÃO é mais o `[]`: desde o #161 o próprio componente o rejeita.",
   ).toHaveCount(0);
 });
 
