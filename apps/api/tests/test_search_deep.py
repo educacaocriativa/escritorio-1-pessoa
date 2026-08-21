@@ -174,10 +174,18 @@ def test_o_recorte_nasce_do_fuso_do_tenant_e_nao_do_relogio_do_servidor(db):
     atrasado = _corte_de_mensagens(db, 12)
 
     assert adiantado is not None and atrasado is not None
-    # Estrito, e com a diferença exata: 25 horas de separação garantem que as duas datas locais
-    # NUNCA coincidem. Um `>=` aqui passaria com os dois piso idênticos — que é exatamente o
-    # sintoma de o corte ter vindo do relógio do servidor.
-    assert adiantado - atrasado == timedelta(days=1)
+    # 25 horas de separação garantem que as duas datas locais NUNCA coincidem — mas NÃO que a
+    # diferença seja de exatamente 1 dia. Kiritimati vira para o dia seguinte quando a hora UTC
+    # chega a 10 (10+14 = 24); Niue só sai do dia anterior às 11 (11−11 = 0). Entre 10:00 e 10:59
+    # UTC as duas coisas valem juntas e o gap é 2 — um `==` aqui reprovava 1 hora por dia, sem
+    # nenhum diff culpado (#165; caiu no run 32359927329 às 10:47:57Z, no PR #159, que nem toca
+    # busca).
+    #
+    # O que prova a âncora é a diferença EXISTIR: vinda do relógio do servidor os dois piso seriam
+    # idênticos e a diferença seria `timedelta(0)` — e `timedelta(0) >= timedelta(days=1)` é FALSO.
+    # Ou seja, este `>=` não afrouxa nada. O `>=` que afrouxaria seria contra `timedelta(0)`, e não
+    # é este; era esse o alvo do comentário anterior, que dizia o certo sobre o teste errado.
+    assert adiantado - atrasado >= timedelta(days=1)
 
 
 def test_camada_funda_respeita_o_rbac(db):
