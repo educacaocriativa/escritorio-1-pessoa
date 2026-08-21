@@ -131,13 +131,24 @@ describe("CobrancasPage — Nova cobrança (Story 7.5, Task 2)", () => {
 // verdadeiro por construção, dissesse a tela o que dissesse. Agora o relógio é congelado e os
 // dias são strings literais: o teste passou a afirmar sobre a TELA, não sobre si mesmo.
 //
-// `2026-08-17T02:30:00Z` separa os três relógios do jeito que interessa aqui:
-//   · **navegador** (America/Sao_Paulo, o runner) → 16/08 23:30 → **2026-08-16**
+// ⚠️ **O instante era `2026-08-17T02:30:00Z`, e isolava o relógio ERRADO** (#153). Ali navegador
+// dava 16/08 enquanto UTC e tenant davam ambos 17/08: quem ficava sozinho era o NAVEGADOR, e o
+// teste era CEGO para UTC por construção. Medido: mutar `dataPadrao={HOJE_DO_TENANT}` para
+// `new Date().toISOString().slice(0, 10)` — o relógio UTC —, com `tsc --noEmit` limpo e o import
+// órfão removido, SOBREVIVIA aos 17 testes. UTC não é relógio hipotético: o CLAUDE.md §5.2 registra
+// que o comentário substituído pelo #78 opunha as duas únicas opções que existiam então, navegador
+// e UTC.
+//
+// `2026-08-17T16:00:00Z` isola o relógio do TENANT — o único que a tela pode legitimamente usar:
+//   · **navegador** (America/Sao_Paulo, o runner) → 17/08 13:00 → **2026-08-17**
 //   · **UTC**                                     → **2026-08-17**
-//   · **tenant em Asia/Tokyo**                    → 17/08 11:30 → **2026-08-17**
-// Com o esperado em 16/08, morre tanto quem passar a ler UTC quanto quem passar a ler o fuso do
-// tenant — e é exatamente essa segunda morte que expõe o que a tela faz hoje (ver abaixo).
-const INSTANTE = "2026-08-17T02:30:00Z";
+//   · **tenant em Asia/Tokyo**                    → 18/08 01:00 → **2026-08-18**
+// Nenhum instante separa os TRÊS dias: varridos os 48 instantes de meia em meia hora, Tóquio só
+// passa do dia de UTC a partir das 15:00Z e São Paulo só fica atrás antes das 03:00Z — faixas
+// mutuamente exclusivas. O que se escolhe é qual relógio fica sozinho, e o certo é o do tenant:
+// com o esperado em 18/08 e navegador/UTC colados em 17/08, um único literal mata AS DUAS
+// regressões de uma vez.
+const INSTANTE = "2026-08-17T16:00:00Z";
 
 /**
  * O dia que esta tela usa como default de "recebi direto na conta".
@@ -156,9 +167,18 @@ const INSTANTE = "2026-08-17T02:30:00Z";
  * máquina: os dois relógios voltariam a dar a mesma string por construção e nenhuma mutação
  * morreria. Foi essa coincidência que escondeu o defeito por meses (CLAUDE.md §5.2).
  *
- * No `INSTANTE` congelado: navegador 16/08, UTC 17/08, tenant em Tóquio **17/08**.
+ * No `INSTANTE` congelado: navegador 17/08, UTC 17/08, tenant em Tóquio **18/08** (#153).
  */
-const DIA_DO_TENANT = "2026-08-17";
+const DIA_DO_TENANT = "2026-08-18";
+
+/**
+ * O dia que navegador **e** UTC dão neste instante — os dois relógios errados, colados um no outro.
+ *
+ * É o literal que faz a asserção negativa valer por dois: `localYmd(new Date())` (navegador) e
+ * `toISOString().slice(0, 10)` (UTC) produzem AMBOS `2026-08-17` aqui, então qualquer uma das duas
+ * regressões cai na mesma linha. Não troque por um dos dois nomes: a coincidência é o mecanismo.
+ */
+const DIA_DOS_RELOGIOS_ERRADOS = "2026-08-17";
 
 const CONTA_BANCARIA = {
   id: "acc-1",
@@ -279,8 +299,9 @@ describe("CobrancasPage — recebimento fora do trilho (Story 8.15)", () => {
   });
 
   it("envia bank_account_id e received_on; o dia default é HOJE — hoje NO FUSO DO TENANT (#136)", async () => {
-    // Relógio congelado num instante em que navegador (16/08), UTC (17/08) e um tenant em Tóquio
-    // (17/08) discordam: sem isso a asserção compara o dia do navegador com o dia do navegador.
+    // Relógio congelado num instante em que o tenant em Tóquio (18/08) fica SOZINHO — navegador e
+    // UTC caem os dois em 17/08. Sem isso a asserção compara o dia do navegador com o dia do
+    // navegador; com o instante antigo (`02:30:00Z`) ela ainda era cega para UTC (#153).
     fusoDoTenant = FUSO_DISTANTE;
     vi.useFakeTimers({ shouldAdvanceTime: true });
     vi.setSystemTime(new Date(INSTANTE));
@@ -298,9 +319,10 @@ describe("CobrancasPage — recebimento fora do trilho (Story 8.15)", () => {
     // o tenant está em Tóquio e o relógio, congelado.
     expect(dia.value).toBe(DIA_DO_TENANT);
     expect(dia.value).not.toBe(COBRANCA_ABERTA.due_date);
-    // O dia do navegador neste instante é 16/08. Afirmar que o campo NÃO o mostra é a metade que
-    // impede um "hoje" qualquer de passar por tenant.
-    expect(dia.value).not.toBe("2026-08-16");
+    // Navegador E UTC dão ambos 17/08 neste instante. Afirmar que o campo NÃO mostra esse dia é a
+    // metade que impede um "hoje" qualquer de passar por tenant — e mata as DUAS regressões, não só
+    // a do navegador (#153).
+    expect(dia.value).not.toBe(DIA_DOS_RELOGIOS_ERRADOS);
 
     await user.click(screen.getByRole("button", { name: /confirmar recebimento/i }));
 
