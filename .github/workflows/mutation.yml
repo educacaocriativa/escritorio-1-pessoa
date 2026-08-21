@@ -62,6 +62,46 @@ jobs:
     # ~21 min em 12 vCPU; o runner tem 2. O teto existe para não queimar horas num laço infinito
     # que escapou do `timeoutMS` do Stryker, não para apertar a medição.
     timeout-minutes: 120
+
+    # ── FUSO, NO NIVEL DO JOB (issue #169) ──────────────────────────────────────────────────────
+    # O runner do GitHub roda em UTC. Este job abortou nas suas DUAS unicas execucoes (19 e
+    # 20/08/2026), sempre no dry run do Stryker, e sempre com a mesma notícia:
+    #
+    #     expected '2026-10-11' to be '2026-10-10' // Object.is equality
+    #
+    # A asserção é de `src/features/agenda/grade.test.ts:468`, e ela esta CERTA: o proprio
+    # comentario dela nomeia a dependencia ("o TZ que a suite fixa"). O defeito era o ambiente
+    # deste job, nao o teste.
+    #
+    # ⚠️ E por que o `env: { TZ }` do `vitest.config.ts` nao bastava — isto foi MEDIDO em
+    # 20/08/2026 (vitest 2.1.9, Node 24, maquina forcada para `TZ=UTC`), nao inferido:
+    #
+    #     pool                | `grade.test.ts`
+    #     --------------------|----------------
+    #     default (`forks`)   | 40 passed
+    #     `threads`           | 1 failed  <-- o que o Stryker monta
+    #
+    # `@stryker-mutator/vitest-runner` FORCA `pool: 'threads'` para rodar com um worker so
+    # (`dist/src/vitest-test-runner.js`, `#getVitestPoolConfig`). E o `env` do vitest so troca o
+    # fuso de verdade quando ele nasce COM o processo — o que o pool `forks` faz e o `threads` nao
+    # tem como fazer: uma thread nasce dentro de um processo que ja escolheu seu fuso, e escrever
+    # em `process.env` depois nao reabre essa escolha. Medido dentro da thread: `process.env.TZ`
+    # dizia "America/Sao_Paulo" e o relogio dizia UTC. O env CHEGA — chega tarde.
+    #
+    # Fixar aqui resolve na raiz: a variavel existe ANTES de o Node comecar, entao vale para
+    # qualquer pool, qualquer runner e qualquer runner de teste futuro.
+    #
+    # ⚠️ No JOB, e nao num `step`: os DOIS passos que rodam teste dependem disto — `pnpm test` e
+    # `pnpm mutation` — e uma variavel por step e exatamente a guarda que alguem esquece de
+    # repetir no terceiro. E nao no topo do arquivo (nivel de workflow) porque o alcance certo e
+    # este job: um segundo job futuro (publicar relatorio, abrir issue de sobreviventes) nao
+    # deve herdar em silencio um fuso que nao lhe diz respeito.
+    #
+    # America/Sao_Paulo, e nao UTC, porque e o fuso em que o e1p vive (CLAUDE.md) e o que a suite
+    # ja exige. Reproduzir aqui o ambiente da suite e o ponto.
+    env:
+      TZ: America/Sao_Paulo
+
     defaults:
       run:
         working-directory: apps/web
