@@ -18,6 +18,11 @@ como o papel não-superusuário `e1p_app` contra um Postgres real, exercitando d
 cd apps/api && pytest -m rls_e2e -k receipts
 ```
 
+⚠️ **Com a máquina só para você.** Se houver outra suíte pesada rodando (`pytest -q`, `pnpm e2e`,
+mutação), a contaminação devolve `AssertionError` indistinguível de regressão real e o resultado
+não conta como sinal — ver `CLAUDE.md` §5.5. Para rodar tudo em série de uma vez:
+`bash scripts/gates.sh`.
+
 Se precisar validar à mão de qualquer forma (ex.: investigando uma regressão), o roteiro
 equivalente por HTTP é: dois tenants via `/auth/register`, conta a pagar em A, comprovante em B,
 `POST /payables/receipts/{id}/link` com token de B e `bill_id` de A → esperado `404`.

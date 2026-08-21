@@ -44,7 +44,10 @@ scripts/           Utilitários (check, seed, etc.)
 ## 5. Fluxo de qualidade (Req. 3 — obrigatório a cada mudança)
 Ao criar/alterar qualquer funcionalidade:
 1. Escreva/atualize testes (`apps/api/tests`, `apps/web` vitest, e2e playwright).
-2. Rode `bash scripts/check.sh` (lint + types + testes) — deve passar.
+2. Rode `bash scripts/check.sh` (lint + types + testes) — deve passar. Antes de fechar a tarefa,
+   rode o alvo único **`bash scripts/gates.sh`**, que encadeia as três suítes pesadas **em série**
+   (`check.sh` → `pytest -m rls_e2e` → `pnpm e2e`). **Nunca rode duas delas ao mesmo tempo:** sob
+   concorrência elas se contaminam e a falha fica indistinguível de regressão real — §5.5.
 3. Rode os agentes de QA conforme a tarefa:
    - **regression-tester** — garante que o novo não quebrou o antigo.
    - **bug-hunter** — caça bugs/edge cases no código novo.
@@ -103,7 +106,10 @@ certo, e a tela estava errada. **Nenhum teste de `apps/web/e2e/` pode aferir cla
   vermelhos com `getByTestId` "não encontrado" para um `data-testid` escrito no arquivo — e o modo
   de falha oposto (**verde** contra código alheio) seria indistinguível de aprovação. Agora
   `reuseExistingServer` é **`false` sempre**: porta ocupada vira erro alto em vez de medição falsa.
-  Para rodar duas worktrees ao mesmo tempo: `E2E_PORT=5373 pnpm --filter @e1p/web e2e`.
+  Para rodar duas worktrees ao mesmo tempo: `E2E_PORT=5373 pnpm --filter @e1p/web e2e`. ⚠️ **A
+  porta própria resolve a colisão de PORTA, não a de MÁQUINA** (#162): duas suítes pesadas rodando
+  de fato ao mesmo tempo se contaminam e devolvem `locator not found` indistinguível de regressão
+  real — ver §5.5.
 - ⚠️ **O controle positivo é parte do teste, não cortesia — e ele MUDA com o título** (#130).
   Modal de título **digitado pelo dono**: remover `min-w-0 break-words` do `Modal.tsx` tem de deixar
   o spec **vermelho**, restaurar (por CÓPIA do arquivo, nunca `git checkout`) tem de devolver o
@@ -541,6 +547,70 @@ lugares — o nome do centro sobra **215,5px** e a tabela "Resultado por centro 
 alcançabilidade, e não há régua verde para ela nesta rota. Medido também que `break-words` no rótulo
 do nome **não muda o número** (o `span` é item de flex com `min-width: auto`, então nunca chega a
 quebrar) — mudança que nenhuma régua vê é peso morto, e por isso ela não entrou.
+
+
+### 5.5 As suítes pesadas não se sobrepõem (issue #162, 2026-08-20)
+
+**`pytest -q`, `pytest -m rls_e2e` e `pnpm e2e` NÃO rodam ao mesmo tempo — e uma falha obtida sob
+concorrência NÃO conta como sinal.** Nem como sinal de que há bug, nem como sinal de que não há.
+Ela não é evidência de nada: é para ser jogada fora e refeita em série.
+
+**O mecanismo, e por que ele custa caro.** O sintoma honesto seria "timeout por carga". Não é o que
+aparece. As três suítes disputam CPU, disco e Docker; o que sai na tela é `AssertionError` no
+backend e `locator not found` no Playwright — exatamente o que uma regressão de VERDADE diria. Não
+há nada na mensagem que separe "seu diff quebrou isto" de "a máquina estava cheia". Quem roda as
+três em paralelo para economizar relógio tem dois destinos, e os dois são caros: investigar um bug
+que não existe, ou — pior — catalogar como "aquele flake" uma quebra que era real.
+
+O **único** sinal secundário é o **tempo**, e ninguém o lê no meio de uma investigação: quando o
+teste está vermelho, a atenção vai para a asserção, não para o rodapé com a duração. Números
+**citados da issue #162** (medidos lá, não remedidos aqui): sob concorrência a `pytest -q` foi de
+**21min para 48min** e o Playwright de **1,9min para 9,2min**. Observado em **duas sessões
+independentes** durante o #146 (PR #158) — `test_financial_intelligence_profitability_rls.py`
+(FAILED sob concorrência, `3 passed in 28.32s` isolado), `agenda-evento-360.spec.ts` ×2 (FAILED,
+`4 passed (43.2s)` isolado) e `test_ai_usage_rls.py` (FAILED, `1 passed in 6.55s` isolado). O
+terceiro veio de uma **reconferência separada**, com o diff já verificado: a classe reincide e não
+depende de qual branch está na árvore.
+
+**Não é classe nova — é a mesma, um nível acima.** O #147 (PR #148) já a fechou **dentro** do
+Playwright pondo `workers: 1` como padrão: *"o paralelo inventa falhas"* — 14 vermelhos espalhados
+por specs sem relação contra os 2 que a mesma mutação produz serialmente (ver o cabeçalho de
+`apps/web/playwright.config.ts`). O `mutation.yml` fecha a mesma coisa com `concurrency:` (*"a
+segunda mediria contenção de CPU, não qualidade de teste — e é assim que timeout vira falso
+positivo"*). E o `apps/web/vitest.config.ts` já carrega a terceira instância: `testTimeout: 15000`
+existe porque `PlatformUsers.test.tsx` e `ContractBuilderPage.test.tsx` estouravam os 5000ms
+default *"só sob a suíte completa em paralelo — isolados, ambos passam"*. Três lugares, a mesma
+física. O que faltava era a proteção **ENTRE** as suítes.
+
+- **O alvo único é `bash scripts/gates.sh`** (issue #162). Encadeia as três **em série**, na ordem
+  do `ci.yml` (mais barata primeiro): `scripts/check.sh` → `pytest -m rls_e2e` → `pnpm e2e`. Falha
+  rápido (`set -euo pipefail`): etapa vermelha aborta o encadeamento e as caras nem começam.
+  **Imprime o tempo de cada etapa** — é a forma de pôr na tela o sinal fraco que ninguém lê.
+- **Preflight que não se pula:** sem `pnpm` ou sem Docker respondendo, o script reprova ANTES da
+  etapa 1, em vez de descobrir isso 20 minutos depois. E a etapa de RLS carrega a **mesma guarda
+  anti-skip-silencioso do `ci.yml`** (lê o `--junitxml` e exige ≥ 1 teste REALMENTE executado):
+  `rls_e2e` que se pula sozinho fica verde sem ter exercido RLS nenhuma.
+- ⚠️ **`gates.sh` não é um lock.** Ele torna o modo certo o mais fácil; não impede que alguém abra
+  outro terminal — ou outra worktree do mesmo repo — e rode `pnpm e2e` por cima. A contenção
+  continua sendo responsabilidade de quem digita. O lock de arquivo foi considerado e **não** foi
+  feito (issue #162, opção 2).
+- **Em worktrees paralelas:** `E2E_PORT=5373 bash scripts/gates.sh`. A 5273 colide entre checkouts
+  do próprio e1p (#123, §5.1); com `reuseExistingServer: false`, porta ocupada vira erro alto em
+  vez de medição do branch alheio.
+- **O teste de mutação (`pnpm --filter @e1p/web mutation`, ~21min) é a QUARTA suíte pesada** e
+  **não** entra no `gates.sh`: é diagnóstico periódico da qualidade da suíte, não portaria de
+  mudança (§5.3, e o cabeçalho de `mutation.yml`). Se você o rodar à mão, ele conta para esta regra
+  igual às outras três — não o sobreponha a elas.
+- ⚠️ **Quem for cronometrar as suítes não está exercitando fuso.** `TZ=UTC` **não troca o fuso no
+  Windows**: a variável chega ao Python, mas o fuso local não muda (`apps/api/tests/test_search_deep.py`
+  documenta). Por isso `gates.sh` **não mexe em `TZ`** — um `TZ=...` na frente destas suítes daria a
+  impressão de estar exercitando fuso sem exercitar nada. A régua do fuso é a do §5.2 (mock do fuso
+  do **tenant**), nunca a variável de ambiente da máquina.
+
+**O que fazer quando a falha aparece.** Antes de abrir o editor: pergunte se havia outra suíte
+rodando. Se havia, o resultado é **descartado** — não é "flake", não é "bug", não é nada. Rode
+`bash scripts/gates.sh` com a máquina só para você e leia o que sair de lá. Só esse resultado entra
+numa investigação, num comentário de PR ou numa Completion Note.
 
 
 ## 6. Estado atual / roadmap

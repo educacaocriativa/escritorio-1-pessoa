@@ -34,5 +34,10 @@ docker compose --env-file .env -f infra/docker-compose.yml up --build
 ## Qualidade (obrigatório a cada mudança)
 ```bash
 bash scripts/check.sh           # lint + types + testes (backend e web)
+bash scripts/gates.sh           # as 3 suítes PESADAS, em série (check.sh → rls_e2e → playwright)
 ```
+⚠️ **Nunca rode duas suítes pesadas ao mesmo tempo.** Sob concorrência elas se contaminam e a falha
+sai como `AssertionError`/`locator not found` — indistinguível de regressão real, e por isso não
+conta como sinal. Use o `gates.sh`, que as encadeia (ver `CLAUDE.md` §5.5).
+
 Mais os agentes de QA em `.claude/agents/` (ver `CLAUDE.md` §5).
