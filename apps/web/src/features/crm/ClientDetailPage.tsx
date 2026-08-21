@@ -66,6 +66,15 @@ export default function ClientDetailPage() {
   const openSum = charges.filter((c) => c.status === "open" && !c.is_overdue).reduce((a, c) => a + c.amount_cents, 0);
   const overdueSum = charges.filter((c) => c.is_overdue).reduce((a, c) => a + c.amount_cents, 0);
   const paidSum = charges.filter((c) => c.status === "paid").reduce((a, c) => a + c.amount_cents, 0);
+  // [issue #154] A QUARTA soma, e ela existe porque as três de cima **não cobrem a lista**.
+  // `ChargeStatus` tem quatro valores (`open` | `scheduled` | `paid` | `canceled`) e os recortes
+  // acima só alcançam três deles: uma cobrança `scheduled` não é "a vencer" (o recorte exige
+  // `status === "open"`), não é "Vencido" (`is_overdue` nasce `false` fora de `open`) e não é
+  // "Recebido" (o dinheiro ainda não caiu). Sem este cartão ela **some da ficha** — o mesmo modo
+  // de falha que a `CobrancasPage` eliminou na Story 8.15 e que o `scheduled_cents` do backend
+  // (`receivables/service.py`) já calcula para a tela irmã.
+  // `canceled` ficar fora de tudo é DIFERENTE e está certo: não é dinheiro que vai entrar.
+  const scheduledSum = charges.filter((c) => c.status === "scheduled").reduce((a, c) => a + c.amount_cents, 0);
 
   async function protest(cid: string) {
     await api.post(`/receivables/charges/${cid}/protest`);
@@ -111,6 +120,14 @@ export default function ClientDetailPage() {
         <Stat label="A receber (a vencer)" value={brl(openSum)} tone="text-neutral-700" />
         <Stat label="Vencido" value={brl(overdueSum)} tone="text-danger" />
         <Stat label="Recebido" value={brl(paidSum)} tone="text-accent-700" />
+        {/* [issue #154] Espelho EXATO do quarto cartão da `CobrancasPage` (Story 8.15): mesmo
+            rótulo, mesmo tom âmbar e **some quando é zero**, pela mesma disciplina anti-ruído.
+            Rótulo e semântica vêm de lá de propósito — a ficha e a tela de cobranças são a MESMA
+            ação de dinheiro, e uma terceira convenção para o mesmo estado seria a assimetria que
+            esta issue existe para fechar. */}
+        {scheduledSum > 0 && (
+          <Stat label="Agendado para entrar" value={brl(scheduledSum)} tone="text-amber-700" />
+        )}
       </div>
 
       {/* Histórico — primeiro bloco de propósito: é a história que dá sentido às seções
