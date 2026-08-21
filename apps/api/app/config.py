@@ -1,5 +1,18 @@
-from pydantic import model_validator
+import logging
+
+from pydantic import ValidationInfo, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+logger = logging.getLogger("e1p.config")
+
+# Os campos do storage S3. Ver `_descarta_comentario_do_template` para o porquê deste grupo.
+_CAMPOS_S3 = (
+    "s3_endpoint_url",
+    "s3_bucket",
+    "s3_access_key_id",
+    "s3_secret_access_key",
+    "s3_region",
+)
 
 _DEV_SECRET = "dev-secret-change-in-production"  # noqa: S105 (sentinela do default de dev)
 _DEFAULT_ADMIN_PASSWORD = "trocar-no-primeiro-acesso"  # noqa: S105 (sentinela do default de dev)
@@ -76,6 +89,38 @@ class Settings(BaseSettings):
     s3_access_key_id: str = ""
     s3_secret_access_key: str = ""
     s3_region: str = "auto"
+
+    @field_validator(*_CAMPOS_S3, mode="before")
+    @classmethod
+    def _descarta_comentario_do_template(cls, v: object, info: ValidationInfo) -> object:
+        """Valor que é só o comentário do template não é configuração — é a AUSÊNCIA dela.
+
+        `env_file` do Docker Compose **não** remove comentário na mesma linha do valor: tudo
+        depois do `=` vira o valor. Copiado do `.env.prod.example`, `S3_BUCKET=  # vazio =
+        storage S3 desligado` chega ao container como a própria frase — não-vazia — e
+        `storage.is_configured()` responde True. O upload segue para o S3 com um
+        `S3_ENDPOINT_URL` igualmente comentado e morre em `ValueError: Invalid endpoint`,
+        devolvendo 500 em TODO anexo. Foi o que aconteceu na AWS em 2026-08-20: a frase que
+        dizia "storage S3 desligado" era exatamente o que ligava o storage.
+
+        Devolve o DEFAULT do campo, não `""`: para `s3_region` o desligado é `"auto"`, e zerá-la
+        entregaria uma região vazia ao boto3.
+
+        ⚠️ **Só o grupo S3.** Segredo e senha podem legitimamente começar com `#`, e descartá-los
+        trocaria este defeito por um pior — a app subindo em produção sem a credencial que o
+        operador configurou. Se um campo novo do S3 nascer, acrescente-o a `_CAMPOS_S3`.
+        """
+        if isinstance(v, str) and v.lstrip().startswith("#"):
+            nome = (info.field_name or "").upper()
+            logger.warning(
+                "%s recebeu um comentário como valor (%r) e foi IGNORADO — comentário em "
+                "env_file precisa estar em linha própria. Se você queria o storage S3 ligado, "
+                "corrija o .env; os anexos continuam no Postgres.",
+                nome,
+                v[:60],
+            )
+            return cls.model_fields[info.field_name].default  # type: ignore[index]
+        return v
 
     # OAuth Google (Meet/Calendar) — app OAuth GLOBAL da plataforma (um Google Cloud project
     # para todos os tenants). Vazio = integração indisponível (fail-safe: o sistema segue

@@ -597,6 +597,64 @@ quebrar) — mudança que nenhuma régua vê é peso morto, e por isso ela não 
 - [x] **Storage S3-compatível dos Anexos** — os bytes podem sair do Postgres para um object storage S3 (`app/core/storage.py`, wrapper fino sobre `boto3` com `endpoint_url` configurável: AWS S3 real OU MinIO/B2/Wasabi barato, sem trocar código). **Dual-write/dual-read com fallback gracioso:** se `S3_BUCKET` está vazio (dev/CI/staging sem bucket), tudo continua no Postgres exatamente como antes (mesmo padrão fail-safe de WhatsApp/SMTP). Se configurado, anexo novo sobe pro bucket (`storage_key` setado, `data=None`); a leitura resolve a origem por linha, então anexo legado (pré-migração) continua baixando. Isolamento de tenant também no path da chave (`tenants/{tenant_id}/attachments/{id}/{filename}` via `build_key`), em complemento à RLS do metadado. Contrato HTTP dos 4 endpoints de `/attachments` e o componente `Attachments.tsx` **inalterados** (só persistência mudou). Migration 0039 (só estrutural: `storage_key` + `data` nullable — não toca em rede no boot). Backfill idempotente `python -m app.scripts.migrate_attachments_to_s3` (documentado em `docs/HOSTINGER-DEPLOY.md`, roda numa janela após configurar as envs). Faseável/não-bloqueante para o deploy.
   - **Dívida:** remover a coluna `data` (limpeza só depois do backfill 100% em produção); validação real contra um bucket S3/MinIO de verdade é manual (sem testcontainers p/ S3 no CI, mesma lacuna do RLS/Postgres).
 
+### O comentário do template LIGOU o storage S3 em produção (AWS, 2026-08-20)
+
+**A frase que dizia "storage S3 desligado" era exatamente o que o ligava.** `env_file` do Docker
+Compose **não** remove comentário na mesma linha do valor — tudo depois do `=` vira o valor. O
+`.env.prod.example` trazia `S3_BUCKET=   # vazio = storage S3 desligado (fallback Postgres)`, e o
+`.env.prod` da AWS foi preenchido copiando o template como ele estava. Dentro do container:
+
+| Variável | Valor real | Efeito |
+|---|---|---|
+| `S3_BUCKET` | `"# vazio = storage S3 desligado (fallback Postgres)"` | **não-vazio** → `is_configured()` devolve `True` |
+| `S3_ENDPOINT_URL` | `"# vazio = endpoint padrão da AWS; defina p/ MinIO/B2/Wasabi"` | boto3 → `ValueError: Invalid endpoint` |
+
+Resultado: **500 em TODO upload de anexo** — comprovante pelo celular, boleto e contrato de
+Pagar/Cobranças, e a mídia recebida no WhatsApp, que **falha CALADA**
+(`whatsapp_inbox/service.py` captura `Exception` amplo e registra a mensagem sem o anexo). Leitura
+de anexo antigo seguia funcionando — linha legada tem `storage_key` nulo e lê do Postgres —, e foi
+isso que fez o defeito parecer isolado no comprovante.
+
+- ⚠️ **A degradação graciosa da Story 3.5 estava CORRETA e foi derrotada pela configuração.** O
+  fallback nunca chegou a rodar: `is_configured()` lê só `s3_bucket`, e um bucket "preenchido" com
+  a própria frase que anuncia o desligamento satisfaz a condição. **Uma feature fail-safe só é
+  fail-safe até o env mentir sobre estar vazio.**
+- [x] **`Settings._descarta_comentario_do_template`** (`app/config.py`) — valor de env que começa com
+  `#` nos campos `S3_*` é **ausência de configuração**, e volta ao DEFAULT do campo (não a `""`:
+  para `s3_region` o desligado é `"auto"`, e zerá-la entregaria região vazia ao boto3).
+  - ⚠️ **Só o grupo S3, e a restrição é a decisão.** Segredo e senha podem legitimamente começar com
+    `#`; descartá-los trocaria este defeito por um pior — a app subindo em produção sem a
+    credencial que o operador configurou. Campo S3 novo entra em `_CAMPOS_S3`.
+  - **O descarte LOGA em WARNING, e isso tem teste próprio.** Degradar para o Postgres em silêncio
+    é como o defeito sobreviveu a um deploy inteiro sem ninguém notar; quem QUERIA o S3 ligado
+    precisa achar a linha no log.
+- [x] **`.env.prod.example`** — os comentários das duas linhas foram para **linha própria**, com o
+  aviso do mecanismo escrito ali. Eram as **únicas duas** linhas do template inteiro com
+  comentário inline (`grep -nE "^[A-Z_][A-Z0-9_]*=.*#"` dá zero agora).
+- **A correção em produção não precisa de deploy de código:** zerar as duas linhas do
+  `/opt/e1p/infra/.env.prod` e `docker compose up -d` **sem nomear serviço** (`api` e `worker` leem
+  o mesmo `env_file`; `restart` **não** relê o arquivo, só o `up` relê).
+- **Zerar é seguro:** o `put_object` sempre falhou ANTES do `commit`, então nenhuma linha de
+  `attachments` ficou com `storage_key` apontando para um bucket — não há byte órfão.
+
+⚠️ **A Hostinger nunca teve o defeito, e o motivo importa:** o `.env.prod` dela tem **33 linhas** (contra as ~100
+do template) e **nenhum `S3_BUCKET` nem `S3_ENDPOINT_URL`** — a única linha com "s3" é
+`BACKUP_S3_BUCKET`, que é o bucket do `rclone` do dump e nem é lida pelo `Settings`. Sem as
+variáveis, `s3_bucket` cai no default do pydantic e o storage fica desligado. Aquele arquivo foi
+escrito à MÃO; o da AWS foi montado a partir do `.env.prod.example`, e é só nisso que diferem. *"Lá
+funciona"* não contradiz o diagnóstico — é a previsão dele. **Regra que fica: o `.env.prod` é
+escrito à mão em cada servidor e NUNCA foi versionado, então dois ambientes com o mesmo commit
+podem divergir em qualquer variável.** Ao investigar diferença entre ambientes, compare o env
+antes de procurar no código — aqui o `git log` do caminho inteiro (`receipts.py`,
+`attachments/`, `core/storage.py`) mostrava zero mudanças desde o PR #71, de 04/08.
+
+- **Dívida:** nada impede a **próxima** variável não-S3 de cair na mesma armadilha — a guarda é
+  deliberadamente estreita, e o que protege o resto é só o template estar limpo hoje. Um teste que
+  varra `.env.prod.example` atrás de `^[A-Z_]+=.*#` fecharia a classe; não entrou aqui para não
+  misturar regra nova com a correção do incidente.
+- **Dívida:** `whatsapp_inbox` engole a falha de anexo em `except Exception` — durante a janela do
+  defeito, mídia recebida foi perdida sem sinal nenhum ao dono. Fora do escopo desta correção.
+
 ## Anexos: comprovante pelo share sheet do celular
 - [x] **Compartilhar comprovante do app do banco → Contas a Pagar** — o comprovante entra pelo
   compartilhamento nativo do celular, sem salvar arquivo antes. **Bandeja de staging** sem tabela
