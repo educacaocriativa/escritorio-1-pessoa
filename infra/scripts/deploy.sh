@@ -105,7 +105,17 @@ bundle_servido() {
 }
 
 # --- 2. O checkout esta limpo? ------------------------------------------------
-[[ -z "$(git status --porcelain)" ]] || morre "ha mudancas nao commitadas em $RAIZ - resolva antes de deployar"
+# --untracked-files=no NAO e frouxidao: e o que torna a guarda APLICAVEL neste parque. A AWS
+# carrega arquivos NAO RASTREADOS de proposito -- `DEPLOY-AWS.md`, `docker-compose.override.yml`,
+# `Caddyfile.single` -- justamente para o `git pull` nunca conflitar (o passo 1 acima os cita por
+# nome). `git status --porcelain` lista nao rastreado como `?? caminho`, entao a versao anterior
+# ABORTAVA em 100% das execucoes naquele host: um `?? DEPLOY-AWS.md` sozinho ja derrubava.
+# Medido em 2026-08-21, no primeiro `--dry-run` real depois do merge do #167.
+#
+# O risco que a guarda existe para pegar continua pego: arquivo VERSIONADO modificado ou em
+# stage -- o caso "editei em producao para testar e esqueci" --, porque o `git pull --ff-only`
+# do passo seguinte falharia no meio do deploy, ou pior, o build subiria com a edicao solta.
+[[ -z "$(git status --porcelain --untracked-files=no)" ]] || morre "ha mudancas nao commitadas em arquivo versionado de $RAIZ - resolva antes de deployar"
 
 git fetch origin --quiet
 SHA_ANTES="$(git rev-parse HEAD)"
