@@ -119,13 +119,43 @@ export default {
   jsonReporter: { fileName: "reports/mutation/mutation.json" },
   clearTextReporter: { allowColor: false, maxTestsToLog: 0 },
 
-  // ⚠️ SEM `break`. O gate nasce OBSERVÁVEL, igual a `secret-scan`, `sast-semgrep` e
-  // `frontend` no ci.yml — e aqui há um motivo a mais: limiar escrito antes da primeira
-  // medição é número sem evidência (Artigo IV da Constitution, "No Invention"). O baseline
-  // medido está no CLAUDE.md §5.3; a promoção a bloqueante vem depois de um período de
-  // observação, e é uma edição de uma linha aqui (`break: <n>`).
-  // `high`/`low` só colorem o relatório — não reprovam nada.
-  thresholds: { high: 80, low: 60, break: null },
+  // ── LIMIAR BLOQUEANTE — 80, e a aritmética que o produziu ────────────────────────────────
+  // Este campo nasceu `null` de propósito: limiar escrito antes da primeira medição é número
+  // sem evidência (Artigo IV da Constitution, "No Invention"). Agora HÁ medição.
+  //
+  // **Baseline: 83,52%**, da primeira corrida que o job noturno completou —
+  // `Mutation (noturno)` run 32478357936, 21/08/2026, `main` em e422278, 12min56s no runner de
+  // 2 vCPU. 1.779 mutantes: 1.479 mortos, 1 timeout, 269 sobreviventes, 23 sem cobertura,
+  // 0 erros. As três execuções anteriores (19, 20 e 21/08) nunca chegaram a medir — abortavam
+  // no dry run por fuso, ver issue #169 e o `env: TZ` do `.github/workflows/mutation.yml`.
+  //
+  // ⚠️ O `break` compara com o `mutationScore` GLOBAL — a linha "All files", que inclui os
+  // mutantes sem cobertura. São os 83,52, e NÃO os 84,62 de `mutationScoreBasedOnCoveredCode`
+  // ("covered" na tabela). Lido na fonte, não inferido: `determineExitCode()` em
+  // `dist/src/reporters/mutation-test-report-helper.js` faz
+  // `metrics.systemUnderTestMetrics.metrics.mutationScore < break`. Comparação ESTRITA: um
+  // empate exato no limiar passa.
+  //
+  // Consequência que evita susto na triagem: nenhum arquivo reprova sozinho. `app/navigation.ts`
+  // mede 55,65% e responde por 51 dos 269 sobreviventes — continua sendo o pior da árvore e
+  // continua NÃO derrubando o job. O que este número protege é o total.
+  //
+  // **Por que 80 e não 83.** 1 ponto de score = ~17,8 mutantes. Um limiar colado no baseline
+  // reprovaria a primeira noite em que qualquer coisa se mexesse, inclusive coisas que não são
+  // queda de qualidade: (a) `mutate` é DESCOBERTO, não escrito à mão — todo `.ts` que ganhar um
+  // irmão `.test.ts` entra sozinho, e um módulo novo com teste mediano puxa o total para baixo
+  // sem que nenhum teste existente tenha piorado; (b) o timeout conta como morto, então um
+  // mutante que hoje estoura o `timeoutMS` pode sobreviver numa noite de runner mais folgado
+  // (é 1 mutante, ~0,06 pt — pequeno, mas não é zero). 80 dá ~3,5 pt = ~63 mutantes de folga:
+  // absorve um módulo novo inteiro e ainda pega qualquer desmonte real da suíte.
+  //
+  // **E por que exatamente 80, o mesmo valor de `high`.** Vira uma regra só em vez de duas:
+  // o job reprova exatamente quando o relatório deixa de ser verde. Não há restrição do Stryker
+  // ligando os dois — o `customValidation()` do `options-validator.js` só exige `high >= low`,
+  // `break` é independente. A coincidência é escolha de legibilidade, não imposição.
+  //
+  // `high`/`low` seguem só colorindo o relatório — quem reprova é `break`.
+  thresholds: { high: 80, low: 60, break: 80 },
 
   // O timeout do Stryker é `tempo-do-teste-original * fator + offset`. Os testes de lógica
   // pura rodam em milissegundos, então o fator multiplica quase nada e um mutante que cai em
