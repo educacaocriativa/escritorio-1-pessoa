@@ -319,9 +319,27 @@ depender (issue #121).
   "o teste DEDICADO prende a lógica" e "algum teste de componente passou por ali de raspão" — e
   vale 5,5x em tempo (74s → 13,5s no ciclo base). O erro que isso introduz tem direção conhecida:
   a régua pode pedir teste **a mais**, nunca a menos.
-- **Não há limiar de reprovação** (`thresholds.break: null`). Limiar antes da primeira medição é
-  número sem evidência. Observável primeiro, bloqueante depois — mesmo caminho de
-  `secret-scan`/`sast-semgrep`/`frontend`.
+- **O limiar de reprovação é 80** (`thresholds.break: 80`, desde 2026-08-21). Nasceu `null` de
+  propósito — limiar antes da primeira medição é número sem evidência — e virou número quando
+  houve medição, mesmo caminho de `secret-scan`/`sast-semgrep`/`frontend`: observável primeiro,
+  bloqueante depois. Ele compara com o **score GLOBAL** (a linha "All files", que inclui os
+  mutantes sem cobertura), nunca com o de um arquivo: `app/navigation.ts` mede 55,65% e **não**
+  derruba o job sozinho. A aritmética dos 80 está comentada no `stryker.config.mjs`; o resumo é
+  que 1 ponto ≈ 17,8 mutantes e a folga de ~3,5 pt absorve um módulo novo entrando pelo escopo
+  descoberto sem que nenhum teste existente tenha piorado.
+
+**Baseline no CI — 83,52%** (2026-08-21, run `32478357936`, `main` em `e422278`, runner de 2 vCPU,
+**12min56s**). 1.779 mutantes em **27 módulos**: 1.479 mortos, 1 timeout, 269 sobreviventes, 23 sem
+cobertura, 0 erros. É desta corrida que saiu o limiar acima, e é a **primeira que o job noturno
+completou**: as três anteriores (19, 20 e 21/08) abortavam no dry run por fuso — o runner do GitHub
+roda em UTC e o `env: { TZ }` do `vitest.config.ts` não pega no pool `threads` que o Stryker força
+(issue #169; conserto no `env:` do job em `.github/workflows/mutation.yml` + guarda fail-closed em
+`src/test-setup.ts`).
+
+↳ O 27º módulo é **`features/busca/resultado.ts`** (18 mutantes, 72,22%, 5 sobreviventes), que
+entrou pelo escopo descoberto depois de 18/08 e por isso **não está na tabela abaixo** — é
+exatamente a contrapartida avisada acima. A tabela que segue continua sendo a medição local de
+2026-08-18 (12 vCPU, 26 módulos), preservada pelo par antes/depois da triagem da issue #121.
 
 **Baseline MEDIDO** (2026-08-18, Node 24, 12 vCPU, `--concurrency` default; ~21 min em quatro
 lotes para os 1.605 mutantes; **os 25 módulos de então foram medidos, nenhum ficou de fora** — o
