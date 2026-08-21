@@ -3103,10 +3103,54 @@ de existir quando ninguém escolhe.
 > config do webhook da Evolution em memória (§WhatsApp): **estado em memória divergindo do estado
 > em disco**, três vezes no mesmo repositório.
 
+#### A guarda de "checkout limpo" abortava 100% dos deploys na AWS (2026-08-21)
+
+**`git status --porcelain` lista arquivo NÃO RASTREADO como `?? caminho`**, e a instância da AWS
+carrega três de propósito — `DEPLOY-AWS.md`, `docker-compose.override.yml`, `Caddyfile.single` —
+justamente para o `git pull` nunca conflitar. A guarda do passo 2 era
+`[[ -z "$(git status --porcelain)" ]] || morre`, então **um `?? DEPLOY-AWS.md` sozinho já
+derrubava**: o script morria antes de fazer qualquer coisa, em toda execução, naquele host.
+
+- ⚠️ **A ironia é o que ensina: o MESMO script conhecia os três arquivos.** O comentário do passo
+  1 os cita **por nome** para explicar por que a lista de compose vem do label em vez de ser
+  cravada. A guarda do passo 2, doze linhas abaixo, não recebeu a mesma informação. **Saber de um
+  fato num ponto do arquivo não o propaga para o resto dele** — e nada no #167 protestou, porque
+  o script nunca tinha sido rodado no host que ele existe para servir.
+- [x] **`--untracked-files=no`, e isso NÃO é afrouxar.** O risco que a guarda existe para pegar
+  continua pego: arquivo **versionado** modificado ou em stage — o caso *"editei em produção para
+  testar e esqueci"* —, que faria o `git pull --ff-only` do passo seguinte falhar no meio do
+  deploy. O que ela parou de recusar é o desvio que a máquina carrega **por desenho**.
+- [x] **O teste EXTRAI a linha do `deploy.sh` e a EXECUTA** num repo git descartável
+  (`test_deploy_guarda_checkout_limpo.py`) — não é uma cópia da linha escrita no teste, que
+  passaria a concordar consigo mesma no dia em que alguém editasse o script. **Provado por
+  mutação:** com a guarda de volta ao `--porcelain` puro, morre exatamente o caso do não
+  rastreado e os três controles seguem verdes.
+  - Os controles positivos são **três**, e cada um mata uma guarda degenerada diferente:
+    versionado modificado **aborta**, mudança em **stage** aborta (o `--untracked-files=no` não
+    pode cegar a guarda para o índice), e checkout limpo **passa** — sem este último, uma guarda
+    que recusasse tudo passaria nos dois primeiros.
+- ⚠️ **`bash` nesta máquina de dev é o do WSL, e ele traz um git PRÓPRIO** (`PWD=/mnt/c/...`).
+  Com `core.autocrlf` diferente do git do Windows que cria o repo de teste, os dois discordam
+  sobre um arquivo escrito com LF: um vê limpo, o outro vê ` M`. O repo de teste nascia **sujo** e
+  os dois casos de "aceita" falhavam por um motivo que não tinha nada a ver com a guarda — 20
+  minutos de investigação até o `PWD` no log denunciar. O fixture fixa `core.autocrlf=false` **no
+  repo** (não por `-c`), que é o que faz os dois gits lerem a mesma coisa.
+- **O gate roda no job `cross-tenant-rls`, junto com o do Caddyfile**, no mesmo passo e sob a
+  mesma guarda anti-vacuidade — agora `executados >= 9` (5 + 4) em vez de `>= 1`, que aceitaria
+  **um dos dois** pulado em silêncio. Os dois dependem de `infra/` alcançável e se auto-pulam
+  dentro da imagem da API; um gate que se pula sozinho fica verde sem proteger nada.
+
+> **A regra que fica:** um script de operação só está verificado depois de rodar **no host que
+> ele existe para servir**. `--dry-run` na máquina de dev prova que ele RECUSA o ambiente errado
+> (o que é uma garantia real, e ela funcionou); não prova que ele aceita o certo.
+
 - **Dívida:** nada no repo REPROVA um deploy que ignore o override — a garantia é o script, e quem
-  rodar compose à mão continua exposto. O conserto de verdade é a **issue #151**: enquanto o
-  `infra/Caddyfile` tiver o bloco wildcard incondicional, aquela instância depende de um arquivo
-  local para subir.
+  rodar compose à mão continua exposto. ⚠️ **Mas a issue #151 está FECHADA** (PRs #170 e #193, em
+  produção desde 21/08): o `infra/Caddyfile` não tem mais o bloco wildcard incondicional, então
+  esquecer o override deixou de derrubar o site. O override segue valendo pelo `Caddyfile.single`.
+- **Dívida:** o `deploy.sh` **nunca completou uma execução de verdade** — o `--dry-run` da AWS
+  parava na guarda, e o primeiro caminho feliz ainda não aconteceu. Os passos 3 em diante (gate de
+  CI, backup, `up -d`, prova do bundle) seguem exercitados só por leitura.
 - **Dívida:** o `CLOUDFLARE_API_TOKEN` segue vazio na AWS. Correto hoje (sem wildcard, sem DNS-01);
   vira problema no dia em que subdomínio por tenant entrar em uso.
 
