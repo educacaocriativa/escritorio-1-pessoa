@@ -101,3 +101,46 @@ def test_o_bloco_opcional_existe_e_nao_esta_vazio(nome: str):
     `test_todo_bloco_opcional_e_ativado_pelo_entrypoint` verde por vacuidade."""
     conteudo = (OPCIONAIS / nome).read_text(encoding="utf-8")
     assert "{" in conteudo, f"{nome} não tem bloco de site nenhum"
+
+
+# --- ENTRYPOINT sem CMD: o container que sai com 0 e reinicia para sempre (2026-08-21) ---
+#
+# Declarar `ENTRYPOINT` num Dockerfile **ZERA** o CMD herdado da imagem base. Medido:
+# `caddy:2-alpine` tem CMD=["caddy","run",...] e a nossa imagem ficou com CMD=null. O entrypoint
+# entao chegava no `exec "$@"` sem argumento, terminava com SUCESSO, e o `restart: always`
+# reiniciava em loop — produção fora do ar com **exit code 0** em toda tentativa.
+#
+# Os cinco cenários validados no PR #170 não pegaram isto porque **todos passavam um comando
+# explícito** (`sh -c ...`) e portanto forneciam o `"$@"` que faltava no caminho real: o compose
+# roda a imagem SEM argumentos. Testar o mecanismo não é testar o efeito.
+
+DOCKERFILE_CADDY = (INFRA or pathlib.Path(".")) / "caddy" / "Dockerfile"
+
+
+def test_dockerfile_que_declara_entrypoint_declara_cmd_tambem():
+    linhas = [
+        linha.strip()
+        for linha in DOCKERFILE_CADDY.read_text(encoding="utf-8").splitlines()
+        if not linha.lstrip().startswith("#")
+    ]
+    tem_entrypoint = any(linha.startswith("ENTRYPOINT") for linha in linhas)
+    tem_cmd = any(linha.startswith("CMD") for linha in linhas)
+    assert not tem_entrypoint or tem_cmd, (
+        "o Dockerfile declara ENTRYPOINT e NÃO declara CMD. O ENTRYPOINT zera o CMD da imagem "
+        "base, então o entrypoint recebe zero argumentos, sai com 0 e o container reinicia em "
+        "loop servindo NADA — sem nunca aparecer como falha."
+    )
+
+
+def test_o_entrypoint_recusa_ficar_sem_comando():
+    """Segunda camada: se o CMD sumir de novo, o container FALHA em vez de sair com 0.
+
+    Sucesso silencioso é o que torna este defeito invisível — `docker ps` mostra "Restarting"
+    e o exit code diz 0, então nada no sinal aponta para o arranque.
+    """
+    script = (INFRA or pathlib.Path(".")) / "caddy" / "entrypoint.sh"
+    texto = script.read_text(encoding="utf-8")
+    assert '"$#" -eq 0' in texto and "exit 1" in texto, (
+        "o entrypoint precisa recusar (exit != 0) quando não recebe comando; sair com 0 "
+        "transforma um erro de build num loop de restart que não se anuncia."
+    )

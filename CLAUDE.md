@@ -3231,10 +3231,42 @@ segue normal)"* — uma degradação graciosa que **não existia**. Derrubou a p
     de `apps/api` não pode viver só no `pytest` da imagem — ou ele se pula, ou ele quebra a
     coleta.**
 
-- **Dívida:** a validação de verdade (build da imagem + `caddy validate` nos cinco cenários) é
-  **manual, com Docker, e não roda no CI** — o que roda é o gate de TEXTO. Um job que buildasse a
-  imagem por PR pagaria ~2 min de `xcaddy` em toda mudança do repo; a troca não foi feita, e fica
-  registrada em vez de escondida.
+~~**Dívida:** a validação de verdade não roda no CI.~~ **FECHADA no dia seguinte, e o preço foi a
+produção fora do ar** — ver logo abaixo. Hoje existe `.github/workflows/caddy-image.yml`, com
+filtro de caminho: buildar a imagem custa ~2 min de `xcaddy` e só se paga quando `infra/caddy/**`
+ou `infra/Caddyfile` mudam.
+
+#### O container que sobe, sai com 0, e reinicia para sempre (2026-08-21)
+
+**Declarar `ENTRYPOINT` num Dockerfile ZERA o `CMD` herdado da imagem base.** Medido com
+`docker inspect`: `caddy:2-alpine` tem `CMD=["caddy","run",…]`, e a imagem do PR #170 ficou com
+**`CMD=null`**. O entrypoint rodava, imprimia as duas linhas de diagnóstico, chegava no
+`exec "$@"` **sem argumento nenhum**, e o script terminava. Exit **0**. O `restart: always`
+reiniciava, e o ciclo não aparecia como falha em lugar nenhum — `docker ps` dizia
+`Restarting (0)` e a porta 443 recusava conexão.
+
+- ⚠️ **Os cinco cenários validados no #170 NÃO pegavam isto, e o motivo é a lição.** Todos eles
+  rodavam a imagem passando um comando explícito (`sh -c 'cat > …; caddy validate …'`) — e o
+  comando explícito **fornecia o `"$@"` que faltava**. O compose roda a imagem **sem argumentos**,
+  e esse era o único caminho nunca exercitado. **Testar que a config adapta não é testar que o
+  container SOBE**: é a família do `toContain("flex-wrap")` do §5.1, agora em Docker.
+- ⚠️ **E o comentário do Dockerfile afirmava o contrário, sem código atrás** (*"esse CMD chega ao
+  script como `$@`"*) — a classe de defeito nº 1 do Epic 8, o documento que afirma sobre a camada
+  de baixo e desliga quem viria conferir. Hoje o Dockerfile declara `CMD` explicitamente, com o
+  aviso ao lado.
+- [x] **Duas camadas, porque uma só volta a falhar em silêncio:** o `CMD` explícito **e** uma guarda
+  no entrypoint que **recusa (exit 1)** quando `$#` é zero, dizendo o que fazer. Sair com 0 é o
+  pior desfecho possível aqui — transforma erro de build em loop que ninguém vê.
+- [x] **`caddy-image.yml` roda o container do jeito que o compose roda** (`docker run -d`, sem
+  argumento) e reprova se ele não ficar `running`; mais o controle positivo da guarda e os dois
+  modos de config. **Provado localmente antes de subir:** a imagem antiga sai com `exit=0`, a nova
+  fica `running`.
+- [x] **Gate de texto** no mesmo arquivo do #170: Dockerfile que declara `ENTRYPOINT` **precisa**
+  declarar `CMD`. Barato, roda em toda mudança, e morre sob mutação (tirar o `CMD` deixa vermelho).
+- **Restauração do incidente:** `command:` no `docker-compose.override.yml` da instância — a
+  imagem estava boa, faltava só o comando, então `up -d` **sem `--build`** devolveu o site em
+  segundos. ⚠️ **Esse `command:` precisa SAIR do override** depois deste PR chegar em produção;
+  enquanto estiver lá ele mascara uma eventual reincidência.
 - **Dívida:** o `docker-compose.override.yml` da AWS pode perder o bloco `caddy:` depois que isto
   for deployado — mas só **depois**, e conferindo que o wildcard segue desligado lá
   (`CLOUDFLARE_API_TOKEN` vazio de propósito). Enquanto o override existir, ele vence: monta o

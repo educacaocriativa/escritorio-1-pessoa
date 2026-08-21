@@ -1,0 +1,82 @@
+# Imagem do Caddy — o gate que faltava, e o motivo dele existir.
+#
+# Em 2026-08-21 a produção ficou fora do ar com o container do Caddy em `Restarting (0)`: o
+# Dockerfile declarava ENTRYPOINT e não declarava CMD, e declarar ENTRYPOINT **zera** o CMD
+# herdado da imagem base. O entrypoint chegava no `exec "$@"` sem argumento, terminava com
+# SUCESSO, e o `restart: always` reiniciava para sempre.
+#
+# Cinco cenários de configuração tinham sido validados antes do merge — e nenhum pegou, porque
+# **todos passavam um comando explícito** (`sh -c ...`) e portanto forneciam o `"$@"` que faltava
+# no caminho real. O compose roda a imagem SEM argumentos. Testar que a config adapta não é
+# testar que o container SOBE.
+#
+# Roda só quando a imagem ou o Caddyfile mudam: `xcaddy` recompila o Caddy e custa ~2 min, que
+# não faz sentido pagar em PR de frontend. Fora deste recorte, o gate de texto em
+# `apps/api/tests/test_caddyfile_blocos_opcionais.py` continua valendo em toda mudança.
+name: Imagem do Caddy
+
+on:
+  pull_request:
+    paths:
+      - "infra/caddy/**"
+      - "infra/Caddyfile"
+      - ".github/workflows/caddy-image.yml"
+  push:
+    branches: [main]
+    paths:
+      - "infra/caddy/**"
+      - "infra/Caddyfile"
+      - ".github/workflows/caddy-image.yml"
+
+jobs:
+  arranque:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build da imagem (com o plugin de DNS)
+        run: docker build -t e1p-caddy:ci infra/caddy
+
+      # A asserção CENTRAL: sem argumento nenhum, do jeito que o compose roda.
+      - name: O container SOBE sem argumentos (o defeito de 2026-08-21)
+        run: |
+          set -uo pipefail
+          cid=$(docker run -d -e DOMAIN=app.exemplo.com e1p-caddy:ci)
+          sleep 8
+          estado=$(docker inspect "$cid" --format '{{.State.Status}}')
+          codigo=$(docker inspect "$cid" --format '{{.State.ExitCode}}')
+          echo "--- log do container ---"
+          docker logs "$cid" 2>&1 | tail -15
+          docker rm -f "$cid" >/dev/null
+          echo "estado=$estado exit=$codigo"
+          if [ "$estado" != "running" ]; then
+            echo "::error::O container do Caddy NAO ficou de pe sem argumentos (estado=$estado, exit=$codigo). Se o exit for 0, o Dockerfile provavelmente perdeu o CMD: declarar ENTRYPOINT zera o CMD da imagem base, o entrypoint recebe zero argumentos e o container termina 'com sucesso' em loop."
+            exit 1
+          fi
+
+      # Controle positivo da guarda do entrypoint: sem comando, ele tem de FALHAR, nunca sair com 0.
+      - name: Entrypoint sem comando falha alto
+        run: |
+          if docker run --rm --entrypoint /usr/local/bin/entrypoint.sh -e DOMAIN=x e1p-caddy:ci; then
+            echo "::error::O entrypoint saiu com 0 sem receber comando. Sucesso silencioso aqui vira loop de restart que nao se anuncia em lugar nenhum."
+            exit 1
+          fi
+          echo "ok: o entrypoint recusou ficar sem comando"
+
+      # A config continua adaptando nos dois modos — o que o PR #170 entregou.
+      - name: A config adapta com e sem o bloco wildcard
+        run: |
+          set -euo pipefail
+          echo "--- sem token: wildcard fora, dominio unico de pe ---"
+          docker run --rm -i -e DOMAIN=app.exemplo.com e1p-caddy:ci \
+            sh -c 'cat > /etc/caddy/Caddyfile; caddy validate --config /etc/caddy/Caddyfile --adapter caddyfile 2>&1 | tail -1' < infra/Caddyfile
+          # Token DESCARTAVEL gerado na hora. Placeholder literal aqui e indistinguivel de um
+          # segredo de verdade -- o `secret-scan` acusou, e estava certo. `openssl rand -hex 20`
+          # da 40 chars [a-f0-9], que e o formato que o plugin da Cloudflare valida, e nao usa
+          # pipe: `tr ... | head -c 40` mata o `tr` com SIGPIPE (141) e o `pipefail` deste passo
+          # derrubaria a corrida.
+          token_falso=$(openssl rand -hex 20)
+          echo "--- com token + ROOT_DOMAIN: wildcard entra ---"
+          docker run --rm -i -e DOMAIN=app.exemplo.com -e ROOT_DOMAIN=exemplo.com \
+            -e CLOUDFLARE_API_TOKEN="$token_falso" e1p-caddy:ci \
+            sh -c 'cat > /etc/caddy/Caddyfile; test -f /etc/caddy/conf.d/wildcard.caddy || { echo "wildcard NAO entrou"; exit 1; }; caddy validate --config /etc/caddy/Caddyfile --adapter caddyfile 2>&1 | tail -1' < infra/Caddyfile
