@@ -53,27 +53,35 @@ export default function JuridicoPage() {
           <h2 className="text-sm font-semibold text-neutral-700">Documentos recentes</h2>
           <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
             {docs.slice(0, 6).map((d) => (
-              <button
-                key={d.id}
-                onClick={() => navigate(`/juridico/${d.id}`)}
-                className="flex items-start gap-3 rounded-xl bg-white p-3 text-left shadow-sm transition hover:shadow-md"
-              >
-                <FileText className="mt-0.5 shrink-0 text-primary-600" size={18} />
-                <div className="min-w-0 flex-1">
-                  <p className="truncate text-sm font-medium text-neutral-700">{d.title}</p>
-                  <p className="text-xs text-neutral-400">
-                    {categoryLabel(d.category)}
-                    {d.client_name ? ` · ${d.client_name}` : ""}
-                    {d.status === "failed" ? " · falhou" : ""}
-                  </p>
-                </div>
+              // ⚠️ A lixeira é IRMÃ do card, nunca filha (#160) — ver o comentário longo em
+              // `funis/FunisPage.tsx`. Resumo: com os dois alvos aninhados, 10px de deslocamento
+              // entre `mousedown` e `mouseup` fazem o navegador emitir o `click` no ancestral
+              // comum, e o toque na lixeira vira navegação (#149).
+              <div key={d.id} className="relative">
                 <button
+                  data-testid={`abrir-documento-${d.id}`}
+                  onClick={() => navigate(`/juridico/${d.id}`)}
+                  className="flex w-full items-start gap-3 rounded-xl bg-white p-3 pr-9 text-left shadow-sm transition hover:shadow-md"
+                >
+                  <FileText className="mt-0.5 shrink-0 text-primary-600" size={18} />
+                  <div className="min-w-0 flex-1">
+                    <p className="truncate text-sm font-medium text-neutral-700">{d.title}</p>
+                    <p className="text-xs text-neutral-400">
+                      {categoryLabel(d.category)}
+                      {d.client_name ? ` · ${d.client_name}` : ""}
+                      {d.status === "failed" ? " · falhou" : ""}
+                    </p>
+                  </div>
+                </button>
+                <button
+                  data-testid={`excluir-documento-${d.id}`}
+                  aria-label={`Excluir ${d.title}`}
                   onClick={(e) => removeDoc(e, d.id)}
-                  className="shrink-0 text-neutral-300 hover:text-danger"
+                  className="absolute right-3 top-3 text-neutral-300 hover:text-danger"
                 >
                   <Trash2 size={14} />
                 </button>
-              </button>
+              </div>
             ))}
           </div>
         </section>
