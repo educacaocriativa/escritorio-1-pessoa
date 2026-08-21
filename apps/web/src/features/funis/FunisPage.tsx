@@ -44,24 +44,41 @@ export default function FunisPage() {
       ) : (
         <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
           {funnels.map((f) => (
-            <button
-              key={f.id}
-              onClick={() => navigate(`/funis/${f.id}`)}
-              className="group flex items-center justify-between rounded-2xl bg-white p-5 text-left shadow-sm transition hover:shadow-md"
-            >
-              <div className="flex items-center gap-3">
-                <span className="flex h-10 w-10 items-center justify-center rounded-xl bg-primary-50 text-primary-600">
-                  <Workflow size={18} />
-                </span>
-                <div>
-                  <p className="font-semibold text-neutral-800">{f.name}</p>
-                  <p className="text-xs text-neutral-400">{f.node_count} componentes</p>
+            // ⚠️ A lixeira é IRMÃ do card, nunca filha (#160). `<button>` dentro de `<button>` não
+            // é só HTML inválido: quando dois alvos clicáveis são aninhados, o navegador emite o
+            // `click` no ANCESTRAL COMUM de `mousedown` e `mouseup`, e **10px de deslocamento já
+            // bastam** (limiar medido no #149) para o toque na lixeira virar NAVEGAÇÃO. Aqui o
+            // ancestral comum é esta `<div>` sem handler, então o escorregão não faz nada — que é
+            // a troca que a issue compra. Medido em `e2e/aninhamento-clicavel-360.spec.ts`.
+            //
+            // ⚠️ Trocar o `<button>` de fora por `<div role="button">` NÃO resolveria: o `click`
+            // continuaria caindo nele e o `onClick` continuaria disparando. O que desarma o
+            // mecanismo é o parentesco, não a tag.
+            <div key={f.id} className="relative">
+              <button
+                data-testid={`abrir-funil-${f.id}`}
+                onClick={() => navigate(`/funis/${f.id}`)}
+                className="group flex w-full items-center rounded-2xl bg-white p-5 pr-14 text-left shadow-sm transition hover:shadow-md"
+              >
+                <div className="flex items-center gap-3">
+                  <span className="flex h-10 w-10 items-center justify-center rounded-xl bg-primary-50 text-primary-600">
+                    <Workflow size={18} />
+                  </span>
+                  <div>
+                    <p className="font-semibold text-neutral-800">{f.name}</p>
+                    <p className="text-xs text-neutral-400">{f.node_count} componentes</p>
+                  </div>
                 </div>
-              </div>
-              <button onClick={(e) => remove(e, f.id)} className="text-neutral-300 hover:text-danger">
+              </button>
+              <button
+                data-testid={`excluir-funil-${f.id}`}
+                aria-label={`Excluir ${f.name}`}
+                onClick={(e) => remove(e, f.id)}
+                className="absolute right-5 top-1/2 -translate-y-1/2 text-neutral-300 hover:text-danger"
+              >
                 <Trash2 size={16} />
               </button>
-            </button>
+            </div>
           ))}
         </div>
       )}

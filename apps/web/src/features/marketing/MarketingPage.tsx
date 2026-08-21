@@ -45,26 +45,37 @@ export default function MarketingPage() {
       ) : (
         <div className="grid grid-cols-2 gap-4 sm:grid-cols-3 lg:grid-cols-4">
           {carousels.map((c) => (
-            <button
-              key={c.id}
-              onClick={() => navigate(`/marketing/${c.id}`)}
-              className="group text-left"
-            >
-              <div className="flex justify-center overflow-hidden rounded-2xl shadow-sm transition group-hover:shadow-md">
-                <CarouselThumb slides={c.slides} style={c} display={240} />
-              </div>
-              <div className="mt-2 flex items-start justify-between gap-2">
-                <div className="min-w-0">
+            // ⚠️ A lixeira é IRMÃ do card, nunca filha (#160) — ver o comentário longo em
+            // `funis/FunisPage.tsx`. Resumo: com os dois alvos aninhados, 10px de deslocamento
+            // entre `mousedown` e `mouseup` fazem o navegador emitir o `click` no ancestral
+            // comum, e o toque na lixeira vira navegação (#149). Esta era a ÚNICA das três telas
+            // em que o defeito já aparecia com um título de tamanho comum — nas outras duas a
+            // lixeira ia parar fora da viewport de 360px antes de o escorregão poder acontecer.
+            <div key={c.id} className="relative">
+              <button
+                data-testid={`abrir-carrossel-${c.id}`}
+                onClick={() => navigate(`/marketing/${c.id}`)}
+                className="group block w-full text-left"
+              >
+                <div className="flex justify-center overflow-hidden rounded-2xl shadow-sm transition group-hover:shadow-md">
+                  <CarouselThumb slides={c.slides} style={c} display={240} />
+                </div>
+                <div className="mt-2 min-w-0 pr-6">
                   <p className="truncate text-sm font-medium text-neutral-700">{c.topic}</p>
                   <p className="text-xs text-neutral-400">
                     {c.slides.length} slides · {c.status === "ready" ? "Pronto" : "Rascunho"}
                   </p>
                 </div>
-                <button onClick={(e) => remove(e, c.id)} className="shrink-0 text-neutral-300 hover:text-danger">
-                  <Trash2 size={14} />
-                </button>
-              </div>
-            </button>
+              </button>
+              <button
+                data-testid={`excluir-carrossel-${c.id}`}
+                aria-label={`Excluir ${c.topic}`}
+                onClick={(e) => remove(e, c.id)}
+                className="absolute bottom-0 right-0 text-neutral-300 hover:text-danger"
+              >
+                <Trash2 size={14} />
+              </button>
+            </div>
           ))}
         </div>
       )}
