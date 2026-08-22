@@ -298,8 +298,12 @@ jobs:
           set -o pipefail
           echo '### Guarda de timeouts' >> "$GITHUB_STEP_SUMMARY"
           echo '```' >> "$GITHUB_STEP_SUMMARY"
+          # `|| rc=$?` e NAO `rc=$?` na linha seguinte: o Actions roda `run:` sob `bash -e`, e
+          # ali um pipeline que falha ABORTA o passo antes da proxima linha. Medido: a cerca de
+          # codigo ficava ABERTA e engolia o resto do summary; o guarda reprovava certo, e o
+          # relatorio dele saia ilegivel. Dentro de uma lista `||` o `-e` nao dispara.
+          rc=0
           node scripts/guarda-timeouts-mutacao.mjs \
-            apps/web/reports/mutation/mutation.json | tee -a "$GITHUB_STEP_SUMMARY"
-          rc=$?
+            apps/web/reports/mutation/mutation.json | tee -a "$GITHUB_STEP_SUMMARY" || rc=$?
           echo '```' >> "$GITHUB_STEP_SUMMARY"
           exit "$rc"
