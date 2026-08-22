@@ -213,7 +213,12 @@ function Builder() {
   }, []);
 
   useEffect(() => {
-    api.get<FunnelComponentCategory[]>("/funnels/components").then(({ data }) => setCatalog(data));
+    // `Array.isArray`, e aqui não havia operador nenhum: `catalog.map` monta a paleta no render, e
+    // o `.then` não alcança o render. O PR #197 já guardou `nodes`/`edges` deste mesmo arquivo — o
+    // catálogo era o terceiro payload da mesma tela, e ficou de fora.
+    api
+      .get<FunnelComponentCategory[]>("/funnels/components")
+      .then(({ data }) => setCatalog(Array.isArray(data) ? data : []));
     api
       .get<TenantProfile>("/settings/profile")
       .then(({ data }) => setWhatsappProvider(data.whatsapp_provider))
