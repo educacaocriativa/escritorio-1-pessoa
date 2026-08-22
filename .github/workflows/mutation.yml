@@ -25,12 +25,24 @@
 # QUALIDADE DA SUÍTE, não portaria de mudança — a suíte não muda de qualidade entre duas PRs de
 # terça-feira. O gate de PR continua sendo o job `frontend` do `ci.yml`.
 #
-# ── OBSERVÁVEL PRIMEIRO ──────────────────────────────────────────────────────────────────────────
-# Não há limiar de reprovação. `stryker.config.mjs` traz `thresholds.break: null` de propósito:
-# limiar escrito antes da primeira medição é número sem evidência (Artigo IV da Constitution, "No
-# Invention"). O baseline MEDIDO está no CLAUDE.md §5.3 e é dele que sai o primeiro limiar, depois
-# de um período de observação. Mesmo caminho que `secret-scan`, `sast-semgrep` e `frontend` já
-# percorrem no `ci.yml`: mede antes, barra depois.
+# ── MEDE ANTES, BARRA DEPOIS — E JÁ BARRA ────────────────────────────────────────────────────────
+# Este job nasceu SEM limiar de reprovação, de propósito: limiar escrito antes da primeira medição é
+# número sem evidência (Artigo IV da Constitution, "No Invention"). O período de observação acabou.
+# Hoje `stryker.config.mjs` traz `thresholds.break: 80` (issue #189), derivado do baseline MEDIDO de
+# 83,52% — a aritmética inteira do "por que 80" está no comentário daquele campo. Mesmo caminho que
+# `secret-scan`, `sast-semgrep` e `frontend` já percorreram no `ci.yml`: mede antes, barra depois.
+#
+# ── E O QUE BARRA A MEDIÇÃO QUE NÃO VALE (issue #213) ────────────────────────────────────────────
+# Um limiar de score só significa alguma coisa se o score for confiável, e ele NÃO é em máquina
+# carregada: no Stryker `Timeout` conta como MORTO, então cada mutante que estoura o relógio por
+# contenção de CPU — e não por ter entrado em laço — é creditado como se um teste o tivesse pego. A
+# régua fica otimista exatamente quando o ambiente está pior. Medido no #213: 12 timeouts em
+# `contas.ts` numa máquina com 10 worktrees ativas, contra 0 na CI, e o módulo mediu ~3,8 pontos a
+# mais do que a verdade.
+#
+# O passo `Guarda de timeouts` no fim deste job é quem cobra isso, e por isso este workflow declara:
+# **a corrida só vale em máquina dedicada**. É o que o `concurrency:` abaixo já garante para o
+# runner, e o que o `scripts/gates.sh` pede a quem roda local.
 name: Mutation (noturno)
 
 on:
@@ -264,3 +276,30 @@ jobs:
             gh issue create --label mutacao-tendencia \
               --title "Mutation score caiu ${DELTA} ponto(s), para ${SCORE}%"               --body "$CORPO"
           fi
+
+      # ── A GUARDA DE TIMEOUTS — O SINTOMA VIRA SINAL (issue #213) ──────────────────────────────
+      # `Timeout` conta como MORTO no score do Stryker, e isso não é opção: a soma está em
+      # `mutation-testing-metrics`, `totalDetected = timeout + killed`. Numa máquina disputada, o
+      # mutante estoura o relógio por contenção de CPU e é creditado como se um teste o tivesse
+      # pego — a régua mente A FAVOR justamente quando o ambiente está pior. O raciocínio completo,
+      # a medição de campo e a origem do limiar 5 estão no cabeçalho do script.
+      #
+      # ⚠️ POR ÚLTIMO, e de propósito: se esta guarda reprovar, o resumo já foi para a página da
+      # corrida e o `mutation-report` já subiu como artefato. A evidência de uma medição recusada é
+      # exatamente o que alguém vai querer ler — reprovar antes de publicá-la deixaria o job
+      # vermelho sem material para investigar.
+      #
+      # `if: always()` porque o caso interessante inclui a corrida que o `thresholds.break` já
+      # reprovou: saber que AQUELE número também estava inflado por timeout muda o diagnóstico.
+      - name: Guarda de timeouts (a corrida só vale em máquina dedicada)
+        if: always()
+        working-directory: .
+        run: |
+          set -o pipefail
+          echo '### Guarda de timeouts' >> "$GITHUB_STEP_SUMMARY"
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
+          node scripts/guarda-timeouts-mutacao.mjs \
+            apps/web/reports/mutation/mutation.json | tee -a "$GITHUB_STEP_SUMMARY"
+          rc=$?
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
+          exit "$rc"
