@@ -293,6 +293,40 @@ estava certa; o que faltava era um teste capaz de dizer isso.**
   Escolher um fuso só para o arquivo inteiro deixaria metade da linha sem medição — é a régua "nem
   toda asserção com data deve trocar de fuso" aplicada dentro de uma expressão só.
 
+- ✅ **`toHaveValue("2026-10-10T09:00")` num `datetime-local` é asserção sobre a MÁQUINA — paga
+  pela issue #185 (2026-08-21).** O HTML define o valor desse input como "naive": as partes locais
+  de quem abriu a tela, sem fuso. Cinco testes `.tsx` afirmavam essa string literal enquanto o nome
+  deles falava do tenant, e eram **invisíveis ao job de mutação** — `vitest.mutation.config.ts`
+  exclui `.tsx`, então o Stryker nunca os executou nem para reprovar. Não quebravam: o
+  `env: { TZ }` do `vitest.config.ts` chega a tempo sob o pool `forks`. Quebravam sob `threads`, que
+  é o que o `@stryker-mutator/vitest-runner` força — a mesma armadilha do #169, um andar acima.
+  **Medido varrendo os 74 arquivos da suíte** (não os 21 "sensíveis a fuso": o recorte por grep
+  depende do grep, a suíte inteira não): com o pin de fuso do config neutralizado, **6 falhas em 3
+  arquivos** sob UTC. Agora **0** nos `.tsx` sob UTC, `America/Sao_Paulo`, `Asia/Tokyo` e
+  `America/New_York`.
+  **A regra que fica:** campo de hora se lê pelo INSTANTE, nunca pela string —
+  `src/test/paredeDoTenant.ts` faz `new Date(el.value)` (desfaz exatamente o que o navegador
+  escreveu) e formata no fuso do tenant. O mesmo resultado em qualquer máquina, e a afirmação passa
+  a ser sobre o relógio de que o teste fala.
+  ⚠️ **Ida e volta não substituem a prova de fuso.** Com tenant e máquina no mesmo fuso, elas se
+  cancelam por construção: mutar `instanteNoFuso(...)` para uma string ingênua **sobrevive** aos
+  quatro testes de fuso-do-runner e só morre no de Tóquio (`expected '11/10/2026 02:00' to be
+  '10/10/2026 14:00'`). Um arquivo precisa dos dois tipos de teste, e é por isso que os testes de
+  costura (`BlocoDaAgenda`) continuam no fuso do runner **com a razão escrita**.
+  ⚠️ **O jsdom sanitiza o `datetime-local`, e isso cria mutante EQUIVALENTE de formato.** Medido:
+  `"…T09:00:00"` e `"2026-10-10 09:00"` (separador em branco) voltam os DOIS como `"…T09:00"` —
+  nenhuma leitura de `el.value` pode matá-las, nem a antiga nem a nova. Quem for triar sobreviventes
+  de `paraInputLocal` não perca tempo aí. O que a sanitização **não** desfaz é segundo diferente de
+  zero (`"…T09:00:30"` → `"…T09:00:30.000"`), e só uma asserção de FORMA o pega: `paredeDoTenant`
+  formata hora e minuto e devolveria "09:00" na mesma. Por isso o `toMatch(/^…T\d{2}:\d{2}$/)` fica.
+  ⚠️ **Dívida aberta:** `grade.test.ts` tem **duas** dependências do fuso do navegador, não uma. A
+  do `eventYmd` (linha 468) é o gabarito — legítima, declarada no nome e no comentário, e o relógio
+  que a serve é UM só (o `env` do config + a guarda do #172); mexer nela criaria o segundo relógio
+  que esta seção existe para proibir. A **segunda não estava declarada e não aparecia na varredura
+  em UTC**: `"eventsOfDay filtra pelo dia e ORDENA por horário de início"` usa um evento às
+  `18:00Z`, que em `Asia/Tokyo` cai no dia SEGUINTE e some do filtro. Varrer só em UTC não fecha a
+  classe — UTC e UTC−3 concordam sobre o dia de `18:00Z`, Tóquio não.
+
 ### 5.3 O teste de mutação (`apps/web/stryker.config.mjs`, desde 2026-08-18)
 
 **A suíte verde não prova que os testes seguram alguma coisa.** Na PR #119 o QA achou NOVE
