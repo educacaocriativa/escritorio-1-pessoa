@@ -28,6 +28,7 @@ from datetime import UTC, datetime
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from app import composicao  # noqa: F401 — MESMA fiacao da API; sem ela o gate levanta BankError
 from app.config import settings
 from app.db.session import SessionLocal, tenant_session
 from app.modules.auth.models import Tenant
