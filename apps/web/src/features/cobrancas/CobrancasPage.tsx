@@ -8,7 +8,7 @@ import { pluralize } from "../../lib/pluralize";
 import GanchoDaVima from "../dna/GanchoDaVima";
 import { usePrimaryAction } from "../../store/pageActions";
 import ChartAccountSelect from "../financeiro/ChartAccountSelect";
-import type { BankAccount } from "../financeiro/contas";
+import { AGENDADO_ENTRADA_LABEL, type BankAccount } from "../financeiro/contas";
 import type { CostCenter } from "../financeiro/costCenters";
 import CostCenterSelect from "../financeiro/CostCenterSelect";
 import { type ChartAccount, GRUPOS_DRE } from "../financeiro/planoContas";
@@ -154,12 +154,16 @@ export default function CobrancasPage() {
         <Stat label="Vencido" value={brl(summary.overdue_cents)} hint={`${summary.overdue_count} em atraso`} tone="text-danger" />
         <Stat label="Recebido" value={brl(summary.paid_cents)} hint="total" tone="text-accent-700" />
         {/* [8.15] O agendado tem cartão PRÓPRIO e **some quando é zero** — mesmo tratamento do
-            "Agendado para entrar" da 8.14. Sem ele, a cobrança agendada não apareceria em nenhum
-            dos três cartões (nem "a vencer", nem "vencido", nem "recebido"): o modo de falha "o
-            dinheiro some da tela" que esta onda existe para eliminar. */}
+            agendado da 8.14. Sem ele, a cobrança agendada não apareceria em nenhum dos três
+            cartões (nem "a vencer", nem "vencido", nem "recebido"): o modo de falha "o dinheiro
+            some da tela" que esta onda existe para eliminar.
+            ⚠️ [#186] O rótulo vem de `AGENDADO_ENTRADA_LABEL` (`financeiro/contas.ts`) e não de um
+            literal: `ContasSaldosPage` e `crm/ClientDetailPage` mostram o MESMO estado e têm de
+            mudar de nome junto com este cartão. Escrito solto, um rename desincronizava as três
+            com a suíte inteira verde. */}
         {summary.scheduled_cents > 0 && (
           <Stat
-            label="Agendado para entrar"
+            label={AGENDADO_ENTRADA_LABEL}
             value={brl(summary.scheduled_cents)}
             hint="recebido fora do trilho, com dia marcado"
             tone="text-amber-700"
