@@ -548,6 +548,32 @@ alcançabilidade, e não há régua verde para ela nesta rota. Medido também qu
 do nome **não muda o número** (o `span` é item de flex com `min-width: auto`, então nunca chega a
 quebrar) — mudança que nenhuma régua vê é peso morto, e por isso ela não entrou.
 
+**A TERCEIRA régua de `/financeiro/centros-custo` (#181, 2026-08-21) — e o que ela ensina sobre as
+duas anteriores.** A mesma tela já tinha passado em duas réguas e continuava com **3 alvos abaixo
+do mínimo tocável de 44px**, medidos com `alvosPequenos` no documento inteiro em 360×740:
+
+| Elemento | Antes | Depois |
+|---|---|---|
+| `input[type=checkbox]` «Mostrar arquivados» (área do `<label>`) | 13×13 (rótulo de **20px**) | rótulo de **44px** |
+| `button` «Editar» do cartão | 49,6 × **16** | 57,6 × **44** |
+| `button` «Arquivar» do cartão | 64,3 × **16** | 72,3 × **44** |
+
+Os dois botões são **exatamente os que o #144/PR #156 tornou alcançáveis**: alcançáveis, e de 16px.
+É a lição cara desta rota — **verde em `alcance-360` e em `centros-custo-360` não diz nada sobre
+tamanho de alvo**, porque as três perguntam coisas diferentes (o dedo CHEGA? a TINTA cabe? o alvo
+tem TAMANHO de dedo?). Consertado com o precedente de `ContasSaldosPage.tsx`: `min-h-[44px]` nas
+duas ações e na **linha inteira** do rótulo do checkbox — nunca engordando o `<input>`, que
+viraria um quadrado do tamanho de um botão. Travado por `apps/web/e2e/toque-360.spec.ts`, com
+varredura de `alvosPequenos` no documento inteiro (não só nos três alvos conhecidos).
+
+- **Dívida:** o modal de cadastro/edição desta rota tem **2** alvos abaixo de 44 — o `<input>` do
+  `Field` (**38px**, a dívida GERAL do componente compartilhado, já registrada na Onda 2) e o
+  `<select>` de tipo (**39px**). Fora do escopo do #181, que mede a superfície da PÁGINA.
+- **Dívida:** a varredura filtra `input` por construção — `alvosPequenos` mede o ELEMENTO, e a
+  caixinha do checkbox tem 20×20 por convenção do repo. O custo, medido: tirar o `h-5 w-5` do
+  `<input>` (volta a 13×13) e o `px-1` dos botões são **mutantes equivalentes** — sobrevivem à
+  régua, porque o que ela exige é ÁREA de toque, não quadrado desenhado.
+
 
 ### 5.5 As suítes pesadas não se sobrepõem (issue #162, 2026-08-20)
 
