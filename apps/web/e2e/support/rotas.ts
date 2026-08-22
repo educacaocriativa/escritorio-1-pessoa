@@ -142,6 +142,42 @@ const DIAGNOSTICO = {
   narrative_source: "template",
 };
 
+/**
+ * `/vima/briefing` devolve OBJETO (`BriefingOut`, `apps/api/app/modules/vima/schemas.py`). Com o
+ * `[]` default de `mockarApi` a tela nunca sai de "Preparando seu resumo…" — mediria 360 por
+ * não ter briefing nenhum, e a `marca` "Seu dia" (que só existe no estado CARREGADO) é
+ * exatamente o que reprova esse verde.
+ *
+ * Pior caso plausível na forma real: `linhas[].texto` é o `title` da ausência, montado com nome
+ * DIGITADO pelo dono — fornecedor, título do prazo, nome da conversa (`vima/absences.py`) — e a
+ * narração repete esses nomes. Um token sem espaço ali é o que mais empurra numa tela cuja caixa
+ * é `max-w-prose` e que não recorta nada: `/vima` mora no `ProtectedBareLayout`, sem o
+ * `main.overflow-x-hidden` que segura as telas com shell.
+ *
+ * `kind` preenchido na PRIMEIRA linha PENDENTE não é enfeite: é o que faz `BriefingPage` montar
+ * `GanchoDaVima` (`BriefingPage.tsx:177`) — o caminho que dá nome a esta issue. O card em si
+ * segue de fora pelo default `"/dna/pendente": null` de `support/api.ts`, como nas outras cinco.
+ *
+ * `read_at: null` é o estado em que o dono ABRE a porta do dia; o POST de leitura que ele dispara
+ * cai no mesmo prefixo e recebe o mesmo objeto.
+ */
+const BRIEFING = {
+  id: "b1",
+  reference_date: "2026-08-21",
+  texto: `Bom dia. A conta ${LONGO} venceu ontem, e ${LONGO} escreveu e ainda espera resposta.`,
+  por_ia: true,
+  vazio: false,
+  excedente: 4,
+  linhas: [
+    { secao: "PENDENTE", module: "financeiro", texto: `${LONGO} — R$ 12.345,67 venceu em 19/08`, kind: "financeiro.conta.vencendo" },
+    { secao: "PENDENTE", module: "comercial", texto: `${LONGO} escreveu e ainda não foi respondido`, kind: "comercial.contato.esperando_resposta" },
+    { secao: "ACONTECEU", module: "comercial", texto: `${LONGO} virou cliente`, kind: "" },
+    { secao: "NÚMEROS", module: "financeiro", texto: `${LONGO}: R$ 123.456,78 recebidos no mês`, kind: "" },
+  ],
+  read_at: null,
+  created_at: "2026-08-21T08:00:00Z",
+};
+
 export interface Caso {
   rota: string;
   /** Texto que PRECISA estar visível antes de medir. Sem ele, 360 significaria "tela em branco". */
@@ -186,4 +222,10 @@ export const CASOS: Caso[] = [
   { rota: "/busca", marca: "Busca" }, // vazio
   { rota: "/pagar", marca: "Despesas" }, // vazio
   { rota: "/conversas", marca: "Conversas" }, // vazio
+  // A PORTA DO DIA (#178). `EntradaDoDia` manda a raiz autenticada para cá enquanto o briefing de
+  // hoje não foi lido: é a PRIMEIRA tela que o dono vê no aparelho de 360px, e era a única das
+  // seis que montam `GanchoDaVima` sem régua nenhuma. Mora no `ProtectedBareLayout` — sem shell,
+  // logo sem o `main.overflow-x-hidden`: aqui o que não cabe faz a PÁGINA rolar em vez de ficar
+  // recortado, e é a régua do #135 que o pega primeiro.
+  { rota: "/vima", marca: "Seu dia", mocks: { "/vima/briefing": BRIEFING } },
 ];

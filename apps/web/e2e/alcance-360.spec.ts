@@ -41,11 +41,14 @@ import { semearSessao } from "./support/sessao";
  *      deslizador que rola e exige que ela NÃO o acuse. Sem o primeiro ninguém sabe se ela
  *      enxerga; sem o segundo ninguém sabe se ela sabe parar.
  *
- * Cobertura: as 29 rotas de `support/rotas.ts` (as mesmas que `rotas-360.spec.ts` mede), de 47
- * não-públicas. As 18 que ficaram de fora estão listadas no CLAUDE.md §5.4, uma a uma, com o
- * motivo — inclusive as 4 do `ProtectedBareLayout`, que são a categoria inteira das telas SEM
- * shell e não têm nenhuma medida aqui. Antes de mexer nesse número, leia o "COMO RECONTAR" da
- * §5.4: contar só uma das duas caixas de layout já errou o denominador duas vezes.
+ * Cobertura: as 30 rotas de `support/rotas.ts` (as mesmas que `rotas-360.spec.ts` mede), de 47
+ * não-públicas. As 17 que ficaram de fora estão listadas no CLAUDE.md §5.4, uma a uma, com o
+ * motivo — inclusive as 3 do `ProtectedBareLayout` que seguem sem medida (`/dna/nucleo`,
+ * `/compartilhar`, `/comprovante/:id`). A quarta, `/vima`, entrou no catálogo pelo #178: é a
+ * PORTA DO DIA (`EntradaDoDia` manda a raiz autenticada para lá enquanto o briefing de hoje não
+ * foi lido) e era a única das seis telas que montam `GanchoDaVima` sem régua nenhuma. Antes de
+ * mexer nesse número, leia o "COMO RECONTAR" da §5.4: contar só uma das duas caixas de layout
+ * já errou o denominador duas vezes.
  */
 
 for (const { rota, marca, mocks } of CASOS) {
