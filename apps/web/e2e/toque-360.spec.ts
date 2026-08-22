@@ -1,6 +1,7 @@
 import { expect, test } from "@playwright/test";
 import { mockarApi } from "./support/api";
-import { medirPagina } from "./support/medidas";
+import { alvosPequenos, medirPagina } from "./support/medidas";
+import { LONGO } from "./support/rotas";
 import { semearSessao } from "./support/sessao";
 
 const CONTA = {
@@ -195,4 +196,126 @@ test("a aba 'A sua empresa' abre recolhida, não com 22 telas de rolagem", async
   expect(caixa!.x).toBeGreaterThanOrEqual(0);
   expect(caixa!.x + caixa!.width).toBeLessThanOrEqual(360);
   expect((await medirPagina(page)).larguraDaPagina).toBe(360);
+});
+
+// ── `/financeiro/centros-custo` ────────────────────────────────────────────────────
+// A TERCEIRA régua desta rota (#181), e as outras duas já passavam nela quando esta foi escrita.
+//
+// ⚠️ Três perguntas DIFERENTES sobre a mesma tela, e verde nas duas primeiras não diz nada sobre a
+// terceira — foi exatamente assim que este defeito sobreviveu a dois PRs:
+//
+//   - `alcance-360` (#144/PR #156): o dedo CHEGA ao controle? Ali «Editar» e «Arquivar» começavam
+//     em x=637 e x=699 numa tela de 360px — INTEIRAMENTE fora. O `flex-wrap` os trouxe de volta.
+//   - `centros-custo-360` (#157/PR #174): a TINTA cabe? 14 elementos de texto terminavam além da
+//     borda do cartão, com a página inteira ainda dizendo `scrollWidth === 360`.
+//   - esta: o alvo tem TAMANHO de dedo? Os dois botões que o #156 tornou alcançáveis ficaram
+//     alcançáveis **e de 16px de altura**, e o «Mostrar arquivados» era um checkbox de **13×13**
+//     — a forma LITERAL do defeito do PR #56, onde um controle pequeno demais fez uma conta real
+//     ser marcada como paga sem o dono conseguir ver.
+//
+// Medido em 21/08/2026, ANTES do conserto, com `alvosPequenos` no documento inteiro:
+//   input                                  13   × 13
+//   button «Editar»                        49,6 × 16
+//   button «Arquivar»                      64,3 × 16
+//
+// A fixture é a MESMA de `centros-custo-360` e de `support/rotas.ts` (nome de 74 chars sem
+// espaço) de propósito: 44px de altura muda o REFLOW do cartão, e medir com nome curto seria
+// medir uma tela que o #157 já provou não existir.
+const CENTRO = {
+  id: "cc1",
+  tenant_id: "t1",
+  name: LONGO,
+  kind: "operacional",
+  archived_at: null,
+  created_at: "2026-01-01T10:00:00Z",
+};
+
+const RELATORIO_CENTROS = {
+  start: "2026-08-01",
+  end: "2026-08-31",
+  buckets: [
+    {
+      cost_center_id: "cc1",
+      name: LONGO,
+      kind: "operacional",
+      receita_cents: 123456789,
+      resultado_cents: -98765432,
+      lancamentos: 42,
+    },
+    {
+      cost_center_id: null,
+      name: "Não atribuído",
+      kind: null,
+      receita_cents: 0,
+      resultado_cents: -1234567,
+      lancamentos: 3,
+    },
+  ],
+  notes: [],
+};
+
+test("as ações do centro de custo são tocáveis com o polegar", async ({ page }) => {
+  await semearSessao(page);
+  await mockarApi(page, {
+    "/cost-centers": [CENTRO],
+    // `by-cost-center` devolve OBJETO. Com o `[]` default de `mockarApi` a tela quebra no primeiro
+    // campo e o que sobra é uma página em branco — que não tem controle nenhum e passaria.
+    "/financial-intelligence/by-cost-center": RELATORIO_CENTROS,
+  });
+  await page.goto("/financeiro/centros-custo");
+  // A `marca`: sem ela, "zero alvos pequenos" significaria "não desenhou nada".
+  await expect(page.getByTestId("lista-centros")).toBeVisible();
+
+  // As duas ações do cartão — as MESMAS que o #156 trouxe para dentro da tela, e «Arquivar» é
+  // destrutiva. Mesma forma do bloco de `/financeiro/contas` acima, inclusive a mensagem por
+  // rótulo: um vermelho sem nome não diz qual dos dois encolheu.
+  for (const rotulo of ["Editar", "Arquivar"]) {
+    const alvo = page.getByRole("button", { name: rotulo }).last();
+    const caixa = await alvo.boundingBox();
+    expect(caixa, rotulo).not.toBeNull();
+    expect(caixa!.height, rotulo).toBeGreaterThanOrEqual(44);
+  }
+
+  // O alvo do checkbox é a LINHA INTEIRA do rótulo, não a caixinha — mesma convenção do
+  // «Mostrar arquivadas» de `/financeiro/contas` (`ContasSaldosPage.tsx:208`). Engordar o
+  // `<input>` para 44×44 daria um quadrado desenhado do tamanho de um botão; o que o dedo precisa
+  // é de ÁREA, e o `<label>` já alterna o estado em qualquer ponto dela.
+  const caixaCheckbox = await page.getByText("Mostrar arquivados").boundingBox();
+  expect(caixaCheckbox, "Mostrar arquivados").not.toBeNull();
+  expect(caixaCheckbox!.height, "Mostrar arquivados").toBeGreaterThanOrEqual(44);
+
+  // O «Novo centro de custo» vem do `usePrimaryAction` e é desenhado pelo CABEÇALHO DO SHELL —
+  // outro botão, outra classe, fora do `<main>`. É o mesmo cuidado que o bloco de
+  // `/financeiro/contas` tem com o «Transferir entre contas» do cabeçalho: lá a medição final o
+  // pegou em 34px depois de as ações do cartão irem para 44.
+  const cabecalho = await page
+    .getByRole("button", { name: "Novo centro de custo" })
+    .boundingBox();
+  expect(cabecalho, "Novo centro de custo").not.toBeNull();
+  expect(cabecalho!.height, "Novo centro de custo").toBeGreaterThanOrEqual(44);
+
+  // E a varredura, que é o que impede este arquivo de medir SÓ os três alvos que a issue já
+  // conhecia. Documento inteiro de propósito: um ícone, um chip, um `summary` ou um controle de
+  // filtro acrescentado depois entra na conta sem ninguém precisar lembrar de escrever a linha.
+  //
+  // ⚠️ **O `<input>` fica de fora, e o motivo é que `alvosPequenos` mede o ELEMENTO, não a área
+  // que o dedo acerta.** A caixinha do checkbox tem 20×20 DEPOIS do conserto, e continuará tendo:
+  // quem cumpre os 44px é o `<label>` que a envolve — medido oito linhas acima, e a mesma
+  // convenção de `ContasSaldosPage.tsx:208`. Exigir 44 do quadrado desenhado acusaria toda tela
+  // que segue o padrão do repo e daria um botão onde deveria haver um checkbox.
+  //
+  // O que este filtro CUSTA, dito por extenso em vez de escondido: um campo de TEXTO de 38px
+  // acrescentado a esta página passaria por aqui. É a dívida geral do `Field`, já registrada no
+  // CLAUDE.md e no `modal-conta-360.spec.ts` (o componente é compartilhado por todos os modais do
+  // app), e não é assunto que este PR declare consertar. O modal de cadastro/edição desta rota
+  // também fica fora — ele não está aberto — e tem exatamente esses dois: o `<input>` do `Field`
+  // (38px) e o `<select>` de tipo (39px).
+  const pequenos = (await alvosPequenos(page)).filter((a) => !a.descricao.startsWith("input"));
+  expect(pequenos, "alvos abaixo de 44px").toEqual([]);
+
+  // O que as outras duas réguas já garantiam continua garantido DEPOIS de os alvos crescerem:
+  // 44px de altura mexe no reflow do cartão, e era o reflow que o #156 e o #157 consertaram.
+  const { larguraDaPagina } = await medirPagina(page);
+  expect(larguraDaPagina).toBe(360);
+  await expect(page.getByTestId("comparativo-centros")).toBeVisible();
 });
