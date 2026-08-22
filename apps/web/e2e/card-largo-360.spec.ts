@@ -43,6 +43,15 @@ import { semearSessao } from "./support/sessao";
  * `marca` é o PRÓPRIO CARD: aqui toda rota declara um texto que só o card produz, e o teste
  * «reprova sem card» abaixo prova, com payload `[]`, que essa marca de fato reprova.
  *
+ * ## A SEXTA rota, `/marketing`, entrou pelo #212
+ *
+ * Ela ficou de fora do #182 por um falso positivo de **+808,4px** que era da RÉGUA, não da tela: o
+ * `CarouselThumb` encolhe uma arte de 1080px com `transform: scale()`, e `scrollWidth` é medido
+ * ANTES do `transform`. A régua aprendeu a converter a escala (`support/medidas.ts`,
+ * `escalaHorizontal`) e o mesmo elemento passou a devolver **+2,7px**, todos da ARTE e nenhum do
+ * layout de 360px. O conserto foi na régua, não na exceção — ver o controle da escala no fim deste
+ * arquivo, e a razão medida em `CARROSSEIS_LONGOS`.
+ *
  * As duas rotas de que a issue trata (`/funis` e `/juridico`) saíram do estado vazio no catálogo
  * TAMBÉM, porque é lá que mora a cegueira que a issue descreve — e as fixtures delas são
  * importadas daqui para não existirem em duas cópias. As outras três continuam `// vazio` lá: o
@@ -89,6 +98,52 @@ const INVESTIMENTOS_LONGOS = [
     created_at: "2026-01-01T10:00:00Z",
     bank_account_id: null,
     bank_account_name: null,
+  },
+];
+
+/**
+ * `/marketing` (#212). **O `handle` é o único campo que não é `LONGO`, e o número está medido.**
+ *
+ * O `CarouselThumb` desenha uma ARTE de 1080×1350 e a encolhe com `transform: scale(0.222222)`
+ * (`CarouselSlideView.tsx:179-185`). Tudo que o CARD desenha continua em pior caso aqui — `topic`
+ * (o `p.truncate` da lista), `caption`, `hashtags` e os quatro slides com `heading`/`body`/
+ * `secondary` em `LONGO`. Medido nesta issue, com a régua já convertendo a escala: **zero sobra**.
+ *
+ * Com `handle: `@${LONGO}`` (75 chars) a régua acusa **+2,7px** num `div` do rodapé da arte — e
+ * ela está CERTA: aquele texto sobra 68px do próprio bloco de 968px no espaço de 1080px da arte,
+ * que a 0,222222 dão 15,1px de tela, e a arte se recorta em x=264 deixando 2,7px do lado de fora.
+ * Só que isso é defeito da ARTE, que tem geometria fixa em px por construção e não muda com a
+ * largura da tela: nenhum conserto de layout de 360px o alcança, e a mesma sobra existiria num
+ * monitor de 4K. **Medido: a 40 chars já é zero** — e o Instagram, que é o dono do campo
+ * (`marketing/models.py:33`, `# @ do Instagram`), para em **30**. O valor aqui é o teto real do
+ * campo, não um valor curto escolhido para dar verde. Ver o achado fora do escopo no §5.5.
+ */
+const CARROSSEIS_LONGOS = [
+  {
+    id: "m1",
+    tenant_id: "t1",
+    topic: LONGO,
+    platform: "instagram",
+    slides: ["cover", "editorial", "accent", "cta"].map((kind) => ({
+      kind,
+      heading: LONGO,
+      body: LONGO,
+      secondary: LONGO,
+      highlight: "Diagnostico",
+      photo_url: "",
+      photo_position: "mid",
+    })),
+    status: "draft",
+    handle: "@escritorio_de_uma_pessoa_1234",
+    caption: LONGO,
+    hashtags: `#${LONGO}`,
+    template: "editorial",
+    primary_color: "#123456",
+    bg_color: "#ffffff",
+    text_color: "#111111",
+    accent_color: "#ff0000",
+    font: "Inter",
+    created_at: "2026-01-01T10:00:00Z",
   },
 ];
 
@@ -140,6 +195,15 @@ const CARDS: CasoDeCard[] = [
     marcaDoCard: LONGO,
     mocks: { "/investments": INVESTIMENTOS_LONGOS, "/bank/accounts": [] },
     semDado: { "/investments": [], "/bank/accounts": [] },
+  },
+  // A SEXTA rota, acrescentada pelo #212 — ver a razão medida em `CARROSSEIS_LONGOS` acima e o
+  // teste «a régua converte `scrollWidth` para a escala do `transform`» no fim deste arquivo.
+  {
+    rota: "/marketing",
+    marcaDaPagina: "Carrosséis",
+    marcaDoCard: LONGO,
+    mocks: { "/marketing/carousels": CARROSSEIS_LONGOS },
+    semDado: { "/marketing/carousels": [] },
   },
 ];
 
@@ -244,4 +308,74 @@ test("a régua enxerga tinta fora da borda com a caixa dentro dela", async ({ pa
     cortes.map((c) => c.descricao),
     "a régua ficou CEGA para a classe do #182: tinta além da borda com a caixa dentro dela",
   ).toContain("p.isca-182");
+});
+
+/**
+ * CONTROLE DA ESCALA — a régua converte `scrollWidth` para o tamanho em que o dono vê a tinta.
+ *
+ * `scrollWidth` é medido no espaço de LAYOUT do elemento, ANTES de qualquer `transform` de
+ * ancestral; `getBoundingClientRect` já vem transformado. Somar um ao outro mistura duas réguas, e
+ * foi o que manteve `/marketing` fora deste catálogo: o `div` do rodapé da arte, dentro do
+ * `scale(0.222222)` do `CarouselThumb`, reportava `scrollWidth` 1036 ocupando **215,1px** de tela,
+ * e a régua acusava **+808,4px** de um elemento que cabia (#182, §5.5). Com a conversão o mesmo
+ * elemento devolve **+2,7px** — a tinta que de fato sobra, medida na escala em que ela é vista.
+ *
+ * ⚠️ **Este teste é o par do `isca-182` acima, e existe pela razão OPOSTA.** Aquele prova que a
+ * régua VÊ tinta que a caixa esconde; este prova que ela não ficou CEGA dentro de um `transform`
+ * ao aprender a não inventar. Uma correção que simplesmente ignorasse elementos escalados passaria
+ * no `/marketing` do catálogo e falharia aqui — e é por isso que a asserção é o NÚMERO: sem a
+ * conversão a régua devolveria `cru`, que a medição abaixo exige ser mais de 3× maior.
+ */
+test("a régua converte `scrollWidth` para a escala do `transform`", async ({ page }) => {
+  await semearSessao(page);
+  await mockarApi(page, { "/funnels": [] });
+  await page.goto("/funis");
+  await expect(page.getByText("Funis de Vendas").first()).toBeVisible();
+
+  expect(await textoForaDaTela(page, "main")).toEqual([]);
+
+  // Uma LONA como a do `CarouselThumb`: tinta desenhada grande, encolhida por `transform: scale`
+  // dentro de um `overflow: hidden`. Ela sobra de VERDADE — mas só 1/4 do que o `scrollWidth` cru
+  // diz, porque o `scale` encolheu a tinta junto.
+  await page.evaluate((palavra) => {
+    const lona = document.createElement("div");
+    lona.className = "lona-212";
+    lona.style.cssText = "width:120px;overflow:hidden";
+    const escalada = document.createElement("div");
+    escalada.style.cssText = "transform:scale(0.25);transform-origin:top left";
+    const isca = document.createElement("p");
+    isca.className = "isca-212";
+    isca.style.cssText = "white-space:nowrap;width:200px;font-size:60px";
+    isca.textContent = palavra;
+    escalada.appendChild(isca);
+    lona.appendChild(escalada);
+    document.querySelector("main")!.appendChild(lona);
+  }, LONGO);
+
+  const medido = await page.evaluate(() => {
+    const el = document.querySelector(".isca-212")!;
+    const r = el.getBoundingClientRect();
+    const limite = Math.min(
+      document.querySelector(".lona-212")!.getBoundingClientRect().right,
+      document.documentElement.clientWidth,
+    );
+    return {
+      escala: +(r.width / (el as HTMLElement).offsetWidth).toFixed(4),
+      caixaDireita: +r.right.toFixed(1),
+      naEscala: +(r.left + el.scrollWidth * 0.25 - limite).toFixed(1),
+      cru: +(r.left + el.scrollWidth - limite).toFixed(1),
+    };
+  });
+  // O `scale` de fato encolheu, e a CAIXA cabe na tela: só o caminho do `scrollWidth` pode acusar.
+  expect(medido.escala).toBe(0.25);
+  expect(medido.caixaDireita).toBeLessThanOrEqual(360);
+  expect(medido.cru).toBeGreaterThan(medido.naEscala * 3);
+
+  const corte = (await textoForaDaTela(page, "main")).find((c) => c.descricao === "p.isca-212");
+  expect(corte, "a régua ficou CEGA para tinta dentro de um `transform: scale`").toBeDefined();
+  expect(
+    corte!.forcaFora,
+    `a régua somou \`scrollWidth\` CRU (${medido.cru}px) à borda já transformada, ` +
+      `em vez do valor na escala (${medido.naEscala}px)`,
+  ).toBeCloseTo(medido.naEscala, 1);
 });
