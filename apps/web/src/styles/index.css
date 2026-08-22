@@ -11,3 +11,43 @@ body {
   background: theme("colors.neutral.50");
   color: theme("colors.neutral.800");
 }
+
+/**
+ * ALVO TOCÁVEL DE CAMPO — 44px de altura mínima para o que se DIGITA.
+ *
+ * O mínimo é o do PR #56, cuja consequência medida foi uma conta real marcada como paga sem o
+ * dono ver: num formulário, errar o alvo é digitar no campo errado.
+ *
+ * ⚠️ **Por que uma regra de CSS, e não `min-h-11` em cada `className`.** O `Field` de
+ * `components/Modal.tsx` é usado por **84 `<Field>` em 14 telas**, e ao lado de cada um há um
+ * `<select>` escrito à mão com a MESMA classe (`px-3 py-2 text-sm`, 38–39px medidos). Consertar
+ * só o `Field` deixaria todos os `<select>` em 39px — e ainda por cima não alcançaria as **3
+ * cópias locais** do `Field` (`auth/LoginPage.tsx:203`, `funis/FunnelBuilderPage.tsx:736`,
+ * `juridico/JuridicoWizardPage.tsx:178`). Medido em 22/08/2026 contra `origin/main`: **79 campos
+ * abaixo de 44px em 16 telas**, dos quais só 2 estavam na issue. Uma regra num lugar só fecha a
+ * classe inteira; 14 arquivos editados fechariam a metade que alguém lembrasse de editar.
+ *
+ * ⚠️ **Por que OPT-IN (uma classe de escopo) e não global.** Medido no mesmo dia, com a varredura
+ * do catálogo de `e2e/support/rotas.ts`: fora dos formulários há mais **~90** campos abaixo de
+ * 44px, e eles vivem nos CONSTRUTORES — `/marketing/m1` (30), `/sites/s1` (15), `/marketing/novo`
+ * (12), `/orcamentos/novo` (7), `/contratos/novo` (4) —, editores densos de `px-2 py-1.5 text-xs`
+ * com 27 a 34px. Engordá-los junto mudaria cinco telas que nenhuma régua deste repo mede por
+ * altura, sem ninguém ter olhado o resultado. Uma allowlist para excluí-los seria allowlist sem
+ * razão, que é exatamente como uma régua vira enfeite. O alcance fica declarado e auditável:
+ * `grep -rn "campos-tocaveis" src/` diz, numa linha, todas as telas que esta regra alcança.
+ *
+ * `checkbox`, `radio`, `file`, `color` e `range` ficam de fora por construção: no repo a caixinha
+ * do checkbox tem 20×20 e quem cumpre os 44px é o `<label>` em volta
+ * (`ContasSaldosPage.tsx:208`) — exigir 44 do quadrado desenhado daria um botão onde deve haver
+ * um checkbox.
+ *
+ * Medido por `e2e/campo-modal-360.spec.ts`, em 16 telas.
+ */
+@layer components {
+  .campos-tocaveis
+    input:not([type="checkbox"]):not([type="radio"]):not([type="file"]):not([type="color"]):not([type="range"]),
+  .campos-tocaveis select,
+  .campos-tocaveis textarea {
+    min-height: 2.75rem; /* 44px */
+  }
+}
