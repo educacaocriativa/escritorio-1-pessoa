@@ -114,9 +114,14 @@ export default function InvestimentosPage() {
           return (
             <div key={a.id} className="rounded-2xl bg-white p-5 shadow-sm">
               <div className="flex flex-wrap items-start justify-between gap-3">
-                <div>
-                  <h2 className="font-semibold text-neutral-800">{a.name}</h2>
-                  <p className="text-xs text-neutral-500">
+                {/* ⚠️ `min-w-0` + `break-words` (#182): `flex-wrap` resolve a QUEBRA DE LINHA entre
+                    o bloco e o botão, mas não faz o bloco encolher — item de flex nasce com
+                    `min-width: auto` e o min-content de um nome de conta sem espaço é o nome
+                    inteiro. Medido em 360×740: nome e rótulo de índice saíam 264px além da borda,
+                    com `documentElement.scrollWidth` em 360. */}
+                <div className="min-w-0">
+                  <h2 className="break-words font-semibold text-neutral-800">{a.name}</h2>
+                  <p className="break-words text-xs text-neutral-500">
                     {[a.kind, a.index_rate_label].filter(Boolean).join(" · ") || "Aplicação"}
                   </p>
                 </div>
