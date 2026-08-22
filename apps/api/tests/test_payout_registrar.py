@@ -14,7 +14,7 @@ from fastapi.testclient import TestClient
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
-from app import main as app_main
+from app import composicao
 from app.modules.bank import payout as bank_payout
 from app.modules.bank.models import SOURCE_PAYOUT, STATUS_MATCHED, BankTransaction
 from app.modules.wallet import service as wallet_service
@@ -229,7 +229,7 @@ def test_app_nao_sobe_sem_o_registrador_de_payout(monkeypatch):
     """
     monkeypatch.setattr(wallet_service, "_payout_registrar", None)
     with pytest.raises(RuntimeError, match="registrador de payout"):
-        app_main.verifica_fiacao_do_payout()
+        composicao.verifica_fiacao_do_payout()
 
 
 def test_a_verificacao_do_payout_e_chamada_no_nivel_do_modulo():
@@ -239,7 +239,7 @@ def test_a_verificacao_do_payout_e_chamada_no_nivel_do_modulo():
     Nenhum teste de comportamento pegaria — a app continuaria subindo e a guarda viraria função
     morta. Mesmo par de `test_a_guarda_de_boot_e_chamada_no_nivel_do_modulo`.
     """
-    fonte = pathlib.Path(app_main.__file__).read_text(encoding="utf-8")
+    fonte = pathlib.Path(composicao.__file__).read_text(encoding="utf-8")
     tree = ast.parse(fonte)
     chamadas = {
         node.value.func.id
