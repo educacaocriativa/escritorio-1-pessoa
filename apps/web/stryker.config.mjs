@@ -40,9 +40,13 @@ const RAIZ = "src";
  * O que a regra EXCLUI, e por quê:
  * - `.tsx` — fora de escopo por decisão da issue. Mutação em React é lenta e ruidosa; o
  *   retorno está na aritmética de dinheiro, data e fuso.
- * - `.ts` SEM teste dedicado (hoje 8: `lib/api.ts`, `lib/texto.ts`, `lib/pluralize.ts`,
- *   `lib/whatsappCapabilities.ts`, `features/juridico/categories.ts`,
- *   `store/useIdleTimeout.ts`, `test-setup.ts`, `test/fixtures/agenda.ts`). Módulo sem
+ * - `.ts` SEM teste dedicado (em 22/08/2026 são 9: `features/busca/useBusca.ts`,
+ *   `features/juridico/categories.ts`, `lib/pluralize.ts`, `lib/texto.ts`,
+ *   `lib/whatsappCapabilities.ts`, `store/useIdleTimeout.ts`, `test/fixtures/agenda.ts`,
+ *   `test/paredeDoTenant.ts`, `test-setup.ts`). Esta lista é um INSTANTÂNEO e envelhece sozinha —
+ *   a regra acima é que manda. `lib/api.ts` estava aqui e saiu ao ganhar teste irmão no #197
+ *   (PR do #179): é o 28º módulo entrando no escopo sem ninguém editar este arquivo, exatamente
+ *   como projetado. Módulo sem
  *   teste dedicado pontua perto de zero e não diz nada de novo: já SABEMOS que não tem
  *   teste, e isso é trabalho de cobertura, não de mutação. Misturá-los afogaria o sinal —
  *   o score global viraria uma média de duas perguntas diferentes.
@@ -146,7 +150,9 @@ export default {
   // irmão `.test.ts` entra sozinho, e um módulo novo com teste mediano puxa o total para baixo
   // sem que nenhum teste existente tenha piorado; (b) o timeout conta como morto, então um
   // mutante que hoje estoura o `timeoutMS` pode sobreviver numa noite de runner mais folgado
-  // (é 1 mutante, ~0,06 pt — pequeno, mas não é zero). 80 dá ~3,5 pt = ~63 mutantes de folga:
+  // (é 1 mutante, ~0,06 pt — pequeno, mas não é zero; o erro na direção OPOSTA, o falso morto de
+  // máquina carregada, é bem maior e tem guarda própria — ver `timeoutMS` abaixo e a issue #213).
+  // 80 dá ~3,5 pt = ~63 mutantes de folga:
   // absorve um módulo novo inteiro e ainda pega qualquer desmonte real da suíte.
   //
   // **E por que exatamente 80, o mesmo valor de `high`.** Vira uma regra só em vez de duas:
@@ -163,6 +169,37 @@ export default {
   // arquivos rápidos) e evita marcar como "timeout" o que é só contenção de CPU na máquina
   // de quem roda local — o mesmo tipo de flake que já obrigou o `testTimeout: 15000` do
   // `vitest.config.ts`.
+  //
+  // ── O ERRO TEM DUAS DIREÇÕES, E AS DUAS JÁ FORAM OBSERVADAS ────────────────────────────────
+  // `Timeout` conta como MORTO no score (`totalDetected = timeout + killed`, em
+  // `mutation-testing-metrics`). Como o relógio depende da MÁQUINA e não só do mutante, esse
+  // crédito escorrega para os dois lados:
+  //
+  //   máquina FOLGADA   -> falso SOBREVIVENTE. Um mutante que hoje estoura o `timeoutMS` roda
+  //                        dentro do prazo numa noite de runner mais leve e passa a contar como
+  //                        vivo. A régua fica PESSIMISTA; o score cai sem ninguém ter piorado
+  //                        teste nenhum. (Previsto aqui desde o #189; é o `break: 80` que
+  //                        absorve, com ~3,5 pt de folga.)
+  //
+  //   máquina CARREGADA -> falso MORTO. Sob contenção de CPU o processo estoura o relógio em
+  //                        mutantes que não podem enlaçar, e eles são creditados como pegos. A
+  //                        régua fica OTIMISTA — e mente a favor exatamente quando o ambiente
+  //                        está pior. MEDIDO no #213: `contas.ts` deu 90,79 com 12 timeouts numa
+  //                        máquina com 10 worktrees ativas, contra 86,98 e ZERO timeouts na CI.
+  //                        Os 12 eram `StringLiteral` em declaração de constante; 27 + 12 = 39,
+  //                        os mesmos sobreviventes que a CI viu.
+  //
+  // Afrouxar estes dois números NÃO resolve o segundo caso: contenção não tem teto, e com a
+  // máquina suficientemente carregada qualquer valor finito estoura. Reclassificar `Timeout`
+  // como inconclusivo resolveria — e não é configurável: `@stryker-mutator/core@10.0.0` expõe 45
+  // opções (`@stryker-mutator/api/dist/schema/stryker-core.json`) e nenhuma remapeia status.
+  //
+  // O que fecha o buraco é uma regra de PROCEDIMENTO com guarda automática: **a corrida só vale
+  // em máquina dedicada**, e `scripts/guarda-timeouts-mutacao.mjs` reprova a medição quando os
+  // timeouts passam de 5. As 3 corridas de CI que completaram mediram 1 timeout cada, sempre o
+  // MESMO mutante — `features/agenda/grade.ts:294`, `UpdateOperator` trocando `h++` por `h--` num
+  // `for`, que é laço infinito de verdade e cuja detecção por timeout está CERTA. Em máquina
+  // dedicada o número é estável e explicável; é isso que o torna um sinal.
   timeoutMS: 10000,
   timeoutFactor: 2,
 
