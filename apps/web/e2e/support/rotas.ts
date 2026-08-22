@@ -68,6 +68,22 @@ const CARROSSEL = {
   created_at: "2026-01-01T10:00:00Z",
 };
 
+/** As LISTAS de `/funis` e `/juridico` (#182). Ficam aqui porque o catálogo é quem as usa; são
+ * importadas por `card-largo-360.spec.ts`, que mede a BORDA do card, para não haver duas cópias. */
+export const FUNIS_LONGOS = [
+  { id: "f1", name: LONGO, node_count: 7, created_at: "2026-01-01T10:00:00Z" },
+];
+
+export const JURIDICO_DOCS = [
+  { id: "d1", skill: "peticao", category: "core", title: LONGO, client_id: null,
+    client_name: LONGO, status: "ready", created_at: "2026-01-01T10:00:00Z" },
+];
+
+export const JURIDICO_SKILLS = [
+  { skill: "peticao", label: LONGO, category: "core", description: `${LONGO} ${LONGO}`,
+    output_type: LONGO },
+];
+
 const CATALOGO_FUNIL = [{
   category: "gatilhos", label: "Gatilhos", color: "#123456",
   items: [{ key: "lead", label: LONGO, description: LONGO, shape: "node", action: "" }],
@@ -185,8 +201,11 @@ export const CASOS: Caso[] = [
   { rota: "/contratos", marca: "Contratos" }, // vazio
   { rota: "/marketing", marca: "Carrosséis" }, // vazio
   { rota: "/marketing/m1", marca: "Pré-visualização (Instagram 4:5) — baixe em PNG", mocks: { "/marketing/carousels/templates": [], "/marketing/carousels": CARROSSEL } },
-  { rota: "/juridico", marca: "Assistente Jurídico" }, // vazio
-  { rota: "/funis", marca: "Funis de Vendas" }, // vazio
+  // #182: as duas saíram do estado vazio. A `marca` é o TÍTULO DO CARD, não o da página: com o
+  // título da página elas passavam sem card nenhum, e foi assim que o card de 316px fora da tela
+  // atravessou o #135, o #144 e o #160. A borda do card é medida em `card-largo-360.spec.ts`.
+  { rota: "/juridico", marca: LONGO, mocks: { "/juridico/documents": JURIDICO_DOCS, "/juridico/skills": JURIDICO_SKILLS } },
+  { rota: "/funis", marca: LONGO, mocks: { "/funnels": FUNIS_LONGOS } },
   { rota: "/funis/f1", marca: "Automação", mocks: { "/funnels/components": CATALOGO_FUNIL, "/funnels/f1": FUNIL, "/crm/clients": [] } },
   // A partir daqui, rotas acrescentadas pelo #144. `/funis/novo` é a outra metade da issue: mesmo
   // componente do `/funis/:id`, estado inicial diferente — e o cabeçalho que não cabia era o

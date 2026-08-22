@@ -632,6 +632,70 @@ rodando. Se havia, o resultado é **descartado** — não é "flake", não é "b
 numa investigação, num comentário de PR ou numa Completion Note.
 
 
+### 5.6 A régua da BORDA DO CARD (`e2e/card-largo-360.spec.ts`, issue #182, 2026-08-21)
+
+**A terceira pergunta sobre a mesma tela, e as duas primeiras são cegas para ela — cada uma por um
+motivo diferente.** Com título de pior caso (74 chars sem espaço), em 360×740:
+
+| | #135 (`rotas-360`) | #58/#144 (`alcance-360`) | **#182 (`card-largo-360`)** |
+|---|---|---|---|
+| O que mede | `scrollWidth` do documento | `boundingBox` de CONTROLE vs. a borda alcançável | **borda direita do que foi DESENHADO** (`x + width`, ou `x + scrollWidth` quando o elemento não recorta a si mesmo) |
+| Por que é cega para o #182 | `main` é `overflow-x-hidden`: o card é recortado, não empurra o documento — **360 nas cinco rotas** | a CAIXA do `<button w-full>` mede 312px e cabe; o que vaza é a TINTA, e `getBoundingClientRect` não vê tinta | — |
+
+**As cinco rotas medidas, e o que cada uma devolvia antes do conserto** (`textoForaDaTela`, escopo
+`main`; `documentElement.scrollWidth` = **360** em todas as cinco):
+
+| Rota | Sobra além da borda | Controle levado junto |
+|---|---|---|
+| `/funis` | **+316px** (nome do funil, e a linha "N componentes" junto) | — |
+| `/juridico` (documentos) | **+213,5px** | lixeira `absolute right-3` em **x 583,5 → 597,5, INTEIRAMENTE FORA** |
+| `/juridico` (skills) | **+187,5px** (rótulo e tipo de saída) | card de skill parcialmente fora (24 → 563,5) |
+| `/sites` | **+264px** (título da página) | — |
+| `/produtos` | **+264px** (nome) e **+315,8px** (etiqueta "Inativo" empurrada para x=624) | — |
+| `/financeiro/investimentos` | **+264px** (nome da conta e rótulo do índice) | — |
+
+**Os dois mecanismos, e o conserto de cada um:**
+
+1. **Trilha de grade `auto`.** `grid gap-2 sm:grid-cols-2` sem contagem de colunas no breakpoint
+   base tem UMA coluna implícita de tamanho `auto`, e trilha `auto` cresce com o min-content. Só
+   `/juridico` estava assim, e é a única em que a CAIXA do card crescia — levando junto o que está
+   `absolute` dentro dela. Conserto: `grid-cols-1`, que o Tailwind escreve `repeat(1, minmax(0,
+   1fr))`; é o `minmax(0, …)` que segura.
+2. **Item de flex com `min-width: auto`.** Ele não encolhe abaixo do próprio min-content, e o
+   min-content de uma palavra sem espaço é a palavra inteira. Conserto: **`min-w-0` no item de
+   flex + `break-words` no bloco de texto, nessa ordem** — `break-words` sozinho quebra a palavra
+   DENTRO da caixa, e a caixa é que estava larga demais (é o mesmo "não muda o número" já medido
+   no §5.4). Onde o texto é bloco dentro de bloco (`/sites`), `break-words` sozinho basta.
+
+- ⚠️ **A `marca` desta régua é o TÍTULO DO CARD, nunca o da página.** As cinco rotas estavam
+  catalogadas em `support/rotas.ts` como `// vazio`: a régua visitava, não havia card nenhum, e
+  "nada fora da borda" era o resultado — verde por não ter desenhado nada. É por isso que o defeito
+  atravessou o #135, o #144 e o #160. Cada caso do spec tem um teste irmão que reprova com payload
+  `[]` (a marca do card some, a da página fica), e `/funis` e `/juridico` saíram do estado vazio no
+  catálogo TAMBÉM, com `marca: LONGO`. **Prova por mutação:** esvaziar `FUNIS_LONGOS` deixa as
+  **três** réguas vermelhas na marca ("element(s) not found"), nunca verdes.
+- ⚠️ **`produtos-vender-360` já usava um nome de 74 chars, e mesmo assim não via** — ele aponta
+  `textoForaDaTela` para dentro do modal de venda (`'[data-testid="modal-vender-produto"]'`), e o
+  card da lista nunca esteve no escopo. Fixture de pior caso não mede nada sozinha: quem mede é o
+  escopo.
+- ⚠️ **Escopo `main`, de propósito.** `textoForaDaTela` mede contra a borda do ancestral que
+  RECORTA, e um deslizador horizontal legítimo (a DRE de 12 meses, o Kanban) tem conteúdo fora dessa
+  borda por construção. Nenhuma das cinco rotas daqui tem deslizador.
+- **O controle positivo** planta um `<p white-space: nowrap>` no `main`, prova pelo número que a
+  CAIXA cabe (`right <= 360`) e que a página não rola (360) — o disfarce exato da classe — e exige
+  que a régua veja a tinta. Mutação "régua cega" (`sobra > 0.5` → `sobra > 1e9`): morre.
+- **Mutante equivalente, medido e dispensado:** `break-words` na descrição da skill não muda número
+  nenhum, porque `line-clamp-3` já é `overflow: hidden` e ela RECORTA em vez de vazar. Não entrou —
+  mudança que nenhuma régua vê é peso morto (§5.4).
+
+**Achado fora do escopo, não consertado:** em `/marketing`, `textoForaDaTela` acusa **+808,4px** num
+`div` dentro do `CarouselThumb`. Não é defeito do produto: o thumb desenha a arte em 1080px e a
+encolhe com `transform: scale()` dentro de um `overflow: hidden` (`CarouselSlideView.tsx:182-185`), e
+`scrollWidth` é medido ANTES do `transform`. É um falso positivo da régua na mesma família da
+exceção `.react-flow` do §5.4, e por isso `/marketing` **não** entrou no catálogo do
+`card-largo-360`. O card de `/marketing` em si está correto (`truncate` + `min-w-0` + `grid-cols-2`)
+— medido, zero sobra.
+
 ## 6. Estado atual / roadmap
 - [x] Fundação do monorepo, docs, agentes de QA, CI local.
 - [x] Core do backend: tenancy (RLS) + anonimizador + camada de IA + auditoria.

@@ -51,7 +51,14 @@ export default function JuridicoPage() {
       {docs.length > 0 && (
         <section className="space-y-3">
           <h2 className="text-sm font-semibold text-neutral-700">Documentos recentes</h2>
-          <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
+          {/* ⚠️ `grid-cols-1` não é redundante com o `sm:grid-cols-2` (#182). Sem uma contagem de
+              colunas no breakpoint base, a grade tem UMA coluna implícita de tamanho `auto`, e
+              trilha `auto` cresce com o min-content do conteúdo — um título sem espaço a levava a
+              585,5px numa tela de 360. `grid-cols-1` é `repeat(1, minmax(0, 1fr))` no Tailwind, e é
+              o `minmax(0, …)` que segura a trilha. Medido: a lixeira `absolute right-3` ia junto,
+              para x=583,5 → 597,5 — **inteiramente fora**, sem jeito de excluir um documento no
+              celular — e `documentElement.scrollWidth` continuava dizendo 360. */}
+          <div className="grid grid-cols-1 gap-2 sm:grid-cols-2 lg:grid-cols-3">
             {docs.slice(0, 6).map((d) => (
               // ⚠️ A lixeira é IRMÃ do card, nunca filha (#160) — ver o comentário longo em
               // `funis/FunisPage.tsx`. Resumo: com os dois alvos aninhados, 10px de deslocamento
@@ -66,7 +73,10 @@ export default function JuridicoPage() {
                   <FileText className="mt-0.5 shrink-0 text-primary-600" size={18} />
                   <div className="min-w-0 flex-1">
                     <p className="truncate text-sm font-medium text-neutral-700">{d.title}</p>
-                    <p className="text-xs text-neutral-400">
+                    {/* O título acima é `truncate` (recorta com reticências); esta linha não pode
+                        ser, porque o nome do cliente precisa ser lido inteiro. `break-words`
+                        (#182): sem ele o `client_name` sem espaço saía 213,5px além da borda. */}
+                    <p className="break-words text-xs text-neutral-400">
                       {categoryLabel(d.category)}
                       {d.client_name ? ` · ${d.client_name}` : ""}
                       {d.status === "failed" ? " · falhou" : ""}
@@ -95,18 +105,26 @@ export default function JuridicoPage() {
               <Icon className="text-primary-600" size={18} />
               <h2 className="text-sm font-semibold text-neutral-700">{categoryLabel(cat)}</h2>
             </div>
-            <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+            {/* `grid-cols-1` pelo mesmo motivo da grade de documentos acima (#182): sem ele o card
+                de skill ia a 563,5px de largura numa tela de 360. */}
+            <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
               {byCategory.get(cat)!.map((s) => (
                 <button
                   key={s.skill}
                   onClick={() => navigate(`/juridico/novo?skill=${s.skill}`)}
                   className="flex h-full flex-col rounded-2xl bg-white p-4 text-left shadow-sm transition hover:shadow-md hover:ring-1 hover:ring-primary-300"
                 >
-                  <p className="text-sm font-semibold text-neutral-800">{s.label}</p>
+                  {/* `break-words` no rótulo e no tipo de saída (#182): os dois vêm do catálogo de
+                      skills e nenhum tem largura garantida — medido, saíam 187,5px além da borda.
+                      A DESCRIÇÃO fica de fora de propósito: `line-clamp-3` já é `overflow: hidden`,
+                      então ela RECORTA em vez de vazar. Mutante equivalente, medido: tirar
+                      `break-words` só dela não muda número nenhum, e mudança que nenhuma régua vê é
+                      peso morto (§5.4). */}
+                  <p className="break-words text-sm font-semibold text-neutral-800">{s.label}</p>
                   <p className="mt-1 line-clamp-3 flex-1 text-xs text-neutral-500">
                     {s.description}
                   </p>
-                  <p className="mt-3 text-[11px] font-medium uppercase tracking-wide text-primary-600">
+                  <p className="mt-3 break-words text-[11px] font-medium uppercase tracking-wide text-primary-600">
                     {s.output_type}
                   </p>
                 </button>
