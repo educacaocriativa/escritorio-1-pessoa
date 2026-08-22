@@ -57,6 +57,25 @@ describe("rotuloDaRota — o que a linha da lista diz", () => {
     const c = { ...BASE, bank_account_id: "acc-sumida", paid_at: null } as Charge;
     expect(rotuloDaRota(c, nome)).toBe("recebido direto na conta");
   });
+
+  it("conta desconhecida MAS com data: nada de 'caiu no  em 04/08' com o buraco no meio", () => {
+    // Provado por mutação (issue #191). O caso acima tinha `paid_at: null`, então conta E dia eram
+    // vazios juntos e o `&&` da linha 53 nunca era exercido de verdade — trocá-lo por `||`
+    // sobrevivia à suíte. Este é o caso que separa os dois: a lista de contas ainda não chegou
+    // (nome vazio) mas o crédito tem data. Com o `||`, o dono leria "caiu no  em 04/08", uma frase
+    // com um buraco onde deveria estar o nome do banco.
+    const c = { ...BASE, bank_account_id: "acc-sumida", paid_at: "2026-08-04T00:00:00Z" } as Charge;
+    expect(rotuloDaRota(c, nome)).toBe("recebido direto na conta");
+  });
+
+  it("conta conhecida SEM data: diz o banco e cala sobre o dia, em vez de calar sobre os dois", () => {
+    // Provado por mutação (issue #191): o ramo `if (conta) return \`caiu no ${conta}\`` era o único
+    // dos três sem caso próprio — apagá-lo passava verde. É o estado real de uma baixa manual sem
+    // `paid_at`: o e1p sabe ONDE o dinheiro caiu e não sabe QUANDO. Degradar para "recebido direto
+    // na conta" jogaria fora a metade que ele sabe.
+    const c = { ...BASE, bank_account_id: "acc-1", paid_at: null } as Charge;
+    expect(rotuloDaRota(c, nome)).toBe("caiu no Itaú PJ");
+  });
 });
 
 describe("diaDoCredito — data de CALENDÁRIO, nunca horário local", () => {
@@ -69,5 +88,14 @@ describe("diaDoCredito — data de CALENDÁRIO, nunca horário local", () => {
 
   it("sem data, string vazia (nada a dizer)", () => {
     expect(diaDoCredito(null)).toBe("");
+  });
+
+  it("data TRUNCADA não vira 'undefined/08' na tela", () => {
+    // Provado por mutação (issue #191): o `dia && mes ?` da linha 40 podia virar `true` ou `dia ||
+    // mes` sem quebrar teste, porque todo caso testado era um ISO completo ou `null` — os dois
+    // extremos, nenhum meio-termo. `"2026-08"` é o meio-termo: `split("-")` devolve duas partes, o
+    // dia sai `undefined` e o template interpolaria a palavra "undefined" direto na linha da lista.
+    expect(diaDoCredito("2026-08")).toBe("");
+    expect(diaDoCredito("2026")).toBe("");
   });
 });

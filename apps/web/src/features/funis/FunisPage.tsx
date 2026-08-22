@@ -60,12 +60,20 @@ export default function FunisPage() {
                 onClick={() => navigate(`/funis/${f.id}`)}
                 className="group flex w-full items-center rounded-2xl bg-white p-5 pr-14 text-left shadow-sm transition hover:shadow-md"
               >
-                <div className="flex items-center gap-3">
+                {/* ⚠️ `min-w-0` nos DOIS níveis, e `break-words` só depois (#182). Item de flex
+                    nasce com `min-width: auto`: ele NÃO encolhe abaixo do próprio min-content, e o
+                    min-content de um nome sem espaço é o nome inteiro. Medido em 360×740 com um
+                    título de 74 chars: a caixa do `<button w-full>` continuava em 312px (cabe), e
+                    a tinta ia para x=676 — **316px além da borda** — enquanto
+                    `documentElement.scrollWidth` seguia em 360, porque `main` é `overflow-x-hidden`
+                    e recorta. `break-words` sozinho não muda número nenhum aqui: ele quebra a
+                    palavra DENTRO da caixa, e a caixa é que estava larga demais (§5.4). */}
+                <div className="flex min-w-0 items-center gap-3">
                   <span className="flex h-10 w-10 items-center justify-center rounded-xl bg-primary-50 text-primary-600">
                     <Workflow size={18} />
                   </span>
-                  <div>
-                    <p className="font-semibold text-neutral-800">{f.name}</p>
+                  <div className="min-w-0">
+                    <p className="break-words font-semibold text-neutral-800">{f.name}</p>
                     <p className="text-xs text-neutral-400">{f.node_count} componentes</p>
                   </div>
                 </div>
