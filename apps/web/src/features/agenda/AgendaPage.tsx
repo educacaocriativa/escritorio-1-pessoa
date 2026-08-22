@@ -205,47 +205,67 @@ function MonthGrid({
           const inMonth = d.getMonth() === anchor.getMonth();
           const dayEvents = eventsOfDay(events, d);
           return (
-            <button
+            // ⚠️ **O chip é IRMÃO da célula, nunca filho (#183).** Ele morava DENTRO do `<button>` do
+            // dia, e os dois abrem modais DIFERENTES (chip → detalhe · célula → "Novo evento").
+            // Com dois alvos clicáveis aninhados o navegador emite o `click` no ANCESTRAL COMUM de
+            // `mousedown` e `mouseup`: medido em 21/08/2026, chip de 31,3×20,5 numa célula de
+            // 44,3×92, **12px de deslocamento** já bastam para o toque no chip virar "Novo evento"
+            // — 8/10/11px ainda caem no chip, 12/14/16/20px caem na célula. O limiar é a meia-altura
+            // do chip (10,25px), e por isso ele é 12 aqui e 10 nas listas do #160.
+            //
+            // ⚠️ O `data-testid` + `stopPropagation` do #149 CONTORNARAM o sintoma sem desfazer o
+            // aninhamento: o alvo nunca foi ambíguo (`count() === 1`, medido), ambíguo era o PONTO.
+            // `stopPropagation` só age quando o `click` nasce no chip — escorregando, ele nasce na
+            // célula, e não há o que parar.
+            //
+            // ⚠️ **A correção é o PARENTESCO, não a tag.** O ancestral comum passa a ser esta `<div>`
+            // sem handler, então o escorregão não faz NADA. A célula vira uma camada `absolute
+            // inset-0` ATRÁS do conteúdo, e o conteúdo é `pointer-events-none` com os chips
+            // reabilitados — assim a geometria da grade (42 células de 44,3×92 em 360px) fica
+            // idêntica à de antes, medido antes e depois. Trocar o `<button>` de fora por
+            // `<div role="button">` NÃO resolveria: o `click` continuaria caindo nele.
+            //
+            // ⚠️ E o NOME ACESSÍVEL deixa de engolir o compromisso. Aninhado, o snapshot do CI do
+            // #149 anunciava dia e evento como um controle só: `button "18 10:00 Alinhamento…"`.
+            // Medido em `e2e/agenda-chip-aninhamento-360.spec.ts`.
+            <div
               key={d.toISOString()}
-              onClick={() => onDayClick(d)}
-              className={`min-h-[92px] border-b border-r border-neutral-50 p-1.5 text-left align-top hover:bg-neutral-50 ${
+              className={`relative min-h-[92px] border-b border-r border-neutral-50 ${
                 inMonth ? "" : "bg-neutral-50/50 text-neutral-300"
               }`}
             >
-              <span
-                className={`inline-flex h-6 w-6 items-center justify-center rounded-full text-xs ${
-                  sameDay(d, today) ? "bg-primary-500 font-bold text-white" : "text-neutral-500"
-                }`}
-              >
-                {d.getDate()}
-              </span>
-              <div className="mt-1 space-y-0.5">
-                {dayEvents.slice(0, 3).map((e) => (
-                  <div
-                    key={e.id}
-                    // ⚠️ O chip mora DENTRO do `<button>` da célula do dia, e os dois abrem modais
-                    // DIFERENTES (chip → detalhe · célula → "Novo evento"). Mirar o chip por TEXTO
-                    // não basta: o alvo certo é preciso, mas o `click` do Playwright é por PONTO, e
-                    // um deslocamento vertical de ~10px entre o `mousedown` e o `mouseup` faz o
-                    // navegador emitir o `click` no ANCESTRAL COMUM — a célula — abrindo o modal
-                    // errado sem erro de hit-target (#149). O `testId` torna o alvo inequívoco e o
-                    // spec passa a exigir que o modal ERRADO não tenha aberto.
-                    data-testid={`chip-evento-${e.id}`}
-                    onClick={(ev) => {
-                      ev.stopPropagation();
-                      onEventClick(e);
-                    }}
-                    className={`cursor-pointer truncate rounded px-1 py-0.5 text-[11px] hover:opacity-80 ${eventColor(e, hoje)}`}
-                  >
-                    {!e.all_day && <span className="tabular-nums">{hhmm(e.starts_at, fuso)} </span>}
-                    {chipLabel(e)}
-                  </div>
-                ))}
-                {dayEvents.length > 3 && (
-                  <div className="text-[10px] text-neutral-400">+{dayEvents.length - 3} mais</div>
-                )}
+              <button
+                data-testid={`celula-dia-${localYmd(d)}`}
+                aria-label={`Novo evento em ${d.toLocaleDateString("pt-BR", { day: "2-digit", month: "long" })}`}
+                onClick={() => onDayClick(d)}
+                className="absolute inset-0 h-full w-full hover:bg-neutral-50"
+              />
+              <div className="pointer-events-none relative p-1.5 text-left">
+                <span
+                  className={`inline-flex h-6 w-6 items-center justify-center rounded-full text-xs ${
+                    sameDay(d, today) ? "bg-primary-500 font-bold text-white" : "text-neutral-500"
+                  }`}
+                >
+                  {d.getDate()}
+                </span>
+                <div className="mt-1 space-y-0.5">
+                  {dayEvents.slice(0, 3).map((e) => (
+                    <button
+                      key={e.id}
+                      data-testid={`chip-evento-${e.id}`}
+                      onClick={() => onEventClick(e)}
+                      className={`pointer-events-auto block w-full truncate rounded px-1 py-0.5 text-left text-[11px] hover:opacity-80 ${eventColor(e, hoje)}`}
+                    >
+                      {!e.all_day && <span className="tabular-nums">{hhmm(e.starts_at, fuso)} </span>}
+                      {chipLabel(e)}
+                    </button>
+                  ))}
+                  {dayEvents.length > 3 && (
+                    <div className="text-[10px] text-neutral-400">+{dayEvents.length - 3} mais</div>
+                  )}
+                </div>
               </div>
-            </button>
+            </div>
           );
         })}
       </div>
