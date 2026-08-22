@@ -89,6 +89,48 @@ describe("toPolylinePoints", () => {
   it("retorna string vazia sem pontos", () => {
     expect(toPolylinePoints([], { width: 10, height: 10 })).toBe("");
   });
+
+  it("reserva `padding` nas QUATRO bordas — com o padding 12 que a tela usa de verdade", () => {
+    // Provado por mutação (issue #191): os dois testes acima mediam só a ORDEM relativa das
+    // coordenadas, e o principal usava `padding: 0` — onde `padding * 2`, `padding / 2` e
+    // `padding + ...` valem todos zero. Resultado: 17 mutantes de aritmética sobreviviam nas
+    // linhas 89-99, e a única frase concreta do docstring ("reserva `padding` nas bordas")
+    // não tinha nenhuma asserção. Pior: `ProjecaoCaixaPage.tsx:248` desenha com `padding: 12`,
+    // ou seja, o valor que EMBARCA era exatamente o que nenhum teste exercitava.
+    //
+    // As quatro âncoras abaixo são o contrato inteiro da normalização, e são exatas de
+    // propósito (não `toBeCloseTo`): x do primeiro dia = borda esquerda, x do último dia =
+    // borda direita, y do maior saldo = topo, y do menor saldo = base. Qualquer troca de
+    // sinal, de fator ou de operando nessa aritmética tira um dos quatro do lugar.
+    const width = 200;
+    const height = 100;
+    const padding = 12;
+    const poly = toPolylinePoints(trajectoryPoints(projection()), { width, height, padding });
+    const coords = poly.split(" ").map((p) => p.split(",").map(Number));
+
+    expect(coords).toHaveLength(4);
+    // Eixo X: dia 0 encosta na borda esquerda, o último dia (90) encosta na direita.
+    expect(coords[0][0]).toBe(padding); // 12
+    expect(coords[3][0]).toBe(width - padding); // 188
+    // Eixo Y invertido: o MAIOR saldo (90000, o primeiro ponto) vai para o topo; o MENOR
+    // (-80000, o último) vai para a base. Nenhum dos dois invade o padding.
+    expect(coords[0][1]).toBe(padding); // 12
+    expect(coords[3][1]).toBe(height - padding); // 88
+
+    // Os pontos internos são proporcionais aos DIAS (não à posição no array): 30/90 e 60/90 da
+    // largura útil. É o que prende o `pt.days / maxDays` — uma divisão trocada por multiplicação
+    // mantém a ordem crescente e só aparece no valor.
+    const util = width - padding * 2; // 176
+    expect(coords[1][0]).toBeCloseTo(padding + (30 / 90) * util, 1); // 70.7
+    expect(coords[2][0]).toBeCloseTo(padding + (60 / 90) * util, 1); // 129.3
+    // E nenhuma coordenada escapa do viewBox.
+    for (const [x, y] of coords) {
+      expect(x).toBeGreaterThanOrEqual(padding);
+      expect(x).toBeLessThanOrEqual(width - padding);
+      expect(y).toBeGreaterThanOrEqual(padding);
+      expect(y).toBeLessThanOrEqual(height - padding);
+    }
+  });
 });
 
 describe("runwayLabel", () => {
@@ -196,6 +238,43 @@ describe("parcelasSaldoInicial (Story 8.8 AC5)", () => {
     const parcelas = parcelasSaldoInicial(sacouTudo);
     expect(parcelas).toHaveLength(2);
     expect(parcelas[1]).toEqual({ rotulo: ROTULO_PLATAFORMA, cents: 0 });
+  });
+
+  it("sob 'misto' com o BANCO zerado as duas parcelas continuam saindo — é o `||` que garante", () => {
+    // Alvo nº1 da issue #191, e o único sobrevivente de `ConditionalExpression` fora do gráfico.
+    // O `if (p.saldo_inicial_origem === "misto" || banco.cents !== 0)` tinha o lado ESQUERDO
+    // solto: todos os casos `misto` existentes traziam banco != 0, então o segundo operando
+    // sozinho já decidia e trocar o primeiro por `false` (ou o literal "misto" por "") não
+    // quebrava teste nenhum. Até o caso "conta nova zerada" do teste da soma passava com o
+    // mutante, porque com total 0 a soma fecha com uma parcela ou com duas.
+    //
+    // O caso que separa os dois programas é este: origem `misto`, banco EXATAMENTE 0 e
+    // plataforma com dinheiro — quem declarou as duas origens mas ainda não conciliou o banco
+    // (ou zerou a conta). O docstring já promete "sob `misto`, as DUAS parcelas saem sempre,
+    // inclusive uma zerada"; o teste de cima cobria só a metade com a PLATAFORMA zerada. Esta é
+    // a metade que faltava, e é a que o `||` governa. Com o mutante, o usuário perderia a linha
+    // "no banco: R$ 0,00" e voltaria a ver um saldo inicial que não diz de onde vem — o bug de
+    // produção que o Epic 8 existe para corrigir.
+    const bancoZerado = misto({
+      saldo_inicial_cents: 90000,
+      saldo_inicial_banco_cents: 0,
+      saldo_inicial_plataforma_cents: 90000,
+    });
+    expect(parcelasSaldoInicial(bancoZerado)).toEqual([
+      { rotulo: ROTULO_BANCO, cents: 0 },
+      { rotulo: ROTULO_PLATAFORMA, cents: 90000 },
+    ]);
+
+    // E o contraste que prova que é a ORIGEM decidindo, não o valor: o mesmo par de números com
+    // origem `plataforma` continua devolvendo só uma parcela.
+    const soPlataforma = projection({
+      saldo_inicial_cents: 90000,
+      saldo_inicial_banco_cents: 0,
+      saldo_inicial_plataforma_cents: 90000,
+    });
+    expect(parcelasSaldoInicial(soPlataforma)).toEqual([
+      { rotulo: ROTULO_PLATAFORMA, cents: 90000 },
+    ]);
   });
 
   it("a soma das parcelas é SEMPRE o total (a invariante do AC2, também na tela)", () => {

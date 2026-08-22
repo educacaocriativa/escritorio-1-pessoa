@@ -16,6 +16,7 @@ import { api, apiErrorMessage } from "../../lib/api";
 import { formatDate, formatDay } from "../../lib/datetime";
 import { useFuso } from "../../store/auth";
 import { rotaDaCobranca } from "../cobrancas/rota";
+import { AGENDADO_ENTRADA_LABEL } from "../financeiro/contas";
 import BlocoDaAgenda from "./BlocoDaAgenda";
 import BlocoDaConversa from "./BlocoDaConversa";
 import ClientTimeline from "./ClientTimeline";
@@ -124,9 +125,13 @@ export default function ClientDetailPage() {
             rótulo, mesmo tom âmbar e **some quando é zero**, pela mesma disciplina anti-ruído.
             Rótulo e semântica vêm de lá de propósito — a ficha e a tela de cobranças são a MESMA
             ação de dinheiro, e uma terceira convenção para o mesmo estado seria a assimetria que
-            esta issue existe para fechar. */}
+            esta issue existe para fechar.
+            ⚠️ [#186] É por isso que o rótulo é IMPORTADO de `financeiro/contas.ts` em vez de
+            escrito solto: "vem de lá" precisava continuar valendo quando alguém o renomear. O
+            import atravessa feature de propósito e não inventa convenção — é a mesma forma do
+            `VOCAB_ENTRADA` (`pagar/baixa.ts`) que esta tela já importa acima. */}
         {scheduledSum > 0 && (
-          <Stat label="Agendado para entrar" value={brl(scheduledSum)} tone="text-amber-700" />
+          <Stat label={AGENDADO_ENTRADA_LABEL} value={brl(scheduledSum)} tone="text-amber-700" />
         )}
       </div>
 

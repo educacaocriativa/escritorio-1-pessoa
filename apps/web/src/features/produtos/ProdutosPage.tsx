@@ -88,8 +88,14 @@ export default function ProdutosPage() {
             products.map((p) => (
               <div key={p.id} className="rounded-2xl bg-white p-5 shadow-sm">
                 <div className="mb-2 flex items-start justify-between">
-                  <div>
-                    <p className="font-semibold text-neutral-800">{p.name}</p>
+                  {/* ⚠️ `min-w-0` + `break-words` (#182), e a ordem importa: item de flex nasce com
+                      `min-width: auto` e não encolhe abaixo do min-content, que num nome sem espaço
+                      é o nome inteiro. Medido com o mesmo nome de 74 chars que a fixture do
+                      `produtos-vender-360` já usava: a tinta ia 264px além da borda e a etiqueta
+                      "Inativo" era empurrada para x=624 → 675,8 — 315,8px fora. O spec antigo não
+                      via porque media `textoForaDaTela` DENTRO do modal de venda, nunca no card. */}
+                  <div className="min-w-0">
+                    <p className="break-words font-semibold text-neutral-800">{p.name}</p>
                     <p className="text-xs text-neutral-400">{kindLabel(p.kind)}</p>
                   </div>
                   {!p.active && (

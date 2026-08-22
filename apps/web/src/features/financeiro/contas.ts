@@ -537,7 +537,27 @@ export const DISPONIVEL_CAIXA_LABEL = "Disponível como caixa";
  * "no banco", que são vocabulário de **saldo**. Não são sinônimos e a tela não pode sugerir que são.
  */
 export const AGENDADO_SAIDA_LABEL = "Agendado para sair";
-/** O par simétrico. Só passa a ter valor com a Story 8.15 (recebimento com data futura). */
+/**
+ * O par simétrico. Só passa a ter valor com a Story 8.15 (recebimento com data futura).
+ *
+ * ⚠️ **[#186] FONTE ÚNICA do rótulo — três telas o exibem e NENHUMA o escreve solto.**
+ *
+ * As três leem o número de origens diferentes e mesmo assim usam esta string, porque para o dono
+ * elas nomeiam **a mesma ideia**: dinheiro com dia marcado que ainda não caiu.
+ *
+ * | Tela | De onde vem o número |
+ * |---|---|
+ * | `financeiro/ContasSaldosPage` | `resumoSaldos()`, sobre `agendado_entrada_cents` da conta |
+ * | `cobrancas/CobrancasPage` | `summary.scheduled_cents` (cobranças `scheduled`) |
+ * | `crm/ClientDetailPage` | as cobranças `scheduled` **do cliente** (issue #154) |
+ *
+ * Até o #186 as duas últimas escreviam o literal. A medição que fechou a questão: renomear esta
+ * constante deixava **183 testes verdes** e as telas passavam a exibir DOIS nomes para o mesmo
+ * estado — desincronia silenciosa, sem nenhum teste para denunciá-la. Importar daqui amarra as
+ * três e **não inventa convenção nova**: é a mesma forma do `VOCAB_ENTRADA` (`pagar/baixa.ts`),
+ * que essas duas telas já importam. Um módulo neutro só para duas strings, esse sim, seria a
+ * terceira convenção que o PR #171 recusou com razão.
+ */
 export const AGENDADO_ENTRADA_LABEL = "Agendado para entrar";
 
 /** Tipos que NÃO são caixa imediato — espelha o default de `active_balance_total` (design §6.1). */

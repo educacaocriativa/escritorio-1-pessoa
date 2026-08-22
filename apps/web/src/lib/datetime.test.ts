@@ -7,6 +7,7 @@ import {
   formatDateTime,
   formatDay,
   formatTime,
+  formatWeekday,
   fusoValido,
   today,
 } from "./datetime";
@@ -59,6 +60,47 @@ describe("formatação de data de calendário", () => {
   it("tolera vazio", () => {
     expect(formatDay(null)).toBe("");
     expect(formatDay("")).toBe("");
+  });
+
+  it("data INCOMPLETA devolve vazio em vez de interpolar 'undefined'", () => {
+    // Provado por mutação (issue #191). O guarda `y && m && d ?` tinha QUATRO mutantes vivos: os
+    // testes só usavam ISO completo, `null` e `""` — nunca uma string com algumas partes. As duas
+    // linhas abaixo são as duas metades do `&&` encadeado:
+    //   • `"2026-08"` (falta o dia) mata `true` e `y && m || d`;
+    //   • `"-08-05"` (falta o ano) mata `y && m → true` e `y && m → y || m`.
+    // Sem elas, uma `due_date` truncada pela API sairia como "undefined/08/2026" na tela — pior que
+    // um campo vazio, porque parece um dado.
+    expect(formatDay("2026-08")).toBe("");
+    expect(formatDay("-08-05")).toBe("");
+  });
+});
+
+describe("os vazios de cada formatador (nenhum devolve 'Invalid Date')", () => {
+  // Provado por mutação (issue #191): só `formatDateTime` e `formatDateShort` tinham o caso nulo
+  // preso. Os ramos `: ""` de `formatDate` e `formatTime` estavam sem asserção, e o contrato do
+  // módulo — "devolve string vazia em vez de 'Invalid Date'" — vale para todos eles igualmente.
+  it("nulo e indefinido saem vazios em todas as variantes", () => {
+    expect(formatDate(null, FUSO_PADRAO)).toBe("");
+    expect(formatDate(undefined, FUSO_PADRAO)).toBe("");
+    expect(formatTime(null, FUSO_PADRAO)).toBe("");
+    expect(formatTime(undefined, FUSO_PADRAO)).toBe("");
+    expect(formatWeekday(null, FUSO_PADRAO)).toBe("");
+  });
+});
+
+describe("formatWeekday", () => {
+  // Provado por mutação (issue #191): a função inteira estava SEM COBERTURA — 5 mutantes
+  // `NoCoverage`, incluindo esvaziar o corpo (`{}`) e apagar o objeto de opções. Não é dívida de
+  // mutação e sim de cobertura: `formatWeekday` é a única porta do módulo que ninguém chamava num
+  // teste, e ela é a que a Agenda usa no cabeçalho do dia.
+  it("dia da semana por extenso, no fuso do TENANT", () => {
+    expect(formatWeekday(NOITE_DO_DIA_5, "America/Sao_Paulo")).toBe("quarta-feira, 05 de agosto");
+  });
+
+  it("o fuso é parâmetro de verdade — em UTC já é outro dia, e outro dia da semana", () => {
+    // 2026-08-06T01:30Z: para o dono ainda é quarta 05; em UTC já é quinta 06. Se as opções
+    // (`weekday`/`day`/`month`) ou o fuso se perdessem, esta linha e a de cima colapsariam na mesma.
+    expect(formatWeekday(NOITE_DO_DIA_5, "UTC")).toBe("quinta-feira, 06 de agosto");
   });
 });
 
