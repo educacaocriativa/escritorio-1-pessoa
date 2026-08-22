@@ -657,7 +657,9 @@ function RunNodeModal({
 
   return (
     <div className="absolute inset-0 z-30 flex items-center justify-center bg-black/30 p-4" onClick={onClose}>
-      <div className="w-full max-w-md rounded-2xl bg-white p-6 shadow-card" onClick={(e) => e.stopPropagation()}>
+      {/* `campos-tocaveis`: modal escrito à MÃO — não passa por `components/Modal.tsx`, e usa a
+          cópia local do `Field` (l. ~736). Medido: 38–39px. Ver `styles/index.css`. */}
+      <div className="campos-tocaveis w-full max-w-md rounded-2xl bg-white p-6 shadow-card" onClick={(e) => e.stopPropagation()}>
         <div className="mb-1 flex items-center gap-2">
           <span className="h-3 w-3 rounded-full" style={{ background: node.data.color }} />
           <h3 className="text-lg font-bold text-neutral-800">{ACTION_TITLE[action] ?? "Executar ação"}</h3>
@@ -826,7 +828,8 @@ function NodeContentEditor({
 
   return (
     <div className="absolute inset-0 z-30 flex items-center justify-center bg-black/30 p-4" onClick={onClose}>
-      <div className="w-full max-w-lg rounded-2xl bg-white p-6 shadow-card" onClick={(e) => e.stopPropagation()}>
+      {/* `campos-tocaveis`: o outro modal escrito à mão desta tela. Mesma razão do de cima. */}
+      <div className="campos-tocaveis w-full max-w-lg rounded-2xl bg-white p-6 shadow-card" onClick={(e) => e.stopPropagation()}>
         <div className="mb-1 flex items-center gap-2">
           <span className="h-3 w-3 rounded-full" style={{ background: node.data.color }} />
           <h3 className="text-lg font-bold text-neutral-800">{title}</h3>

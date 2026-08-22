@@ -298,19 +298,22 @@ test("as ações do centro de custo são tocáveis com o polegar", async ({ page
   // conhecia. Documento inteiro de propósito: um ícone, um chip, um `summary` ou um controle de
   // filtro acrescentado depois entra na conta sem ninguém precisar lembrar de escrever a linha.
   //
-  // ⚠️ **O `<input>` fica de fora, e o motivo é que `alvosPequenos` mede o ELEMENTO, não a área
-  // que o dedo acerta.** A caixinha do checkbox tem 20×20 DEPOIS do conserto, e continuará tendo:
+  // ⚠️ **`checkbox` e `radio` ficam de fora, e o motivo é que `alvosPequenos` mede o ELEMENTO,
+  // não a área que o dedo acerta.** A caixinha tem 20×20 DEPOIS do conserto, e continuará tendo:
   // quem cumpre os 44px é o `<label>` que a envolve — medido oito linhas acima, e a mesma
   // convenção de `ContasSaldosPage.tsx:208`. Exigir 44 do quadrado desenhado acusaria toda tela
   // que segue o padrão do repo e daria um botão onde deveria haver um checkbox.
   //
-  // O que este filtro CUSTA, dito por extenso em vez de escondido: um campo de TEXTO de 38px
-  // acrescentado a esta página passaria por aqui. É a dívida geral do `Field`, já registrada no
-  // CLAUDE.md e no `modal-conta-360.spec.ts` (o componente é compartilhado por todos os modais do
-  // app), e não é assunto que este PR declare consertar. O modal de cadastro/edição desta rota
-  // também fica fora — ele não está aberto — e tem exatamente esses dois: o `<input>` do `Field`
-  // (38px) e o `<select>` de tipo (39px).
-  const pequenos = (await alvosPequenos(page)).filter((a) => !a.descricao.startsWith("input"));
+  // ⚠️ **O recorte era `!descricao.startsWith("input")` — TODO `<input>` — e o custo estava
+  // escrito aqui: "um campo de TEXTO de 38px acrescentado a esta página passaria por aqui". Ele
+  // passou.** O modal desta mesma rota tinha exatamente dois (`<input>` do `Field` a 38px,
+  // `<select>` de tipo a 39px) e virou a issue #215. `Alvo` passou a carregar `tipo` justamente
+  // para que este filtro pudesse recortar só o que precisa ser recortado: um `<input type="text"`
+  // baixo demais agora reprova AQUI, além de reprovar na régua transversal
+  // (`campo-modal-360.spec.ts`), que mede os campos com o modal ABERTO em 16 telas.
+  const pequenos = (await alvosPequenos(page)).filter(
+    (a) => a.tipo !== "checkbox" && a.tipo !== "radio",
+  );
   expect(pequenos, "alvos abaixo de 44px").toEqual([]);
 
   // O que as outras duas réguas já garantiam continua garantido DEPOIS de os alvos crescerem:
