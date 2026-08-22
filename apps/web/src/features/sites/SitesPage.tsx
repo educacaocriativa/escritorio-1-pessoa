@@ -67,7 +67,11 @@ export default function SitesPage() {
                   {p.status === "published" ? "Publicada" : "Rascunho"}
                 </span>
               </div>
-              <p className="font-semibold text-neutral-800">{p.title}</p>
+              {/* `break-words` (#182): o título da página é livre e sem espaço não quebrava — a
+                  tinta saía 264px além da borda de 360px, com `scrollWidth` em 360 (o `main` é
+                  `overflow-x-hidden` e recorta). A caixa do card já é segurada pelo `grid-cols-1`
+                  da grade acima, então aqui basta deixar a palavra quebrar. */}
+              <p className="break-words font-semibold text-neutral-800">{p.title}</p>
               <p className="text-xs text-neutral-400">{MODELS.find(([m]) => m === p.model)?.[1] ?? p.model}</p>
               <div className="mt-3 flex items-center justify-between">
                 {p.status === "published" && p.public_slug ? (

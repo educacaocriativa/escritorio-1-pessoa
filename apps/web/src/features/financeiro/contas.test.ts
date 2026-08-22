@@ -335,6 +335,38 @@ describe("parseCentsBRL / centsToInput — dinheiro em centavos até a borda", (
     expect(parseCentsBRL("0.5")).toBe(50);
   });
 
+  it("o grupo de milhar vale com 2 e 3 dígitos na frente, não só com 1", () => {
+    // Provado por mutação (issue #191). Os dois casos de milhar que existiam — "1.234" e
+    // "1.234.567" — começam ambos com UM dígito. Isso deixava o `{1,3}` de
+    // `/^-?\d{1,3}(\.\d{3})+$/` inteiramente solto: trocá-lo por `\d` (exatamente um dígito)
+    // passava verde. E o mutante não erra pouco: "12.345" viraria R$ 12,35 em vez de
+    // R$ 12.345,00 — mil vezes menos, num campo de saldo de conta.
+    expect(parseCentsBRL("12.345")).toBe(1234500);
+    expect(parseCentsBRL("123.456")).toBe(12345600);
+  });
+
+  it("as DUAS âncoras do detector de milhar estão presas (`^` e `$`)", () => {
+    // Provado por mutação (issue #191): os três mutantes de `Regex` do módulo estavam todos nesta
+    // linha, e dois deles eram exatamente apagar uma âncora. É a lição do `HEX_RE` do `theme.ts`
+    // (CLAUDE.md §5.3) reaparecendo — só que aqui em cima de dinheiro, e errando por 1000x.
+    //
+    // Sem o `$`: "1.2345" casaria pelo prefixo "1.234" e seria lido como milhar → R$ 12.345,00
+    // em vez de R$ 1,23. Um dígito a mais digitado sem querer multiplicaria o saldo por 10.000.
+    expect(parseCentsBRL("1.2345")).toBe(123);
+    // Sem o `^`: "1234.567" casaria no MEIO ("234.567") e viraria R$ 1.234.567,00 em vez de
+    // R$ 1.234,57. O `^` é o que obriga o grupo de milhar a começar onde o número começa.
+    expect(parseCentsBRL("1234.567")).toBe(123457);
+  });
+
+  it("espaço no meio do número é limpo — inclusive como separador de milhar", () => {
+    // Provado por mutação (issue #191): apagar o `.trim().replace(/\s/g, "")` inteiro sobrevivia,
+    // porque o único caso com espaço era `"   "` (só espaço), que dá 0 nos dois programas. O caso
+    // que separa é o espaço INTERNO — o formato que extrato de banco e planilha exportam. Sem a
+    // limpeza, "1 234,56" para no primeiro espaço e vira R$ 1,00.
+    expect(parseCentsBRL("1 234,56")).toBe(123456);
+    expect(parseCentsBRL(" 1234,56 ")).toBe(123456);
+  });
+
   it("aceita negativo (conta no limite é saldo de abertura legítimo)", () => {
     expect(parseCentsBRL("-250,00")).toBe(-25000);
   });
@@ -358,6 +390,15 @@ describe("formatDateBR — data de calendário por STRING, nunca `new Date` loca
     // fuso que sumiu com eventos da Agenda (CLAUDE.md §6.0).
     expect(formatDateBR("2026-01-01")).toBe("01/01/2026");
     expect(formatDateBR("2026-07-30T00:00:00Z")).toBe("30/07/2026");
+  });
+
+  it("data INCOMPLETA volta como veio, em vez de virar 'undefined/07/2026'", () => {
+    // Provado por mutação (issue #191): o guarda `d && m && y ?` tinha os mesmos QUATRO mutantes
+    // vivos que `lib/datetime.ts:formatDay` e `cobrancas/rota.ts:diaDoCredito` — a suíte só usava
+    // ISO completo, nunca uma string com partes faltando. É a terceira ocorrência do MESMO padrão
+    // no repositório, e as três estão fechadas neste PR.
+    expect(formatDateBR("2026-07")).toBe("2026-07");
+    expect(formatDateBR("2026")).toBe("2026");
   });
 });
 
