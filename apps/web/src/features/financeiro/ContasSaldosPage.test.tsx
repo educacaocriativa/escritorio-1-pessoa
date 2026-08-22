@@ -1261,3 +1261,43 @@ describe("#136 — o dia desta tela é o do TENANT, e é UM só", () => {
     expect(botao).toBeEnabled();
   });
 });
+
+// ── Payload fora de forma nos checkpoints (issue #179) ────────────────────────
+describe("checkpoints fora de formato não viram saldo declarado", () => {
+  beforeEach(() => {
+    vi.mocked(api.get).mockReset();
+    fusoDoTenant = "America/Sao_Paulo";
+  });
+
+  it("payload STRING não vira checkpoint — indexar string devolve CARACTERE", async () => {
+    // O que mata a volta para `cps.data[0] ?? null`: em `"abcdef"`, `[0]` é `"a"` — *truthy*.
+    // O cartão passava a exibir a linha de saldo declarado montada sobre um caractere, com
+    // `formatDateBR(undefined)` e `formatBRL(undefined)` no meio.
+    mockApi([conta({ id: "a", name: "Itaú PJ" })], "abcdef" as never);
+    renderPage();
+
+    await waitFor(() => expect(screen.getByText("Itaú PJ")).toBeInTheDocument());
+    expect(screen.getByText("Nenhum saldo declarado ainda")).toBeInTheDocument();
+    expect(screen.queryByText(/Saldo declarado em/)).not.toBeInTheDocument();
+  });
+
+  it("payload OBJETO indexável não vira checkpoint", async () => {
+    mockApi([conta({ id: "a", name: "Itaú PJ" })], {
+      0: { id: "cp", reference_date: "2026-08-01", balance_cents: 999 },
+    } as never);
+    renderPage();
+
+    await waitFor(() => expect(screen.getByText("Itaú PJ")).toBeInTheDocument());
+    expect(screen.getByText("Nenhum saldo declarado ainda")).toBeInTheDocument();
+  });
+
+  it("lista de verdade continua produzindo o saldo declarado", async () => {
+    // O contra-teste: a guarda não pode ter fechado o caminho feliz.
+    mockApi([conta({ id: "a", name: "Itaú PJ" })], [
+      { id: "cp", bank_account_id: "a", reference_date: "2026-08-01", balance_cents: 123456 },
+    ] as never);
+    renderPage();
+
+    await waitFor(() => expect(screen.getByText(/Saldo declarado em/)).toBeInTheDocument());
+  });
+});

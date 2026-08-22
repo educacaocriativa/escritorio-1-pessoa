@@ -115,3 +115,42 @@ describe("LoginPage / LoginForm (Story 7.4 — portão de entrada)", () => {
     expect(loginMock).not.toHaveBeenCalled();
   });
 });
+
+// ── `dev_reset_token` fora de forma (issue #179) ──────────────────────────────
+//
+// Sétimo site da classe, FORA da lista da issue: `devToken` é renderizado direto em
+// `<code>{devToken}</code>`. Com `?? null`, um objeto *truthy* passava e o React estoura com
+// "Objects are not valid as a React child" — tela branca no LOGIN, a única tela de onde ninguém
+// consegue sair navegando.
+describe("ForgotForm — dev_reset_token só é exibido se tiver FORMA de token", () => {
+  beforeEach(() => {
+    postMock.mockReset();
+  });
+
+  async function pedirRedefinicao() {
+    render(<LoginPage />);
+    await userEvent.click(screen.getByRole("button", { name: /esqueci minha senha/i }));
+    await userEvent.type(screen.getByLabelText(/e-mail/i), "joao@e1p.com");
+    await userEvent.click(screen.getByRole("button", { name: /enviar/i }));
+  }
+
+  it.each([
+    ["objeto", { toString: "x" }],
+    ["número", 12345],
+    ["booleano", true],
+    ["array", ["tok"]],
+  ])("dev_reset_token %s não é renderizado e não derruba o login", async (_rotulo, valor) => {
+    postMock.mockResolvedValue({ data: { message: "ok", dev_reset_token: valor } });
+    await pedirRedefinicao();
+
+    await waitFor(() => expect(screen.queryByRole("code")).not.toBeInTheDocument());
+    expect(screen.queryByText(/token:/i)).not.toBeInTheDocument();
+  });
+
+  it("token string de verdade continua aparecendo", async () => {
+    postMock.mockResolvedValue({ data: { message: "ok", dev_reset_token: "tok-123" } });
+    await pedirRedefinicao();
+
+    await waitFor(() => expect(screen.getByText("tok-123")).toBeInTheDocument());
+  });
+});

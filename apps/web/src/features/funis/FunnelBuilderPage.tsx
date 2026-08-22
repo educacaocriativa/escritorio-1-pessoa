@@ -224,8 +224,12 @@ function Builder() {
     if (!isNew && id) {
       api.get(`/funnels/${id}`).then(({ data }) => {
         setName(data.name);
-        setNodes(data.nodes ?? []);
-        setEdges(data.edges ?? []);
+        // `Array.isArray`, e não `?? []` (issue #179): um valor *truthy* fora do formato passa
+        // pelo `??` e chega inteiro ao reactflow, que faz `.map` nele. Pior, `setNodes`/`setEdges`
+        // são setters de estado do React: se o valor for FUNÇÃO, o React a trata como updater e a
+        // EXECUTA — a armadilha que o `ClientTimeline` documenta.
+        setNodes(Array.isArray(data?.nodes) ? data.nodes : []);
+        setEdges(Array.isArray(data?.edges) ? data.edges : []);
       });
     }
   }, [isNew, id, setNodes, setEdges]);

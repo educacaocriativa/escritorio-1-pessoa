@@ -121,7 +121,10 @@ export default function ContasSaldosPage() {
               `/bank/accounts/${a.id}/checkpoints`,
               { params: { limit: 1 } },
             );
-            return [a.id, cps.data[0] ?? null] as const;
+            // `Array.isArray`, e não `cps.data[0] ?? null` (issue #179): indexar um payload fora
+            // do formato devolve lixo *truthy* (numa string, `[0]` é o primeiro CARACTERE), que
+            // vira o `checkpoint` do cartão e chega a `formatDateBR`/`formatBRL`.
+            return [a.id, Array.isArray(cps.data) ? (cps.data[0] ?? null) : null] as const;
           } catch {
             // Falha em UM cartão não derruba a lista inteira: a tela mostra "—" naquele campo.
             return [a.id, null] as const;

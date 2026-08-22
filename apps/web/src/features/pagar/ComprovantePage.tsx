@@ -100,7 +100,11 @@ export default function ComprovantePage() {
       .get<ReceiptInfo[]>("/payables/receipts")
       .then(({ data }) => {
         if (cancelled) return;
-        setReceipt(data.find((r) => r.id === id) ?? null);
+        // `Array.isArray`, e não `data.find(...) ?? null` (issue #179): com `data` fora do
+        // formato, `.find` não existe e o `TypeError` cai no `.catch()` abaixo — que está escrito
+        // para "sem o nome do arquivo a tela opera igual", então o erro sumiria em silêncio e o
+        // comprovante ficaria sem identificação sem ninguém saber por quê.
+        setReceipt(Array.isArray(data) ? (data.find((r) => r.id === id) ?? null) : null);
       })
       .catch(() => {
         /* o nome do arquivo é contexto, não função — sem ele a tela opera igual */

@@ -34,6 +34,13 @@ export function AutomationFields({
   data: NodeLike;
   onChange: (patch: ConfigPatch) => void;
 }) {
+  // Issue #179 mapeou este `?? {}` como irmão do `?? null` sobre payload de API, mas ele é FALSO
+  // POSITIVO e fica como está — de propósito. Todo consumo de `cfg` abaixo é `cfg.X ?? padrão`
+  // sobre chaves que nenhum protótipo embutido define, e `cfg` nunca é espalhado nem iterado:
+  // com `config` valendo string, número ou array, TODA leitura dá `undefined` e a tela renderiza
+  // igualzinho a `{}`. Uma guarda de forma aqui seria um predicado que nenhum teste consegue
+  // matar — e "predicado sem rede é dívida, não proteção" (`GanchoDaVima`, #161). A proteção
+  // real deste caminho mora na origem, em `FunnelBuilderPage` (`Array.isArray(data?.nodes)`).
   const cfg = data.config ?? {};
   const key = data.key;
   const action = data.action ?? "";

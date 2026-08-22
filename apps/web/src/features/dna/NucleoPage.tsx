@@ -2,6 +2,7 @@ import type { DnaPergunta } from "@e1p/shared-types";
 import { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { api } from "../../lib/api";
+import { ehPergunta } from "./GanchoDaVima";
 import PerguntaDaVima from "./PerguntaDaVima";
 
 /** Marca de "o núcleo já foi decidido NESTE aparelho". Espelha `CHAVE_ENTRADA` do briefing. */
@@ -43,7 +44,21 @@ export default function NucleoPage() {
     api
       .get<DnaPergunta[]>("/dna/faltantes", { params: { gancho: "nucleo" } })
       .then(({ data }) => {
-        const lista = data ?? [];
+        // `Array.isArray` + forma item a item, e não `data ?? []` (issue #179): `{}` é *truthy*,
+        // então passava, `!perguntas` (abaixo) não pegava, `perguntas.length === 0` virava
+        // `undefined === 0` → falso, e `perguntas[i].key` estourava DENTRO do render — que não cai
+        // no `.catch()` desta promise. Isso era **tela branca**, o irmão pior do card fantasma do
+        // #161.
+        //
+        // `Array.isArray` sozinho NÃO bastaria: um array bem formado de itens fora de contrato
+        // passa por ele e estoura mais adiante, em `pergunta.opcoes.map` dentro de
+        // `PerguntaDaVima`. Por isso o filtro é `ehPergunta`, o mesmo predicado do #161 — ele
+        // valida exatamente o que o caminho de render consome.
+        //
+        // **Filtra, não rejeita a lista inteira:** uma pergunta nova com contrato quebrado no
+        // servidor não pode apagar as outras cinco. E o denominador da telemetria passa a ser o
+        // que a pessoa REALMENTE viu — que é o que `avisar("open")` já prometia logo abaixo.
+        const lista = Array.isArray(data) ? data.filter(ehPergunta) : [];
         if (!vivo) return;
         setPerguntas(lista);
         // `open` só DEPOIS do sucesso e só quando havia o que ver: é isso que faz "ausência de

@@ -90,7 +90,11 @@ function ForgotForm({ onBack, onHaveToken }: { onBack: () => void; onHaveToken: 
         { email },
       );
       setSent(true);
-      setDevToken(data.dev_reset_token ?? null);
+      // Guarda por FORMA, e não `?? null` (issue #179 — sétimo site, fora da lista da issue):
+      // `devToken` é renderizado direto em `<code>{devToken}</code>`. Um objeto *truthy* passava
+      // pelo `??` e o React estoura com "Objects are not valid as a React child" — tela branca no
+      // LOGIN, a única tela de onde ninguém consegue sair navegando.
+      setDevToken(typeof data?.dev_reset_token === "string" ? data.dev_reset_token : null);
     } finally {
       setLoading(false);
     }
