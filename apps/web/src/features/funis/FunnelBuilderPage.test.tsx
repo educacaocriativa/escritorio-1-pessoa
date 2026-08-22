@@ -163,3 +163,59 @@ describe("nó de WhatsApp — template (Meta) × texto livre (Evolution)", () =>
     expect(screen.getByRole("button", { name: "Salvar no nó" })).toBeDisabled();
   });
 });
+
+// ── Payload fora de forma em `GET /funnels/{id}` (issue #179) ─────────────────
+//
+// `setNodes`/`setEdges` são setters de estado do React alimentados direto pelo payload. O antigo
+// `data.nodes ?? []` só barrava `null`/`undefined`: qualquer *truthy* fora de formato chegava
+// inteiro ao reactflow, que faz `.map` nele — e `.map` de não-array ESTOURA no render, que não
+// cai no `.catch()` da promise. É a mesma armadilha que o `ClientTimeline` documenta.
+describe("funil com nodes/edges fora de formato não derruba o builder", () => {
+  function renderEdit() {
+    return render(
+      <MemoryRouter initialEntries={["/funis/f-1"]}>
+        <Routes>
+          <Route path="/funis/:id" element={<FunnelBuilderPage />} />
+        </Routes>
+      </MemoryRouter>,
+    );
+  }
+
+  function mockFunnel(payload: unknown) {
+    vi.mocked(api.get).mockImplementation((url: string) => {
+      if (url === "/funnels/components") return Promise.resolve({ data: catalog } as never);
+      if (url === "/settings/profile") return Promise.resolve({ data: profile(null) } as never);
+      if (url === "/funnels/f-1") return Promise.resolve({ data: payload } as never);
+      return Promise.resolve({ data: [] } as never);
+    });
+  }
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it.each([
+    ["objeto no lugar da lista", { name: "F", nodes: { a: 1 }, edges: { b: 2 } }],
+    ["string no lugar da lista", { name: "F", nodes: "n", edges: "e" }],
+    ["número no lugar da lista", { name: "F", nodes: 3, edges: 4 }],
+    ["payload inteiro fora de formato", "não é json"],
+  ])("%s → o builder monta vazio em vez de estourar", async (_rotulo, payload) => {
+    mockFunnel(payload);
+    renderEdit();
+
+    // O catálogo é a prova de que o render CHEGOU AO FIM: ele fica depois do canvas na árvore.
+    await waitFor(() => expect(screen.getByText("Novo Lead")).toBeInTheDocument());
+  });
+
+  it("nodes/edges de verdade continuam chegando ao canvas", async () => {
+    // Contra-teste: a guarda não pode ter fechado o caminho feliz.
+    mockFunnel({
+      name: "Funil real",
+      nodes: [{ id: "n1", position: { x: 0, y: 0 }, data: { key: "novo_lead", label: "Novo Lead" } }],
+      edges: [],
+    });
+    renderEdit();
+
+    await waitFor(() => expect(screen.getByDisplayValue("Funil real")).toBeInTheDocument());
+  });
+});

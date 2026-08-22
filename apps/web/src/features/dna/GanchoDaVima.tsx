@@ -29,6 +29,11 @@ const FORMATOS = ["escolha", "escolha_multipla", "texto"] as const;
  *   render não cai no `.catch()` da promise, então derrubaria a tela hospedeira, quebrando o
  *   "falha em silêncio, sempre" que este componente promete.
  *
+ * **Exportada porque a classe não mora neste componente** (issue #179): `NucleoPage` renderiza
+ * uma LISTA das mesmas perguntas pelo mesmo `PerguntaDaVima`, e lá o payload fora de forma não
+ * dava card fantasma, dava TELA BRANCA. Um predicado só, no arquivo que o documenta, em vez de
+ * uma segunda convenção parecida a dois diretórios de distância.
+ *
  * `eixo` fica de fora de propósito: é obrigatório no contrato, mas nenhum pixel depende dele.
  * Validá-lo só se sustentaria num teste tautológico, e predicado sem consequência é dívida.
  *
@@ -37,7 +42,7 @@ const FORMATOS = ["escolha", "escolha_multipla", "texto"] as const;
  * separada seria um predicado que nenhum teste consegue matar — o `.catch()` da promise a
  * cobriria em silêncio — e predicado sem rede é dívida, não proteção.
  */
-function ehPergunta(data: unknown): data is DnaPergunta {
+export function ehPergunta(data: unknown): data is DnaPergunta {
   const p = data as Record<string, unknown> | null | undefined;
   return (
     typeof p?.key === "string" &&

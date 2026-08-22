@@ -598,3 +598,44 @@ describe("ComprovantePage — a escolha da baixa (Story 8.13)", () => {
     expect(pagina.className).toContain("pb-52");
   });
 });
+
+// ── Payload fora de forma na bandeja de comprovantes (issue #179) ─────────────
+describe("bandeja fora de formato não identifica comprovante nenhum", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    fusoDoTenant = "America/Sao_Paulo";
+  });
+
+  it("payload que RESPONDE a `.find` mas não é lista não vira comprovante", async () => {
+    // A asserção que mata a volta para `data.find(...) ?? null`: com um objeto que tem `.find`,
+    // o código antigo aceitava o retorno como se fosse um `ReceiptInfo` da bandeja e escrevia o
+    // nome dele no cabeçalho. `Array.isArray` reprova por FORMA — "não é lista, não tem
+    // comprovante" — em vez de confiar em quem responde ao método certo.
+    vi.mocked(api.get).mockImplementation((url: string) => {
+      if (url === "/payables/receipts") {
+        return Promise.resolve({
+          data: { find: () => ({ id: "r-1", filename: "forjado.pdf", size: 4096 }) },
+        } as never);
+      }
+      if (url.startsWith("/payables/receipts/candidates")) return Promise.resolve({ data: [] } as never);
+      if (url === "/bank/accounts") return Promise.resolve({ data: [CONTA] } as never);
+      return Promise.resolve({ data: [] } as never);
+    });
+    renderPage();
+
+    await waitFor(() => expect(screen.getByText("Comprovante recebido")).toBeInTheDocument());
+    expect(screen.queryByText("forjado.pdf")).not.toBeInTheDocument();
+  });
+
+  it("bandeja não-array degrada para o rótulo genérico, sem derrubar a tela", async () => {
+    vi.mocked(api.get).mockImplementation((url: string) => {
+      if (url === "/payables/receipts") return Promise.resolve({ data: { detail: "erro" } } as never);
+      if (url.startsWith("/payables/receipts/candidates")) return Promise.resolve({ data: [] } as never);
+      if (url === "/bank/accounts") return Promise.resolve({ data: [CONTA] } as never);
+      return Promise.resolve({ data: [] } as never);
+    });
+    renderPage();
+
+    await waitFor(() => expect(screen.getByText("Comprovante recebido")).toBeInTheDocument());
+  });
+});

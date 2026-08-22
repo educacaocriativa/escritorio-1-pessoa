@@ -45,7 +45,13 @@ export const publicApi = axios.create({
 export async function refreshSession(): Promise<string | null> {
   try {
     const { data } = await api.post<{ access_token: string }>("/auth/refresh");
-    return data.access_token ?? null;
+    // Guarda por FORMA, nunca por veracidade (issue #179): isto é SESSÃO. `data.access_token ??
+    // null` aceitava qualquer *truthy* — um objeto de erro serializado, um número — e ele iria
+    // parar no header `Authorization` como `[object Object]`, trocando "sessão não renovada"
+    // (que o interceptor sabe tratar) por um 401 opaco a cada request seguinte.
+    return typeof data?.access_token === "string" && data.access_token !== ""
+      ? data.access_token
+      : null;
   } catch {
     return null;
   }
