@@ -2,6 +2,7 @@ import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { api } from "../../lib/api";
+import { paredeDoTenant } from "../../test/paredeDoTenant";
 import BlocoDaAgenda from "./BlocoDaAgenda";
 
 // Task 6 (Onda 2): o bloco reusa o `NewEventModal` da Task 5 — por isso o mock de `api` também
@@ -19,6 +20,12 @@ vi.mock("../../lib/api", () => ({
 // do tenant e lê-lo pelas partes locais do `Date` dá o MESMO resultado, e a asserção de fuso fica
 // estruturalmente incapaz de falhar (§5.1 do CLAUDE.md, a família do `toContain("flex-wrap")`).
 let fusoDoTenant = "America/Sao_Paulo";
+// ⚠️ Os campos de horário do formulário são lidos por `paredeDoTenant`, nunca por
+// `toHaveValue("…T10:00")` (issue #185): o valor de um `<input type="datetime-local">` sai nas
+// partes locais da MÁQUINA, então a string literal amarrava dois testes daqui a America/Sao_Paulo
+// sem dizer isso — e `.tsx` está fora do `vitest.mutation.config.ts`, então o job de mutação nunca
+// os executou nem para reprovar. Ler pelo instante e formatar no fuso do tenant vale em qualquer
+// máquina, e mantém a afirmação onde ela é: no relógio do tenant.
 // Tóquio (UTC+9, sem horário de verão) está 12h à frente do runner — sob ele os dois caminhos
 // discordam até sobre que DIA é.
 const FUSO_DISTANTE = "Asia/Tokyo";
@@ -152,15 +159,20 @@ describe("BlocoDaAgenda", () => {
     // O seletor sai de cena e o formulário entra com a escolha já feita — o dono não redigita
     // a data que acabou de apontar no calendário.
     //
-    // ⚠️ Fuso do runner de propósito: este teste é sobre a COSTURA (a escolha atravessa do
-    // seletor para o formulário), não sobre fuso. A prova de que a hora escolhida é a hora de
+    // ⚠️ Tenant no fuso do runner de propósito: este teste é sobre a COSTURA (a escolha atravessa
+    // do seletor para o formulário), não sobre fuso. A prova de que a hora escolhida é a hora de
     // PAREDE DO TENANT — `instanteNoFuso` + `paraInputLocal`, com tenant em Tóquio — já vive em
     // `features/agenda/NewEventModal.test.tsx`, no dono da conversão. Trocar o fuso aqui só
     // trocaria a string esperada por outra igualmente arbitrária e duplicaria aquela prova.
+    //
+    // O que MUDA (#185) é como o campo é lido: a faixa que o dono apontou foi "10:00–11:00" no
+    // relógio do tenant, e é isso que a asserção diz. A string crua do campo diria "10:00" só
+    // enquanto a máquina estivesse em UTC−3 — afirmação sobre o runner, disfarçada de afirmação
+    // sobre a costura.
     expect(screen.getByRole("heading", { name: "Novo evento" })).toBeInTheDocument();
     expect(screen.queryByRole("heading", { name: "Marcar com Loana" })).not.toBeInTheDocument();
-    expect(screen.getByLabelText("Início")).toHaveValue("2026-08-20T10:00");
-    expect(screen.getByLabelText("Fim")).toHaveValue("2026-08-20T11:00");
+    expect(paredeDoTenant(screen.getByLabelText("Início"), fusoDoTenant)).toBe("20/08/2026 10:00");
+    expect(paredeDoTenant(screen.getByLabelText("Fim"), fusoDoTenant)).toBe("20/08/2026 11:00");
 
     // Depois de abrir, a próxima chamada a `GET /agenda/events` já devolve o evento recém-criado
     // — é isso que prova que a lista recarregou, e não só que o modal fechou.
@@ -226,6 +238,9 @@ describe("BlocoDaAgenda", () => {
 
     expect(screen.getByLabelText("Dia inteiro")).not.toBeChecked();
     expect(screen.getByLabelText("Título")).toHaveValue("");
-    expect(screen.getByLabelText("Início")).toHaveValue("2026-08-21T14:00");
+    // A hora NOVA (14:00 no relógio do tenant), não a da escolha abandonada — lida pelo instante
+    // para não depender do fuso da máquina (#185). "Título" segue com `toHaveValue`: string vazia
+    // não tem fuso.
+    expect(paredeDoTenant(screen.getByLabelText("Início"), fusoDoTenant)).toBe("21/08/2026 14:00");
   });
 });

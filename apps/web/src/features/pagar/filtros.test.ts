@@ -29,6 +29,23 @@ describe("fimDoMesSeguinte", () => {
   it("acerta o ano secular nao bissexto", () => {
     expect(fimDoMesSeguinte("2100-01-10")).toBe("2100-02-28");
   });
+
+  it("acerta o ano secular BISSEXTO — a metade da regra gregoriana que faltava", () => {
+    // Provado por mutacao (issue #191). O teste de 2100 acima ja mostrava que o autor se importava
+    // com anos seculares, mas so cobria a metade "divisivel por 100 nao e bissexto". A outra
+    // metade — `|| ano % 400 === 0` — nao tinha nenhum caso: apagar a clausula inteira ou trocar
+    // o `%` por `*` passava verde. Sem esta linha, `bissexto` estava escrito com tres quartos da
+    // regra testados e um quarto por fe.
+    expect(fimDoMesSeguinte("2000-01-10")).toBe("2000-02-29");
+  });
+
+  it("num ano bissexto os OUTROS meses nao herdam os 29 dias", () => {
+    // Provado por mutacao (issue #191): trocar `mes === 2` por `true` sobrevivia a suite inteira,
+    // porque todo caso bissexto que existia caia em fevereiro e todo caso nao-fevereiro caia em
+    // ano comum. Com o mutante, setembro de 2028 fecharia dia 29 e o horizonte padrao de Contas a
+    // Pagar esconderia um dia inteiro de vencimentos — em silencio, um ano a cada quatro.
+    expect(fimDoMesSeguinte("2028-08-18")).toBe("2028-09-30");
+  });
 });
 
 describe("filtroPadrao", () => {
@@ -76,6 +93,58 @@ describe("paraQuery", () => {
     const q = paraQuery(filtroPadrao("2026-08-18"), 50, 100);
     expect(q.limit).toBe(50);
     expect(q.offset).toBe(100);
+  });
+
+  it("manda o piso de data como `from` quando o dono escolhe um — nao so o teto", () => {
+    // Provado por mutacao (issue #191): `if (f.de) q.from = f.de` podia virar `if (false)` sem
+    // quebrar teste nenhum, porque NENHUM caso preenchia `de` (o padrao e `null` de proposito, e
+    // todos os testes partiam do padrao). O sintoma seria mudo e caro: o dono aplica o periodo
+    // "de 01/08 a 30/09", a tela mostra o recorte marcado e a API devolve tudo desde o comeco do
+    // mundo — sem erro, sem aviso, so uma lista maior do que ele pediu.
+    const f = { ...filtroPadrao("2026-08-18"), de: "2026-08-01" };
+    expect(paraQuery(f, 50, 0).from).toBe("2026-08-01");
+  });
+
+  it("o texto vai APARADO, e so espaco nao vira busca", () => {
+    // Provado por mutacao (issue #191): os dois `.trim()` da linha podiam sumir sem quebrar nada.
+    // O primeiro e o guarda ("   " nao e uma busca, e omitir a chave e o que traz a lista inteira
+    // de volta); o segundo e o que impede um `?q=%20anthropic%20` de nao casar com nada no
+    // servidor. Sao dois efeitos diferentes na mesma linha, por isso as duas asseracoes.
+    const soEspaco = { ...filtroPadrao("2026-08-18"), q: "   " };
+    expect(paraQuery(soEspaco, 50, 0)).not.toHaveProperty("q");
+
+    const comSobra = { ...filtroPadrao("2026-08-18"), q: "  anthropic  " };
+    expect(paraQuery(comSobra, 50, 0).q).toBe("anthropic");
+  });
+});
+
+describe("paraQuery — a ORDEM da lista (olhar para tras x olhar para a frente)", () => {
+  // Provado por mutacao (issue #191): o unico caso de ordenacao que existia era `status: ["paid"]`
+  // ⇒ `desc`. Isso deixava metade do predicado solto — o `.every` podia virar `.some`, o
+  // `"canceled"` podia virar `""` e o `status.length > 0` podia virar `>= 0`, tudo verde. Os tres
+  // casos abaixo sao os que separam esses programas, e cada um e uma tela que o dono abre.
+  const base = filtroPadrao("2026-08-18");
+
+  it("historico cancelado tambem e olhar para tras", () => {
+    // `canceled` e `paid` sao o MESMO gesto (arquivo); so `paid` estava preso.
+    expect(paraQuery({ ...base, status: ["canceled"], ate: null }, 50, 0).order).toBe("desc");
+    expect(paraQuery({ ...base, status: ["paid", "canceled"], ate: null }, 50, 0).order).toBe(
+      "desc",
+    );
+  });
+
+  it("recorte MISTO olha para a frente — basta uma conta viva para o proximo vencimento mandar", () => {
+    // `every`, nao `some`: com uma aberta no meio do recorte, o que interessa e o que vence
+    // primeiro. Trocado por `some`, a lista abriria pelo passado e o dono perderia de vista
+    // exatamente a conta que ainda pode pagar.
+    expect(paraQuery({ ...base, status: ["paid", "open"], ate: null }, 50, 0).order).toBe("asc");
+  });
+
+  it("sem nenhum status marcado ('todos') a ordem e crescente, nao decrescente", () => {
+    // Pegadinha real do `every`: `[].every(...)` e `true` por vacuidade, entao o `status.length > 0`
+    // e a UNICA coisa segurando o caso "todos" no lado certo. Trocado por `>= 0`, a visao "todos"
+    // abriria pelo mais antigo — a lista que ninguem quer ver primeiro.
+    expect(paraQuery({ ...base, status: [], ate: null }, 50, 0).order).toBe("asc");
   });
 });
 

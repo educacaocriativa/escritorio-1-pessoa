@@ -48,6 +48,40 @@ export interface NavSection {
  * Cada grupo é separado por um divisor tracejado (ver AppShell.tsx) — evita a lista única
  * misturando navegação diária com telas de configuração/relatório raramente abertas.
  */
+// ── FORA DO TESTE DE MUTAÇÃO, e a medição que decidiu isso (issue #191) ──────────────────────
+//
+// `navigation.ts` era o PIOR score da árvore — 55,65%, 51 dos 269 sobreviventes da primeira
+// corrida completa (run 32478357936). Ordenado por contagem, seria o alvo nº1. Medido por TIPO,
+// não é dívida nenhuma.
+//
+// Os 115 mutantes deste arquivo são, sem exceção: 53 `StringLiteral`, 26 `BooleanLiteral`,
+// 30 `ObjectLiteral` e 6 `ArrayDeclaration`. **Zero** `ConditionalExpression`, `LogicalOperator`,
+// `EqualityOperator` ou `ArithmeticOperator` — e não é coincidência: este módulo não exporta
+// função nenhuma, só a tabela abaixo. Não há expressão para mutar porque não há lógica. A
+// pergunta que a mutação faz ("o teste prende a lógica?") não tem sujeito aqui.
+//
+// Matar os 51 sobreviventes significaria afirmar cada `label` e cada `ready` num teste — uma
+// SEGUNDA CÓPIA desta tabela, que dobra o custo de mexer no menu e não pega nada que um humano
+// não veja na tela em um segundo. Seria dívida nova, não dívida paga.
+//
+// E há a prova de que o número era um artefato da régua, não do código: a corrida exclui
+// `.test.tsx` de propósito (ver `vitest.mutation.config.ts`), e `ClientDetailPage.test.tsx:880`
+// clica em `findByRole("button", { name: /CRM & Kanban/ })` — esse teste MATA um dos 26 mutantes
+// de string. Os 51 mediam a ausência de teste de componente na corrida, não a qualidade do
+// `navigation.test.ts`.
+//
+// **Por que aqui e não em `stryker.config.mjs`.** A regra de descoberta de lá ("todo `.ts` com um
+// irmão `.test.ts`") é boa e não deve ganhar a primeira exceção por nome de arquivo — a segunda
+// viria fácil. O `disable` fica no lugar onde a próxima pessoa lê o motivo, e é BRACKETADO: se um
+// dia alguém exportar uma função daqui, ela nasce fora do bloco e entra na corrida sozinha.
+//
+// O `navigation.test.ts` continua rodando e continua guardando o que importa — as quatro travas
+// da Story 8.7 e as 24 rotas pré-existentes. Isto não afrouxa teste nenhum; só para de pontuar
+// uma tabela de dados como se fosse lógica.
+//
+// Impacto medido no score GLOBAL: 83,52% → 85,46% (1.480/1.772 → 1.416/1.657) só por sair.
+//
+// Stryker disable all : tabela de dados declarativa, sem lógica — ver o bloco acima (issue #191)
 export const navSections: NavSection[] = [
   {
     // Núcleo: o que se abre todo dia.
@@ -111,3 +145,5 @@ export const navSections: NavSection[] = [
     items: [{ label: "Configurações", to: "/config", icon: Settings, ready: true }],
   },
 ];
+
+// Stryker restore all
