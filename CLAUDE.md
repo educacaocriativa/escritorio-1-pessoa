@@ -499,8 +499,8 @@ arquivar um centro de custo num celular de 360px**. O `<a>` do bloco "botão" va
 **página pública** (`PageBlocks.tsx` é o mesmo componente), onde ele é a única conversão que existe:
 rótulo longo sem espaço media **626px** de largura.
 
-**Cobertura: 29 das 47 rotas não-públicas de `App.tsx`** — **43 no `ProtectedLayout`** (com shell:
-sidebar + topbar) **+ 4 no `ProtectedBareLayout`** (sem shell). **18 de fora**, e as duas caixas
+**Cobertura: 30 das 47 rotas não-públicas de `App.tsx`** — **43 no `ProtectedLayout`** (com shell:
+sidebar + topbar) **+ 4 no `ProtectedBareLayout`** (sem shell). **17 de fora**, e as duas caixas
 falham por motivos diferentes:
 
 **14 do `ProtectedLayout`.** `/`, `/config`, `/crm`, `/financeiro/conferencia` **quebram com o mock
@@ -511,15 +511,34 @@ renderizam **em branco** (`pageerror` real: `reading 'some'`/`'trim'`/`'filter'`
 `/juridico/novo`, `/juridico/:id` (as duas últimas exigem `?skill=`) e `/admin` (exige
 `is_platform_admin`) pedem fixture ou sessão própria. `*` (ComingSoon) não tem controle.
 
-**4 do `ProtectedBareLayout`, e estas são a categoria INTEIRA:** `/vima`, `/dna/nucleo`,
-`/compartilhar`, `/comprovante/:id`. **Nenhuma está no catálogo** — não por triagem, por omissão do
-denominador. E não são periferia: os comentários do próprio `App.tsx` dizem que `/vima` e
-`/dna/nucleo` são **"desenhados para 360px"**, e `/comprovante/:id` é **tela de dinheiro** que já
+**3 do `ProtectedBareLayout`** (eram as 4 da categoria INTEIRA até o #178): `/dna/nucleo`,
+`/compartilhar`, `/comprovante/:id`. **Nenhuma das três está no catálogo** — não por triagem, por
+omissão do denominador. E não são periferia: o comentário do próprio `App.tsx` diz que
+`/dna/nucleo` é **"desenhado para 360px"**, e `/comprovante/:id` é **tela de dinheiro** que já
 carrega dívida de medição registrada no §5.1 (*"Segue de pé a dívida da `ComprovantePage` … aquela
 tela não está entre as medidas"*) — o `ALTURA_DA_BARRA` do `baixa.ts` tem seis mutantes
 sobreviventes justamente porque o número é medida do DOM e ninguém mede aquela tela. **Não foram
 medidas nesta issue de propósito** (o pedido era o número honesto, não mais cobertura): se
 alguma tiver defeito, vira issue própria com o número medido.
+
+⚠️ **`/vima` saiu dessa lista no #178, e o que ela tinha escondido era defeito de verdade.** É a
+PORTA DO DIA (`EntradaDoDia` manda a raiz autenticada para lá enquanto o briefing de hoje não foi
+lido — a primeira tela do dono no aparelho de 360px, de manhã) e era a **única das seis telas que
+montam `GanchoDaVima`** sem régua nenhuma. Uma entrada em `e2e/support/rotas.ts` com o payload de
+pior caso na forma real do `BriefingOut` reprovou **na primeira medição**: `documentElement
+.scrollWidth` **649px** numa viewport de 360. Causa: `linhas[].texto` e a narração repetem nomes
+**digitados pelo dono** (fornecedor, título do prazo, nome da conversa — `vima/absences.py`), e um
+token sem espaço não tem onde quebrar; sem shell **não há `main.overflow-x-hidden`** para recortar,
+então o que não cabe vaza e a página inteira rola. Conserto: `break-words` nos dois lugares —
+medidos **um a um**, a narração sozinha vale **649px** e a lista sozinha **525px**.
+
+⚠️ **Nesta rota as duas réguas NÃO são independentes, e a razão é estrutural.** Sem shell não há
+ancestral que recorte: o que estoura empurra o documento, e `medirControles` **absolve** todo
+controle quando a página rola (`deslizador = "document"`). Logo, hoje, quem tem dente aqui é a
+régua do #135; a do #144 só acusa se alguém introduzir um recorte. Medido no #178: `overflow-hidden`
+no contêner + «Ir para o painel» em largura fixa de 600px → `alcance-360` acusa **272px além da
+borda** e `rotas-360` continua devolvendo **360**. É exatamente por isso que a entrada vale nas
+DUAS listas: a segunda é a guarda do dia em que essa tela ganhar um cartão com recorte.
 
 ⚠️ **COMO RECONTAR — a régua que impede o próximo erro deste parágrafo, que já aconteceu DUAS
 vezes seguidas.** Conte `<Route path=` nas **DUAS** caixas de layout (`ProtectedLayout` **e**
