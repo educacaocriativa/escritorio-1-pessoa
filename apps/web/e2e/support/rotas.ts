@@ -68,6 +68,22 @@ const CARROSSEL = {
   created_at: "2026-01-01T10:00:00Z",
 };
 
+/** As LISTAS de `/funis` e `/juridico` (#182). Ficam aqui porque o catálogo é quem as usa; são
+ * importadas por `card-largo-360.spec.ts`, que mede a BORDA do card, para não haver duas cópias. */
+export const FUNIS_LONGOS = [
+  { id: "f1", name: LONGO, node_count: 7, created_at: "2026-01-01T10:00:00Z" },
+];
+
+export const JURIDICO_DOCS = [
+  { id: "d1", skill: "peticao", category: "core", title: LONGO, client_id: null,
+    client_name: LONGO, status: "ready", created_at: "2026-01-01T10:00:00Z" },
+];
+
+export const JURIDICO_SKILLS = [
+  { skill: "peticao", label: LONGO, category: "core", description: `${LONGO} ${LONGO}`,
+    output_type: LONGO },
+];
+
 const CATALOGO_FUNIL = [{
   category: "gatilhos", label: "Gatilhos", color: "#123456",
   items: [{ key: "lead", label: LONGO, description: LONGO, shape: "node", action: "" }],
@@ -126,6 +142,42 @@ const DIAGNOSTICO = {
   narrative_source: "template",
 };
 
+/**
+ * `/vima/briefing` devolve OBJETO (`BriefingOut`, `apps/api/app/modules/vima/schemas.py`). Com o
+ * `[]` default de `mockarApi` a tela nunca sai de "Preparando seu resumo…" — mediria 360 por
+ * não ter briefing nenhum, e a `marca` "Seu dia" (que só existe no estado CARREGADO) é
+ * exatamente o que reprova esse verde.
+ *
+ * Pior caso plausível na forma real: `linhas[].texto` é o `title` da ausência, montado com nome
+ * DIGITADO pelo dono — fornecedor, título do prazo, nome da conversa (`vima/absences.py`) — e a
+ * narração repete esses nomes. Um token sem espaço ali é o que mais empurra numa tela cuja caixa
+ * é `max-w-prose` e que não recorta nada: `/vima` mora no `ProtectedBareLayout`, sem o
+ * `main.overflow-x-hidden` que segura as telas com shell.
+ *
+ * `kind` preenchido na PRIMEIRA linha PENDENTE não é enfeite: é o que faz `BriefingPage` montar
+ * `GanchoDaVima` (`BriefingPage.tsx:177`) — o caminho que dá nome a esta issue. O card em si
+ * segue de fora pelo default `"/dna/pendente": null` de `support/api.ts`, como nas outras cinco.
+ *
+ * `read_at: null` é o estado em que o dono ABRE a porta do dia; o POST de leitura que ele dispara
+ * cai no mesmo prefixo e recebe o mesmo objeto.
+ */
+const BRIEFING = {
+  id: "b1",
+  reference_date: "2026-08-21",
+  texto: `Bom dia. A conta ${LONGO} venceu ontem, e ${LONGO} escreveu e ainda espera resposta.`,
+  por_ia: true,
+  vazio: false,
+  excedente: 4,
+  linhas: [
+    { secao: "PENDENTE", module: "financeiro", texto: `${LONGO} — R$ 12.345,67 venceu em 19/08`, kind: "financeiro.conta.vencendo" },
+    { secao: "PENDENTE", module: "comercial", texto: `${LONGO} escreveu e ainda não foi respondido`, kind: "comercial.contato.esperando_resposta" },
+    { secao: "ACONTECEU", module: "comercial", texto: `${LONGO} virou cliente`, kind: "" },
+    { secao: "NÚMEROS", module: "financeiro", texto: `${LONGO}: R$ 123.456,78 recebidos no mês`, kind: "" },
+  ],
+  read_at: null,
+  created_at: "2026-08-21T08:00:00Z",
+};
+
 export interface Caso {
   rota: string;
   /** Texto que PRECISA estar visível antes de medir. Sem ele, 360 significaria "tela em branco". */
@@ -149,8 +201,11 @@ export const CASOS: Caso[] = [
   { rota: "/contratos", marca: "Contratos" }, // vazio
   { rota: "/marketing", marca: "Carrosséis" }, // vazio
   { rota: "/marketing/m1", marca: "Pré-visualização (Instagram 4:5) — baixe em PNG", mocks: { "/marketing/carousels/templates": [], "/marketing/carousels": CARROSSEL } },
-  { rota: "/juridico", marca: "Assistente Jurídico" }, // vazio
-  { rota: "/funis", marca: "Funis de Vendas" }, // vazio
+  // #182: as duas saíram do estado vazio. A `marca` é o TÍTULO DO CARD, não o da página: com o
+  // título da página elas passavam sem card nenhum, e foi assim que o card de 316px fora da tela
+  // atravessou o #135, o #144 e o #160. A borda do card é medida em `card-largo-360.spec.ts`.
+  { rota: "/juridico", marca: LONGO, mocks: { "/juridico/documents": JURIDICO_DOCS, "/juridico/skills": JURIDICO_SKILLS } },
+  { rota: "/funis", marca: LONGO, mocks: { "/funnels": FUNIS_LONGOS } },
   { rota: "/funis/f1", marca: "Automação", mocks: { "/funnels/components": CATALOGO_FUNIL, "/funnels/f1": FUNIL, "/crm/clients": [] } },
   // A partir daqui, rotas acrescentadas pelo #144. `/funis/novo` é a outra metade da issue: mesmo
   // componente do `/funis/:id`, estado inicial diferente — e o cabeçalho que não cabia era o
@@ -167,4 +222,10 @@ export const CASOS: Caso[] = [
   { rota: "/busca", marca: "Busca" }, // vazio
   { rota: "/pagar", marca: "Despesas" }, // vazio
   { rota: "/conversas", marca: "Conversas" }, // vazio
+  // A PORTA DO DIA (#178). `EntradaDoDia` manda a raiz autenticada para cá enquanto o briefing de
+  // hoje não foi lido: é a PRIMEIRA tela que o dono vê no aparelho de 360px, e era a única das
+  // seis que montam `GanchoDaVima` sem régua nenhuma. Mora no `ProtectedBareLayout` — sem shell,
+  // logo sem o `main.overflow-x-hidden`: aqui o que não cabe faz a PÁGINA rolar em vez de ficar
+  // recortado, e é a régua do #135 que o pega primeiro.
+  { rota: "/vima", marca: "Seu dia", mocks: { "/vima/briefing": BRIEFING } },
 ];

@@ -78,9 +78,15 @@ export default function CentrosCustoPage() {
             usa não é obrigado — lançamentos sem centro aparecem como "Não atribuído".
           </p>
         </div>
-        <label className="flex items-center gap-2 text-sm text-neutral-600">
+        {/* O alvo é a LINHA INTEIRA do rótulo, não a caixinha: o `<input>` nasce com **13×13px**
+            e engordá-lo para 44×44 desenharia um quadrado do tamanho de um botão. O `<label>` já
+            alterna o estado em qualquer ponto da sua área — mesma convenção do «Mostrar
+            arquivadas» de `ContasSaldosPage.tsx`. O `h-5 w-5` é só para a caixinha parar de ser um
+            ponto; quem cumpre os 44px é o `min-h-[44px]` da linha. */}
+        <label className="flex min-h-[44px] items-center gap-3 text-sm text-neutral-600">
           <input
             type="checkbox"
+            className="h-5 w-5 shrink-0"
             checked={includeArchived}
             onChange={(e) => setIncludeArchived(e.target.checked)}
           />
@@ -140,16 +146,21 @@ export default function CentrosCustoPage() {
                 </span>
                 {!c.archived_at && (
                   <span className="flex items-center gap-3">
+                    {/* `min-h-[44px]` nas DUAS ações. O #156 as trouxe para dentro da tela e
+                        parou aí: alcançáveis, e de **16px** de altura. «Arquivar» é destrutiva e
+                        pede confirmação, mas errar o alvo dela não é de graça — é a classe do PR
+                        #56. A fonte não cresce, só a área: o cartão fica mais alto e rolar na
+                        vertical é nativo e gratuito. Medido em #181. */}
                     <button
                       onClick={() => setEditing(c)}
-                      className="inline-flex items-center gap-1 text-xs font-medium text-neutral-500 hover:text-primary-600"
+                      className="inline-flex min-h-[44px] items-center gap-1 px-1 text-xs font-medium text-neutral-500 hover:text-primary-600"
                     >
                       <Pencil size={14} />
                       Editar
                     </button>
                     <button
                       onClick={() => archive(c.id)}
-                      className="inline-flex items-center gap-1 text-xs font-medium text-neutral-500 hover:text-danger"
+                      className="inline-flex min-h-[44px] items-center gap-1 px-1 text-xs font-medium text-neutral-500 hover:text-danger"
                     >
                       <Archive size={14} />
                       Arquivar

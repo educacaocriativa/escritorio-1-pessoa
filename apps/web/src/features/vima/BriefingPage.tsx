@@ -88,8 +88,17 @@ export default function BriefingPage() {
         <span className="text-xs text-neutral-400">{formatTime(briefing.created_at, fuso)}</span>
       </header>
 
-      {/* A narração. Tipografia grande porque é o que se lê, não o que se consulta. */}
-      <p className="mt-3 whitespace-pre-line text-lg leading-relaxed text-neutral-800 sm:text-xl">
+      {/*
+        A narração. Tipografia grande porque é o que se lê, não o que se consulta.
+
+        `break-words` não é enfeite (#178): este texto repete nomes DIGITADOS pelo dono —
+        fornecedor, título do prazo, nome da conversa (`vima/absences.py` monta o `title` da
+        ausência com eles) — e um token sem espaço não tem onde quebrar. Medido em 360×740 com a
+        fixture de pior caso: sem a classe, a PÁGINA INTEIRA rola até **649px**. E aqui não há
+        `main.overflow-x-hidden` para recortar nada: `/vima` mora no `ProtectedBareLayout`
+        (sem shell), então o que não cabe vaza para fora da tela em vez de ficar preso.
+      */}
+      <p className="mt-3 whitespace-pre-line break-words text-lg leading-relaxed text-neutral-800 sm:text-xl">
         {briefing.texto}
       </p>
 
@@ -161,9 +170,11 @@ function Secoes({ linhas, excedente }: { linhas: BriefingLinha[]; excedente: num
             {linhas
               .filter((l) => l.secao === secao)
               .map((l, i) => (
+                // `break-words` pela mesma razão do parágrafo da narração, e medida à parte:
+                // só estas linhas, sem a classe, já levam a página a **525px** em 360 (#178).
                 <li
                   key={`${secao}-${i}`}
-                  className="rounded-md border border-neutral-200 bg-white px-3 py-2 text-sm text-neutral-700"
+                  className="break-words rounded-md border border-neutral-200 bg-white px-3 py-2 text-sm text-neutral-700"
                 >
                   {l.texto}
                 </li>

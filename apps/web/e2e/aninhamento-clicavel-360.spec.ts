@@ -62,6 +62,50 @@ import { semearSessao } from "./support/sessao";
 const DESLOCAMENTO_PX = 10;
 
 /**
+ * A folga que a régua EXIGE entre a distância de saída da lixeira e o deslocamento do gesto — a
+ * correção do #190.
+ *
+ * ⚠️ **Este número não é gosto, é o teto que a geometria de hoje permite.** Medido em 21/08/2026,
+ * viewport 360×740, contra o HEAD desta branch (base `c36a295`):
+ *
+ * | tela | caixa da lixeira | direção do gesto | saída no eixo | folga para os 10px |
+ * |---|---|---|---|---|
+ * | `/funis` | 16 × 16 | (−1,000 · 0,000) | **8,00** | **2,00** |
+ * | `/juridico` | 14 × 14 | (−0,997 · 0,080) | 7,02 | 2,98 |
+ * | `/marketing` | 14 × 14 | (−0,376 · −0,927) | 7,55 | 2,45 |
+ *
+ * O `/funis` é o que fixa o teto, e ele é **determinístico por construção**: o `Trash2 size={16}`
+ * dá uma caixa de 16×16; `top-1/2` centra a lixeira na `<div relative>` e `-translate-y-1/2` a
+ * centra em si mesma, então o centro dela coincide com o centro do card **exatamente**, `dy = 0`,
+ * a direção é horizontal pura e a saída é `16/2 = 8,00` — sem depender de métrica de fonte nem de
+ * quebra de linha. `MARGEM_PX = 3` (o número sugerido na issue) reprovaria o `/funis`.
+ *
+ * Chegar a 3 exigiria encolher a lixeira do `/funis` de `size={16}` para `size={14}` — ou seja,
+ * **piorar um alvo de toque que já é pequeno demais**, que é dívida declarada de outra issue no ⚠️
+ * do cabeçalho. Aumentar o `DESLOCAMENTO_PX` está fora de questão: os 10px são a afirmação medida
+ * no #149 sobre o mundo real, não um parâmetro de conveniência do teste (#190, item 3). Por isso o
+ * `/funis` fica **em cima do limite**, e isso é deliberado: a guarda está calibrada na tela mais
+ * apertada, e qualquer inclinação futura da direção dele reprova — o que é sinal VERDADEIRO.
+ *
+ * ⚠️ **A linha do `/marketing` da issue (direção −0,803 · −0,596, saída 8,72) NÃO se reproduz, e a
+ * razão é estrutural.** `git diff f41e134..HEAD` não toca `features/marketing`, `features/funis`,
+ * `features/juridico` nem `components/` — o código é o mesmo. E a altura do card do `/marketing`
+ * não é negociável com o renderizador: o `CarouselThumb` passa `display = 240` para o
+ * `ScaledSlide`, que fixa `height: H * scale = 1350 × (240/1080) = 300px` em estilo **inline**. Com
+ * a miniatura de 300px o vetor fica quase vertical (`|uy| = 0,927`) e a saída, 7,55. Os 8,72 só
+ * saem de um card de ~148×113, que essa geometria não produz. Ou seja: a régua não está a 1,28px
+ * do vermelho no `/marketing`; quem está no fio é o `/funis`, com 2,00px — e determinísticos.
+ *
+ * ⚠️ **O ganho do #190 não é o número, é a implicação.** A guarda velha (`min(w,h)/2`) podia
+ * PASSAR afirmando 7 enquanto o gesto precisava de 8,72 — ela media uma grandeza que é sempre ≤ a
+ * que importa. Com a guarda nova, "a guarda passou" implica "o gesto sai da lixeira com folga de
+ * pelo menos 2px". Quando a folga acabar, a régua reprova **aqui**, no `beforeEach`, com
+ * a mensagem que aponta o conserto — e não 30 linhas adiante, no alvo do clique, com a mensagem
+ * que custou a investigação do #177.
+ */
+const MARGEM_PX = 2;
+
+/**
  * ⚠️ **O pior caso de §5.1 aqui é o pior caso ALCANÇÁVEL, e a diferença foi medida.**
  *
  * O nome sem espaço de 80 chars que a régua de layout usa (`support/rotas.ts`) empurra a lixeira
@@ -116,14 +160,79 @@ async function lerCliques(page: Page): Promise<string[]> {
   return page.evaluate(() => (window as JanelaComGravador).__cliques ?? []);
 }
 
+/** A caixa que o `boundingBox()` devolve — só os campos que a geometria abaixo usa. */
+interface Caixa {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+}
+
 /**
- * O GESTO do #149: `mousedown` no centro do alvo INTERNO (a lixeira) e `mouseup` deslocado
- * `DESLOCAMENTO_PX` na direção do centro do alvo EXTERNO (o card).
+ * A DIREÇÃO do gesto do #149: do centro do alvo INTERNO (a lixeira) para o centro do alvo EXTERNO
+ * (o card), normalizada.
  *
  * A direção é calculada, não chutada: apontar para o centro do card garante que o `mouseup` caia
  * DENTRO da caixa do externo nas duas versões — a desaninhada e a mutante —, que é o que torna a
  * medição comparável. Um deslocamento fixo "para baixo" cairia fora do card em uma das três telas
  * e a régua mediria coisas diferentes em cada uma.
+ *
+ * ⚠️ **Ela é uma função COMPARTILHADA de propósito, e isso é metade da correção do #190.** Antes,
+ * a guarda do `beforeEach` calculava a SUA grandeza (`min(w,h)/2`) e o gesto calculava a DELE —
+ * então as duas podiam divergir, e divergiam: no `/marketing` de `f41e134` a guarda afirmava 7
+ * onde o gesto precisava de 8,72. Com um só cálculo de direção, guarda e gesto não têm como medir
+ * gestos diferentes.
+ */
+function escorregaoDe(
+  caixaInterna: Caixa,
+  caixaExterna: Caixa,
+): { x0: number; y0: number; ux: number; uy: number } {
+  const x0 = caixaInterna.x + caixaInterna.width / 2;
+  const y0 = caixaInterna.y + caixaInterna.height / 2;
+  const dx = caixaExterna.x + caixaExterna.width / 2 - x0;
+  const dy = caixaExterna.y + caixaExterna.height / 2 - y0;
+  const norma = Math.hypot(dx, dy) || 1;
+  return { x0, y0, ux: dx / norma, uy: dy / norma };
+}
+
+/**
+ * Quanto o `mouseup` precisa andar, **na direção do gesto**, para sair da caixa da lixeira.
+ *
+ * Escorregando ao longo do unitário `(ux, uy)` a partir do centro, a borda vertical é cruzada em
+ * `(w/2)/|ux|` e a horizontal em `(h/2)/|uy|`; sai-se da caixa na PRIMEIRA das duas:
+ *
+ * ```
+ * saida = min( (w/2)/|ux| , (h/2)/|uy| )
+ * ```
+ *
+ * ⚠️ **É esta a grandeza que a régua precisa, e a guarda velha media outra.** `min(w,h)/2` é a
+ * saída na melhor direção possível (a paralela ao lado menor), logo é **sempre ≤** `saida`. Uma
+ * guarda sistematicamente otimista pode passar enquanto o gesto NÃO sai — que é exatamente o
+ * vermelho do #177: o `mouseup` caiu na borda, o `click` foi para o próprio `svg` da lixeira e a
+ * régua morreu no meio da asserção, sem dizer o que consertar (#190).
+ *
+ * ⚠️ **Eixo zero devolve `Infinity`, e isso é a resposta CERTA, não um caso de borda.** No
+ * `/funis` a lixeira é centrada verticalmente no card (`top-1/2 -translate-y-1/2`), então `dy = 0`
+ * e `uy = 0`: andando na horizontal pura **nunca** se cruza a borda de cima nem a de baixo, e
+ * `Infinity` no `min` deixa o eixo X decidir.
+ *
+ * ⚠️ **Medido: com o `Math.abs` no denominador, apagar este ramo é um MUTANTE EQUIVALENTE.**
+ * `8/Math.abs(+0)` e `8/Math.abs(-0)` dão os dois `Infinity` (`Math.abs(-0)` é `+0`), então a
+ * conta não muda. O ramo fica como documentação executável do caso `uy = 0` — e como aviso: é o
+ * `Math.abs` que segura a armadilha, porque `8/-0` cru devolve **`-Infinity`**, e um `-Infinity`
+ * no `min` faria esta guarda passar calada contra qualquer caixa. Daí o piso do `beforeEach`.
+ */
+function distanciaDeSaida(caixaInterna: Caixa, caixaExterna: Caixa): number {
+  const { ux, uy } = escorregaoDe(caixaInterna, caixaExterna);
+  const saidaEmX = ux === 0 ? Infinity : caixaInterna.width / 2 / Math.abs(ux);
+  const saidaEmY = uy === 0 ? Infinity : caixaInterna.height / 2 / Math.abs(uy);
+  return Math.min(saidaEmX, saidaEmY);
+}
+
+/**
+ * O GESTO do #149: `mousedown` no centro do alvo INTERNO (a lixeira) e `mouseup` deslocado
+ * `DESLOCAMENTO_PX` na direção dada por `escorregaoDe` — a mesma que a guarda do `beforeEach` usa
+ * para conferir se esse deslocamento SAI da lixeira.
  */
 async function toqueQueEscorrega(page: Page, interno: Locator, externo: Locator): Promise<void> {
   const caixaInterna = await interno.boundingBox();
@@ -131,15 +240,11 @@ async function toqueQueEscorrega(page: Page, interno: Locator, externo: Locator)
   expect(caixaInterna, "a lixeira precisa estar na tela — sem caixa não há gesto").not.toBeNull();
   expect(caixaExterna, "o card precisa estar na tela — sem caixa não há direção").not.toBeNull();
 
-  const x0 = caixaInterna!.x + caixaInterna!.width / 2;
-  const y0 = caixaInterna!.y + caixaInterna!.height / 2;
-  const dx = caixaExterna!.x + caixaExterna!.width / 2 - x0;
-  const dy = caixaExterna!.y + caixaExterna!.height / 2 - y0;
-  const norma = Math.hypot(dx, dy) || 1;
+  const { x0, y0, ux, uy } = escorregaoDe(caixaInterna!, caixaExterna!);
 
   await page.mouse.move(x0, y0);
   await page.mouse.down();
-  await page.mouse.move(x0 + (dx / norma) * DESLOCAMENTO_PX, y0 + (dy / norma) * DESLOCAMENTO_PX);
+  await page.mouse.move(x0 + ux * DESLOCAMENTO_PX, y0 + uy * DESLOCAMENTO_PX);
   await page.mouse.up();
 }
 
@@ -273,12 +378,38 @@ for (const tela of TELAS) {
         "a lixeira escapou pela DIREITA da viewport de 360px — a régua mediria o transbordo, não o aninhamento",
       ).toBeLessThanOrEqual(360);
 
-      // E ela tem de ser MENOR que o deslocamento, senão o escorregão de 10px cai dentro dela e a
-      // régua vira um medidor de padding (ver o ⚠️ do cabeçalho).
+      // ⚠️ **E o escorregão tem de SAIR da lixeira, com folga — a correção do #190.** Se o
+      // `mouseup` cai dentro dela, o `click` vai para a própria lixeira, o `confirm` é dispensado
+      // pelo Playwright e a régua fica VERDE com o defeito de pé (foi assim que a primeira versão
+      // passou 14/15 contra o código aninhado). A grandeza é a distância de saída NO EIXO DO
+      // GESTO, não `min(w,h)/2`: aquela é a saída na melhor direção possível, é sempre ≤ esta, e
+      // por isso podia passar afirmando 7 onde o gesto precisava de 8,72.
+      //
+      // O `MARGEM_PX` transforma o fio da navalha em reprovação LEGÍVEL: quando a caixa crescer, a
+      // régua morre aqui, com "a lixeira ficou grande demais", em vez de morrer no meio da
+      // asserção do alvo do clique — a falha que *parece* regressão que o #162 cataloga.
+      const caixaDoCard = (await page.getByTestId(tela.externo).boundingBox())!;
+      const saida = distanciaDeSaida(caixa, caixaDoCard);
+      // ⚠️ **Antes do teto, o PISO — e ele não é zelo, é o que impede a guarda de emudecer.**
+      // `saida` divide meia-extensão por `|u| ≤ 1`, então é, por construção, **≥ `min(w,h)/2`**.
+      // Um erro de sinal na fórmula (perder o `Math.abs`, trocar a direção) devolveria número
+      // NEGATIVO, o teto abaixo passaria sempre, e o #190 estaria de volta — uma guarda calada,
+      // que é exatamente o defeito que esta PR conserta. Medido: sem esta linha, apagar o
+      // `Math.abs` deixa as três telas VERDES com a guarda neutralizada.
       expect(
-        Math.min(caixa.width, caixa.height) / 2,
-        `a lixeira ficou grande demais: o escorregão de ${DESLOCAMENTO_PX}px não sairia dela`,
-      ).toBeLessThan(DESLOCAMENTO_PX);
+        saida,
+        `a fórmula da saída devolveu ${saida.toFixed(2)}px, menos que os ` +
+          `${(Math.min(caixa.width, caixa.height) / 2).toFixed(2)}px de min(w,h)/2 — isso é ` +
+          `impossível nesta geometria: quem está errada é a CONTA, não a tela`,
+      ).toBeGreaterThanOrEqual(Math.min(caixa.width, caixa.height) / 2);
+
+      expect(
+        saida,
+        `a lixeira ficou grande demais: sair dela na direção do gesto custa ${saida.toFixed(2)}px, ` +
+          `e o escorregão do #149 é de ${DESLOCAMENTO_PX}px — sobram menos que os ${MARGEM_PX}px de ` +
+          `folga que a régua exige. Encolha a caixa da lixeira (ou reveja a direção do gesto); ` +
+          `NÃO aumente o deslocamento, que é a medição do #149 sobre o mundo real`,
+      ).toBeLessThanOrEqual(DESLOCAMENTO_PX - MARGEM_PX);
     });
 
     test(`o toque na lixeira que escorrega ${DESLOCAMENTO_PX}px NÃO dispara a ação do card`, async ({
