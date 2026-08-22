@@ -12,6 +12,7 @@ import { type ReactNode, useCallback, useEffect, useState } from "react";
 import { api, apiErrorMessage } from "../../lib/api";
 import { DialogDeBaixa } from "../pagar/EscolhaDaBaixa";
 import { formatDay } from "../../lib/datetime";
+import { formatBRL } from "./dre";
 
 /**
  * Fila de Pagamentos (Story 5.9) — painel único do que pagar hoje e nos próximos dias, com baixa
@@ -37,8 +38,6 @@ import { formatDay } from "../../lib/datetime";
  * sai do meu caixa nos próximos dias"*. Os quatro baldes antigos e os oito campos antigos do
  * `PaymentQueueSummary` **não mudaram de definição** e continuam calculados na leitura.
  */
-const brl = (c: number) =>
-  (c / 100).toLocaleString("pt-BR", { style: "currency", currency: "BRL" });
 
 const EMPTY: PaymentQueue = {
   atrasados: [],
@@ -124,10 +123,10 @@ export default function FilaPagamentosPage() {
       {error && <p className="rounded-lg bg-red-50 p-2 text-sm text-danger">{error}</p>}
 
       <div className="grid grid-cols-2 gap-4 lg:grid-cols-4">
-        <Stat label="Atrasados" value={brl(s.atrasados_cents)} count={s.atrasados_count} tone="text-danger" />
-        <Stat label="Hoje" value={brl(s.hoje_cents)} count={s.hoje_count} tone="text-amber-700" />
-        <Stat label="Próximos 7 dias" value={brl(s.proximos_7_dias_cents)} count={s.proximos_7_dias_count} tone="text-neutral-700" />
-        <Stat label="Próximos 30 dias" value={brl(s.proximos_30_dias_cents)} count={s.proximos_30_dias_count} tone="text-neutral-700" />
+        <Stat label="Atrasados" value={formatBRL(s.atrasados_cents)} count={s.atrasados_count} tone="text-danger" />
+        <Stat label="Hoje" value={formatBRL(s.hoje_cents)} count={s.hoje_count} tone="text-amber-700" />
+        <Stat label="Próximos 7 dias" value={formatBRL(s.proximos_7_dias_cents)} count={s.proximos_7_dias_count} tone="text-neutral-700" />
+        <Stat label="Próximos 30 dias" value={formatBRL(s.proximos_30_dias_cents)} count={s.proximos_30_dias_count} tone="text-neutral-700" />
       </div>
 
       {loading && <p className="text-sm text-neutral-400">Carregando fila…</p>}
@@ -182,7 +181,7 @@ export default function FilaPagamentosPage() {
 
       {!nada && (
         <p className="text-right text-xs text-neutral-400">
-          Total pendente na fila (30 dias): <strong>{brl(totalPendente)}</strong>
+          Total pendente na fila (30 dias): <strong>{formatBRL(totalPendente)}</strong>
         </p>
       )}
 
@@ -190,7 +189,7 @@ export default function FilaPagamentosPage() {
         <DialogDeBaixa
           titulo="Dar baixa nesta conta"
           descricao={pagando.description || pagando.supplier || "Conta"}
-          valor={`${brl(pagando.amount_cents)} · vence ${formatDay(pagando.due_date)}`}
+          valor={`${formatBRL(pagando.amount_cents)} · vence ${formatDay(pagando.due_date)}`}
           dataPadrao={pagando.due_date}
           onClose={() => setPagando(null)}
           onPago={(corpo) => pay(pagando.id, corpo)}
@@ -255,7 +254,7 @@ function Bucket({
               </span>
             </div>
             <span className="shrink-0 font-medium tabular-nums text-neutral-800">
-              {brl(p.amount_cents)}
+              {formatBRL(p.amount_cents)}
             </span>
             {p.payment_code && (
               <button

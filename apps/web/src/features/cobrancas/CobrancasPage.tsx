@@ -16,11 +16,10 @@ import { VOCAB_ENTRADA } from "../pagar/baixa";
 import { DialogDeBaixa, HOJE_DO_TENANT } from "../pagar/EscolhaDaBaixa";
 import { rotuloDaRota } from "./rota";
 import { formatDay } from "../../lib/datetime";
+import { formatBRL } from "../financeiro/dre";
 
 /** Grupos DRE cabíveis numa RECEITA (Cobranças nunca lança em Despesa/Tributo/Investimento). */
 const REVENUE_GROUPS = GRUPOS_DRE.filter((g) => g === "RECEITA");
-
-const brl = (c: number) => (c / 100).toLocaleString("pt-BR", { style: "currency", currency: "BRL" });
 
 const KINDS = [
   ["service", "Serviço"],
@@ -150,9 +149,9 @@ export default function CobrancasPage() {
       <GanchoDaVima gancho="receivables.cobranca.criada" />
 
       <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
-        <Stat label="A vencer" value={brl(summary.open_cents)} hint={`${summary.open_count} ${pluralize(summary.open_count, "cobrança", "cobranças")}`} tone="text-blue-700" />
-        <Stat label="Vencido" value={brl(summary.overdue_cents)} hint={`${summary.overdue_count} em atraso`} tone="text-danger" />
-        <Stat label="Recebido" value={brl(summary.paid_cents)} hint="total" tone="text-accent-700" />
+        <Stat label="A vencer" value={formatBRL(summary.open_cents)} hint={`${summary.open_count} ${pluralize(summary.open_count, "cobrança", "cobranças")}`} tone="text-blue-700" />
+        <Stat label="Vencido" value={formatBRL(summary.overdue_cents)} hint={`${summary.overdue_count} em atraso`} tone="text-danger" />
+        <Stat label="Recebido" value={formatBRL(summary.paid_cents)} hint="total" tone="text-accent-700" />
         {/* [8.15] O agendado tem cartão PRÓPRIO e **some quando é zero** — mesmo tratamento do
             agendado da 8.14. Sem ele, a cobrança agendada não apareceria em nenhum dos três
             cartões (nem "a vencer", nem "vencido", nem "recebido"): o modo de falha "o dinheiro
@@ -164,7 +163,7 @@ export default function CobrancasPage() {
         {summary.scheduled_cents > 0 && (
           <Stat
             label={AGENDADO_ENTRADA_LABEL}
-            value={brl(summary.scheduled_cents)}
+            value={formatBRL(summary.scheduled_cents)}
             hint="recebido fora do trilho, com dia marcado"
             tone="text-amber-700"
           />
@@ -220,7 +219,7 @@ export default function CobrancasPage() {
                     <td className="px-4 py-3 tabular-nums text-neutral-600">
                       {formatDay(c.due_date)}
                     </td>
-                    <td className="px-4 py-3 font-medium tabular-nums">{brl(c.amount_cents)}</td>
+                    <td className="px-4 py-3 font-medium tabular-nums">{formatBRL(c.amount_cents)}</td>
                     <td className="px-4 py-3">
                       <span className={`rounded-pill px-2 py-0.5 text-xs ${st.cls}`}>{st.label}</span>
                       {/* [8.15] A linha liquidada FORA DO TRILHO diz QUAL conta recebeu e QUANDO.
@@ -280,7 +279,7 @@ export default function CobrancasPage() {
         <DialogDeBaixa
           titulo="Recebi direto na conta"
           descricao={recebendo.client_name || recebendo.description || "Cobrança"}
-          valor={`${brl(recebendo.amount_cents)} · vence ${formatDay(recebendo.due_date)}`}
+          valor={`${formatBRL(recebendo.amount_cents)} · vence ${formatDay(recebendo.due_date)}`}
           // Default = HOJE (não o vencimento): o gesto aqui é "caiu na minha conta", um fato que o
           // dono está observando agora — a assimetria com a baixa de Contas a Pagar é deliberada.
           // ⚠️ **`HOJE_DO_TENANT`, não um hoje montado aqui** (#136). Esta tela passava
@@ -319,7 +318,7 @@ export default function CobrancasPage() {
         <Modal title="Contrato / documentos da cobrança" open onClose={() => setDocs(null)}>
           <div className="space-y-3">
             <p className="text-sm text-neutral-500">
-              {docs.client_name ?? docs.description ?? "Cobrança"} — {brl(docs.amount_cents)}
+              {docs.client_name ?? docs.description ?? "Cobrança"} — {formatBRL(docs.amount_cents)}
             </p>
             <p className="text-xs font-medium text-neutral-600">Anexar arquivos (PDF, JPEG ou PNG)</p>
             <Attachments

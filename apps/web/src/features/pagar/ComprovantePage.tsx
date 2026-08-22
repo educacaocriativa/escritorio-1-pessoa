@@ -12,6 +12,7 @@ import {
   HOJE_DO_TENANT,
   useEscolhaDaBaixa,
 } from "./EscolhaDaBaixa";
+import { formatBRL } from "../financeiro/dre";
 
 /** O que a bandeja devolve por comprovante (`GET /payables/receipts`). */
 interface ReceiptInfo {
@@ -20,7 +21,6 @@ interface ReceiptInfo {
   size: number;
 }
 
-const brl = (c: number) => (c / 100).toLocaleString("pt-BR", { style: "currency", currency: "BRL" });
 const kb = (n: number) =>
   n < 1024 * 1024 ? `${Math.round(n / 1024)} KB` : `${(n / 1024 / 1024).toFixed(1)} MB`;
 // Data de calendário: formatada pela string, sem `Date` — não há fuso a errar.
@@ -278,7 +278,7 @@ export default function ComprovantePage() {
                     <p className="mt-1 text-xs text-neutral-500">Vence {dia(c.due_date)}</p>
                   </div>
                   <div className="shrink-0 text-right">
-                    <p className="font-bold text-neutral-800">{brl(c.amount_cents)}</p>
+                    <p className="font-bold text-neutral-800">{formatBRL(c.amount_cents)}</p>
                     <span className={`rounded-pill px-2 py-0.5 text-[10px] font-semibold ${tag.cls}`}>
                       {tag.label}
                     </span>
@@ -331,7 +331,7 @@ export default function ComprovantePage() {
                 <p className="truncate text-sm font-medium text-neutral-700">
                   {chosen.description || chosen.supplier || "Conta"}
                 </p>
-                <p className="text-xs text-neutral-500">{brl(chosen.amount_cents)}</p>
+                <p className="text-xs text-neutral-500">{formatBRL(chosen.amount_cents)}</p>
               </div>
               {chosen.status === "open" && (
                 <label className="flex shrink-0 items-center gap-2 text-xs font-medium text-neutral-600">
