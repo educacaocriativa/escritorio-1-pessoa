@@ -178,6 +178,78 @@ const BRIEFING = {
   created_at: "2026-08-21T08:00:00Z",
 };
 
+/**
+ * `/dna/faltantes` devolve LISTA (`DnaPergunta[]`, `packages/shared-types/src/index.ts:1182`), e o
+ * `[]` default de `mockarApi` é o pior mock que existe para esta rota: com a lista vazia a
+ * `NucleoPage` chama `sair()` e **NAVEGA para a raiz** (`NucleoPage.tsx:110`). A régua mediria o
+ * PAINEL acreditando ter medido o núcleo — 360 verdinho, tela errada. Por isso a `marca` é o texto
+ * da PRIMEIRA pergunta, e não o título fixo "Me conta do seu negócio".
+ *
+ * **Só `perguntas[0]` está na tela por vez** — a página renderiza um índice, não a lista. Então o
+ * pior caso mora na primeira; as seis continuam aqui porque o denominador é impresso ("1 de 6") e
+ * porque `ehPergunta` (`GanchoDaVima.tsx:45`) filtra item a item: uma forma quebrada no meio da
+ * lista muda o denominador sem derrubar a tela, e é assim que a produção se comporta.
+ *
+ * `formato: "escolha"` na primeira não é conveniência: é o ramo que rende os blocos de largura
+ * inteira do `PerguntaDaVima` (`px-4 py-3`, um por opção) — a caixa mais larga que esta tela
+ * desenha sem ninguém tocar em nada. Os outros dois formatos ficam nas seguintes.
+ *
+ * O catálogo mora no SERVIDOR (`apps/api/app/modules/dna/catalog.py`) e hoje é português
+ * editorial, com espaço para quebrar — mas o front **não tem cópia dele** (é o que o próprio
+ * `DnaPergunta` declara), e pergunta nova é um deploy. `LONGO` é o que guarda a PRÓXIMA: sem
+ * espaço para quebrar, dentro do `max-w-md` de uma tela que não recorta nada.
+ */
+const NUCLEO_PERGUNTAS = [
+  { key: "oferta.o_que_vende", classe: "retrato", eixo: "oferta", texto: `O que você vende, ${LONGO}?`,
+    formato: "escolha", opcoes: [{ rotulo: LONGO, valor: "servico_recorrente" }, { rotulo: `${LONGO} avulso`, valor: "servico_projeto" }] },
+  { key: "oferta.em_uma_frase", classe: "retrato", eixo: "oferta", texto: LONGO, formato: "texto", opcoes: [] },
+  { key: "oferta.como_cobra", classe: "retrato", eixo: "oferta", texto: LONGO, formato: "escolha_multipla",
+    opcoes: [{ rotulo: LONGO, valor: "hora" }] },
+  { key: "oferta.ticket_tipico", classe: "retrato", eixo: "oferta", texto: LONGO, formato: "escolha", opcoes: [{ rotulo: LONGO, valor: 1 }] },
+  { key: "cliente.como_chega", classe: "retrato", eixo: "cliente", texto: LONGO, formato: "escolha", opcoes: [{ rotulo: LONGO, valor: "indicacao" }] },
+  { key: "limites.nunca_faco", classe: "retrato", eixo: "limites", texto: LONGO, formato: "texto", opcoes: [] },
+];
+
+/**
+ * A BANDEJA do comprovante (`/comprovante/:id`) — duas listas, e as duas precisam de forma.
+ *
+ * `/payables/receipts` devolve `ReceiptInfo[]` (declarado em `ComprovantePage.tsx:17`; não existe
+ * `GET /payables/receipts/{id}`, a tela FILTRA a bandeja pelo `id` da URL). O `id` daqui tem de
+ * casar com o da rota (`/comprovante/r1`), senão `receipt` fica `null` e o cabeçalho cai no texto
+ * genérico — verde medindo o estado de fallback em vez do estado real.
+ *
+ * `/payables/receipts/candidates` devolve `Payable[]`
+ * (`packages/shared-types/src/index.ts:459`). Vence a chave MAIS LONGA em `mockarApi`, então as
+ * duas convivem. Com o `[]` default as duas caem no estado vazio — cabeçalho genérico e "Nenhuma
+ * conta encontrada" —, que mede 360 por não ter desenhado a tela que interessa.
+ *
+ * Pior caso plausível na forma real: `description`/`supplier` são DIGITADOS pelo dono (o
+ * fornecedor vem do app do banco, copiado no celular) e `filename` vem do share sheet do
+ * Android — nenhum dos três tem espaço garantido. `amount_cents` acompanha as demais fixtures do
+ * catálogo (`RELATORIO_CC`): R$ 1.234.567,89, que é o que faz a coluna `shrink-0` da direita
+ * valer o que ela vale. A segunda candidata é `description: ""` + `status: "paid"`, os dois
+ * ramos que o cartão tem de próprio (`c.description || c.supplier` e o chip "Pago").
+ *
+ * ⚠️ **A barra fixa do rodapé fica FORA desta medida**: `EscolhaDaBaixa` e o rótulo com o nome da
+ * conta só montam depois de TOCAR numa candidata (`daBaixa`), e este catálogo não toca em nada. O
+ * que a barra tem de próprio continua sendo assunto de spec dedicada — é a dívida do
+ * `ALTURA_DA_BARRA` registrada no §5.1, e esta entrada não a fecha.
+ */
+const RECEIPTS = [{ id: "r1", filename: `${LONGO}.pdf`, size: 3_670_016 }];
+
+const CANDIDATAS = [
+  { id: "p1", tenant_id: "t1", description: LONGO, category: LONGO, supplier: LONGO,
+    amount_cents: 123456789, due_date: "2026-08-19", chart_account_id: null, contract_id: null,
+    cost_center_id: null, status: "open", is_overdue: true, paid_at: null, recurrence: "none",
+    recurrence_count: 0, recurrence_group: null, payment_code: LONGO, attachment_url: "",
+    created_at: "2026-08-01T10:00:00Z" },
+  { id: "p2", tenant_id: "t1", description: "", category: "Geral", supplier: LONGO,
+    amount_cents: 987654321, due_date: "2026-09-30", chart_account_id: null, contract_id: null,
+    cost_center_id: null, status: "paid", is_overdue: false, paid_at: "2026-08-20T10:00:00Z",
+    recurrence: "none", recurrence_count: 0, recurrence_group: null, payment_code: "",
+    attachment_url: "", created_at: "2026-08-01T10:00:00Z" },
+];
+
 export interface Caso {
   rota: string;
   /** Texto que PRECISA estar visível antes de medir. Sem ele, 360 significaria "tela em branco". */
@@ -228,4 +300,29 @@ export const CASOS: Caso[] = [
   // logo sem o `main.overflow-x-hidden`: aqui o que não cabe faz a PÁGINA rolar em vez de ficar
   // recortado, e é a régua do #135 que o pega primeiro.
   { rota: "/vima", marca: "Seu dia", mocks: { "/vima/briefing": BRIEFING } },
+  // AS OUTRAS TRÊS DO `ProtectedBareLayout` (#208). Mesma caixa de layout da `/vima`, e foi a
+  // FORMA dessa caixa — não a tela — que produziu os 649px do #178: sem shell não há
+  // `main.overflow-x-hidden`, então o que não cabe VAZA em vez de ficar recortado. Entram no fim
+  // do array de propósito: a ordem das anteriores é o histórico das issues que as trouxeram.
+  { rota: "/dna/nucleo", marca: LONGO, mocks: { "/dna/faltantes": NUCLEO_PERGUNTAS } },
+  // `/compartilhar` é a única das quatro que NÃO é dirigida por payload: é rota de trânsito do
+  // Web Share Target e desenha dois estados só — o spinner e o erro. O que se mede é o ERRO, o
+  // único com conteúdo; e `?erro=` é como o service worker o reporta quando o POST do share
+  // sheet falha (`public/sw.js:55` — o valor `falha` é o que o SW emite de verdade; o outro é
+  // `sem-arquivo`). A `marca` é a frase que SÓ esse ramo produz: sem ela o teste
+  // passaria medindo "Enviando comprovante...", que é a tela em branco desta rota.
+  //
+  // ⚠️ **Por que `?erro=` e não `?k=<chave já consumida>`**, que seria o caminho mais comum em
+  // campo: medido no #208, com `?k=` a tela fica PRESA no spinner em modo de desenvolvimento e a
+  // `marca` reprova. Não é defeito da fixture — é o guard de StrictMode do `CompartilharPage`
+  // (`startedFor`) casando com o `cancelled` por execução: a primeira montagem começa o trabalho
+  // assíncrono e é cancelada na limpeza, a segunda vê o mesmo token e desiste, e ninguém chama
+  // `setError`. O ramo do `?erro=` é SÍNCRONO, então o estado sobrevive à dobra. Está registrado
+  // como achado fora do escopo do #208; a régua mede o estado que existe, e não fica vermelha
+  // esperando o conserto de outra issue.
+  { rota: "/compartilhar?erro=falha", marca: "Não conseguimos receber o arquivo compartilhado" },
+  // TELA DE DINHEIRO, e a que carrega a dívida de medição do §5.1: o `ALTURA_DA_BARRA` do
+  // `baixa.ts` tem seis mutantes sobreviventes porque o número é medida do DOM e ninguém media
+  // esta tela. O `r1` da rota casa com o `id` de `RECEIPTS` — ver a nota da fixture.
+  { rota: "/comprovante/r1", marca: LONGO, mocks: { "/payables/receipts": RECEIPTS, "/payables/receipts/candidates": CANDIDATAS } },
 ];
