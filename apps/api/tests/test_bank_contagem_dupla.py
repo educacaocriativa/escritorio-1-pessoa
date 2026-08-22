@@ -36,7 +36,7 @@ import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy.orm import Session
 
-from app import main as app_main
+from app import composicao
 from app.modules.bank import service as bank_service
 from app.modules.bank.models import KIND_CHECKING, OPERATION_NATURES, BankTransaction
 from app.modules.bank.schemas import BankTransactionCreate
@@ -327,7 +327,7 @@ def test_app_nao_sobe_sem_o_probe_de_contagem_dupla(monkeypatch):
     """
     monkeypatch.setattr(bank_service, "_duplicata_probe", None)
     with pytest.raises(RuntimeError, match="guarda de contagem dupla"):
-        app_main.verifica_fiacao_da_guarda()
+        composicao.verifica_fiacao_da_guarda()
 
 
 def test_a_guarda_de_boot_e_chamada_no_nivel_do_modulo():
@@ -337,7 +337,7 @@ def test_a_guarda_de_boot_e_chamada_no_nivel_do_modulo():
     Nenhum teste de comportamento pegaria isso — a app continuaria subindo, e a guarda de boot
     viraria uma função morta que ninguém percebe.
     """
-    fonte = (pathlib.Path(app_main.__file__)).read_text(encoding="utf-8")
+    fonte = (pathlib.Path(composicao.__file__)).read_text(encoding="utf-8")
     tree = ast.parse(fonte)
     chamadas = {
         node.value.func.id
