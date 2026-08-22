@@ -27,7 +27,11 @@ export default function PlanoContasPage() {
     const { data } = await api.get<ChartAccount[]>("/chart-of-accounts", {
       params: { include_archived: includeArchived },
     });
-    setAccounts(data);
+    // `Array.isArray`, e aqui não havia operador nenhum — este é o pior da classe. `buildHierarchy`
+    // é chamado no CORPO do componente e abre com `for (const acc of accounts)`: payload fora de
+    // forma estoura antes de a primeira linha de JSX existir, e sem ErrorBoundary a árvore inteira
+    // some. Nem o `accounts.length > 0` abaixo denuncia — em objeto, `.length` é `undefined`.
+    setAccounts(Array.isArray(data) ? data : []);
   }, [includeArchived]);
 
   useEffect(() => {

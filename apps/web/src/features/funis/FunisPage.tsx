@@ -11,7 +11,10 @@ export default function FunisPage() {
 
   const load = useCallback(async () => {
     const { data } = await api.get<FunnelSummary[]>("/funnels");
-    setFunnels(data);
+    // `Array.isArray`, e aqui não havia operador nenhum: `funnels.map` É a tela, e o `.length === 0`
+    // logo acima não protege — em objeto `.length` é `undefined`, e `undefined === 0` é falso, então
+    // o fluxo cai justamente no ramo que faz o `.map`.
+    setFunnels(Array.isArray(data) ? data : []);
   }, []);
 
   useEffect(() => {

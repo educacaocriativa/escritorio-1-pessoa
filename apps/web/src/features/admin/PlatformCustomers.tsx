@@ -26,7 +26,10 @@ export default function PlatformCustomers() {
   useEffect(() => {
     api
       .get<PlatformCustomerCard[]>("/admin/customers")
-      .then(({ data }) => setCustomers(data))
+      // `Array.isArray`, e aqui não havia operador nenhum: `customers.filter` roda no `useMemo`
+      // logo abaixo e `customers.reduce` no corpo do componente — os dois em tempo de RENDER, que
+      // não cai neste `.then`. Sem ErrorBoundary no app, isso é tela branca, não lista vazia.
+      .then(({ data }) => setCustomers(Array.isArray(data) ? data : []))
       .finally(() => setLoading(false));
   }, []);
 
