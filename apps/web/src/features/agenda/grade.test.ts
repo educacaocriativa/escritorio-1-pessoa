@@ -194,6 +194,20 @@ describe("faixasLivres", () => {
     expect(faixasLivres([viagem], DIA, FUSO, ONTEM)).toEqual([]);
   });
 
+  it("o compromisso que já TERMINOU em outro dia não ocupa nada", () => {
+    // Achado por mutação (#214): a guarda de `intervaloNoDia` é `ymd < diaInicio || diaFim < ymd`,
+    // e todos os testes acima só exercitavam o primeiro lado (evento no FUTURO do dia pedido) ou
+    // eventos que encostam no dia. Apagando o segundo lado, um compromisso do dia 8 volta como
+    // `{ inicio: 0, fim: minFim }` — ele cai no ramo "termina neste dia" e ocupa da meia-noite
+    // até as 11h do dia 10. A grade de 42 dias manda a janela INTEIRA para cá, sem pré-filtro
+    // por dia: todo compromisso passado do mês fecharia a manhã de todos os dias seguintes.
+    const semanaPassada = evento({ starts_at: "2026-10-08T13:00:00Z", ends_at: "2026-10-08T14:00:00Z" });
+
+    const fx = faixasLivres([semanaPassada], DIA, FUSO, ONTEM);
+
+    expect(horas(fx)).toEqual([8, 9, 10, 11, 12, 13, 14, 15, 16, 17]);
+  });
+
   it("na hora cheia exata, a faixa que começa AGORA já não é oferecida", () => {
     // Borda: às 14:00:00 em ponto a faixa das 14h não tem mais nem um minuto de antecedência.
     // O caso de 14:30 (acima) passa com `<` e com `<=`; só a hora cheia separa os dois.
@@ -471,13 +485,19 @@ describe("eventYmd / eventsOfDay", () => {
   it("eventsOfDay filtra pelo dia e ORDENA por horário de início", () => {
     const tarde = evento({ id: "tarde", starts_at: "2026-10-10T18:00:00Z", ends_at: "2026-10-10T19:00:00Z" });
     const manha = evento({ id: "manha", starts_at: "2026-10-10T12:00:00Z", ends_at: "2026-10-10T13:00:00Z" });
+    const noite = evento({ id: "noite", starts_at: "2026-10-10T21:00:00Z", ends_at: "2026-10-10T22:00:00Z" });
     const outroDia = evento({ id: "outro", starts_at: "2026-10-12T12:00:00Z", ends_at: "2026-10-12T13:00:00Z" });
 
     // A lista entra FORA de ordem de propósito: com ela já ordenada, um comparador quebrado
     // devolve a mesma saída e o teste passa sem exercer a ordenação.
-    const doDia = eventsOfDay([tarde, manha, outroDia], DIA);
+    //
+    // São TRÊS eventos, e não dois, por achado de mutação (#214): com dois, trocar o `+` do
+    // primeiro operando por `-` (comparador sempre negativo) faz o V8 apenas INVERTER o par —
+    // e a inversão de `[tarde, manha]` é exatamente `[manha, tarde]`, a resposta certa. Medido:
+    // com três, `[tarde, manha, noite]` sai `[noite, manha, tarde]` sob o mutante.
+    const doDia = eventsOfDay([tarde, manha, noite, outroDia], DIA);
 
-    expect(doDia.map((e) => e.id)).toEqual(["manha", "tarde"]);
+    expect(doDia.map((e) => e.id)).toEqual(["manha", "tarde", "noite"]);
   });
 
   it("eventsOfDay não modifica a lista recebida", () => {
