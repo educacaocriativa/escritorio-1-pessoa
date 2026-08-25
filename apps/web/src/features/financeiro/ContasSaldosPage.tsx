@@ -110,12 +110,17 @@ export default function ContasSaldosPage() {
       const res = await api.get<BankAccount[]>("/bank/accounts", {
         params: { include_archived: includeArchived },
       });
-      setAccounts(res.data);
+      // `Array.isArray`, e aqui não havia operador nenhum. Duas consequências, não uma: o
+      // `contas.map` abaixo estoura DENTRO do `try` (vira "erro de rede" que não é), e
+      // `accounts.map` estoura no RENDER, que nenhum `catch` alcança. A lista saneada serve aos
+      // dois — não adianta guardar só o estado e deixar `res.data` cru alimentando o `Promise.all`.
+      const contas = Array.isArray(res.data) ? res.data : [];
+      setAccounts(contas);
       // Último saldo declarado por conta: `limit=1` numa rota já paginada e ordenada por
       // `reference_date` desc (8.4). São N chamadas, mas N é o número de contas do dono (poucas) e
       // saem em paralelo — não existe rota em lote e a IV3 proíbe criar uma aqui.
       const pares = await Promise.all(
-        res.data.map(async (a) => {
+        contas.map(async (a) => {
           try {
             const cps = await api.get<BankBalanceCheckpoint[]>(
               `/bank/accounts/${a.id}/checkpoints`,

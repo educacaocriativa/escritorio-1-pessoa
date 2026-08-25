@@ -66,7 +66,11 @@ export default function ConversasPage() {
   const loadConversations = useCallback(async () => {
     try {
       const { data } = await api.get<ConversationSummary[]>("/whatsapp-conversations");
-      setConversations(data);
+      // `Array.isArray`, e aqui não havia operador nenhum. O `finally` abaixo trata falha como
+      // "resolveu", nunca como "resolveu com dado VÁLIDO" — e `conversations.find` roda no corpo
+      // do componente, em tempo de render, longe deste `try`. É a mesma armadilha que o
+      // `ClientTimeline` já derrubou nesta tela, agora pela lista principal.
+      setConversations(Array.isArray(data) ? data : []);
     } finally {
       // No `finally`, não no `try`: mesmo se a primeira chamada falhar, "ainda carregando"
       // não pode durar para sempre — mas sucesso e falha são tratados como "resolveu", não

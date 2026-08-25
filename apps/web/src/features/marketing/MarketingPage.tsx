@@ -12,7 +12,9 @@ export default function MarketingPage() {
 
   const load = useCallback(async () => {
     const { data } = await api.get<Carousel[]>("/marketing/carousels");
-    setCarousels(data);
+    // `Array.isArray`, e aqui não havia operador nenhum: `carousels.map` É a tela, e o
+    // `.length === 0` acima não desvia — em objeto `.length` é `undefined`, nunca `0`.
+    setCarousels(Array.isArray(data) ? data : []);
   }, []);
 
   useEffect(() => {

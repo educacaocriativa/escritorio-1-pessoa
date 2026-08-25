@@ -121,7 +121,9 @@ export default function PlatformUsers() {
 
   const load = useCallback(async () => {
     const { data } = await api.get<TenantUsers[]>("/admin/users");
-    setNodes(data);
+    // `Array.isArray`, e aqui não havia operador nenhum: `nodes.reduce`/`nodes.filter` rodam nos
+    // `useMemo` abaixo, em tempo de RENDER — fora do alcance de qualquer `catch` deste `load`.
+    setNodes(Array.isArray(data) ? data : []);
   }, []);
 
   useEffect(() => {

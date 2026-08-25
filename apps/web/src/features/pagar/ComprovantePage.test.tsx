@@ -3,6 +3,7 @@ import userEvent from "@testing-library/user-event";
 import { MemoryRouter, Route, Routes } from "react-router-dom";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { api } from "../../lib/api";
+import { assentar } from "../../test/assentar";
 import ComprovantePage from "./ComprovantePage";
 
 vi.mock("../../lib/api", () => ({
@@ -637,5 +638,48 @@ describe("bandeja fora de formato não identifica comprovante nenhum", () => {
     renderPage();
 
     await waitFor(() => expect(screen.getByText("Comprovante recebido")).toBeInTheDocument());
+  });
+});
+
+// ── `GET /payables/receipts/candidates` fora de forma (issue #207) ────────────
+//
+// `setCandidates(data)` recebia o payload CRU, sem operador nenhum. O `.catch` do efeito mostra a
+// mensagem de erro e a tela segue — mas `candidates.find` (no `useMemo` da conta selecionada) e
+// `candidates.map` rodam DEPOIS, no render, onde nenhum `catch` chega. Sem ErrorBoundary no app,
+// é tela branca.
+//
+// É o mesmo arquivo do `setReceipt` guardado no PR #197, e a diferença de peso é o ponto: lá o
+// payload era o NOME do arquivo (contexto — "sem ele a tela opera igual"); aqui é a lista de
+// contas, que é a razão de a tela existir.
+//
+// ⚠️ O `assentar()` é a metade que MATA o mutante — ver `src/test/assentar.ts`.
+describe("ComprovantePage — candidatas fora de forma não derrubam a tela (#207)", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    fusoDoTenant = "America/Sao_Paulo";
+  });
+  afterEach(() => vi.useRealTimers());
+
+  it.each([
+    ["envelope de erro devolvido com 200", { detail: "algo deu errado" }],
+    ["string no lugar da lista", "não é json"],
+    ["corpo vazio (204 / sem conteúdo)", null],
+    ["número no lugar da lista", 7],
+  ])("%s → a tela mostra o estado vazio em vez de estourar", async (_rotulo, payload) => {
+    mockApi(payload as never);
+    renderPage();
+    await assentar();
+
+    expect(screen.getByText("Nenhuma conta encontrada.")).toBeInTheDocument();
+    expect(screen.getByPlaceholderText("Buscar conta por nome ou fornecedor")).toBeInTheDocument();
+  });
+
+  it("contra-teste: candidata de verdade continua listada", async () => {
+    mockApi();
+    renderPage();
+    await assentar();
+
+    expect(screen.getByText("Energia")).toBeInTheDocument();
+    expect(screen.queryByText("Nenhuma conta encontrada.")).not.toBeInTheDocument();
   });
 });
