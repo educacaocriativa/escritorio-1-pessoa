@@ -69,7 +69,7 @@ export default function QuoteBuilderPage() {
   const [aiBusy, setAiBusy] = useState(false);
 
   useEffect(() => {
-    api.get<Client[]>("/crm/clients").then(({ data }) => setClients(data));
+    api.get<Client[]>("/crm/clients").then(({ data }) => setClients(Array.isArray(data) ? data : []));
   }, []);
 
   // Proposta nova já nasce com o Brand Kit do tenant (logo + cores + fonte).

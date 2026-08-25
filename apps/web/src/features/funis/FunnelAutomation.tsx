@@ -165,12 +165,12 @@ export function FunnelAutomationDrawer({
 
   const load = useCallback(async () => {
     const { data } = await api.get<FunnelRunSummary[]>(`/funnels/${funnelId}/runs`);
-    setRuns(data);
+    setRuns(Array.isArray(data) ? data : []);
   }, [funnelId]);
 
   useEffect(() => {
     load();
-    api.get<Client[]>("/crm/clients").then(({ data }) => setClients(data));
+    api.get<Client[]>("/crm/clients").then(({ data }) => setClients(Array.isArray(data) ? data : []));
   }, [load]);
 
   async function enroll() {

@@ -4,6 +4,7 @@ import { MemoryRouter } from "react-router-dom";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { api } from "../../lib/api";
 import { PageActionsProvider, usePageActions } from "../../store/pageActions";
+import { assentar } from "../../test/assentar";
 import PagarPage from "./PagarPage";
 
 // Story 7.5 — Task 1. Rede sempre mockada (IV2): nenhum teste bate em /payables real.
@@ -844,5 +845,47 @@ describe("PagarPage — separador de milhar (#224)", () => {
       "/payables/bills/b-1",
       expect.objectContaining({ amount_cents: 123456 }),
     );
+  });
+});
+
+// ── `GET /contracts` fora de forma (issue #225) ─────────────────────────────────
+//
+// `setContracts(r.data)` (dentro do `ContractSelect` local desta tela) recebia o payload CRU no
+// caminho de sucesso — só o `.catch` da rejeição tratava a forma. `contracts.map` (select
+// "Vincular a contrato") é montado direto assim que o modal "Nova conta" abre.
+describe("PagarPage — contratos fora de forma não derrubam o modal Nova conta (#225)", () => {
+  it.each([
+    ["envelope de erro devolvido com 200", { detail: "algo deu errado" }],
+    ["string no lugar da lista", "não é json"],
+  ])("%s → o modal abre, com o select de contrato vazio", async (_rotulo, payload) => {
+    const user = userEvent.setup();
+    vi.mocked(api.get).mockImplementation((url: string) => {
+      if (url === "/payables/summary") return Promise.resolve({ data: emptySummary } as never);
+      if (url === "/payables/bills") return Promise.resolve({ data: { items: [], total: 0 } } as never);
+      if (url === "/contracts") return Promise.resolve({ data: payload } as never);
+      return Promise.resolve({ data: [] } as never);
+    });
+    renderPage();
+    await user.click(await screen.findByRole("button", { name: "Nova conta" }));
+    await assentar();
+
+    expect(screen.getByText("Vincular a contrato (opcional)")).toBeInTheDocument();
+    expect(screen.getByText("Empresa (sem contrato)")).toBeInTheDocument();
+  });
+
+  it("contra-teste: contrato de verdade continua aparecendo no select", async () => {
+    const user = userEvent.setup();
+    vi.mocked(api.get).mockImplementation((url: string) => {
+      if (url === "/payables/summary") return Promise.resolve({ data: emptySummary } as never);
+      if (url === "/payables/bills") return Promise.resolve({ data: { items: [], total: 0 } } as never);
+      if (url === "/contracts")
+        return Promise.resolve({ data: [{ id: "ct-1", title: "Consultoria", client_name: null }] } as never);
+      return Promise.resolve({ data: [] } as never);
+    });
+    renderPage();
+    await user.click(await screen.findByRole("button", { name: "Nova conta" }));
+    await assentar();
+
+    expect(await screen.findByText("Consultoria")).toBeInTheDocument();
   });
 });

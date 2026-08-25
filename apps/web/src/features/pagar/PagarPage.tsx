@@ -30,7 +30,10 @@ const PAGINA = 50;
 function ContractSelect({ value, onChange }: { value: string; onChange: (v: string) => void }) {
   const [contracts, setContracts] = useState<Contract[]>([]);
   useEffect(() => {
-    api.get<Contract[]>("/contracts").then((r) => setContracts(r.data)).catch(() => setContracts([]));
+    api
+      .get<Contract[]>("/contracts")
+      .then((r) => setContracts(Array.isArray(r.data) ? r.data : []))
+      .catch(() => setContracts([]));
   }, []);
   return (
     <label className="block">

@@ -3,6 +3,7 @@ import userEvent from "@testing-library/user-event";
 import { MemoryRouter, Route, Routes } from "react-router-dom";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { api } from "../../lib/api";
+import { assentar } from "../../test/assentar";
 import ContractBuilderPage from "./ContractBuilderPage";
 
 // Story 7.5 — Task 3. Rede sempre mockada (IV2): nenhum teste bate em /contracts real.
@@ -86,5 +87,42 @@ describe("ContractBuilderPage — salvar contrato (Story 7.5, Task 3)", () => {
     // Prova de que a validação é 100% client-side: nenhum round-trip ao backend.
     expect(vi.mocked(api.post)).not.toHaveBeenCalled();
     expect(vi.mocked(api.patch)).not.toHaveBeenCalled();
+  });
+});
+
+// ── `GET /crm/clients` e `GET /contracts/templates` fora de forma (issue #225) ───────────────
+//
+// `setClients(data)`/`setTemplates(data)` recebiam o payload CRU. Os dois `<select>` (linha
+// ~193 e ~200) mapeiam `clients`/`templates` SEM guarda de `.length` — o `<select>` está sempre
+// montado, não atrás de um modal. Um envelope de erro devolvido com 200 estoura no primeiro
+// render da página, e sem ErrorBoundary derruba o editor de contrato inteiro.
+describe("ContractBuilderPage — clientes/templates fora de forma não derrubam o editor (#225)", () => {
+  it.each([
+    ["envelope de erro devolvido com 200", { detail: "algo deu errado" }],
+    ["string no lugar da lista", "não é json"],
+  ])("%s → o editor continua montado, com os selects vazios", async (_rotulo, payload) => {
+    vi.mocked(api.get).mockImplementation((url: string) => {
+      if (url === "/crm/clients") return Promise.resolve({ data: payload } as never);
+      if (url === "/contracts/templates") return Promise.resolve({ data: payload } as never);
+      return Promise.resolve({ data: [] } as never);
+    });
+    renderNew();
+    await assentar();
+
+    expect(screen.getByPlaceholderText("Título do contrato")).toBeInTheDocument();
+    expect(screen.getByText("Sem cliente")).toBeInTheDocument();
+  });
+
+  it("contra-teste: cliente de verdade continua aparecendo no select", async () => {
+    vi.mocked(api.get).mockImplementation((url: string) => {
+      if (url === "/crm/clients")
+        return Promise.resolve({ data: [{ id: "c-1", name: "Maria Silva" }] } as never);
+      if (url === "/contracts/templates") return Promise.resolve({ data: [] } as never);
+      return Promise.resolve({ data: [] } as never);
+    });
+    renderNew();
+    await assentar();
+
+    expect(await screen.findByText("Maria Silva")).toBeInTheDocument();
   });
 });

@@ -445,8 +445,11 @@ function NewChargeModal({
 
   useEffect(() => {
     if (open) {
-      api.get<Client[]>("/crm/clients").then(({ data }) => setClients(data));
-      api.get<Contract[]>("/contracts").then(({ data }) => setContracts(data)).catch(() => setContracts([]));
+      api.get<Client[]>("/crm/clients").then(({ data }) => setClients(Array.isArray(data) ? data : []));
+      api
+        .get<Contract[]>("/contracts")
+        .then(({ data }) => setContracts(Array.isArray(data) ? data : []))
+        .catch(() => setContracts([]));
     }
   }, [open]);
 

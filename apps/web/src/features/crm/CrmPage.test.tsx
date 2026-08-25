@@ -5,6 +5,7 @@ import { MemoryRouter } from "react-router-dom";
 import type { Board } from "@e1p/shared-types";
 import { api } from "../../lib/api";
 import { PageActionsProvider, usePageActions } from "../../store/pageActions";
+import { assentar } from "../../test/assentar";
 import CrmPage from "./CrmPage";
 
 // Story 7.15 — Task 1. Rede sempre mockada (IV2): nenhum teste bate em /crm real.
@@ -341,5 +342,37 @@ describe("CrmPage — próximo passo de dia inteiro não 'volta' um dia (achado 
       await screen.findByText(/próximo: Reunião de alinhamento em 21\/08/i),
     ).toBeInTheDocument();
     expect(screen.queryByText(/em 20\/08/i)).not.toBeInTheDocument();
+  });
+});
+
+// ── `GET /crm/board` fora de forma (issue #225) ─────────────────────────────────
+//
+// `setBoard(data)` recebia o payload CRU — o análogo em forma de OBJETO do pior caso do #216
+// (`CrmPage.tsx` é o quadro central do CRM). `board.columns.map` roda direto no render (linhas
+// ~72 e ~100, incl. o modal "Nova etapa"), SEM guarda de campo. A guarda é por CAMPO
+// (`Array.isArray(data?.columns)`), não por raiz — um payload que É um array, ou um objeto sem
+// `columns`, cai nos dois casos.
+describe("CrmPage — quadro fora de forma não derruba o CRM (#225)", () => {
+  it.each([
+    ["envelope de erro devolvido com 200", { detail: "algo deu errado" }],
+    ["objeto sem a chave columns", { total: 3 }],
+    ["array no lugar do objeto (raiz certa, campo errado)", [{ stage: {}, clients: [] }]],
+    ["string no lugar do objeto", "não é json"],
+    ["corpo vazio (204 / sem conteúdo)", null],
+  ])("%s → o quadro segue montado, sem colunas", async (_rotulo, payload) => {
+    vi.mocked(api.get).mockResolvedValue({ data: payload } as never);
+    renderPage();
+    await assentar();
+
+    expect(screen.getByText("Funil de clientes")).toBeInTheDocument();
+    expect(screen.queryByText("Solte um card aqui")).not.toBeInTheDocument();
+  });
+
+  it("contra-teste: coluna de verdade continua aparecendo no quadro", async () => {
+    mockarBoard(null);
+    renderPage();
+    await assentar();
+
+    expect(await screen.findByText("Entrada")).toBeInTheDocument();
   });
 });

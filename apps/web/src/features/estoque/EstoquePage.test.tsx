@@ -3,6 +3,7 @@ import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { api } from "../../lib/api";
 import { PageActionsProvider, usePageActions } from "../../store/pageActions";
+import { assentar } from "../../test/assentar";
 import EstoquePage from "./EstoquePage";
 
 // Story 7.16 — Task 1. Rede sempre mockada (IV2): nenhum teste bate em /stock real.
@@ -111,5 +112,47 @@ describe("EstoquePage — separador de milhar (#224)", () => {
       "/stock/items",
       expect.objectContaining({ unit_cost_cents: 123456 }),
     );
+  });
+});
+
+// ── `GET /products` fora de forma (issue #225) ──────────────────────────────────
+//
+// `setProducts(data)` recebia o payload CRU. `products.map` (select "Ligar a um produto") está
+// SEM guarda de `.length` — dispara assim que o modal "Novo item" abre.
+describe("EstoquePage — produtos fora de forma não derrubam o modal Novo item (#225)", () => {
+  it.each([
+    ["envelope de erro devolvido com 200", { detail: "algo deu errado" }],
+    ["string no lugar da lista", "não é json"],
+  ])("%s → o modal abre, com o select de produto vazio", async (_rotulo, payload) => {
+    const user = userEvent.setup();
+    vi.mocked(api.get).mockImplementation((url: string) => {
+      if (url === "/stock/summary") return Promise.resolve({ data: emptySummary } as never);
+      if (url === "/stock/items") return Promise.resolve({ data: [] } as never);
+      if (url === "/products") return Promise.resolve({ data: payload } as never);
+      return Promise.resolve({ data: [] } as never);
+    });
+    renderPage();
+    await user.click(await screen.findByRole("button", { name: "Novo item" }));
+    await assentar();
+
+    expect(screen.getByLabelText("Nome")).toBeInTheDocument();
+    expect(screen.getByText("Não ligar")).toBeInTheDocument();
+  });
+
+  it("contra-teste: produto de verdade continua aparecendo no select", async () => {
+    const user = userEvent.setup();
+    vi.mocked(api.get).mockImplementation((url: string) => {
+      if (url === "/stock/summary") return Promise.resolve({ data: emptySummary } as never);
+      if (url === "/stock/items") return Promise.resolve({ data: [] } as never);
+      if (url === "/products") return Promise.resolve({ data: [{ id: "p-1", name: "Camiseta P" }] } as never);
+      return Promise.resolve({ data: [] } as never);
+    });
+    renderPage();
+    await user.click(await screen.findByRole("button", { name: "Novo item" }));
+    await assentar();
+
+    // "Camiseta P" também é o nome digitado no teste feliz acima, mas cada teste remonta a
+    // página — aqui só a opção do select existe.
+    expect(await screen.findByText("Camiseta P")).toBeInTheDocument();
   });
 });
