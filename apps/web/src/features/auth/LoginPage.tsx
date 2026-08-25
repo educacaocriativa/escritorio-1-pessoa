@@ -11,7 +11,10 @@ export default function LoginPage() {
 
   return (
     <div className="flex min-h-screen items-center justify-center bg-primary-500 p-4">
-      <div className="w-full max-w-md rounded-2xl bg-white p-8 shadow-xl">
+      {/* `campos-tocaveis`: esta tela tem CÓPIA PRÓPRIA do `Field` (abaixo, l. ~203) e não passa
+          pelo `components/Modal.tsx` — o conserto de lá não chega até aqui. Medido: e-mail e senha
+          a 38px na PRIMEIRA tela do produto. Ver `styles/index.css`. */}
+      <div className="campos-tocaveis w-full max-w-md rounded-2xl bg-white p-8 shadow-xl">
         <div className="mb-6 flex items-center gap-2">
           <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-primary-500 font-bold text-white">
             e1

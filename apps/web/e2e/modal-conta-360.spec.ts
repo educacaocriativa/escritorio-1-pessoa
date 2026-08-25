@@ -56,11 +56,12 @@ test("a escolha do saldo é tocável com o polegar", async ({ page }) => {
 test("nenhum BOTÃO do modal fica abaixo do mínimo tocável", async ({ page }) => {
   // Escopo no modal: a página por trás é assunto de outros specs.
   //
-  // A asserção é sobre BOTÃO, não sobre todo controle, e o recorte é deliberado: os campos de
-  // texto do `Field` têm 38px de altura e são compartilhados por todos os modais do app —
-  // engordá-los aqui mudaria telas que este PR declara não tocar. O que a dívida mediu como
-  // quebrado foi a ESCOLHA (rádios de 13px, coberta pelo teste acima) e o botão que a efetiva.
-  // Os 38px ficam registrados como dívida no CLAUDE.md, não escondidos num filtro.
+  // A asserção é sobre BOTÃO, não sobre todo controle. O recorte era deliberado e a dívida que o
+  // justificava — "os campos de texto do `Field` têm 38px e engordá-los aqui mudaria telas que
+  // este PR declara não tocar" — foi PAGA pela issue #215: os 7 campos deste modal medem 44px, e
+  // quem os mede é `campo-modal-360.spec.ts`, com o alcance declarado (16 telas). O recorte fica
+  // porque a pergunta deste arquivo continua sendo a do botão; o que mudou é que o resto não
+  // está mais sem dono.
   const pequenos = (await alvosPequenos(page, 44, ".fixed.inset-0.z-50")).filter((a) =>
     a.descricao.startsWith("button"),
   );
