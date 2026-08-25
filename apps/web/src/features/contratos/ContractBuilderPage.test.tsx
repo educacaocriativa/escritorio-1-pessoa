@@ -50,7 +50,11 @@ beforeEach(() => {
 
 describe("ContractBuilderPage — salvar contrato (Story 7.5, Task 3)", () => {
   it("caminho feliz: título + ao menos uma cláusula → POST /contracts com clauses preenchidas", async () => {
-    const user = userEvent.setup();
+    // `delay: null` (em vez do default `0`) evita o `setTimeout` REAL que o user-event faz
+    // entre cada tecla de `type()`; sob contenção de CPU (várias worktrees/CI concorrente) esse
+    // `setTimeout(0)` acumulado é a causa medida dos 7-9s deste arquivo sob carga (issue #231),
+    // mesma classe de sintoma documentada em `vitest.config.ts`. Não muda o que é digitado.
+    const user = userEvent.setup({ delay: null });
     vi.mocked(api.post).mockResolvedValue({ data: savedContract } as never);
     renderNew();
 
@@ -73,7 +77,7 @@ describe("ContractBuilderPage — salvar contrato (Story 7.5, Task 3)", () => {
   });
 
   it("caminho infeliz: sem título/cláusula é bloqueado client-side, SEM chamar a API", async () => {
-    const user = userEvent.setup();
+    const user = userEvent.setup({ delay: null }); // ver nota de perf no teste anterior
     renderNew();
 
     // Clica "Salvar" com o formulário vazio (título vazio + cláusula sem texto).
