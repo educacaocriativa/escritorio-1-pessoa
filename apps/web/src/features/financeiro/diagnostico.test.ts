@@ -43,6 +43,10 @@ describe("countByLevel", () => {
 describe("sourceLabel", () => {
   it("traduz as origens conhecidas e devolve o cru para desconhecidas", () => {
     expect(sourceLabel("lucratividade")).toBe("Lucratividade por contrato");
+    // Achado por mutação (#214): `projecao` era a única origem do `switch` que NENHUM teste
+    // afirmava. Apagar o corpo do `case` faz ele CAIR no case seguinte — e a projeção de caixa
+    // passa a se chamar "Investimentos" na tela do diagnóstico, sem nada quebrar.
+    expect(sourceLabel("projecao")).toBe("Projeção de caixa");
     expect(sourceLabel("investimento")).toBe("Investimentos");
     expect(sourceLabel("desconhecido")).toBe("desconhecido");
   });
@@ -86,6 +90,12 @@ describe("completudeCaveat", () => {
   it("avisa quando a completude está 🟡", () => {
     const texto = completudeCaveat([sig("amarelo", "completude")]);
     expect(texto).toContain("possivelmente incompletos");
+    // Achado por mutação (#214): "possivelmente incompletos" é a metade COMUM aos dois textos,
+    // então fixar `level === "vermelho"` em `true` passava neste teste — o 🟡 exibia a redação do
+    // 🔴 ("divergência acima da tolerância", uma afirmação de fato) sem ninguém perceber. O que
+    // separa os dois estados é justamente a abertura.
+    expect(texto).toContain("Ainda não dá para afirmar");
+    expect(texto).not.toContain("divergência acima da tolerância");
   });
 
   it("cala quando a completude está 🟢 ou ausente", () => {

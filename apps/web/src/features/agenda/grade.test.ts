@@ -222,6 +222,20 @@ describe("faixasLivres", () => {
     expect(faixasLivres([viagem], DIA, FUSO, ONTEM)).toEqual([]);
   });
 
+  it("o compromisso que já TERMINOU em outro dia não ocupa nada", () => {
+    // Achado por mutação (#214): a guarda de `intervaloNoDia` é `ymd < diaInicio || diaFim < ymd`,
+    // e todos os testes acima só exercitavam o primeiro lado (evento no FUTURO do dia pedido) ou
+    // eventos que encostam no dia. Apagando o segundo lado, um compromisso do dia 8 volta como
+    // `{ inicio: 0, fim: minFim }` — ele cai no ramo "termina neste dia" e ocupa da meia-noite
+    // até as 11h do dia 10. A grade de 42 dias manda a janela INTEIRA para cá, sem pré-filtro
+    // por dia: todo compromisso passado do mês fecharia a manhã de todos os dias seguintes.
+    const semanaPassada = evento({ starts_at: "2026-10-08T13:00:00Z", ends_at: "2026-10-08T14:00:00Z" });
+
+    const fx = faixasLivres([semanaPassada], DIA, FUSO, ONTEM);
+
+    expect(horas(fx)).toEqual([8, 9, 10, 11, 12, 13, 14, 15, 16, 17]);
+  });
+
   it("na hora cheia exata, a faixa que começa AGORA já não é oferecida", () => {
     // Borda: às 14:00:00 em ponto a faixa das 14h não tem mais nem um minuto de antecedência.
     // O caso de 14:30 (acima) passa com `<` e com `<=`; só a hora cheia separa os dois.
