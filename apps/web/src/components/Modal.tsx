@@ -43,7 +43,13 @@ export default function Modal({
     >
       <div
         data-testid={testId}
-        className="max-h-[85vh] w-full max-w-md overflow-y-auto rounded-2xl bg-white p-6 shadow-xl"
+        // `campos-tocaveis` (`styles/index.css`): 44px de altura mínima em TODO campo de
+        // digitação desta caixa — o `<input>` do `Field` abaixo e também os `<select>` e
+        // `<input>` que cada tela escreve à mão ao lado dele. Medido em 22/08/2026: eram 38–40px
+        // em 13 modais, 63 campos. É o mínimo do PR #56, onde um alvo pequeno demais fez uma
+        // conta real ser marcada como paga sem o dono ver — num formulário, errar o alvo é
+        // digitar no campo errado. Régua: `e2e/campo-modal-360.spec.ts`.
+        className="campos-tocaveis max-h-[85vh] w-full max-w-md overflow-y-auto rounded-2xl bg-white p-6 shadow-xl"
         onClick={(e) => e.stopPropagation()}
       >
         <div className="mb-4 flex items-start justify-between gap-2">
@@ -74,6 +80,22 @@ export default function Modal({
   );
 }
 
+/**
+ * O campo de texto padrão dos modais — 84 usos em 14 telas.
+ *
+ * ⚠️ **A altura NÃO está nesta `className`, e isso é deliberado.** Ela vem da regra
+ * `.campos-tocaveis` (`styles/index.css`), aplicada pela CAIXA do `Modal` acima. A razão é que
+ * este componente nunca foi o problema inteiro: ao lado de quase todo `<Field>` há um `<select>`
+ * escrito à mão com a mesma classe (`px-3 py-2 text-sm`) e a mesma altura errada, e há **três
+ * cópias locais** deste componente que um conserto aqui não alcançaria
+ * (`auth/LoginPage.tsx:203`, `funis/FunnelBuilderPage.tsx:736`,
+ * `juridico/JuridicoWizardPage.tsx:178`). Pôr `min-h-11` aqui consertaria 84 campos e deixaria
+ * outros ~35 em pé, com a aparência de dívida paga.
+ *
+ * Consequência prática: `<Field>` usado FORA de um `Modal` volta aos 38px. Quem o fizer precisa
+ * declarar `campos-tocaveis` no contêiner do formulário — foi o que os três clones acima
+ * receberam, e `e2e/campo-modal-360.spec.ts` mede os três, um a um.
+ */
 export function Field({
   label,
   value,
