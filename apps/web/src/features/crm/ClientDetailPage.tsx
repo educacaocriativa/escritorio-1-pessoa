@@ -13,8 +13,9 @@ import {
 import { useCallback, useEffect, useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
 import { api, apiErrorMessage } from "../../lib/api";
+import { hasModule } from "../../lib/access";
 import { formatDate, formatDay } from "../../lib/datetime";
-import { useFuso } from "../../store/auth";
+import { useAuth, useFuso } from "../../store/auth";
 import { rotaDaCobranca } from "../cobrancas/rota";
 import { AGENDADO_ENTRADA_LABEL } from "../financeiro/contas";
 import BlocoDaAgenda from "./BlocoDaAgenda";
@@ -29,6 +30,7 @@ const dt = (s: string, tz: string) => (s.length === 10 ? formatDay(s) : formatDa
 
 export default function ClientDetailPage() {
   const fuso = useFuso();
+  const { user } = useAuth();
   const { id = "" } = useParams();
   const navigate = useNavigate();
   const [client, setClient] = useState<Client | null>(null);
@@ -41,14 +43,42 @@ export default function ClientDetailPage() {
   // [8.15] A cobrança para a qual o dono está declarando "recebi direto na conta".
   const [recebendo, setRecebendo] = useState<Charge | null>(null);
 
+  // A ficha pertence ao CRM, mas AGREGA cinco módulos que podem não pertencer ao usuário — um
+  // sub-usuário sem Jurídico/Funis (por exemplo) tem `allowed_modules` sem eles. Antes desta
+  // correção o `load()` disparava as SEIS leituras num `Promise.all` só: a PRIMEIRA a voltar 403
+  // rejeitava o lote inteiro, `client` nunca saía de `null`, e a ficha ficava presa em
+  // "Carregando ficha..." mesmo para os dados que o usuário TINHA permissão de ver.
+  const podeCobrancas = hasModule(user, "receivables");
+  const podeContratos = hasModule(user, "contracts");
+  const podeOrcamentos = hasModule(user, "quotes");
+  const podeJuridico = hasModule(user, "juridico");
+  const podeFunis = hasModule(user, "funnels");
+
   const load = useCallback(async () => {
+    // Cada leitura secundária: (1) nem dispara se o módulo não é permitido — não há por que
+    // pedir o que se sabe de antemão que vai vir 403; (2) tem `.catch` próprio para qualquer
+    // outra falha (rede, 500) não derrubar as outras seções. `client` (o único dado sem o qual a
+    // ficha não faz sentido nenhum) continua fora dessa rede: se ele falhar, a falha aparece —
+    // não há "ficha parcial" sem cliente.
     const [c, ch, co, qu, ld, jr] = await Promise.all([
       api.get<Client>(`/crm/clients/${id}`),
-      api.get<Charge[]>(`/receivables/charges?client_id=${id}`),
-      api.get<Contract[]>(`/contracts?client_id=${id}`),
-      api.get<Quote[]>(`/quotes?client_id=${id}`),
-      api.get<LegalDocumentSummary[]>(`/juridico/documents?client_id=${id}`),
-      api.get<FunnelRunSummary[]>(`/funnels/runs?client_id=${id}`),
+      podeCobrancas
+        ? api.get<Charge[]>(`/receivables/charges?client_id=${id}`).catch(() => ({ data: [] as Charge[] }))
+        : Promise.resolve({ data: [] as Charge[] }),
+      podeContratos
+        ? api.get<Contract[]>(`/contracts?client_id=${id}`).catch(() => ({ data: [] as Contract[] }))
+        : Promise.resolve({ data: [] as Contract[] }),
+      podeOrcamentos
+        ? api.get<Quote[]>(`/quotes?client_id=${id}`).catch(() => ({ data: [] as Quote[] }))
+        : Promise.resolve({ data: [] as Quote[] }),
+      podeJuridico
+        ? api
+            .get<LegalDocumentSummary[]>(`/juridico/documents?client_id=${id}`)
+            .catch(() => ({ data: [] as LegalDocumentSummary[] }))
+        : Promise.resolve({ data: [] as LegalDocumentSummary[] }),
+      podeFunis
+        ? api.get<FunnelRunSummary[]>(`/funnels/runs?client_id=${id}`).catch(() => ({ data: [] as FunnelRunSummary[] }))
+        : Promise.resolve({ data: [] as FunnelRunSummary[] }),
     ]);
     setClient(c.data);
     setCharges(ch.data);
@@ -56,7 +86,7 @@ export default function ClientDetailPage() {
     setQuotes(qu.data);
     setLegalDocs(ld.data);
     setJourneys(jr.data);
-  }, [id]);
+  }, [id, podeCobrancas, podeContratos, podeOrcamentos, podeJuridico, podeFunis]);
 
   useEffect(() => {
     load();
@@ -116,24 +146,28 @@ export default function ClientDetailPage() {
         {client.notes && <p className="mt-3 whitespace-pre-line rounded-lg bg-neutral-50 p-3 text-sm text-neutral-600">{client.notes}</p>}
       </div>
 
-      {/* Resumo financeiro */}
-      <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
-        <Stat label="A receber (a vencer)" value={formatBRL(openSum)} tone="text-neutral-700" />
-        <Stat label="Vencido" value={formatBRL(overdueSum)} tone="text-danger" />
-        <Stat label="Recebido" value={formatBRL(paidSum)} tone="text-accent-700" />
-        {/* [issue #154] Espelho EXATO do quarto cartão da `CobrancasPage` (Story 8.15): mesmo
-            rótulo, mesmo tom âmbar e **some quando é zero**, pela mesma disciplina anti-ruído.
-            Rótulo e semântica vêm de lá de propósito — a ficha e a tela de cobranças são a MESMA
-            ação de dinheiro, e uma terceira convenção para o mesmo estado seria a assimetria que
-            esta issue existe para fechar.
-            ⚠️ [#186] É por isso que o rótulo é IMPORTADO de `financeiro/contas.ts` em vez de
-            escrito solto: "vem de lá" precisava continuar valendo quando alguém o renomear. O
-            import atravessa feature de propósito e não inventa convenção — é a mesma forma do
-            `VOCAB_ENTRADA` (`pagar/baixa.ts`) que esta tela já importa acima. */}
-        {scheduledSum > 0 && (
-          <Stat label={AGENDADO_ENTRADA_LABEL} value={formatBRL(scheduledSum)} tone="text-amber-700" />
-        )}
-      </div>
+      {/* Resumo financeiro — some inteiro sem o módulo Cobranças (`receivables`): mostrar três
+          cartões zerados para quem não tem acesso ao dinheiro do cliente seria uma afirmação
+          ("nada a receber") que ninguém verificou, não um resumo. */}
+      {podeCobrancas && (
+        <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
+          <Stat label="A receber (a vencer)" value={formatBRL(openSum)} tone="text-neutral-700" />
+          <Stat label="Vencido" value={formatBRL(overdueSum)} tone="text-danger" />
+          <Stat label="Recebido" value={formatBRL(paidSum)} tone="text-accent-700" />
+          {/* [issue #154] Espelho EXATO do quarto cartão da `CobrancasPage` (Story 8.15): mesmo
+              rótulo, mesmo tom âmbar e **some quando é zero**, pela mesma disciplina anti-ruído.
+              Rótulo e semântica vêm de lá de propósito — a ficha e a tela de cobranças são a MESMA
+              ação de dinheiro, e uma terceira convenção para o mesmo estado seria a assimetria que
+              esta issue existe para fechar.
+              ⚠️ [#186] É por isso que o rótulo é IMPORTADO de `financeiro/contas.ts` em vez de
+              escrito solto: "vem de lá" precisava continuar valendo quando alguém o renomear. O
+              import atravessa feature de propósito e não inventa convenção — é a mesma forma do
+              `VOCAB_ENTRADA` (`pagar/baixa.ts`) que esta tela já importa acima. */}
+          {scheduledSum > 0 && (
+            <Stat label={AGENDADO_ENTRADA_LABEL} value={formatBRL(scheduledSum)} tone="text-amber-700" />
+          )}
+        </div>
+      )}
 
       {/* Histórico — primeiro bloco de propósito: é a história que dá sentido às seções
           operacionais abaixo (Cobranças, Contratos, Orçamentos). */}
@@ -166,7 +200,8 @@ export default function ClientDetailPage() {
         <BlocoDaAgenda clientId={id} nome={client.name} />
       </Section>
 
-      {/* Cobranças */}
+      {/* Cobranças — some inteiro sem o módulo `receivables` (ver comentário do resumo acima). */}
+      {podeCobrancas && (
       <Section icon={<Receipt size={16} />} title={`Cobranças (${charges.length})`}>
         {charges.length === 0 ? (
           <Empty text="Nenhuma cobrança para este cliente." />
@@ -184,8 +219,10 @@ export default function ClientDetailPage() {
           </ul>
         )}
       </Section>
+      )}
 
-      {/* Contratos */}
+      {/* Contratos — some inteiro sem o módulo `contracts`. */}
+      {podeContratos && (
       <Section icon={<FileSignature size={16} />} title={`Contratos (${contracts.length})`}>
         {contracts.length === 0 ? (
           <Empty text="Nenhum contrato." />
@@ -203,8 +240,10 @@ export default function ClientDetailPage() {
           </ul>
         )}
       </Section>
+      )}
 
-      {/* Orçamentos */}
+      {/* Orçamentos — some inteiro sem o módulo `quotes`. */}
+      {podeOrcamentos && (
       <Section icon={<FileText size={16} />} title={`Orçamentos (${quotes.length})`}>
         {quotes.length === 0 ? (
           <Empty text="Nenhum orçamento." />
@@ -222,8 +261,11 @@ export default function ClientDetailPage() {
           </ul>
         )}
       </Section>
+      )}
 
-      {/* Documentos jurídicos */}
+      {/* Documentos jurídicos — some inteiro sem o módulo `juridico` (segredo de justiça: nem a
+          CONTAGEM de documentos deve vazar para quem não tem o módulo). */}
+      {podeJuridico && (
       <Section icon={<Gavel size={16} />} title={`Documentos jurídicos (${legalDocs.length})`}>
         {legalDocs.length === 0 ? (
           <Empty text="Nenhum documento jurídico vinculado." />
@@ -241,8 +283,10 @@ export default function ClientDetailPage() {
           </ul>
         )}
       </Section>
+      )}
 
-      {/* Jornadas no funil (automação) */}
+      {/* Jornadas no funil (automação) — some inteiro sem o módulo `funnels`. */}
+      {podeFunis && (
       <Section icon={<Workflow size={16} />} title={`Jornadas no funil (${journeys.length})`}>
         {journeys.length === 0 ? (
           <Empty text="Este contato não está em nenhum funil." />
@@ -260,6 +304,7 @@ export default function ClientDetailPage() {
           </ul>
         )}
       </Section>
+      )}
 
       {/* [8.15] A MESMA porta da tela de Cobranças, no MESMO componente — a Ficha 360° não ganha
           um segundo fluxo de registro. */}
