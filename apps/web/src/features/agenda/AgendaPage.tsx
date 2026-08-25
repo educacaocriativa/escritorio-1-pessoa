@@ -53,7 +53,10 @@ export default function AgendaPage() {
     const { data } = await api.get<AgendaEvent[]>("/agenda/events", {
       params: paramsDaGrade(start, end),
     });
-    setEvents(data);
+    // `Array.isArray`, e aqui não havia operador nenhum: a grade chama `eventsOfDay(events, d)`
+    // para CADA dia visível, e `eventsOfDay` abre com `events.filter` (`grade.ts`). Payload fora de
+    // forma estoura no primeiro dia do mês — antes de qualquer célula existir, com a tela em branco.
+    setEvents(Array.isArray(data) ? data : []);
   }, [start, end]);
 
   useEffect(() => {
