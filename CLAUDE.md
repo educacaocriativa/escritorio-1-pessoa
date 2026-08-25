@@ -2807,6 +2807,52 @@ primeira rodada.
   ocorrências** quando a contagem real é **190** — o erro de 27× faz a dívida se ler como "ainda
   não vale um componente".
 
+## RBAC no frontend: a sidebar e as rotas passam a respeitar `allowed_modules` (2026-08-25)
+
+**O frontend nunca consultava `allowed_modules` — em lugar nenhum.** A sidebar (`navigation.ts`)
+mostrava os ~20 itens de menu a todo usuário, dono ou sub-usuário restrito, e nenhuma rota sabia
+recusar antes da página tentar buscar dados. O sintoma achado pelo fundador: um sub-usuário sem
+Jurídico/Funis abria a ficha do cliente (`/crm/clients/:id`) e ela ficava presa em **"Carregando
+ficha..." para sempre** — e o mesmo em `/config` (exige o módulo `settings` inteiro).
+
+- **Causa em `ClientDetailPage`:** o `load()` da montagem juntava as seis leituras (cliente,
+  cobranças, contratos, orçamentos, jurídico, funis) num `Promise.all` só. A PRIMEIRA a voltar 403
+  rejeitava o lote inteiro — `client` nunca saía de `null`, e nem os dados PERMITIDOS apareciam.
+  **Causa em `ConfiguracoesPage`:** `load()` não tinha `.catch`; o 403 de `/settings/profile`
+  também deixava `p` preso em `null` para sempre.
+- [x] **`lib/access.ts` — `hasModule(user, module)`**, espelho **exato** de `require_module`
+  (`app/core/tenancy.py`): `role === "owner" || allowed_modules.length === 0 ||
+  allowed_modules.includes(module)`. Porta única desta regra no frontend.
+- [x] **`navigation.ts` — cada item ganhou `module`** (o mesmo nome que `require_module` usa na
+  rota que ele abre) e `visibleNavSections(hasModule)` recorta a sidebar por permissão — seção que
+  fica sem item nenhum some inteira, não deixa título/divisor órfão. `navSections` em si continua
+  a lista COMPLETA e estática (o que `navigation.test.ts` já afirmava).
+  ⚠️ **A função entra FORA do `Stryker disable all` da issue #191** — aquele bloco existe porque o
+  módulo só tinha tabela de dados, sem lógica; `visibleNavSections` é a primeira função exportada
+  daqui, e o comentário do próprio bloco já previa isso ("função nova nasce fora dele").
+- [x] **`App.tsx` — `<Modulo m="...">`** envolve cada rota de módulo de negócio (crm, wallet, bank,
+  receivables, payables, quotes, contracts, products, stock, marketing, funnels, pages, juridico,
+  financial_intelligence, investments, chart_of_accounts, cost_centers, settings): sem o módulo, a
+  página **nem monta** — mostra "sem acesso" em vez de tentar buscar dados que voltariam 403. É a
+  segunda camada, contra link direto/favorito/URL digitada (a sidebar sozinha só esconde o clique).
+  A raiz (`/`, Cockpit) ficou **deliberadamente sem guard**: é a página de entrada do app, e
+  guardá-la arriscava deixar um sub-usuário sem NENHUMA tela de pouso.
+- [x] **`ClientDetailPage.tsx`** — cada leitura secundária só dispara se `hasModule` permitir (não
+  há por que pedir o que já se sabe que vai 403) e tem `.catch` próprio (defesa contra falha por
+  outro motivo — rede, 500 — não travar as demais seções). As cinco seções e o resumo financeiro
+  somem inteiros quando o módulo correspondente falta — nunca mostram contagem zerada de algo que
+  o usuário não tem permissão de ver.
+- [x] **`ConfiguracoesPage.tsx`** — segunda camada de defesa: `load()` ganhou `try/catch`: qualquer
+  falha mostra a mensagem em vez de travar em "Carregando..." para sempre.
+- **Por que também é guard de ROTA, não só de sidebar:** a sidebar é conveniência de navegação; a
+  garantia real precisa valer para quem chega direto pela URL. As duas camadas espelham o padrão
+  que este arquivo já registra em vários lugares (Regra da Origem, Invariante do Trilho): a UI
+  nunca é a única fronteira, o backend (`require_module`) continua sendo o fail-closed de verdade.
+- **Dívida:** nenhuma tela mede em ~360px o estado "sem acesso a este módulo" — texto simples, sem
+  régua própria. E `packages/shared-types` não tem um tipo fechado para os nomes de módulo
+  (`hasModule` recebe `string` solto); um typo no `module` de um item novo de menu não quebraria
+  build nenhum, só esconderia o item em silêncio.
+
 ## Vima: o Registro de Fatos e o briefing (PRs #85 e #90, 2026-08-06/07)
 
 > Spec: `docs/superpowers/specs/2026-08-06-vima-registro-de-fatos-e-briefing-design.md` ·

@@ -12,8 +12,16 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 vi.mock("../lib/api", () => ({
   api: { get: vi.fn().mockResolvedValue({ data: {} }) },
 }));
+// `user` precisa ser um dono de verdade (não `null`): a Sidebar filtra os itens por
+// `hasModule(user, item.module)` (RBAC), e a Sidebar só é montada DEPOIS do gate de autenticação
+// — `user: null` aqui não é um caso real, e faria a sidebar aparecer VAZIA nestes testes
+// (que existem para cobrir responsividade, não permissão).
 vi.mock("../store/auth", () => ({
-  useAuth: () => ({ logout: vi.fn(), user: null, tenant: null }),
+  useAuth: () => ({
+    logout: vi.fn(),
+    user: { role: "owner", allowed_modules: [] },
+    tenant: null,
+  }),
 }));
 vi.mock("../store/pageActions", () => ({
   usePageActions: () => ({ action: null }),

@@ -36,16 +36,28 @@ export default function ConfiguracoesPage() {
   const [saving, setSaving] = useState(false);
   const [savedAt, setSavedAt] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  // A rota já barra quem não tem o módulo `settings` (ver `Modulo` em `app/App.tsx`), então este
+  // 403 não deveria disparar mais — mas nenhuma tela deve ficar presa em "Carregando..." para
+  // sempre por causa de UM erro não tratado (rede caindo, 500, sessão expirando no meio). Sem
+  // isto, `load()` rejeitava em silêncio e `p` nunca saía de `null`.
+  const [loadError, setLoadError] = useState<string | null>(null);
 
   const load = useCallback(async () => {
-    const { data } = await api.get<TenantProfile>("/settings/profile");
-    setP(data);
+    try {
+      const { data } = await api.get<TenantProfile>("/settings/profile");
+      setP(data);
+    } catch (err) {
+      setLoadError(apiErrorMessage(err));
+    }
   }, []);
 
   useEffect(() => {
     load();
   }, [load]);
 
+  if (loadError) {
+    return <div className="p-8 text-sm text-danger">{loadError}</div>;
+  }
   if (!p) return <div className="p-8 text-sm text-neutral-400">Carregando...</div>;
 
   const set = (patch: Partial<TenantProfile>) => setP({ ...p, ...patch });
