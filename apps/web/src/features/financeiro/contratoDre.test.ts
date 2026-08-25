@@ -51,6 +51,14 @@ describe("formatMarginPct", () => {
   it("mostra '—' quando não há receita (null)", () => {
     expect(formatMarginPct(null)).toBe("—");
   });
+
+  it("arredonda em UMA casa decimal (não despeja o dízimo da razão)", () => {
+    // Achado por mutação (#214): trocar `{ maximumFractionDigits: 1 }` por `{}` sobrevivia,
+    // porque 0.6 e 0.125 já cabem em 1 casa. O default do `toLocaleString` é 3 casas, e a razão
+    // que o backend manda é uma DIVISÃO — 60000/486000 = 0,12345679… A margem na tela viraria
+    // "12,346%" em vez de "12,3%".
+    expect(formatMarginPct(0.12345)).toBe("12,3%");
+  });
 });
 
 describe("breakEvenLabel", () => {
@@ -60,6 +68,16 @@ describe("breakEvenLabel", () => {
 
   it("avisa quando não atingível (margem não cobre custos fixos)", () => {
     const d = dre({ break_even_reachable: false, break_even_cents: null });
+    expect(breakEvenLabel(d)).toMatch(/não atingível/i);
+  });
+
+  it("avisa também quando o backend diz 'atingível' mas não manda o valor", () => {
+    // Achado por mutação (#214). Os dois testes acima só usavam os cantos CONCORDANTES
+    // (true+valor, false+null), e nessas duas entradas `||` e `&&` devolvem o mesmo resultado —
+    // por isso o `LogicalOperator` e o segundo operando do `||` sobreviviam os dois. Este é o
+    // caso DISCORDANTE, e é o que a guarda existe para pegar: sem ele, `formatBRL(null)`
+    // renderiza "R$ 0,00" e a tela afirma que o contrato empata com receita ZERO.
+    const d = dre({ break_even_reachable: true, break_even_cents: null });
     expect(breakEvenLabel(d)).toMatch(/não atingível/i);
   });
 });

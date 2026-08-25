@@ -17,6 +17,7 @@ import { camposDaCopia, type CamposDaConta } from "./duplicar";
 import { formatDay, today } from "../../lib/datetime";
 import { useFuso } from "../../store/auth";
 import { apenasTexto, daUrl, type FiltroPagar, filtroPadrao, paraQuery, paraUrl } from "./filtros";
+import { formatBRL } from "../financeiro/dre";
 
 /** Grupos DRE cabíveis numa DESPESA (Contas a Pagar nunca lança em Receita). */
 const EXPENSE_GROUPS = GRUPOS_DRE.filter((g) => g !== "RECEITA");
@@ -51,8 +52,6 @@ function ContractSelect({ value, onChange }: { value: string; onChange: (v: stri
     </label>
   );
 }
-
-const brl = (c: number) => (c / 100).toLocaleString("pt-BR", { style: "currency", currency: "BRL" });
 
 const RECUR = [
   ["none", "Não repete"],
@@ -262,10 +261,10 @@ export default function PagarPage() {
       )}
 
       <div className="grid grid-cols-2 gap-4 lg:grid-cols-4">
-        <Stat label="A pagar" value={brl(summary.open_cents)} tone="text-amber-700" />
-        <Stat label="Atrasado" value={brl(summary.overdue_cents)} tone="text-danger" />
-        <Stat label="Nesta semana" value={brl(summary.week_cents)} tone="text-neutral-700" />
-        <Stat label="Pago no mês" value={brl(summary.paid_month_cents)} tone="text-accent-700" />
+        <Stat label="A pagar" value={formatBRL(summary.open_cents)} tone="text-amber-700" />
+        <Stat label="Atrasado" value={formatBRL(summary.overdue_cents)} tone="text-danger" />
+        <Stat label="Nesta semana" value={formatBRL(summary.week_cents)} tone="text-neutral-700" />
+        <Stat label="Pago no mês" value={formatBRL(summary.paid_month_cents)} tone="text-accent-700" />
       </div>
 
       <FiltrosDaLista
@@ -322,7 +321,7 @@ export default function PagarPage() {
                     <td className="px-4 py-3 tabular-nums text-neutral-600">
                       {formatDay(p.due_date)}
                     </td>
-                    <td className="px-4 py-3 font-medium tabular-nums">{brl(p.amount_cents)}</td>
+                    <td className="px-4 py-3 font-medium tabular-nums">{formatBRL(p.amount_cents)}</td>
                     <td className="px-4 py-3">
                       <span className={`rounded-pill px-2 py-0.5 text-xs ${st.cls}`}>{st.label}</span>
                       {/* A data do DÉBITO, não o vencimento: numa agendada as duas divergem por
@@ -421,7 +420,7 @@ export default function PagarPage() {
         <DialogDeBaixa
           titulo="Dar baixa nesta conta"
           descricao={pagando.description || pagando.supplier || "Conta"}
-          valor={`${brl(pagando.amount_cents)} · vence ${formatDay(pagando.due_date)}`}
+          valor={`${formatBRL(pagando.amount_cents)} · vence ${formatDay(pagando.due_date)}`}
           dataPadrao={pagando.due_date}
           onClose={() => setPagando(null)}
           onPago={async (corpo) => {

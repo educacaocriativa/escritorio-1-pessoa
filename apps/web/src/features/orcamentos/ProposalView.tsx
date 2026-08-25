@@ -1,7 +1,7 @@
 import type { PublicProposal } from "@e1p/shared-types";
 import { CalendarClock, Check, FileText, Image as ImageIcon } from "lucide-react";
+import { formatBRL } from "../financeiro/dre";
 
-const brl = (c: number) => (c / 100).toLocaleString("pt-BR", { style: "currency", currency: "BRL" });
 // só permite http(s) ou caminho relativo como origem de imagem (defesa contra src maliciosa)
 const safeSrc = (u: string) => (/^(https?:\/\/|\/)/i.test(u.trim()) ? u.trim() : "");
 
@@ -42,12 +42,12 @@ export default function ProposalView({
               {it.subtitle && <p className="text-sm opacity-60">{it.subtitle}</p>}
               {it.quantity > 1 && (
                 <p className="mt-1 text-xs opacity-50">
-                  {it.quantity} × {brl(it.unit_price_cents)}
+                  {it.quantity} × {formatBRL(it.unit_price_cents)}
                 </p>
               )}
             </div>
             <p className="shrink-0 font-semibold tabular-nums">
-              {brl(it.quantity * it.unit_price_cents)}
+              {formatBRL(it.quantity * it.unit_price_cents)}
             </p>
           </div>
         ))}
@@ -57,18 +57,18 @@ export default function ProposalView({
       <div className="mt-4 space-y-1 px-6 text-sm">
         <div className="flex justify-between opacity-70">
           <span>Subtotal</span>
-          <span className="tabular-nums">{brl(p.subtotal_cents)}</span>
+          <span className="tabular-nums">{formatBRL(p.subtotal_cents)}</span>
         </div>
         {p.discount_cents > 0 && (
           <div className="flex justify-between opacity-70">
             <span>Desconto</span>
-            <span className="tabular-nums">- {brl(p.discount_cents)}</span>
+            <span className="tabular-nums">- {formatBRL(p.discount_cents)}</span>
           </div>
         )}
         <div className="flex justify-between border-t border-black/10 pt-2 text-lg font-bold">
           <span>Total</span>
           <span className="tabular-nums" style={{ color: p.primary_color }}>
-            {brl(p.total_cents)}
+            {formatBRL(p.total_cents)}
           </span>
         </div>
       </div>

@@ -9,12 +9,10 @@ import ChartAccountSelect from "./ChartAccountSelect";
 import type { CostCenter } from "./costCenters";
 import CostCenterSelect from "./CostCenterSelect";
 import { type ChartAccount, GRUPOS_DRE } from "./planoContas";
+import { formatBRL } from "./dre";
 
 /** Grupos DRE cabíveis numa venda da Carteira (é sempre receita, nunca despesa). */
 const REVENUE_GROUPS = GRUPOS_DRE.filter((g) => g === "RECEITA");
-
-export const brl = (cents: number) =>
-  (cents / 100).toLocaleString("pt-BR", { style: "currency", currency: "BRL" });
 
 const KINDS = [
   ["service", "Serviço"],
@@ -121,10 +119,10 @@ export default function FinanceiroPage() {
       </div>
 
       <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
-        <Stat label="Disponível para saque" value={brl(summary.available_cents)} tone="accent" />
-        <Stat label="A receber" value={brl(summary.pending_cents)} tone="info" />
-        <Stat label="Já sacado" value={brl(summary.withdrawn_cents)} tone="neutral" />
-        <Stat label="Taxas da plataforma" value={brl(summary.fees_total_cents)} tone="neutral" />
+        <Stat label="Disponível para saque" value={formatBRL(summary.available_cents)} tone="accent" />
+        <Stat label="A receber" value={formatBRL(summary.pending_cents)} tone="info" />
+        <Stat label="Já sacado" value={formatBRL(summary.withdrawn_cents)} tone="neutral" />
+        <Stat label="Taxas da plataforma" value={formatBRL(summary.fees_total_cents)} tone="neutral" />
       </div>
 
       {summary.available_cents > 0 && (
@@ -132,7 +130,7 @@ export default function FinanceiroPage() {
           onClick={payout}
           className="rounded-pill bg-primary-500 px-4 py-2 text-sm font-semibold text-white hover:bg-primary-600"
         >
-          Sacar {brl(summary.available_cents)}
+          Sacar {formatBRL(summary.available_cents)}
         </button>
       )}
 
@@ -188,12 +186,12 @@ export default function FinanceiroPage() {
                   <td className="px-4 py-3 text-neutral-500">
                     {(t.cost_center_id && costCenterLabel[t.cost_center_id]) || "—"}
                   </td>
-                  <td className="px-4 py-3 tabular-nums text-neutral-600">{brl(t.gross_cents)}</td>
+                  <td className="px-4 py-3 tabular-nums text-neutral-600">{formatBRL(t.gross_cents)}</td>
                   <td className="px-4 py-3 tabular-nums text-danger">
-                    -{brl(t.platform_fee_cents)}
+                    -{formatBRL(t.platform_fee_cents)}
                   </td>
                   <td className="px-4 py-3 font-medium tabular-nums text-accent-700">
-                    {brl(t.net_cents)}
+                    {formatBRL(t.net_cents)}
                   </td>
                   <td className="px-4 py-3">
                     <span className="rounded-pill bg-neutral-100 px-2 py-0.5 text-xs text-neutral-600">

@@ -96,7 +96,9 @@ export default function JuridicoWizardPage() {
   }
 
   return (
-    <div className="mx-auto max-w-2xl space-y-6">
+    // `campos-tocaveis`: terceira cópia do `Field` (l. ~178), em formulário de página inteira —
+    // não é modal, então nada de `components/Modal.tsx` o alcança. Ver `styles/index.css`.
+    <div className="campos-tocaveis mx-auto max-w-2xl space-y-6">
       <button
         onClick={() => navigate("/juridico")}
         className="flex items-center gap-1 text-sm text-neutral-500 hover:text-neutral-800"
