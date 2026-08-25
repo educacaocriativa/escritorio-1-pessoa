@@ -46,12 +46,12 @@ for (const { rota, marca, mocks } of CASOS) {
 }
 
 /**
- * CONTROLE POSITIVO — o que impede as 18 asserções acima de serem enfeite.
+ * CONTROLE POSITIVO — o que impede as 33 asserções acima de serem enfeite.
  *
  * Medido nesta issue (#135), e é o achado que reescreve a premissa: `main` é
  * `overflow-x-hidden` (`AppShell.tsx:64`). Uma tabela larga demais NÃO faz o documento rolar —
  * ela é recortada, e `larguraDaPagina` devolve 360 com a coluna da direita inalcançável. Provado
- * por mutação: tirar `overflow-x-auto` da `DrePage` (o deslizador da DRE de 12 meses) deixa as 18
+ * por mutação: tirar `overflow-x-auto` da `DrePage` (o deslizador da DRE de 12 meses) deixa as 33
  * rotas VERDES. Logo, esta régua não mede "conteúdo largo" — ela mede exatamente uma coisa, e é a
  * classe do #135: um elemento que ESCAPA do recorte e passa a contar no `scrollWidth` do
  * documento. É o que um `position: absolute` SEM offsets faz quando não há ancestral posicionado:
@@ -60,7 +60,7 @@ for (const { rota, marca, mocks } of CASOS) {
  *
  * Este teste planta essa classe de propósito, na `DrePage` (cujo `overflow-x-auto` da linha 131
  * não tem `relative`), e exige que a conta a enxergue. Se algum dia ele passar a devolver 360, a
- * medição ficou cega e as 18 asserções acima pararam de significar qualquer coisa — mesmo
+ * medição ficou cega e as 33 asserções acima pararam de significar qualquer coisa — mesmo
  * continuando verdes.
  */
 test("a régua enxerga a classe do #135 plantada num deslizador sem `relative`", async ({ page }) => {

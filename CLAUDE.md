@@ -560,9 +560,9 @@ arquivar um centro de custo num celular de 360px**. O `<a>` do bloco "botão" va
 **página pública** (`PageBlocks.tsx` é o mesmo componente), onde ele é a única conversão que existe:
 rótulo longo sem espaço media **626px** de largura.
 
-**Cobertura: 30 das 47 rotas não-públicas de `App.tsx`** — **43 no `ProtectedLayout`** (com shell:
-sidebar + topbar) **+ 4 no `ProtectedBareLayout`** (sem shell). **17 de fora**, e as duas caixas
-falham por motivos diferentes:
+**Cobertura: 33 das 47 rotas não-públicas de `App.tsx`** — **43 no `ProtectedLayout`** (com shell:
+sidebar + topbar) **+ 4 no `ProtectedBareLayout`** (sem shell). **14 de fora, todas do
+`ProtectedLayout`**: a caixa SEM SHELL fechou no #208, e o denominador dela agora é 4/4.
 
 **14 do `ProtectedLayout`.** `/`, `/config`, `/crm`, `/financeiro/conferencia` **quebram com o mock
 default `[]`** (endpoint que devolve objeto) e precisam de fixture própria — medido: as quatro
@@ -572,15 +572,45 @@ renderizam **em branco** (`pageerror` real: `reading 'some'`/`'trim'`/`'filter'`
 `/juridico/novo`, `/juridico/:id` (as duas últimas exigem `?skill=`) e `/admin` (exige
 `is_platform_admin`) pedem fixture ou sessão própria. `*` (ComingSoon) não tem controle.
 
-**3 do `ProtectedBareLayout`** (eram as 4 da categoria INTEIRA até o #178): `/dna/nucleo`,
-`/compartilhar`, `/comprovante/:id`. **Nenhuma das três está no catálogo** — não por triagem, por
-omissão do denominador. E não são periferia: o comentário do próprio `App.tsx` diz que
-`/dna/nucleo` é **"desenhado para 360px"**, e `/comprovante/:id` é **tela de dinheiro** que já
-carrega dívida de medição registrada no §5.1 (*"Segue de pé a dívida da `ComprovantePage` … aquela
-tela não está entre as medidas"*) — o `ALTURA_DA_BARRA` do `baixa.ts` tem seis mutantes
-sobreviventes justamente porque o número é medida do DOM e ninguém mede aquela tela. **Não foram
-medidas nesta issue de propósito** (o pedido era o número honesto, não mais cobertura): se
-alguma tiver defeito, vira issue própria com o número medido.
+**0 do `ProtectedBareLayout`** — eram as 4 da categoria INTEIRA até o #178, e as 3 que restavam
+(`/dna/nucleo`, `/compartilhar`, `/comprovante/:id`) entraram no catálogo pelo **#208**. A
+suspeita que as trouxe estava certa em uma das três, e era a que o próprio `App.tsx` anuncia como
+**"desenhada para 360px"**: `/dna/nucleo` reprovou **na primeira medição**, com
+`documentElement.scrollWidth` = **636px** numa viewport de 360.
+
+| Rota | 1ª medição | Causa | Conserto |
+|---|---|---|---|
+| `/dna/nucleo` | **636px** | `pergunta.texto` e `opcoes[].rótulo` do catálogo do servidor (`dna/catalog.py`), sem quebra | `break-words` nos dois, em `PerguntaDaVima` |
+| `/comprovante/r1` | 360px | — (o `truncate` dos cartões e o `min-w-0` seguram) | — |
+| `/compartilhar?erro=falha` | 360px | — (rota de trânsito, duas frases curtas) | — |
+
+Os 636px da `/dna/nucleo` são **a mesma classe dos 649px da `/vima`**, pela mesma razão
+estrutural: sem shell não há `main.overflow-x-hidden`, o que não cabe VAZA em vez de ficar
+recortado, e a página inteira rola. Medidos um a um em 360×740: o `texto` da pergunta sozinho
+vale **636px**, os botões de opção sozinhos valem **559px**, e só com os dois quebrando a página
+volta a 360. `PerguntaDaVima` é o componente de TRÊS superfícies (núcleo, gancho, config), então o
+conserto vale nas seis telas que montam o gancho também.
+
+- **Limite declarado da `/comprovante/:id`:** a **barra fixa do rodapé** (`EscolhaDaBaixa` + o
+  rótulo com o nome da conta) só monta depois de TOCAR numa candidata, e o catálogo não toca em
+  nada. Ela segue **fora** de qualquer medida — a dívida do `ALTURA_DA_BARRA` do `baixa.ts` (seis
+  mutantes sobreviventes, §5.1) **continua de pé**, e o #208 não a fecha.
+- **Limite declarado da `/compartilhar`:** dos dois estados que ela desenha, o catálogo mede o
+  **erro** (`?erro=falha`, o valor que o `sw.js` emite de verdade). O ramo `?k=<chave consumida>`
+  fica **preso no spinner em desenvolvimento** — achado do #208, registrado abaixo.
+
+**Achado fora do escopo do #208, NÃO consertado — `/compartilhar?k=` trava no spinner sob
+StrictMode.** Medido em 22/08/2026, contra o Vite de desenvolvimento: `/compartilhar?k=<qualquer
+chave>` fica em *"Enviando comprovante..."* para sempre; a mensagem de erro nunca aparece. **Não é
+a fixture** — provado por mutação: tirando `<React.StrictMode>` de `main.tsx` a mesma URL desenha
+*"Não encontramos o arquivo compartilhado. Ele pode já ter sido enviado."* na hora. O mecanismo é o
+guard `startedFor` casando com o `cancelled` por execução (`CompartilharPage.tsx`): a primeira
+montagem começa o trabalho assíncrono e a limpeza a cancela; a segunda vê o **mesmo token** e
+desiste; ninguém chama `setError`. O ramo `?erro=` é síncrono e sobrevive à dobra — por isso é ele
+que o catálogo mede. Efeito em produção: o build não dobra os efeitos, então o caminho feliz e o
+"chave já consumida" funcionam — mas o guard é frágil pelo mesmo motivo em qualquer re-execução de
+efeito com token igual. **Vira issue própria**: consertar o `CompartilharPage` estava fora do
+pedido do #208, que era pôr as três telas sob régua.
 
 ⚠️ **`/vima` saiu dessa lista no #178, e o que ela tinha escondido era defeito de verdade.** É a
 PORTA DO DIA (`EntradaDoDia` manda a raiz autenticada para lá enquanto o briefing de hoje não foi

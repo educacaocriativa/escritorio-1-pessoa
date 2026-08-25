@@ -53,7 +53,13 @@ export default function PerguntaDaVima({ pergunta, source, onPronto, onPular }: 
 
   return (
     <div className="rounded-xl border border-neutral-200 bg-white p-4">
-      <p className="text-base font-medium text-neutral-800">{pergunta.texto}</p>
+      {/* ⚠️ **`break-words` não é enfeite** (#208, medido em 360×740). O catálogo do DNA mora no
+          servidor (`dna/catalog.py`) e o front não tem cópia dele: um `texto` sem espaço para
+          quebrar não tem onde quebrar. Em `/dna/nucleo` isso vale `documentElement.scrollWidth`
+          = **636px** numa viewport de 360 — sozinho, com os botões já quebrando. E ali não há
+          `main.overflow-x-hidden` que recorte (`ProtectedBareLayout`): o que não cabe VAZA e a
+          PÁGINA inteira rola. É o mesmo defeito e o mesmo conserto do #178 na `/vima`. */}
+      <p className="break-words text-base font-medium text-neutral-800">{pergunta.texto}</p>
       <p className="mt-1 text-xs text-neutral-500">
         {pergunta.classe === "calibracao"
           ? "Isso muda o seu resumo a partir de amanhã."
@@ -68,7 +74,9 @@ export default function PerguntaDaVima({ pergunta, source, onPronto, onPular }: 
               type="button"
               disabled={salvando}
               onClick={() => responder(o.valor)}
-              className="w-full rounded-lg border border-neutral-200 px-4 py-3 text-left text-sm text-neutral-700 hover:border-neutral-400 disabled:opacity-50"
+              // `break-words`: o rótulo da opção vem do mesmo catálogo do servidor que o
+              // `texto` acima. Medido no #208: as opções sozinhas valem 559px em 360.
+              className="w-full break-words rounded-lg border border-neutral-200 px-4 py-3 text-left text-sm text-neutral-700 hover:border-neutral-400 disabled:opacity-50"
             >
               {o.rotulo}
             </button>
@@ -90,7 +98,8 @@ export default function PerguntaDaVima({ pergunta, source, onPronto, onPular }: 
                     ativa ? marcadas.filter((v) => v !== o.valor) : [...marcadas, o.valor],
                   )
                 }
-                className={`w-full rounded-lg border px-4 py-3 text-left text-sm disabled:opacity-50 ${
+                // `break-words` pelo mesmo motivo do ramo `escolha` acima (#208).
+                className={`w-full break-words rounded-lg border px-4 py-3 text-left text-sm disabled:opacity-50 ${
                   ativa
                     ? "border-neutral-800 bg-neutral-800 text-white"
                     : "border-neutral-200 text-neutral-700 hover:border-neutral-400"
