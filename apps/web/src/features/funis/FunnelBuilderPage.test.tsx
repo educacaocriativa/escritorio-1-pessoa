@@ -359,3 +359,87 @@ describe("RunNodeModal — separador de milhar (#224)", () => {
     );
   });
 });
+
+// ── `GET /crm/clients` fora de forma dentro do `RunNodeModal` (issue #225) ───────────────────
+//
+// `setClients(data)` recebia o payload cru. `clients.map` (select "Cliente", linha ~685) é
+// montado direto sempre que a ação precisa de cliente (`needsClient`) — aqui, `create_quote`.
+describe("RunNodeModal — clientes fora de forma não derrubam 'Executar ação' (#225)", () => {
+  function mockComAcoes(clientsPayload: unknown) {
+    vi.mocked(api.get).mockImplementation((url: string) => {
+      if (url === "/funnels/components") return Promise.resolve({ data: catalogComAcoesDeDinheiro } as never);
+      if (url === "/settings/profile") return Promise.resolve({ data: profile(null) } as never);
+      if (url === "/crm/clients") return Promise.resolve({ data: clientsPayload } as never);
+      return Promise.resolve({ data: [] } as never);
+    });
+  }
+
+  async function abrirExecutarAcao(user: ReturnType<typeof userEvent.setup>, itemLabel: string) {
+    await user.click(await screen.findByText(itemLabel));
+    fireEvent.click(screen.getAllByText(itemLabel).at(-1)!);
+    await user.click(await screen.findByRole("button", { name: "Executar ação" }));
+  }
+
+  it.each([
+    ["envelope de erro devolvido com 200", { detail: "algo deu errado" }],
+    ["string no lugar da lista", "não é json"],
+  ])("%s → o modal 'Executar ação' abre, com o select de cliente vazio", async (_rotulo, payload) => {
+    const user = userEvent.setup();
+    mockComAcoes(payload);
+    renderNew();
+
+    await abrirExecutarAcao(user, "Gerar orçamento");
+
+    expect(screen.getByText("Cliente")).toBeInTheDocument();
+    expect(screen.getByText("Selecione um cliente")).toBeInTheDocument();
+  });
+
+  it("contra-teste: cliente de verdade continua aparecendo no select", async () => {
+    const user = userEvent.setup();
+    mockComAcoes([{ id: "c-1", name: "Maria Silva" }]);
+    renderNew();
+
+    await abrirExecutarAcao(user, "Gerar orçamento");
+
+    expect(await screen.findByText("Maria Silva")).toBeInTheDocument();
+  });
+});
+
+// ── `GET /whatsapp-templates` fora de forma no editor de mensagem (issue #225) ───────────────
+//
+// `setTemplates(data)` recebia o payload cru. `templates.map` alimenta o `<select>` de template
+// aprovado — só existe no transporte Meta (`usaTemplate`), reaberto do mesmo editor já coberto
+// pelo describe "nó de WhatsApp" acima.
+describe("Editor de mensagem — templates fora de forma não derrubam o select (#225)", () => {
+  async function abrirEditorDeMensagem(user: ReturnType<typeof userEvent.setup>) {
+    await user.click(await screen.findByText("WhatsApp"));
+    fireEvent.click(screen.getAllByText("WhatsApp").at(-1)!);
+    await user.click(await screen.findByRole("button", { name: /Escrever mensagem/ }));
+  }
+
+  it.each([
+    ["envelope de erro devolvido com 200", { detail: "algo deu errado" }],
+    ["string no lugar da lista", "não é json"],
+  ])("%s (Meta) → o editor abre, sem opções de template", async (_rotulo, payload) => {
+    const user = userEvent.setup();
+    mockApi("meta", payload as unknown as unknown[]);
+    renderNew();
+
+    await abrirEditorDeMensagem(user);
+
+    expect(await screen.findByText("Template aprovado (Meta)")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Salvar no nó" })).toBeDisabled();
+  });
+
+  it("contra-teste: template de verdade continua aparecendo no select", async () => {
+    const user = userEvent.setup();
+    mockApi("meta", [
+      { id: "tpl-1", name: "boas_vindas", language: "pt_BR", variable_count: 0 },
+    ]);
+    renderNew();
+
+    await abrirEditorDeMensagem(user);
+
+    expect(await screen.findByText("boas_vindas (pt_BR)")).toBeInTheDocument();
+  });
+});

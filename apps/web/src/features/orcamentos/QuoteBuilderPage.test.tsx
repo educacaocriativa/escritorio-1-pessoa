@@ -3,6 +3,7 @@ import userEvent from "@testing-library/user-event";
 import { MemoryRouter, Route, Routes } from "react-router-dom";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { api } from "../../lib/api";
+import { assentar } from "../../test/assentar";
 import QuoteBuilderPage from "./QuoteBuilderPage";
 
 // Story 7.5 — Task 4 (criação). Rede sempre mockada (IV2): nenhum teste bate em /quotes real.
@@ -154,5 +155,45 @@ describe("QuoteBuilderPage — separador de milhar (#224)", () => {
       "/quotes",
       expect.objectContaining({ discount_cents: 123456 }),
     );
+  });
+});
+
+// ── `GET /crm/clients` fora de forma (issue #225) ──────────────────────────────
+//
+// `setClients(data)` recebia o payload CRU. `clients.map` (aba "Dados", ~linha 497) está SEM
+// guarda de `.length` — o crash só aparece quando o dono clica a aba, mas sem ErrorBoundary
+// derruba o editor inteiro do orçamento na hora.
+describe("QuoteBuilderPage — clientes fora de forma não derrubam a aba Dados (#225)", () => {
+  it.each([
+    ["envelope de erro devolvido com 200", { detail: "algo deu errado" }],
+    ["string no lugar da lista", "não é json"],
+  ])("%s → a aba Dados abre, com o select de cliente vazio", async (_rotulo, payload) => {
+    const user = userEvent.setup();
+    vi.mocked(api.get).mockImplementation((url: string) => {
+      if (url === "/crm/clients") return Promise.resolve({ data: payload } as never);
+      if (url === "/settings/profile") return Promise.resolve({ data: profile } as never);
+      return Promise.resolve({ data: [] } as never);
+    });
+    renderNew();
+    await assentar();
+
+    await user.click(screen.getByRole("button", { name: "Dados" }));
+    expect(screen.getByText("Cliente do CRM (opcional — gera a cobrança ao aprovar)")).toBeInTheDocument();
+    expect(screen.getByText("Sem cliente do CRM")).toBeInTheDocument();
+  });
+
+  it("contra-teste: cliente de verdade continua aparecendo no select", async () => {
+    const user = userEvent.setup();
+    vi.mocked(api.get).mockImplementation((url: string) => {
+      if (url === "/crm/clients")
+        return Promise.resolve({ data: [{ id: "c-1", name: "Maria Silva" }] } as never);
+      if (url === "/settings/profile") return Promise.resolve({ data: profile } as never);
+      return Promise.resolve({ data: [] } as never);
+    });
+    renderNew();
+    await assentar();
+
+    await user.click(screen.getByRole("button", { name: "Dados" }));
+    expect(await screen.findByText("Maria Silva")).toBeInTheDocument();
   });
 });

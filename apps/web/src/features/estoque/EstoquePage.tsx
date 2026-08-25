@@ -146,7 +146,8 @@ function NewItemModal({
   const [saving, setSaving] = useState(false);
 
   useEffect(() => {
-    if (open) api.get<Product[]>("/products").then(({ data }) => setProducts(data));
+    if (open)
+      api.get<Product[]>("/products").then(({ data }) => setProducts(Array.isArray(data) ? data : []));
   }, [open]);
 
   async function save() {

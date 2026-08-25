@@ -3,6 +3,7 @@ import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { api } from "../../lib/api";
 import { PageActionsProvider, usePageActions } from "../../store/pageActions";
+import { assentar } from "../../test/assentar";
 import CobrancasPage from "./CobrancasPage";
 
 // Story 7.5 — Task 2. Rede sempre mockada (IV2): nenhum teste bate em /receivables real.
@@ -541,5 +542,51 @@ describe("CobrancasPage — separador de milhar (#224)", () => {
       "/receivables/charges/c-1",
       expect.objectContaining({ amount_cents: 123456 }),
     );
+  });
+});
+
+// ── `GET /crm/clients` e `GET /contracts` fora de forma (issue #225) ──────────────────────────
+//
+// `setClients(data)`/`setContracts(data)` (dentro de `NewChargeModal`) recebiam o payload cru. Os
+// dois `<select>` ("Cliente" e "Vincular a contrato") são montados direto assim que o modal
+// "Nova cobrança" abre, sem guarda de `.length`.
+describe("CobrancasPage — clientes/contratos fora de forma não derrubam o modal Nova cobrança (#225)", () => {
+  it.each([
+    ["envelope de erro devolvido com 200", { detail: "algo deu errado" }],
+    ["string no lugar da lista", "não é json"],
+  ])("%s → o modal abre, com os selects vazios", async (_rotulo, payload) => {
+    const user = userEvent.setup();
+    vi.mocked(api.get).mockImplementation((url: string) => {
+      if (url === "/receivables/summary") return Promise.resolve({ data: emptySummary } as never);
+      if (url === "/receivables/charges") return Promise.resolve({ data: [] } as never);
+      if (url === "/crm/clients") return Promise.resolve({ data: payload } as never);
+      if (url === "/contracts") return Promise.resolve({ data: payload } as never);
+      return Promise.resolve({ data: [] } as never);
+    });
+    renderPage();
+    await user.click(await screen.findByRole("button", { name: "Nova cobrança" }));
+    await assentar();
+
+    expect(screen.getByText("Sem cliente")).toBeInTheDocument();
+    expect(screen.getByText("Empresa (sem contrato)")).toBeInTheDocument();
+  });
+
+  it("contra-teste: cliente e contrato de verdade continuam aparecendo nos selects", async () => {
+    const user = userEvent.setup();
+    vi.mocked(api.get).mockImplementation((url: string) => {
+      if (url === "/receivables/summary") return Promise.resolve({ data: emptySummary } as never);
+      if (url === "/receivables/charges") return Promise.resolve({ data: [] } as never);
+      if (url === "/crm/clients")
+        return Promise.resolve({ data: [{ id: "c-1", name: "Maria Silva" }] } as never);
+      if (url === "/contracts")
+        return Promise.resolve({ data: [{ id: "ct-1", title: "Consultoria", client_name: null }] } as never);
+      return Promise.resolve({ data: [] } as never);
+    });
+    renderPage();
+    await user.click(await screen.findByRole("button", { name: "Nova cobrança" }));
+    await assentar();
+
+    expect(await screen.findByText("Maria Silva")).toBeInTheDocument();
+    expect(screen.getByText("Consultoria")).toBeInTheDocument();
   });
 });
