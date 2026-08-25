@@ -13,15 +13,18 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 // `useAuth` é mockado (mesmo padrão de `LoginPage.test.tsx`) porque o objetivo aqui é o
 // ROTEAMENTO em si — `ProtectedLayout`/`LoginRoute` — não a UI de login nem o AppShell
 // autenticado (que tem suas próprias dependências de rede, fora do escopo deste teste).
-const auth = vi.hoisted(() => ({ isAuthenticated: false }));
+const auth = vi.hoisted(() => ({
+  isAuthenticated: false,
+  user: null as { role: "owner" | "sub_user"; allowed_modules: string[] } | null,
+}));
 vi.mock("../store/auth", () => ({
-  useAuth: () => ({ isAuthenticated: auth.isAuthenticated, user: null }),
+  useAuth: () => ({ isAuthenticated: auth.isAuthenticated, user: auth.user }),
 }));
 vi.mock("../store/useIdleTimeout", () => ({
   useIdleTimeout: () => ({ showWarning: false, stayConnected: vi.fn() }),
 }));
 
-import { LoginRoute, ProtectedBareLayout, ProtectedLayout } from "./App";
+import { LoginRoute, Modulo, ProtectedBareLayout, ProtectedLayout } from "./App";
 
 /** Sonda que expõe a rota atual e o `state` carregado pelo history, para asserções sem UI real. */
 function LocationProbe({ label }: { label: string }) {
@@ -148,5 +151,44 @@ describe("ProtectedBareLayout — mesma proteção do ProtectedLayout, sem sideb
     await waitFor(() => screen.getByText("tela do comprovante"));
     // "Sair" só existe na Sidebar do AppShell — sua ausência prova que o shell não montou.
     expect(screen.queryByText("Sair")).toBeNull();
+  });
+});
+
+// A causa mais funda do defeito relatado (ficha do cliente e Configurações travadas em
+// "Carregando..." para um sub-usuário sem certos módulos): a sidebar mostrava todo item a todo
+// usuário e nenhuma rota sabia recusar antes de a página tentar buscar dados que voltariam 403.
+// `Modulo` é a segunda metade da correção (a primeira é `visibleNavSections`, em
+// `navigation.test.ts`) — protege contra link direto/favorito/URL digitada, não só o clique no
+// menu.
+describe("Modulo — guarda de rota por RBAC (espelha require_module do backend)", () => {
+  it("dono (`allowed_modules` vazio) vê qualquer módulo", () => {
+    auth.user = { role: "owner", allowed_modules: [] };
+    render(
+      <Modulo m="juridico">
+        <p>conteúdo do módulo</p>
+      </Modulo>,
+    );
+    expect(screen.getByText("conteúdo do módulo")).toBeInTheDocument();
+  });
+
+  it("sub-usuário COM o módulo em `allowed_modules` vê o conteúdo", () => {
+    auth.user = { role: "sub_user", allowed_modules: ["crm", "juridico"] };
+    render(
+      <Modulo m="juridico">
+        <p>conteúdo do módulo</p>
+      </Modulo>,
+    );
+    expect(screen.getByText("conteúdo do módulo")).toBeInTheDocument();
+  });
+
+  it("sub-usuário SEM o módulo vê 'sem acesso' em vez do conteúdo — nunca um spinner eterno", () => {
+    auth.user = { role: "sub_user", allowed_modules: ["crm"] };
+    render(
+      <Modulo m="juridico">
+        <p>conteúdo do módulo</p>
+      </Modulo>,
+    );
+    expect(screen.queryByText("conteúdo do módulo")).toBeNull();
+    expect(screen.getByText(/não tem acesso a este módulo/i)).toBeInTheDocument();
   });
 });

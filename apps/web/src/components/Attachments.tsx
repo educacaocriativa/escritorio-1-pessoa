@@ -24,7 +24,10 @@ export default function Attachments({
     const { data } = await api.get<Attachment[]>(
       `/attachments?owner_type=${ownerType}&owner_id=${ownerId}`,
     );
-    setItems(data);
+    // `Array.isArray`, e aqui não havia operador NENHUM: o payload cru virava estado e ia direto
+    // para `items.map` no render. O app não tem ErrorBoundary — um `.map` de não-array não deixa
+    // este bloco vazio, desmonta a ÁRVORE INTEIRA, e este componente é embutido em várias telas.
+    setItems(Array.isArray(data) ? data : []);
   }, [ownerType, ownerId]);
 
   useEffect(() => {

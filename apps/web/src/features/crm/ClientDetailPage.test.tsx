@@ -34,7 +34,20 @@ let fusoDoTenant = "America/Sao_Paulo";
 /** Tóquio (UTC+9, sem horário de verão) está 12h à frente do runner: os dois discordam do DIA. */
 const FUSO_DISTANTE = "Asia/Tokyo";
 
-vi.mock("../../store/auth", () => ({ useFuso: () => fusoDoTenant }));
+/**
+ * O usuário logado — dono por padrão, então `allowed_modules` vazio não restringe NADA e as 32
+ * asserções pré-existentes (escritas antes desta permissão existir) continuam vendo as seis
+ * seções da ficha. Só os testes que falam de RBAC trocam para um sub-usuário restrito.
+ */
+let usuarioLogado: { role: "owner" | "sub_user"; allowed_modules: string[] } = {
+  role: "owner",
+  allowed_modules: [],
+};
+
+vi.mock("../../store/auth", () => ({
+  useFuso: () => fusoDoTenant,
+  useAuth: () => ({ user: usuarioLogado }),
+}));
 
 // ── O instante congelado ────────────────────────────────────────────────────
 //
@@ -229,6 +242,8 @@ afterEach(() => {
   vi.useRealTimers();
   // Volta ao fuso "coincidente" para não contaminar os testes que não falam de fuso.
   fusoDoTenant = "America/Sao_Paulo";
+  // Volta ao dono (sem restrição) para não contaminar os testes que não falam de RBAC.
+  usuarioLogado = { role: "owner", allowed_modules: [] };
 });
 
 /** Destino de navegação que ECOA o `:id` recebido — ver a nota nas rotas abaixo. */
@@ -1053,5 +1068,87 @@ describe("ClientDetailPage — para onde a ficha leva (issue #145)", () => {
     expect(screen.getByText("Enviado")).toBeInTheDocument(); // orçamento `sent`
     expect(screen.getByText("Rascunho")).toBeInTheDocument(); // documento `draft`
     expect(screen.getByText("running")).toBeInTheDocument(); // jornada — fora do mapa, sai crua
+  });
+});
+
+// ══════════════════════════════════════════════════════════════════════════════════════════════
+// 10. RBAC — um sub-usuário sem TODOS os módulos que a ficha agrega não pode travar em
+//     "Carregando ficha..." para sempre
+//
+// O defeito relatado: um sub-usuário sem Jurídico/Funis via a ficha travada em "Carregando
+// ficha..." porque o `Promise.all` da montagem rejeitava o LOTE INTEIRO na primeira leitura que
+// voltasse 403 — mesmo os dados que ele TINHA permissão de ver nunca apareciam.
+// ══════════════════════════════════════════════════════════════════════════════════════════════
+
+describe("ClientDetailPage — RBAC (sub-usuário sem todos os módulos agregados)", () => {
+  it("abre normalmente, sem pedir os módulos ausentes, e esconde só as seções deles", async () => {
+    usuarioLogado = { role: "sub_user", allowed_modules: ["crm", "receivables", "contracts", "quotes"] };
+    // `urlsPedidas()` lê `mock.calls`, que ACUMULA desde o primeiro teste do arquivo (nenhum
+    // `beforeEach` chama `mockClear()` em `api.get` — só `mockImplementation`). Sem limpar aqui,
+    // a asserção `.not.toContain` abaixo veria as chamadas de dezenas de testes ANTERIORES (o
+    // dono default vendo os seis módulos) e falharia por acúmulo, não pelo próprio `load()`.
+    vi.mocked(api.get).mockClear();
+    renderFicha();
+
+    // A ficha ABRE — não fica presa em "Carregando ficha..." como no defeito relatado.
+    expect(await screen.findByRole("heading", { name: "Joana Ré" })).toBeInTheDocument();
+    expect(screen.queryByText("Carregando ficha...")).toBeNull();
+
+    // Os dados PERMITIDOS aparecem.
+    expect(screen.getByText("Cobranças (6)")).toBeInTheDocument();
+    expect(screen.getByText("Contratos (1)")).toBeInTheDocument();
+    expect(screen.getByText("Orçamentos (1)")).toBeInTheDocument();
+
+    // As seções dos módulos AUSENTES somem inteiras — não aparecem como "0" nem como lista vazia.
+    expect(screen.queryByText(/Documentos jurídicos/)).toBeNull();
+    expect(screen.queryByText(/Jornadas no funil/)).toBeNull();
+
+    // E o ponto central do defeito: a tela nem PEDE os módulos que sabe de antemão que não tem.
+    expect(urlsPedidas()).not.toContain("/juridico/documents?client_id=cli-1");
+    expect(urlsPedidas()).not.toContain("/funnels/runs?client_id=cli-1");
+  });
+
+  it("dono (`allowed_modules` vazio) continua vendo as seis leituras — sem restrição nenhuma", async () => {
+    usuarioLogado = { role: "owner", allowed_modules: [] };
+    renderFicha();
+
+    expect(await screen.findByRole("heading", { name: "Joana Ré" })).toBeInTheDocument();
+    for (const url of URLS_DA_MONTAGEM) {
+      expect(urlsPedidas()).toContain(url);
+    }
+    expect(screen.getByText(/Documentos jurídicos/)).toBeInTheDocument();
+    expect(screen.getByText(/Jornadas no funil/)).toBeInTheDocument();
+  });
+
+  it("sem o módulo `receivables`, o resumo financeiro também some — não mostra R$ 0,00 de mentira", async () => {
+    usuarioLogado = { role: "sub_user", allowed_modules: ["crm", "contracts"] };
+    renderFicha();
+
+    expect(await screen.findByRole("heading", { name: "Joana Ré" })).toBeInTheDocument();
+    expect(screen.queryByText("A receber (a vencer)")).toBeNull();
+    expect(screen.queryByText("Vencido")).toBeNull();
+    expect(screen.queryByText("Recebido")).toBeNull();
+  });
+
+  it("uma leitura PERMITIDA que falha por outro motivo (não 403) não trava as demais seções", async () => {
+    // Defesa em profundidade: mesmo com o módulo liberado, uma falha de rede/500 na leitura de
+    // contratos não pode derrubar cobranças/orçamentos, que já chegaram.
+    usuarioLogado = { role: "owner", allowed_modules: [] };
+    vi.mocked(api.get).mockImplementation((url: string) => {
+      if (url === "/contracts?client_id=cli-1") return Promise.reject(new Error("500"));
+      if (url === "/crm/clients/cli-1") return Promise.resolve({ data: ficha.cliente } as never);
+      if (url === "/receivables/charges?client_id=cli-1") return Promise.resolve({ data: ficha.charges } as never);
+      if (url === "/quotes?client_id=cli-1") return Promise.resolve({ data: ficha.quotes } as never);
+      if (url === "/juridico/documents?client_id=cli-1") return Promise.resolve({ data: ficha.legalDocs } as never);
+      if (url === "/funnels/runs?client_id=cli-1") return Promise.resolve({ data: ficha.journeys } as never);
+      return Promise.resolve({ data: [] } as never);
+    });
+    renderFicha();
+
+    expect(await screen.findByRole("heading", { name: "Joana Ré" })).toBeInTheDocument();
+    expect(screen.queryByText("Carregando ficha...")).toBeNull();
+    expect(screen.getByText("Cobranças (6)")).toBeInTheDocument();
+    // Contratos sobrevive à falha degradando para a lista vazia, não travando a página inteira.
+    expect(screen.getByText("Contratos (0)")).toBeInTheDocument();
   });
 });

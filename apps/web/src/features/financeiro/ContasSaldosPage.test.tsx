@@ -4,6 +4,7 @@ import { MemoryRouter } from "react-router-dom";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { api } from "../../lib/api";
 import { PageActionsProvider } from "../../store/pageActions";
+import { assentar } from "../../test/assentar";
 import ContasSaldosPage from "./ContasSaldosPage";
 import type {
   BankAccount,
@@ -1299,5 +1300,56 @@ describe("checkpoints fora de formato não viram saldo declarado", () => {
     renderPage();
 
     await waitFor(() => expect(screen.getByText(/Saldo declarado em/)).toBeInTheDocument());
+  });
+});
+
+// ── `GET /bank/accounts` fora de forma (issue #207) ───────────────────────────
+//
+// `setAccounts(res.data)` recebia o payload CRU, sem operador nenhum — é um dos dois exemplos que
+// a issue cita pelo nome. Aqui a consequência é DUPLA, e por isso a guarda saneia uma lista local
+// em vez de só o estado:
+//
+//   1. `res.data.map` alimentava o `Promise.all` dos checkpoints DENTRO do `try` — o `TypeError`
+//      virava "erro de rede" na tela, que é uma mentira sobre a causa;
+//   2. `accounts.map` roda no RENDER, onde nenhum `catch` chega, e sem ErrorBoundary no app isso
+//      é tela branca.
+//
+// ⚠️ O `assentar()` é a metade que MATA o mutante — ver `src/test/assentar.ts`.
+describe("ContasSaldosPage — contas fora de forma não derrubam a tela (#207)", () => {
+  const VAZIO = /Nenhuma conta cadastrada ainda/;
+
+  function mockContas(payload: unknown) {
+    vi.mocked(api.get).mockImplementation((url: string) => {
+      if (url === "/bank/accounts") return Promise.resolve({ data: payload } as never);
+      return Promise.resolve({ data: [] } as never);
+    });
+  }
+
+  it.each([
+    ["envelope de erro devolvido com 200", { detail: "algo deu errado" }],
+    ["string no lugar da lista", "não é json"],
+    ["corpo vazio (204 / sem conteúdo)", null],
+    ["número no lugar da lista", 7],
+  ])("%s → a tela mostra o estado vazio em vez de estourar", async (_rotulo, payload) => {
+    mockContas(payload);
+    renderPage();
+    await assentar();
+
+    expect(screen.getByText(VAZIO)).toBeInTheDocument();
+    // E o erro NÃO é rotulado como falha de rede: o `Promise.all` dos checkpoints nunca chegou a
+    // receber um não-array, então o `catch` do `load` não disparou.
+    expect(screen.queryByText("Erro inesperado")).not.toBeInTheDocument();
+  });
+
+  it("contra-teste: conta de verdade continua listada com seus checkpoints", async () => {
+    vi.mocked(api.get).mockImplementation((url: string) => {
+      if (url === "/bank/accounts") return Promise.resolve({ data: [conta()] } as never);
+      return Promise.resolve({ data: [] } as never);
+    });
+    renderPage();
+    await assentar();
+
+    expect(screen.getByText("Itaú PJ")).toBeInTheDocument();
+    expect(screen.queryByText(VAZIO)).not.toBeInTheDocument();
   });
 });

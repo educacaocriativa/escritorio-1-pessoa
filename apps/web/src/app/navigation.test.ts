@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { type NavItem, navSections } from "./navigation";
+import { type NavItem, navSections, visibleNavSections } from "./navigation";
 
 const itens: NavItem[] = navSections.flatMap((s) => s.items);
 
@@ -85,5 +85,49 @@ describe("IV2 — a navegação existente continua inteira", () => {
   it("nenhuma rota duplicada no menu", () => {
     const rotas = itens.map((i) => i.to);
     expect(new Set(rotas).size).toBe(rotas.length);
+  });
+});
+
+/**
+ * `visibleNavSections` — o recorte da sidebar por RBAC (`allowed_modules`). Antes desta função a
+ * sidebar mostrava todo item a todo usuário, e um sub-usuário sem um módulo clicava numa tela que
+ * só sabia travar em "Carregando...". Ver `Modulo` em `app/App.tsx` para a segunda metade (o
+ * guard de ROTA, contra link direto/URL digitada).
+ */
+describe("visibleNavSections", () => {
+  it("dono (hasModule sempre true) vê a lista INTEIRA, mesma forma de navSections", () => {
+    const visiveis = visibleNavSections(() => true).flatMap((s) => s.items);
+    expect(visiveis).toEqual(itens);
+  });
+
+  it("sub-usuário sem nenhum módulo não vê NENHUM item com `module` — a seção some inteira", () => {
+    const secoes = visibleNavSections(() => false);
+    const visiveis = secoes.flatMap((s) => s.items);
+    // O que sobra é só o que nunca teve `module` (hoje, nada — todo item de negócio tem um).
+    expect(visiveis.every((i) => !i.module)).toBe(true);
+  });
+
+  it("um item sem `module` nunca é escondido, mesmo com hasModule sempre false", () => {
+    const semModulo = itens.filter((i) => !i.module);
+    const visiveis = visibleNavSections(() => false).flatMap((s) => s.items);
+    for (const item of semModulo) expect(visiveis).toContainEqual(item);
+  });
+
+  it("sub-usuário restrito (o caso relatado — sem 'juridico' e 'funnels') não vê Jurídico nem Funil de Vendas, mas o resto continua", () => {
+    const modulosPermitidos = new Set(["crm", "cockpit", "agenda", "receivables", "contracts"]);
+    const secoes = visibleNavSections((m) => modulosPermitidos.has(m));
+    const rotas = secoes.flatMap((s) => s.items).map((i) => i.to);
+
+    expect(rotas).not.toContain("/juridico");
+    expect(rotas).not.toContain("/funis");
+    expect(rotas).toContain("/crm");
+    expect(rotas).toContain("/cobrancas");
+    expect(rotas).toContain("/contratos");
+  });
+
+  it("seção que fica sem item nenhum some inteira (não sobra título/divisor vazio)", () => {
+    // "Análise & Configuração Financeira" é só módulos que este usuário não tem — a seção some.
+    const secoes = visibleNavSections((m) => m === "crm");
+    expect(secoes.some((s) => s.title === "Análise & Configuração Financeira")).toBe(false);
   });
 });

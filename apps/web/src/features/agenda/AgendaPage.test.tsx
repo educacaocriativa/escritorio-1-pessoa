@@ -4,6 +4,7 @@ import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { api } from "../../lib/api";
 import { PageActionsProvider, usePageActions } from "../../store/pageActions";
+import { assentar } from "../../test/assentar";
 import AgendaPage from "./AgendaPage";
 
 // Story 7.15 — Task 2. Rede sempre mockada (IV2): nenhum teste bate em /agenda real.
@@ -178,5 +179,60 @@ describe("AgendaPage — chipLabel (Task 3, Onda 2): atalho de nome só para kin
 
     await waitFor(() => expect(container.textContent).toContain("Alinhamento do casamento 12/12"));
     expect(container.textContent).not.toContain("Cliente Vinculado");
+  });
+});
+
+// ── `GET /agenda/events` fora de forma (issue #207) ───────────────────────────
+//
+// `setEvents(data)` recebia o payload CRU, sem operador nenhum. A grade chama `eventsOfDay(events,
+// d)` para CADA dia visível, e `eventsOfDay` abre com `events.filter` (`grade.ts`) — em tempo de
+// render, fora do alcance do `.then`. Sem ErrorBoundary no app, o estouro no primeiro dia do mês
+// desmonta a árvore inteira: a agenda é a tela que o dono abre primeiro no dia.
+//
+// ⚠️ Este site NÃO aparece numa varredura por `estado.map`/`.length`/`.filter` no arquivo: o
+// consumo é indireto, através de `eventsOfDay`. Foi assim que ele escapou da triagem inicial.
+//
+// ⚠️ O `assentar()` é a metade que MATA o mutante — ver `src/test/assentar.ts`.
+describe("AgendaPage — eventos fora de forma não derrubam a grade (#207)", () => {
+  function mockEventos(payload: unknown) {
+    vi.mocked(api.get).mockImplementation((url: string) => {
+      if (url === "/agenda/events") return Promise.resolve({ data: payload } as never);
+      return Promise.resolve({ data: [] } as never);
+    });
+  }
+
+  it.each([
+    ["envelope de erro devolvido com 200", { detail: "algo deu errado" }],
+    ["string no lugar da lista", "não é json"],
+    ["corpo vazio (204 / sem conteúdo)", null],
+    ["número no lugar da lista", 7],
+  ])("%s → a grade do mês continua montada, sem nenhum chip", async (_rotulo, payload) => {
+    mockEventos(payload);
+    renderPage();
+    await assentar();
+
+    expect(screen.getByRole("button", { name: "Hoje" })).toBeInTheDocument();
+    expect(screen.queryByText("Atendimento fora de forma")).not.toBeInTheDocument();
+  });
+
+  it("contra-teste: evento de verdade continua virando chip no dia", async () => {
+    const hoje = new Date();
+    const ymd = `${hoje.getFullYear()}-${String(hoje.getMonth() + 1).padStart(2, "0")}-${String(
+      hoje.getDate(),
+    ).padStart(2, "0")}`;
+    mockEventos([
+      {
+        id: "e-1",
+        title: "Atendimento real",
+        kind: "atendimento",
+        all_day: true,
+        starts_at: `${ymd}T09:00:00Z`,
+        ends_at: `${ymd}T10:00:00Z`,
+      } satisfies Partial<AgendaEvent> as AgendaEvent,
+    ]);
+    renderPage();
+    await assentar();
+
+    expect(screen.getByText("Atendimento real")).toBeInTheDocument();
   });
 });
