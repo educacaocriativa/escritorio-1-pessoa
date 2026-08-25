@@ -267,3 +267,95 @@ describe("catálogo de componentes fora de forma não derruba o builder (#207)",
     expect(screen.getByText("Novo Lead")).toBeInTheDocument();
   });
 });
+
+// ══════════════════════════════════════════════════════════════════════════════════════════════
+// Issue #224 — separador de milhar no valor digitado (parseCentsBRL)
+// ══════════════════════════════════════════════════════════════════════════════════════════════
+//
+// A conta manual antiga (`Math.round(parseFloat(v.replace(",", ".")) * 100)`) só troca a PRIMEIRA
+// vírgula por ponto e nunca remove o ponto de milhar: "1.234,56" vira "1.234.56", `parseFloat` para
+// no segundo ponto e devolve 1.234 → 123 centavos, não 123456. `parseCentsBRL` (contas.ts) trata o
+// milhar corretamente; estes testes fixam esse contrato nos dois sites de `RunNodeModal.run()`
+// (create_quote e create_charge), que digitam no mesmo campo "Valor (R$)" mas montam o payload em
+// dois `if` distintos (linhas 624 e 629 antes do #224).
+const catalogComAcoesDeDinheiro = [
+  {
+    category: "gatilhos",
+    label: "Gatilhos",
+    color: "#F59E0B",
+    items: [
+      {
+        key: "gerar-orcamento", label: "Gerar orçamento", description: "Cria um orçamento",
+        shape: "node", action: "create_quote",
+      },
+      {
+        key: "gerar-cobranca", label: "Gerar cobrança", description: "Cria uma cobrança",
+        shape: "node", action: "create_charge",
+      },
+    ],
+  },
+];
+
+describe("RunNodeModal — separador de milhar (#224)", () => {
+  function mockComAcoes() {
+    vi.mocked(api.get).mockImplementation((url: string) => {
+      if (url === "/funnels/components") return Promise.resolve({ data: catalogComAcoesDeDinheiro } as never);
+      if (url === "/settings/profile") return Promise.resolve({ data: profile(null) } as never);
+      if (url === "/crm/clients") return Promise.resolve({ data: [] } as never);
+      return Promise.resolve({ data: [] } as never);
+    });
+  }
+
+  /** Adiciona o nó pelo item da paleta, seleciona-o no canvas e abre "Executar ação". */
+  async function abrirExecutarAcao(user: ReturnType<typeof userEvent.setup>, itemLabel: string) {
+    await user.click(await screen.findByText(itemLabel)); // item da paleta → cria o nó
+    fireEvent.click(screen.getAllByText(itemLabel).at(-1)!); // seleciona o nó recém-criado
+    await user.click(await screen.findByRole("button", { name: "Executar ação" }));
+  }
+
+  it("create_quote: '1.234,56' vira amount_cents 123456, não 123 (linha do params.amount_cents em create_quote)", async () => {
+    const user = userEvent.setup();
+    mockComAcoes();
+    vi.mocked(api.post).mockImplementation((url: string) => {
+      if (url === "/funnels/run-node") return Promise.resolve({ data: { message: "ok" } } as never);
+      return Promise.resolve({ data: {} } as never);
+    });
+    renderNew();
+
+    await abrirExecutarAcao(user, "Gerar orçamento");
+    await user.type(screen.getByLabelText("Valor (R$)"), "1.234,56");
+    await user.click(screen.getByRole("button", { name: "Executar agora" }));
+
+    await waitFor(() => expect(vi.mocked(api.post)).toHaveBeenCalledWith("/funnels/run-node", expect.anything()));
+    expect(vi.mocked(api.post)).toHaveBeenCalledWith(
+      "/funnels/run-node",
+      expect.objectContaining({
+        action: "create_quote",
+        params: expect.objectContaining({ amount_cents: 123456 }),
+      }),
+    );
+  });
+
+  it("create_charge: '1.234,56' vira amount_cents 123456, não 123 (linha do params.amount_cents em create_charge)", async () => {
+    const user = userEvent.setup();
+    mockComAcoes();
+    vi.mocked(api.post).mockImplementation((url: string) => {
+      if (url === "/funnels/run-node") return Promise.resolve({ data: { message: "ok" } } as never);
+      return Promise.resolve({ data: {} } as never);
+    });
+    renderNew();
+
+    await abrirExecutarAcao(user, "Gerar cobrança");
+    await user.type(screen.getByLabelText("Valor (R$)"), "1.234,56");
+    await user.click(screen.getByRole("button", { name: "Executar agora" }));
+
+    await waitFor(() => expect(vi.mocked(api.post)).toHaveBeenCalledWith("/funnels/run-node", expect.anything()));
+    expect(vi.mocked(api.post)).toHaveBeenCalledWith(
+      "/funnels/run-node",
+      expect.objectContaining({
+        action: "create_charge",
+        params: expect.objectContaining({ amount_cents: 123456 }),
+      }),
+    );
+  });
+});

@@ -8,7 +8,7 @@ import { pluralize } from "../../lib/pluralize";
 import GanchoDaVima from "../dna/GanchoDaVima";
 import { usePrimaryAction } from "../../store/pageActions";
 import ChartAccountSelect from "../financeiro/ChartAccountSelect";
-import { AGENDADO_ENTRADA_LABEL, type BankAccount } from "../financeiro/contas";
+import { AGENDADO_ENTRADA_LABEL, parseCentsBRL, type BankAccount } from "../financeiro/contas";
 import type { CostCenter } from "../financeiro/costCenters";
 import CostCenterSelect from "../financeiro/CostCenterSelect";
 import { type ChartAccount, GRUPOS_DRE } from "../financeiro/planoContas";
@@ -376,7 +376,7 @@ function EditChargeModal({
         description,
         chart_account_id: chartAccountId,
         cost_center_id: costCenterId,
-        amount_cents: Math.round(parseFloat(value.replace(",", ".")) * 100),
+        amount_cents: parseCentsBRL(value),
         due_date: dueDate,
       });
       onSaved();
@@ -454,7 +454,7 @@ function NewChargeModal({
     setError(null);
     setSaving(true);
     try {
-      const amount_cents = Math.round(parseFloat(value.replace(",", ".")) * 100);
+      const amount_cents = parseCentsBRL(value);
       await api.post("/receivables/charges", {
         kind,
         method,

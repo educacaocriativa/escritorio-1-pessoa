@@ -2,6 +2,7 @@ import type { Client, FunnelRun, FunnelRunSummary } from "@e1p/shared-types";
 import { Clock, Play, UserPlus, X } from "lucide-react";
 import { useCallback, useEffect, useState } from "react";
 import { api, apiErrorMessage } from "../../lib/api";
+import { parseCentsBRL } from "../financeiro/contas";
 
 type Notify = (msg: string, type?: "ok" | "err") => void;
 
@@ -113,7 +114,7 @@ export function AutomationFields({
         <input
           inputMode="decimal" value={reais}
           onChange={(e) =>
-            onChange({ amount_cents: Math.round(parseFloat(e.target.value.replace(",", ".") || "0") * 100) })
+            onChange({ amount_cents: parseCentsBRL(e.target.value) })
           }
           placeholder="Valor (R$)"
           className="mb-2 w-full rounded-lg border border-neutral-200 px-2 py-1.5 text-sm outline-none"

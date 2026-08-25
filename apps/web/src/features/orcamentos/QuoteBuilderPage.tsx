@@ -16,9 +16,9 @@ import { api, apiErrorMessage } from "../../lib/api";
 import ProposalView from "./ProposalView";
 import { formatTime } from "../../lib/datetime";
 import { useFuso } from "../../store/auth";
+import { parseCentsBRL } from "../financeiro/contas";
 import { formatBRL } from "../financeiro/dre";
 
-const toCents = (s: string) => Math.round(parseFloat((s || "").replace(",", ".") || "0") * 100);
 const fromCents = (c: number) => (c / 100).toFixed(2).replace(".", ",");
 
 type Service = { description: string; subtitle: string; quantity: number; price: string };
@@ -129,19 +129,19 @@ export default function QuoteBuilderPage() {
           description: s.description,
           subtitle: s.subtitle,
           quantity: Math.max(1, s.quantity || 1),
-          unit_price_cents: toCents(s.price),
+          unit_price_cents: parseCentsBRL(s.price),
         })),
     [services],
   );
   const subtotal = items.reduce((a, i) => a + i.quantity * i.unit_price_cents, 0);
-  const total = Math.max(0, subtotal - toCents(discount));
+  const total = Math.max(0, subtotal - parseCentsBRL(discount));
 
   const preview: PublicProposal = {
     title: title || "Sua proposta",
     client_name: clientName,
     items,
     subtotal_cents: subtotal,
-    discount_cents: toCents(discount),
+    discount_cents: parseCentsBRL(discount),
     total_cents: total,
     payment_terms: paymentTerms,
     show_gallery: showGallery,
@@ -164,7 +164,7 @@ export default function QuoteBuilderPage() {
       title,
       client_id: clientId || null,
       items,
-      discount_cents: toCents(discount),
+      discount_cents: parseCentsBRL(discount),
       client_name: clientName,
       client_whatsapp: clientWhatsapp,
       payment_terms: paymentTerms,

@@ -86,3 +86,30 @@ describe("EstoquePage — Novo item de estoque (Story 7.16, Task 1)", () => {
     expect(screen.getByRole("button", { name: "Criar item" })).toBeEnabled();
   });
 });
+
+// ══════════════════════════════════════════════════════════════════════════════════════════════
+// Issue #224 — separador de milhar no valor digitado (parseCentsBRL)
+// ══════════════════════════════════════════════════════════════════════════════════════════════
+//
+// A conta manual antiga (`Math.round(parseFloat(v.replace(",", ".")) * 100)`) só troca a PRIMEIRA
+// vírgula por ponto e nunca remove o ponto de milhar: "1.234,56" vira "1.234.56", `parseFloat` para
+// no segundo ponto e devolve 1.234 → 123 centavos, não 123456. `parseCentsBRL` (contas.ts) trata o
+// milhar corretamente; este teste fixa esse contrato no único site de EstoquePage.
+describe("EstoquePage — separador de milhar (#224)", () => {
+  it("'1.234,56' vira unit_cost_cents 123456, não 123", async () => {
+    const user = userEvent.setup();
+    vi.mocked(api.post).mockResolvedValue({ data: {} } as never);
+    renderPage();
+
+    await user.click(await screen.findByRole("button", { name: "Novo item" }));
+    await user.type(screen.getByLabelText("Nome"), "Notebook usado");
+    await user.type(screen.getByLabelText("Custo unitário (R$)"), "1.234,56");
+    await user.click(screen.getByRole("button", { name: "Criar item" }));
+
+    await waitFor(() => expect(vi.mocked(api.post)).toHaveBeenCalled());
+    expect(vi.mocked(api.post)).toHaveBeenCalledWith(
+      "/stock/items",
+      expect.objectContaining({ unit_cost_cents: 123456 }),
+    );
+  });
+});
