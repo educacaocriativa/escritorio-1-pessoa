@@ -75,9 +75,10 @@ export default function PlanoContasPage() {
           </p>
         </div>
         <div className="flex items-center gap-3">
-          <label className="flex items-center gap-2 text-sm text-neutral-600">
+          <label className="flex min-h-[44px] items-center gap-3 text-sm text-neutral-600">
             <input
               type="checkbox"
+              className="h-5 w-5 shrink-0"
               checked={includeArchived}
               onChange={(e) => setIncludeArchived(e.target.checked)}
             />
