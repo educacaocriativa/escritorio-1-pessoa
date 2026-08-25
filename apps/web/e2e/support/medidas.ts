@@ -17,6 +17,14 @@ export interface Medidas {
 
 export interface Alvo {
   descricao: string;
+  /**
+   * `type` do `<input>` — `""` para todo o resto. Existe porque um spec precisa distinguir a
+   * CAIXINHA do checkbox (20×20 por convenção do repo, e o alvo do dedo é o `<label>` em volta)
+   * de um campo de TEXTO pequeno demais. Enquanto não existia, o único recorte possível era
+   * `descricao.startsWith("input")`, que joga os dois fora juntos — e foi por esse buraco que o
+   * `<input>` de 38px do `Field` atravessou o #181 (está escrito no `toque-360.spec.ts`).
+   */
+  tipo: string;
   largura: number;
   altura: number;
 }
@@ -44,6 +52,8 @@ export async function medirPagina(page: Page): Promise<Medidas> {
  */
 interface ControleMedido {
   descricao: string;
+  /** `type` do `<input>`; `""` para `button`, `select`, `a`, `summary` e afins. */
+  tipo: string;
   largura: number;
   altura: number;
   esquerda: number;
@@ -116,6 +126,7 @@ async function medirControles(
         }
         return {
           descricao: descrever(el),
+          tipo: el.tagName === "INPUT" ? ((el as HTMLInputElement).getAttribute("type") ?? "text") : "",
           largura: +r.width.toFixed(1),
           altura: +r.height.toFixed(1),
           esquerda: +r.left.toFixed(1),
@@ -144,7 +155,70 @@ export async function alvosPequenos(page: Page, min = 44, raiz?: string): Promis
   const todos = await medirControles(page, raiz);
   return todos
     .filter((c) => c.altura < min || c.largura < min)
-    .map(({ descricao, largura, altura }) => ({ descricao, largura, altura }));
+    .map(({ descricao, tipo, largura, altura }) => ({ descricao, tipo, largura, altura }));
+}
+
+/** Um campo de digitação medido: só ALTURA, porque é ela que decide se o dedo acerta a linha. */
+export interface Campo {
+  descricao: string;
+  altura: number;
+}
+
+/**
+ * Campos de DIGITAÇÃO abaixo do mínimo tocável — `<input>` de texto, `<select>` e `<textarea>`.
+ *
+ * ⚠️ **Não é `alvosPequenos` com outro nome, e a diferença é o buraco por onde estes campos
+ * passaram.** São duas decisões distintas:
+ *
+ *   - `alvosPequenos` mede ALTURA **e** LARGURA, porque um ícone de 44×16 é tão inatingível
+ *     quanto um de 16×44. Aqui a largura não entra: um `<input type="number">` de `w-20` (80px)
+ *     para quantidade é uma escolha de layout, não um defeito — o que decide se o dedo acerta a
+ *     LINHA certa do formulário é a altura dela.
+ *   - `alvosPequenos` varre todo controle (`button`, `a`, `summary`, `[role]`); aqui o conjunto é
+ *     só o que se DIGITA. `checkbox`, `radio`, `file`, `color` e `range` ficam de fora por
+ *     construção: no repo a caixinha do checkbox tem 20×20 e quem cumpre os 44px é o `<label>`
+ *     em volta (`ContasSaldosPage.tsx:208`), e exigir 44 do quadrado desenhado daria um botão
+ *     onde deve haver um checkbox.
+ *
+ * O nome do campo vem do `<label>` que o envolve quando há um — sem isso o vermelho seria uma
+ * lista de `input.w-full.rounded-lg...` idênticos e ninguém saberia qual dos treze encolheu.
+ *
+ * `raiz` recorta a varredura. **Use sempre ao medir um modal**: sem ele a página por trás entra
+ * na conta. Escopo que não casa cai no documento inteiro — seletor podre tem de virar ruído,
+ * nunca aprovação.
+ */
+export async function camposBaixos(page: Page, raiz?: string, min = 44): Promise<Campo[]> {
+  return page.evaluate(
+    ({ raizSel, minimo }) => {
+      const SEL =
+        'input:not([type="hidden"]):not([type="checkbox"]):not([type="radio"])' +
+        ':not([type="file"]):not([type="color"]):not([type="range"]),select,textarea';
+      const escopo: ParentNode = raizSel
+        ? (document.querySelector(raizSel) ?? document)
+        : document;
+      const visivel = (el: Element): boolean => {
+        const s = getComputedStyle(el);
+        if (s.display === "none" || s.visibility === "hidden" || s.opacity === "0") return false;
+        const r = el.getBoundingClientRect();
+        return r.width > 0 && r.height > 0;
+      };
+      return [...escopo.querySelectorAll(SEL)]
+        .filter(visivel)
+        .map((el) => {
+          const r = el.getBoundingClientRect();
+          const rotulo = (el.closest("label")?.textContent ?? "")
+            .trim()
+            .replace(/\s+/g, " ")
+            .slice(0, 40);
+          const tag =
+            el.tagName.toLowerCase() +
+            (el.tagName === "INPUT" ? `[${el.getAttribute("type") ?? "text"}]` : "");
+          return { descricao: rotulo ? `${tag} «${rotulo}»` : tag, altura: +r.height.toFixed(1) };
+        })
+        .filter((c) => c.altura < minimo);
+    },
+    { raizSel: raiz, minimo: min },
+  );
 }
 
 /** Um controle que o dedo não alcança. `foraPor` e as bordas são px medidos na viewport. */
@@ -169,6 +243,16 @@ export interface Inalcancavel {
  * (81 -> 531) e a `div` do nó de x=900 (493,5 -> 568,5) — que nenhum conserto de layout
  * resolve, porque a lona é para ser navegada e não para caber. Os CONTROLES DE TELA do construtor (cabeçalho, paleta,
  * painel lateral) ficam FORA de `.react-flow` e continuam medidos — é lá que mora o #144.
+ *
+ * ⚠️ **A correção de `transform` do #212 NÃO dispensa esta exceção, e a medição diz por quê.** A
+ * suspeita registrada no #212 era de que as duas fossem o mesmo mecanismo. Não são, em dois
+ * pontos: (a) esta régua não usa `scrollWidth` em lugar nenhum — ela mede `getBoundingClientRect`,
+ * que **já vem transformado**, e portanto nunca teve o defeito que `textoForaDaTela` tinha; (b)
+ * medido em `/funis/f1` em 22/08/2026, o `.react-flow__viewport` está em
+ * `matrix(0.5, 0, 0, 0.5, -233,5, 111,5)` e os dois falsos positivos têm escala **0,5** já
+ * aplicada: o nó de x=900 do desenho aterrissa em **493,5 → 568,5** na tela, contra uma lona que
+ * termina em **335**. Ele está fora de verdade, e continua fora em qualquer escala — porque a lona
+ * é panorâmica e o dono a arrasta. Não há número a converter; há uma pergunta que não se aplica.
  */
 export const EXCECOES_DE_ALCANCE = [".react-flow"];
 
@@ -245,6 +329,32 @@ export async function textoForaDaTela(page: Page, raiz?: string): Promise<Corte[
       }
       return document.documentElement;
     };
+    /**
+     * Comprimento, em px de TELA, de um vetor horizontal de 1px no espaco de LAYOUT do elemento.
+     *
+     * `scrollWidth` e medido no layout do proprio elemento, ANTES de qualquer `transform` de
+     * ancestral; `getBoundingClientRect` ja vem transformado. Somar um ao outro mistura duas
+     * reguas. Medido em `/marketing` (#212): o `div` do handle dentro do `CarouselThumb`
+     * (`scale(0.222222)`) reporta `scrollWidth` 1036 ocupando 215,1px de tela, e a regua acusava
+     * **+808,4px** de um elemento que cabe. Com a conversao, o mesmo elemento devolve +2,7px --
+     * que e a tinta que de fato sobra, medida na escala em que o dono a ve.
+     *
+     * `Math.hypot(a, b)` e o comprimento do vetor, nao `m.a`: para `scale(s)` os dois dao `s`,
+     * mas para `rotate(θ)` `m.a` e `cos θ` (encolheria uma tinta que o giro nao encolheu) e o
+     * comprimento e 1, que e o certo. Ha dois `rotate` no app (`PlatformUsers.tsx:256`,
+     * `ContratoDrePage.tsx:264`) e um `scale` (`CarouselSlideView.tsx:185`) -- medido.
+     */
+    const escalaHorizontal = (el: Element): number => {
+      let a = 1;
+      let b = 0;
+      for (let p: Element | null = el; p; p = p.parentElement) {
+        const t = getComputedStyle(p).transform;
+        if (t === "none") continue;
+        const m = new DOMMatrixReadOnly(t);
+        [a, b] = [m.a * a + m.c * b, m.b * a + m.d * b];
+      }
+      return Math.hypot(a, b);
+    };
     const vw = document.documentElement.clientWidth;
     const fora: { texto: string; descricao: string; forcaFora: number }[] = [];
     const escopo: ParentNode = raizSel ? (document.querySelector(raizSel) ?? document.body) : document.body;
@@ -267,7 +377,7 @@ export async function textoForaDaTela(page: Page, raiz?: string): Promise<Corte[
       // devia ficar mais afiada.
       const direita =
         getComputedStyle(el).overflowX === "visible" && el.scrollWidth > el.clientWidth + 0.5
-          ? Math.max(r.right, r.left + el.scrollWidth)
+          ? Math.max(r.right, r.left + el.scrollWidth * escalaHorizontal(el))
           : r.right;
       const sobra = +(direita - limite).toFixed(1);
       if (sobra > 0.5) {

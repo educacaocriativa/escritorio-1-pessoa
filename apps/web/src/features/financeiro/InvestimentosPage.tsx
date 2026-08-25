@@ -44,12 +44,16 @@ export default function InvestimentosPage() {
 
   const load = useCallback(async () => {
     const { data } = await api.get<InvestmentAccount[]>("/investments");
-    setAccounts(data);
+    // `Array.isArray`, e aqui não havia operador nenhum. `accounts.map` é o corpo da tela (linha
+    // 112) e nenhum `catch` alcança o render. A lista saneada também alimenta o `Promise.all`
+    // abaixo: guardar só o estado deixaria o `data.map` cru estourando na mesma resposta.
+    const lista = Array.isArray(data) ? data : [];
+    setAccounts(lista);
     const { data: bancarias } = await api.get<BankAccount[]>("/bank/accounts");
     setContas(contasDeAplicacao(bancarias));
     const params = hasPeriod ? { start, end } : undefined;
     const entries = await Promise.all(
-      data.map(async (a) => {
+      lista.map(async (a) => {
         const { data: r } = await api.get<Rentability>(`/investments/${a.id}/rentability`, {
           params,
         });

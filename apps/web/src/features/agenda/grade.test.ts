@@ -35,6 +35,34 @@ const FUSO_DISTANTE = "Asia/Tokyo";
 
 // Sábado 10/10/2026 — o dia que o dono clicou na grade.
 const DIA = new Date(2026, 9, 10);
+
+/**
+ * Um instante que, no fuso do NAVEGADOR, cai em `2026-10-{dia}` às `hora`:00 — seja qual for esse
+ * fuso (issue #211).
+ *
+ * ## A dependência não declarada que isto fecha
+ *
+ * `eventsOfDay`/`eventYmd` leem o evento pelo fuso do NAVEGADOR — e isso é afirmado de propósito
+ * num único teste, "evento com horário é lido pelo fuso do NAVEGADOR", que é o gabarito. Num teste
+ * que NÃO é sobre fuso, um literal `"…T18:00:00Z"` faz o dia do evento ser escolhido pelo fuso da
+ * MÁQUINA sem dizer que faz: sob `America/Sao_Paulo` (o pin do `vitest.config.ts`) e sob UTC as
+ * 18:00Z caem em 10/10 e tudo passa, mas sob `Asia/Tokyo` caem em 11/10, o evento SOME do filtro e
+ * o teste de ordenação reprova com `expected [ 'manha' ] to deeply equal [ 'manha', 'tarde' ]` —
+ * uma mensagem que fala de agenda quando o defeito é ambiente. É a mesma classe do #169, e ela
+ * aparece de verdade sob o pool `threads` que o Stryker força, onde o pin chega tarde.
+ *
+ * Construir o instante a partir das partes LOCAIS põe a fixture no MESMO sistema de coordenadas de
+ * `DIA` (que também é local) e da asserção. Sob o pin da suíte os instantes são IDÊNTICOS aos
+ * literais que substituem — `instanteLocal(10, 9)` é `2026-10-10T12:00:00Z` em UTC−3 — então o que
+ * se mede não muda; some só a dependência que ninguém declarou.
+ *
+ * ⚠️ Isto NÃO é um segundo relógio (CLAUDE.md §5.2): não escolhe fuso nenhum, usa o que o processo
+ * já tem. Só os testes que passam pelo fuso do NAVEGADOR usam este helper — quem recebe `FUSO`
+ * explícito (`eventosDoDia`, `densidadePorDia`, `faixasLivres`) já é independente da máquina e
+ * segue com os literais `Z`, que ali são o instante bruto que o backend devolveria.
+ */
+const instanteLocal = (dia: number, hora: number) => new Date(2026, 9, dia, hora).toISOString();
+
 // Um "agora" bem distante do DIA, para que o corte do passado não interfira nos casos que não
 // são sobre ele.
 const ONTEM = new Date("2026-10-01T12:00:00Z");
@@ -192,6 +220,20 @@ describe("faixasLivres", () => {
     const viagem = evento({ starts_at: "2026-10-09T15:00:00Z", ends_at: "2026-10-12T15:00:00Z" });
 
     expect(faixasLivres([viagem], DIA, FUSO, ONTEM)).toEqual([]);
+  });
+
+  it("o compromisso que já TERMINOU em outro dia não ocupa nada", () => {
+    // Achado por mutação (#214): a guarda de `intervaloNoDia` é `ymd < diaInicio || diaFim < ymd`,
+    // e todos os testes acima só exercitavam o primeiro lado (evento no FUTURO do dia pedido) ou
+    // eventos que encostam no dia. Apagando o segundo lado, um compromisso do dia 8 volta como
+    // `{ inicio: 0, fim: minFim }` — ele cai no ramo "termina neste dia" e ocupa da meia-noite
+    // até as 11h do dia 10. A grade de 42 dias manda a janela INTEIRA para cá, sem pré-filtro
+    // por dia: todo compromisso passado do mês fecharia a manhã de todos os dias seguintes.
+    const semanaPassada = evento({ starts_at: "2026-10-08T13:00:00Z", ends_at: "2026-10-08T14:00:00Z" });
+
+    const fx = faixasLivres([semanaPassada], DIA, FUSO, ONTEM);
+
+    expect(horas(fx)).toEqual([8, 9, 10, 11, 12, 13, 14, 15, 16, 17]);
   });
 
   it("na hora cheia exata, a faixa que começa AGORA já não é oferecida", () => {
@@ -469,20 +511,32 @@ describe("eventYmd / eventsOfDay", () => {
   });
 
   it("eventsOfDay filtra pelo dia e ORDENA por horário de início", () => {
-    const tarde = evento({ id: "tarde", starts_at: "2026-10-10T18:00:00Z", ends_at: "2026-10-10T19:00:00Z" });
-    const manha = evento({ id: "manha", starts_at: "2026-10-10T12:00:00Z", ends_at: "2026-10-10T13:00:00Z" });
-    const outroDia = evento({ id: "outro", starts_at: "2026-10-12T12:00:00Z", ends_at: "2026-10-12T13:00:00Z" });
+    // Fixtures em hora de parede do NAVEGADOR (`instanteLocal`), não em literal `Z`: o assunto
+    // aqui é filtro + ordenação, e qual relógio decide o dia é assunto do teste acima (#211).
+    const tarde = evento({ id: "tarde", starts_at: instanteLocal(10, 15), ends_at: instanteLocal(10, 16) });
+    const meio = evento({ id: "meio", starts_at: instanteLocal(10, 12), ends_at: instanteLocal(10, 13) });
+    const manha = evento({ id: "manha", starts_at: instanteLocal(10, 9), ends_at: instanteLocal(10, 10) });
+    const outroDia = evento({ id: "outro", starts_at: instanteLocal(12, 9), ends_at: instanteLocal(12, 10) });
 
     // A lista entra FORA de ordem de propósito: com ela já ordenada, um comparador quebrado
     // devolve a mesma saída e o teste passa sem exercer a ordenação.
-    const doDia = eventsOfDay([tarde, manha, outroDia], DIA);
+    //
+    // E são TRÊS do dia, não dois — medido por mutação (#211). Com só dois, a mutação do #121
+    // (`-new Date(a) - +new Date(b)`, comparador sempre NEGATIVO) SOBREVIVIA aqui: num par, "põe
+    // o primeiro argumento antes" acerta a ordem por acidente. O irmão `eventosDoDia` já usava
+    // três exatamente por isso; `eventsOfDay` tinha a fresta aberta.
+    const doDia = eventsOfDay([tarde, manha, outroDia, meio], DIA);
 
-    expect(doDia.map((e) => e.id)).toEqual(["manha", "tarde"]);
+    expect(doDia.map((e) => e.id)).toEqual(["manha", "meio", "tarde"]);
   });
 
   it("eventsOfDay não modifica a lista recebida", () => {
-    const tarde = evento({ id: "tarde", starts_at: "2026-10-10T18:00:00Z", ends_at: "2026-10-10T19:00:00Z" });
-    const manha = evento({ id: "manha", starts_at: "2026-10-10T12:00:00Z", ends_at: "2026-10-10T13:00:00Z" });
+    // Também em hora de parede do navegador, e aqui a razão é sutil: com o literal `18:00:00Z` o
+    // teste NÃO reprovava em Tóquio — `tarde` era filtrado, sobrava um elemento, e a asserção
+    // sobre a ENTRADA continuava verdadeira. Ou seja, degradava em silêncio para um caso de um
+    // item só, que nenhum `.sort()` in-place reordena: o teste passaria com a produção mutada.
+    const tarde = evento({ id: "tarde", starts_at: instanteLocal(10, 15), ends_at: instanteLocal(10, 16) });
+    const manha = evento({ id: "manha", starts_at: instanteLocal(10, 9), ends_at: instanteLocal(10, 10) });
     const entrada = [tarde, manha];
 
     eventsOfDay(entrada, DIA);

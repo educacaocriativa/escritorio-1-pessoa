@@ -19,7 +19,9 @@ export default function SitesPage() {
 
   const load = useCallback(async () => {
     const { data } = await api.get<PageSummary[]>("/pages");
-    setPages(data);
+    // `Array.isArray`, e aqui não havia operador nenhum: `pages.map` É a tela, e o `.length === 0`
+    // acima não desvia — em objeto `.length` é `undefined`, nunca `0`.
+    setPages(Array.isArray(data) ? data : []);
   }, []);
 
   useEffect(() => {

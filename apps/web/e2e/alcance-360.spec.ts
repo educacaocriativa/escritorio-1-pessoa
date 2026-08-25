@@ -41,14 +41,16 @@ import { semearSessao } from "./support/sessao";
  *      deslizador que rola e exige que ela NÃO o acuse. Sem o primeiro ninguém sabe se ela
  *      enxerga; sem o segundo ninguém sabe se ela sabe parar.
  *
- * Cobertura: as 30 rotas de `support/rotas.ts` (as mesmas que `rotas-360.spec.ts` mede), de 47
- * não-públicas. As 17 que ficaram de fora estão listadas no CLAUDE.md §5.4, uma a uma, com o
- * motivo — inclusive as 3 do `ProtectedBareLayout` que seguem sem medida (`/dna/nucleo`,
- * `/compartilhar`, `/comprovante/:id`). A quarta, `/vima`, entrou no catálogo pelo #178: é a
- * PORTA DO DIA (`EntradaDoDia` manda a raiz autenticada para lá enquanto o briefing de hoje não
- * foi lido) e era a única das seis telas que montam `GanchoDaVima` sem régua nenhuma. Antes de
- * mexer nesse número, leia o "COMO RECONTAR" da §5.4: contar só uma das duas caixas de layout
- * já errou o denominador duas vezes.
+ * Cobertura: as 33 rotas de `support/rotas.ts` (as mesmas que `rotas-360.spec.ts` mede), de 47
+ * não-públicas. As 14 que ficaram de fora estão listadas no CLAUDE.md §5.4, uma a uma, com o
+ * motivo — e agora são **todas do `ProtectedLayout`**: a caixa sem shell fechou. `/vima` entrou
+ * pelo #178 (é a PORTA DO DIA — `EntradaDoDia` manda a raiz autenticada para lá enquanto o
+ * briefing de hoje não foi lido — e era a única das seis telas que montam `GanchoDaVima` sem
+ * régua nenhuma); as outras três do `ProtectedBareLayout` entraram pelo #208, e a primeira
+ * medição de `/dna/nucleo` deu **636px** numa viewport de 360 — a mesma classe dos 649px que a
+ * `/vima` tinha escondido, pela mesma razão (sem shell não há `main.overflow-x-hidden`). Antes
+ * de mexer nesse número, leia o "COMO RECONTAR" da §5.4: contar só uma das duas caixas de
+ * layout já errou o denominador duas vezes.
  */
 
 for (const { rota, marca, mocks } of CASOS) {

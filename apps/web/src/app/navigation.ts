@@ -36,6 +36,14 @@ export interface NavItem {
   /** Casamento EXATO da rota ativa (evita acender junto com sub-rotas, ex.: /financeiro x
    * /financeiro/plano-contas). Sem isto, o NavLink usa match por prefixo. */
   exact?: boolean;
+  /**
+   * O mesmo nome que `require_module` usa no backend (`app/core/tenancy.py`) para a rota que
+   * este item abre. Um sub-usuário sem este módulo em `allowed_modules` não vê o item — antes
+   * disto a sidebar mostrava tudo a todo mundo, e quem clicasse num módulo sem permissão via a
+   * tela travar em "Carregando..." (a API 403 e nenhuma página tratava isso). Ausente = item sem
+   * módulo próprio de negócio (não deve ser escondido por RBAC).
+   */
+  module?: string;
 }
 
 export interface NavSection {
@@ -86,10 +94,11 @@ export const navSections: NavSection[] = [
   {
     // Núcleo: o que se abre todo dia.
     items: [
-      { label: "Dashboard", to: "/", icon: LayoutDashboard, ready: true },
-      { label: "Agenda", to: "/agenda", icon: CalendarDays, ready: true },
-      { label: "CRM & Kanban", to: "/crm", icon: Users, ready: true },
-      { label: "Conversas", to: "/conversas", icon: MessageCircle, ready: true },
+      { label: "Dashboard", to: "/", icon: LayoutDashboard, ready: true, module: "cockpit" },
+      { label: "Agenda", to: "/agenda", icon: CalendarDays, ready: true, module: "agenda" },
+      { label: "CRM & Kanban", to: "/crm", icon: Users, ready: true, module: "crm" },
+      // `whatsapp_inbox` usa o mesmo guard de `crm` no backend (mesma dona dos dados).
+      { label: "Conversas", to: "/conversas", icon: MessageCircle, ready: true, module: "crm" },
     ],
   },
   {
@@ -97,7 +106,7 @@ export const navSections: NavSection[] = [
     // primeiro porque é onde entra o lançamento de recebimento do dia a dia ("Registrar venda").
     title: "Financeiro",
     items: [
-      { label: "Financeiro", to: "/financeiro", icon: Wallet, ready: true, exact: true },
+      { label: "Financeiro", to: "/financeiro", icon: Wallet, ready: true, exact: true, module: "wallet" },
       // Story 8.7 — ao lado da Carteira de propósito: o rótulo é "onde está o meu dinheiro", e a
       // vizinhança reforça a distinção dos planos ("na plataforma" × conta bancária). Fica FORA
       // de "Análise & Configuração Financeira" para não ser lido como relatório contábil.
@@ -105,10 +114,10 @@ export const navSections: NavSection[] = [
       // "Conciliação bancária" comunicaria "software de contabilidade" a todo usuário — inclusive
       // a quem nunca abre a tela — e viraria a conferência numa obrigação periódica. Ela é resposta
       // a um sinal. Coberto por teste em `navigation.test.ts`.
-      { label: "Contas & Saldos", to: "/financeiro/contas", icon: Landmark, ready: true },
-      { label: "Cobranças", to: "/cobrancas", icon: Receipt, ready: true },
-      { label: "Contas a Pagar", to: "/pagar", icon: CreditCard, ready: true },
-      { label: "Fila de pagamentos", to: "/financeiro/fila-pagamentos", icon: ListChecks, ready: true },
+      { label: "Contas & Saldos", to: "/financeiro/contas", icon: Landmark, ready: true, module: "bank" },
+      { label: "Cobranças", to: "/cobrancas", icon: Receipt, ready: true, module: "receivables" },
+      { label: "Contas a Pagar", to: "/pagar", icon: CreditCard, ready: true, module: "payables" },
+      { label: "Fila de pagamentos", to: "/financeiro/fila-pagamentos", icon: ListChecks, ready: true, module: "payables" },
     ],
   },
   {
@@ -118,32 +127,56 @@ export const navSections: NavSection[] = [
     // cadastros.
     title: "Análise & Configuração Financeira",
     items: [
-      { label: "DRE", to: "/financeiro/dre", icon: PieChart, ready: true },
-      { label: "Lucratividade", to: "/financeiro/lucratividade", icon: Trophy, ready: true },
-      { label: "Projeção de caixa", to: "/financeiro/projecao-caixa", icon: LineChart, ready: true },
-      { label: "Diagnóstico", to: "/financeiro/diagnostico", icon: Activity, ready: true },
-      { label: "Investimentos", to: "/financeiro/investimentos", icon: TrendingUp, ready: true },
-      { label: "Plano de contas", to: "/financeiro/plano-contas", icon: ListTree, ready: true },
-      { label: "Centros de custo", to: "/financeiro/centros-custo", icon: Layers, ready: true },
+      { label: "DRE", to: "/financeiro/dre", icon: PieChart, ready: true, module: "financial_intelligence" },
+      { label: "Lucratividade", to: "/financeiro/lucratividade", icon: Trophy, ready: true, module: "financial_intelligence" },
+      { label: "Projeção de caixa", to: "/financeiro/projecao-caixa", icon: LineChart, ready: true, module: "financial_intelligence" },
+      { label: "Diagnóstico", to: "/financeiro/diagnostico", icon: Activity, ready: true, module: "financial_intelligence" },
+      { label: "Investimentos", to: "/financeiro/investimentos", icon: TrendingUp, ready: true, module: "investments" },
+      { label: "Plano de contas", to: "/financeiro/plano-contas", icon: ListTree, ready: true, module: "chart_of_accounts" },
+      { label: "Centros de custo", to: "/financeiro/centros-custo", icon: Layers, ready: true, module: "cost_centers" },
     ],
   },
   {
     title: "Ferramentas de Produtividade",
     items: [
-      { label: "Orçamentos", to: "/orcamentos", icon: FileText, ready: true },
-      { label: "Contratos", to: "/contratos", icon: FileSignature, ready: true },
-      { label: "Produtos", to: "/produtos", icon: ShoppingBag, ready: true },
-      { label: "Estoque", to: "/estoque", icon: Package, ready: true },
-      { label: "Marketing", to: "/marketing", icon: Megaphone, ready: true },
-      { label: "Funil de Vendas", to: "/funis", icon: Workflow, ready: true },
-      { label: "Sites", to: "/sites", icon: Globe, ready: true },
-      { label: "Jurídico", to: "/juridico", icon: Scale, ready: true },
+      { label: "Orçamentos", to: "/orcamentos", icon: FileText, ready: true, module: "quotes" },
+      { label: "Contratos", to: "/contratos", icon: FileSignature, ready: true, module: "contracts" },
+      { label: "Produtos", to: "/produtos", icon: ShoppingBag, ready: true, module: "products" },
+      { label: "Estoque", to: "/estoque", icon: Package, ready: true, module: "stock" },
+      { label: "Marketing", to: "/marketing", icon: Megaphone, ready: true, module: "marketing" },
+      { label: "Funil de Vendas", to: "/funis", icon: Workflow, ready: true, module: "funnels" },
+      { label: "Sites", to: "/sites", icon: Globe, ready: true, module: "pages" },
+      { label: "Jurídico", to: "/juridico", icon: Scale, ready: true, module: "juridico" },
     ],
   },
   {
     // Raramente aberto — fica isolado no fim, longe do que se usa todo dia.
-    items: [{ label: "Configurações", to: "/config", icon: Settings, ready: true }],
+    items: [{ label: "Configurações", to: "/config", icon: Settings, ready: true, module: "settings" }],
   },
 ];
 
 // Stryker restore all
+
+/**
+ * `navSections` recortado para o que ESTE usuário pode abrir (`hasModule`). Item sem `module`
+ * nunca é escondido (não é módulo de negócio próprio). Seção que fica sem item nenhum some
+ * inteira — senão restaria só o título/divisor, uma seção vazia na tela.
+ *
+ * `navSections` em si permanece a lista COMPLETA e estática (é o que `navigation.test.ts` já
+ * afirma) — o recorte por permissão é uma função pura à parte, para não misturar "o menu que
+ * existe" com "o menu que este usuário vê".
+ *
+ * FORA do bloco `Stryker disable` acima de propósito (issue #191): esta função TEM lógica
+ * (`ConditionalExpression`/`LogicalOperator`) — é exatamente o caso que o comentário daquele
+ * bloco previu ("função nova nasce fora dele e volta a ser medida").
+ */
+export function visibleNavSections(
+  hasModule: (module: string) => boolean,
+): NavSection[] {
+  return navSections
+    .map((section) => ({
+      ...section,
+      items: section.items.filter((item) => !item.module || hasModule(item.module)),
+    }))
+    .filter((section) => section.items.length > 0);
+}

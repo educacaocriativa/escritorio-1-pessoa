@@ -16,8 +16,8 @@ import { api, apiErrorMessage } from "../../lib/api";
 import ProposalView from "./ProposalView";
 import { formatTime } from "../../lib/datetime";
 import { useFuso } from "../../store/auth";
+import { formatBRL } from "../financeiro/dre";
 
-const brl = (c: number) => (c / 100).toLocaleString("pt-BR", { style: "currency", currency: "BRL" });
 const toCents = (s: string) => Math.round(parseFloat((s || "").replace(",", ".") || "0") * 100);
 const fromCents = (c: number) => (c / 100).toFixed(2).replace(".", ",");
 
@@ -252,7 +252,7 @@ export default function QuoteBuilderPage() {
         <div className="flex flex-wrap items-center justify-end gap-3">
           <div className="text-right">
             <p className="text-xs text-neutral-400">Total</p>
-            <p className="text-lg font-bold text-neutral-800">{brl(total)}</p>
+            <p className="text-lg font-bold text-neutral-800">{formatBRL(total)}</p>
           </div>
           <button onClick={send} disabled={saving || readonly} className="flex items-center gap-1.5 rounded-pill bg-primary-500 px-4 py-2 text-sm font-semibold text-white hover:bg-primary-600 disabled:opacity-50">
             <Send size={14} /> Enviar

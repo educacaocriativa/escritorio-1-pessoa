@@ -3,6 +3,7 @@ import userEvent from "@testing-library/user-event";
 import { MemoryRouter, Route, Routes } from "react-router-dom";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { api } from "../../lib/api";
+import { assentar } from "../../test/assentar";
 import FunnelBuilderPage from "./FunnelBuilderPage";
 
 // Story 7.16 — Task 3. Rede sempre mockada (IV2): nenhum teste bate em /funnels real.
@@ -217,5 +218,52 @@ describe("funil com nodes/edges fora de formato não derruba o builder", () => {
     renderEdit();
 
     await waitFor(() => expect(screen.getByDisplayValue("Funil real")).toBeInTheDocument());
+  });
+});
+
+// ── `GET /funnels/components` fora de forma (issue #207) ──────────────────────
+//
+// `setCatalog(data)` recebia o payload CRU, sem operador NENHUM — o outro exemplo que a issue cita
+// pelo nome. É o terceiro payload desta mesma tela: o PR #197 guardou `nodes`/`edges` (que ao
+// menos tinham `?? []`) e o catálogo ficou de fora justamente por não ter operador algum e por
+// isso não aparecer na varredura por `??`. `catalog.map` monta a paleta no render, fora do alcance
+// do `.then`.
+//
+// ⚠️ O `assentar()` é a metade que MATA o mutante — ver `src/test/assentar.ts`.
+describe("catálogo de componentes fora de forma não derruba o builder (#207)", () => {
+  function mockCatalogo(payload: unknown) {
+    vi.mocked(api.get).mockImplementation((url: string) => {
+      if (url === "/funnels/components") return Promise.resolve({ data: payload } as never);
+      if (url === "/settings/profile") return Promise.resolve({ data: profile(null) } as never);
+      return Promise.resolve({ data: [] } as never);
+    });
+  }
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it.each([
+    ["envelope de erro devolvido com 200", { detail: "algo deu errado" }],
+    ["string no lugar da lista", "não é json"],
+    ["corpo vazio (204 / sem conteúdo)", null],
+    ["número no lugar da lista", 7],
+  ])("%s → o builder monta com a paleta vazia em vez de estourar", async (_rotulo, payload) => {
+    mockCatalogo(payload);
+    renderNew();
+    await assentar();
+
+    // O canvas e a barra de ações continuam de pé...
+    expect(screen.getByRole("button", { name: "Salvar" })).toBeInTheDocument();
+    // ...e a paleta simplesmente não tem itens.
+    expect(screen.queryByText("Novo Lead")).not.toBeInTheDocument();
+  });
+
+  it("contra-teste: catálogo de verdade continua montando a paleta", async () => {
+    mockCatalogo(catalog);
+    renderNew();
+    await assentar();
+
+    expect(screen.getByText("Novo Lead")).toBeInTheDocument();
   });
 });

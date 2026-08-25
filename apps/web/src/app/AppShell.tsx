@@ -5,10 +5,11 @@ import { type ReactNode, useEffect, useState } from "react";
 import { NavLink, useNavigate } from "react-router-dom";
 import BuscaGlobal from "../features/busca/BuscaGlobal";
 import { api } from "../lib/api";
+import { hasModule } from "../lib/access";
 import { applyBrandTheme } from "../lib/theme";
 import { useAuth } from "../store/auth";
 import { usePageActions } from "../store/pageActions";
-import { navSections } from "./navigation";
+import { visibleNavSections } from "./navigation";
 
 /** Largura a partir da qual a sidebar cabe ao lado do conteúdo (= breakpoint `md` do Tailwind). */
 const DESKTOP_MIN_WIDTH = 768;
@@ -74,6 +75,7 @@ function Sidebar({ onClose }: { onClose: () => void }) {
   const closeIfMobile = () => {
     if (!isDesktopWidth()) onClose();
   };
+  const navSections = visibleNavSections((module) => hasModule(user, module));
   return (
     <aside
       className="fixed inset-y-0 left-0 z-40 flex h-screen w-64 shrink-0 flex-col overflow-y-auto bg-primary-500 py-6 pl-4 text-white md:sticky md:top-0 md:z-auto md:self-start"
