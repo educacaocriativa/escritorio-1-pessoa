@@ -132,7 +132,11 @@ export default function ComprovantePage() {
     load()
       .then((data) => {
         if (cancelled) return;
-        setCandidates(data);
+        // `Array.isArray`, e aqui não havia operador nenhum. O `.catch` abaixo mostra a mensagem
+        // de erro e segue — mas `candidates.find` (useMemo) e `candidates.map` rodam no RENDER,
+        // depois do `.then`, onde nenhum `catch` chega. Mesmo arquivo do `setReceipt` guardado no
+        // #197: aquele era o nome do arquivo (contexto), este é a lista que a tela existe para ter.
+        setCandidates(Array.isArray(data) ? data : []);
       })
       .catch((err) => {
         if (cancelled) return;
