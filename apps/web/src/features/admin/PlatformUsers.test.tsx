@@ -3,6 +3,7 @@ import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { api } from "../../lib/api";
 import { PageActionsProvider, usePageActions } from "../../store/pageActions";
+import { assentar } from "../../test/assentar";
 import PlatformUsers from "./PlatformUsers";
 
 // Story 7.18 — Task 4. Rede sempre mockada (IV2): nenhum teste bate em /admin real.
@@ -274,5 +275,44 @@ describe("PlatformUsers — a confirmação do convite diz a verdade sobre a ent
 
     expect(await screen.findByRole("heading", { name: "Conta criada" })).toBeInTheDocument();
     expect(screen.queryByText("Senha temporária")).not.toBeInTheDocument();
+  });
+});
+
+// ── `GET /admin/users` fora de forma (issue #207) ─────────────────────────────
+//
+// `setNodes(data)` recebia o payload CRU, sem operador nenhum. `nodes.reduce` roda dentro do
+// `useMemo` dos totais, em tempo de RENDER — fora do alcance de qualquer `catch` do `load`. E o
+// app não tem ErrorBoundary: o `TypeError` não deixa a lista vazia, desmonta a árvore inteira.
+//
+// ⚠️ O `assentar()` é a metade que MATA o mutante: sem ele o `getByText` acerta o estado vazio
+// INICIAL e passa antes de o payload chegar ao setter. Ver `src/test/assentar.ts`.
+describe("PlatformUsers — lista de contas fora de forma não derruba a aba (#207)", () => {
+  function mockUsers(payload: unknown) {
+    vi.mocked(api.get).mockImplementation((url: string) => {
+      if (url === "/admin/users") return Promise.resolve({ data: payload } as never);
+      return Promise.resolve({ data: [] } as never);
+    });
+  }
+
+  it.each([
+    ["envelope de erro devolvido com 200", { detail: "algo deu errado" }],
+    ["string no lugar da lista", "não é json"],
+    ["corpo vazio (204 / sem conteúdo)", null],
+    ["número no lugar da lista", 7],
+  ])("%s → a aba mostra o estado vazio em vez de estourar", async (_rotulo, payload) => {
+    mockUsers(payload);
+    renderPage();
+    await assentar();
+
+    expect(screen.getByText("Nenhuma conta ainda.")).toBeInTheDocument();
+  });
+
+  it("contra-teste: escritório de verdade continua listado", async () => {
+    mockUsers([officeNode]);
+    renderPage();
+    await assentar();
+
+    expect(screen.getByText("Escritório Alpha Ltda")).toBeInTheDocument();
+    expect(screen.queryByText("Nenhuma conta ainda.")).not.toBeInTheDocument();
   });
 });

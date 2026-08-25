@@ -80,9 +80,10 @@ certo, e a tela estava errada. **Nenhum teste de `apps/web/e2e/` pode aferir cla
   com outro projeto nas máquinas de dev) e intercepta a API com `page.route` (`e2e/support/api.ts`).
   Sem backend, sem Docker, sem banco: foi por achar que medir custava caro que **seis telas** subiram
   sem medição e **três PRs de correção em campo** foram pagos (#56, #58, #89).
-- **A régua** é `e2e/support/medidas.ts`: `medirPagina`, `alvosPequenos` (mínimo tocável **44px**) e
-  `textoForaDaTela` (o texto que só existe se o dono rolar de lado — o defeito que a Onda 2b-ii achou
-  na primeira medição, `R$ 3.` no lugar de `R$ 3.000,00`).
+- **A régua** é `e2e/support/medidas.ts`: `medirPagina`, `alvosPequenos` (mínimo tocável **44px**),
+  `camposBaixos` (o mesmo mínimo, mas só ALTURA e só no que se DIGITA — ver "Campo de digitação"
+  abaixo) e `textoForaDaTela` (o texto que só existe se o dono rolar de lado — o defeito que a Onda
+  2b-ii achou na primeira medição, `R$ 3.` no lugar de `R$ 3.000,00`).
 - **As fixtures são de PIOR CASO PLAUSÍVEL** (nome longo de banco, valor de 6 dígitos, título de
   grupo comprido), nas formas reais de `packages/shared-types`. Dado curto sempre cabe: medir com ele
   é medir uma tela que não existe.
@@ -95,6 +96,32 @@ certo, e a tela estava errada. **Nenhum teste de `apps/web/e2e/` pode aferir cla
   "Declarar saldo"/"Lançar movimento" (`contas-modais-360`), "Movimentar: {item.name}" do Estoque
   (`estoque-movimentar-360`), "Vender: {product.name}" dos Produtos (`produtos-vender-360`) e
   "Transferir"/"Editar movimento"/"Ignorar movimento" (`contas-movimento-360`).
+- **CAMPO DE DIGITAÇÃO: 44px vêm de `.campos-tocaveis`, não de `className` em cada campo** (#215,
+  desde 2026-08-22). A regra vive em `apps/web/src/styles/index.css` e vale para `<input>` (menos
+  `checkbox`/`radio`/`file`/`color`/`range`), `<select>` e `<textarea>` DENTRO de um contêiner que
+  declare a classe. Quem já a declara: a **caixa do `components/Modal.tsx`** (logo, todo modal do
+  app), o cartão do `auth/LoginPage.tsx`, os **dois modais escritos à mão** do
+  `funis/FunnelBuilderPage.tsx` e o formulário do `juridico/JuridicoWizardPage.tsx`. Alcance
+  auditável em uma linha: `grep -rn "campos-tocaveis" apps/web/src/`.
+  - **Por que não `min-h-11` no `Field`.** O `Field` são **84 usos em 14 telas**, mas ao lado de
+    quase todo `<Field>` há um `<select>` escrito à mão com a MESMA classe (`px-3 py-2 text-sm`) e
+    a mesma altura errada, e existem **3 cópias locais** do componente (`LoginPage.tsx:203`,
+    `FunnelBuilderPage.tsx:736`, `JuridicoWizardPage.tsx:178`) que um conserto no componente não
+    alcança. Consertar só o `Field` pagaria 84 campos e deixaria ~35 em pé **com a aparência de
+    dívida paga** — que é a forma de defeito que a issue existia para evitar.
+  - **Por que OPT-IN e não global.** Medido em 22/08/2026 no catálogo de `e2e/support/rotas.ts`:
+    fora dos formulários há mais **~90** campos abaixo de 44px, e eles moram nos CONSTRUTORES —
+    `/marketing/m1` (30), `/sites/s1` (15), `/marketing/novo` (12), `/orcamentos/novo` (7),
+    `/contratos/novo` (4) —, editores densos de `px-2 py-1.5 text-xs` com **27 a 34px**. Engordá-los
+    junto mudaria cinco telas que nenhuma régua mede por ALTURA, sem ninguém ter olhado o resultado;
+    e uma allowlist para excluí-los seria allowlist sem razão. Dívida aberta, com número.
+  - **Consequência a lembrar:** `<Field>` usado FORA de um `Modal` volta aos 38px. Quem o fizer
+    declara `campos-tocaveis` no contêiner do formulário — e acrescenta o caso à régua.
+  - **A régua** é `apps/web/e2e/campo-modal-360.spec.ts`: abre o modal em **16 telas** e mede
+    `camposBaixos` com o recorte no overlay. Antes do conserto: **79 campos abaixo de 44px** (38px
+    o `<input>` do `Field`, 37–39px os `<select>`, 40px os `date`/`datetime-local`). Cada caso
+    declara **quantos** campos tem: modal que não renderizou campo nenhum devolveria lista vazia e
+    passaria por conserto.
 - ⚠️ **`scrollWidth` NÃO vê o defeito do título — a BORDA vê.** Sem `min-w-0`, o `<h2>` é item de flex
   com `min-width: auto`: ele **cresce** em vez de transbordar. Com o conserto do #119 revertido e
   medido, `scrollWidth === clientWidth` seguia **verde** enquanto a borda direita do título ia a
@@ -649,13 +676,15 @@ duas ações e na **linha inteira** do rótulo do checkbox — nunca engordando 
 viraria um quadrado do tamanho de um botão. Travado por `apps/web/e2e/toque-360.spec.ts`, com
 varredura de `alvosPequenos` no documento inteiro (não só nos três alvos conhecidos).
 
-- **Dívida:** o modal de cadastro/edição desta rota tem **2** alvos abaixo de 44 — o `<input>` do
-  `Field` (**38px**, a dívida GERAL do componente compartilhado, já registrada na Onda 2) e o
-  `<select>` de tipo (**39px**). Fora do escopo do #181, que mede a superfície da PÁGINA.
-- **Dívida:** a varredura filtra `input` por construção — `alvosPequenos` mede o ELEMENTO, e a
-  caixinha do checkbox tem 20×20 por convenção do repo. O custo, medido: tirar o `h-5 w-5` do
-  `<input>` (volta a 13×13) e o `px-1` dos botões são **mutantes equivalentes** — sobrevivem à
-  régua, porque o que ela exige é ÁREA de toque, não quadrado desenhado.
+- ~~**Dívida:** o modal de cadastro/edição desta rota tem **2** alvos abaixo de 44 — o `<input>` do
+  `Field` (**38px**) e o `<select>` de tipo (**39px**).~~ **PAGA no #215** (2026-08-22), e a
+  contagem de 2 era piso: eram **79 campos em 16 telas**. Ver "Campo de digitação" abaixo.
+- **Dívida (estreitada no #215):** a varredura filtrava TODO `input` por construção — `alvosPequenos`
+  mede o ELEMENTO, e a caixinha do checkbox tem 20×20 por convenção do repo. O custo estava escrito
+  no spec ("um campo de TEXTO de 38px passaria por aqui") **e foi cobrado**: os 2 alvos acima eram
+  exatamente isso. `Alvo` passou a carregar `tipo` e o filtro hoje recorta só `checkbox`/`radio`.
+  O que continua sendo mutante equivalente: tirar o `h-5 w-5` do `<input>` (volta a 13×13) e o
+  `px-1` dos botões — a régua exige ÁREA de toque, não quadrado desenhado.
 
 
 ### 5.5 As suítes pesadas não se sobrepõem (issue #162, 2026-08-20)
@@ -1809,10 +1838,10 @@ desde a Onda 0 **sem gatilho nenhum**; esta story é o gatilho.
     `footer`.** Alvo dos rádios e de "Conta principal": 44px na **linha inteira** do rótulo, não no
     círculo. O erro continua no corpo — na barra ele empurraria o botão para fora justamente quando
     o dono mais precisa dele. Travado por `apps/web/e2e/modal-conta-360.spec.ts`.
-  - **Dívida:** os campos de texto do `Field` têm **38px** de altura (mínimo tocável é 44). Não
-    foram engordados aqui porque `Field` é compartilhado por todos os modais do app e a mudança
-    sairia do escopo deste PR — o spec afirma sobre BOTÃO, com o recorte escrito no próprio teste
-    em vez de escondido num filtro.
+  - ~~**Dívida:** os campos de texto do `Field` têm **38px** de altura (mínimo tocável é 44).~~
+    **PAGA no #215** (2026-08-22). A razão de não engordá-los aqui continua boa para o escopo
+    daquele PR; o #215 existiu para pagar a dívida com o alcance declarado. Ver "Campo de
+    digitação" abaixo.
 - **Dívida:** conta `is_known=false` + recuo de data pede um saldo cujo campo está escondido no
   formulário; tem saída (marcar *"sei o saldo"* revela o campo), mas a mensagem de erro pede algo que
   não está visível.
@@ -1899,8 +1928,8 @@ onda já fechada. O único teste que tocava a função afirmava que ela era `cal
 - [x] **O aceite em ~360px do campo de vínculo FOI MEDIDO (2026-08-10) e PASSOU.** Com o 409
   acionável disparado, o modal de rendimento tem **596px numa viewport de 740** — cabe sem rolagem
   interna, "Registrar rendimento" fica visível sem rolar, o seletor de conta renderiza e a largura
-  não passa de 360. Sem conserto necessário. (Os campos de `Field` têm 38px — dívida geral do
-  componente, registrada na 8.21.)
+  não passa de 360. Sem conserto necessário. (Os campos de `Field` tinham 38px — dívida geral do
+  componente, registrada na 8.21 e **paga no #215**.)
 - **Dívida:** ~~a 2b-ii continua com o único backfill do épico, e ele continua sendo o item de
   maior risco.~~ **FECHADA na 2b-ii (2026-08-08): o backfill não foi mitigado, deixou de
   existir.** Ver a seção da Onda 2b-ii, logo abaixo.
@@ -2836,6 +2865,52 @@ primeira rodada.
   preset daria `min-h-toque` greppável. E a nota do `rounded-pill` neste arquivo diz **7
   ocorrências** quando a contagem real é **190** — o erro de 27× faz a dívida se ler como "ainda
   não vale um componente".
+
+## RBAC no frontend: a sidebar e as rotas passam a respeitar `allowed_modules` (2026-08-25)
+
+**O frontend nunca consultava `allowed_modules` — em lugar nenhum.** A sidebar (`navigation.ts`)
+mostrava os ~20 itens de menu a todo usuário, dono ou sub-usuário restrito, e nenhuma rota sabia
+recusar antes da página tentar buscar dados. O sintoma achado pelo fundador: um sub-usuário sem
+Jurídico/Funis abria a ficha do cliente (`/crm/clients/:id`) e ela ficava presa em **"Carregando
+ficha..." para sempre** — e o mesmo em `/config` (exige o módulo `settings` inteiro).
+
+- **Causa em `ClientDetailPage`:** o `load()` da montagem juntava as seis leituras (cliente,
+  cobranças, contratos, orçamentos, jurídico, funis) num `Promise.all` só. A PRIMEIRA a voltar 403
+  rejeitava o lote inteiro — `client` nunca saía de `null`, e nem os dados PERMITIDOS apareciam.
+  **Causa em `ConfiguracoesPage`:** `load()` não tinha `.catch`; o 403 de `/settings/profile`
+  também deixava `p` preso em `null` para sempre.
+- [x] **`lib/access.ts` — `hasModule(user, module)`**, espelho **exato** de `require_module`
+  (`app/core/tenancy.py`): `role === "owner" || allowed_modules.length === 0 ||
+  allowed_modules.includes(module)`. Porta única desta regra no frontend.
+- [x] **`navigation.ts` — cada item ganhou `module`** (o mesmo nome que `require_module` usa na
+  rota que ele abre) e `visibleNavSections(hasModule)` recorta a sidebar por permissão — seção que
+  fica sem item nenhum some inteira, não deixa título/divisor órfão. `navSections` em si continua
+  a lista COMPLETA e estática (o que `navigation.test.ts` já afirmava).
+  ⚠️ **A função entra FORA do `Stryker disable all` da issue #191** — aquele bloco existe porque o
+  módulo só tinha tabela de dados, sem lógica; `visibleNavSections` é a primeira função exportada
+  daqui, e o comentário do próprio bloco já previa isso ("função nova nasce fora dele").
+- [x] **`App.tsx` — `<Modulo m="...">`** envolve cada rota de módulo de negócio (crm, wallet, bank,
+  receivables, payables, quotes, contracts, products, stock, marketing, funnels, pages, juridico,
+  financial_intelligence, investments, chart_of_accounts, cost_centers, settings): sem o módulo, a
+  página **nem monta** — mostra "sem acesso" em vez de tentar buscar dados que voltariam 403. É a
+  segunda camada, contra link direto/favorito/URL digitada (a sidebar sozinha só esconde o clique).
+  A raiz (`/`, Cockpit) ficou **deliberadamente sem guard**: é a página de entrada do app, e
+  guardá-la arriscava deixar um sub-usuário sem NENHUMA tela de pouso.
+- [x] **`ClientDetailPage.tsx`** — cada leitura secundária só dispara se `hasModule` permitir (não
+  há por que pedir o que já se sabe que vai 403) e tem `.catch` próprio (defesa contra falha por
+  outro motivo — rede, 500 — não travar as demais seções). As cinco seções e o resumo financeiro
+  somem inteiros quando o módulo correspondente falta — nunca mostram contagem zerada de algo que
+  o usuário não tem permissão de ver.
+- [x] **`ConfiguracoesPage.tsx`** — segunda camada de defesa: `load()` ganhou `try/catch`: qualquer
+  falha mostra a mensagem em vez de travar em "Carregando..." para sempre.
+- **Por que também é guard de ROTA, não só de sidebar:** a sidebar é conveniência de navegação; a
+  garantia real precisa valer para quem chega direto pela URL. As duas camadas espelham o padrão
+  que este arquivo já registra em vários lugares (Regra da Origem, Invariante do Trilho): a UI
+  nunca é a única fronteira, o backend (`require_module`) continua sendo o fail-closed de verdade.
+- **Dívida:** nenhuma tela mede em ~360px o estado "sem acesso a este módulo" — texto simples, sem
+  régua própria. E `packages/shared-types` não tem um tipo fechado para os nomes de módulo
+  (`hasModule` recebe `string` solto); um typo no `module` de um item novo de menu não quebraria
+  build nenhum, só esconderia o item em silêncio.
 
 ## Vima: o Registro de Fatos e o briefing (PRs #85 e #90, 2026-08-06/07)
 

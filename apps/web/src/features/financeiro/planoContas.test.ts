@@ -38,6 +38,18 @@ describe("buildHierarchy (plano de contas — Story 5.1)", () => {
     expect(despesa.categorias.map((c) => c.categoria)).toEqual(["Aluguel"]);
   });
 
+  it("ignora grupo desconhecido em vez de estourar", () => {
+    // Achado por mutação (#214): fixar `byGroup.has(...)` em `true` sobrevivia porque nenhum
+    // teste mandava um grupo fora do enum. O `!` da linha seguinte é uma promessa ao TypeScript,
+    // não uma checagem em runtime: sem a guarda, `byGroup.get(desconhecido)` é `undefined` e o
+    // `.push` derruba a PlanoContasPage inteira — a defesa que o comentário do código promete
+    // ("o backend é a fonte da verdade") não estava provada.
+    const desconhecido = { ...acc({ categoria: "Nova" }), grupo_dre: "GRUPO_NOVO_NO_BACKEND" as never };
+    const groups = buildHierarchy([desconhecido, acc({ grupo_dre: "TRIBUTOS", categoria: "ISS" })]);
+    expect(groups.map((g) => g.grupo_dre)).toEqual([...GRUPOS_DRE]);
+    expect(groups.flatMap((g) => g.categorias.map((c) => c.categoria))).toEqual(["ISS"]);
+  });
+
   it("expõe rótulos PT-BR por grupo", () => {
     const groups = buildHierarchy([]);
     const financeiro = groups.find((g) => g.grupo_dre === "FINANCEIRO")!;

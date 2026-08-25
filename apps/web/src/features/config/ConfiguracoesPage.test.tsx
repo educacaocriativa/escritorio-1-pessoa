@@ -161,6 +161,25 @@ describe("ConfiguracoesPage — áreas", () => {
   });
 });
 
+describe("ConfiguracoesPage — carregamento (RBAC)", () => {
+  it("erro ao carregar o perfil mostra a mensagem em vez de travar em 'Carregando...' para sempre", async () => {
+    // A rota já barra quem não tem o módulo `settings` antes de montar esta página (`Modulo` em
+    // `app/App.tsx`), mas a tela não pode confiar só nisso: qualquer outra falha de `load()`
+    // (rede, 500, sessão expirando) tinha o MESMO sintoma do defeito relatado — `p` nunca saía de
+    // `null` e a tela ficava presa em "Carregando..." para sempre.
+    vi.mocked(api.get).mockImplementation((url: string) => {
+      if (url === "/settings/profile") {
+        return Promise.reject({ response: { data: { detail: "Sem acesso ao módulo 'settings'" } } });
+      }
+      return Promise.resolve({ data: [] } as never);
+    });
+    render(<ConfiguracoesPage />);
+
+    expect(await screen.findByText("Sem acesso ao módulo 'settings'")).toBeInTheDocument();
+    expect(screen.queryByText("Carregando...")).toBeNull();
+  });
+});
+
 describe("ConfiguracoesPage — aba Integrações", () => {
   it("troca pra aba Integrações e lista as chaves", async () => {
     const user = userEvent.setup();

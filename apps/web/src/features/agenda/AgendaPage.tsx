@@ -22,8 +22,7 @@ import {
 } from "./grade";
 import { useFuso } from "../../store/auth";
 import NewEventModal from "./NewEventModal";
-
-const brl = (c: number) => (c / 100).toLocaleString("pt-BR", { style: "currency", currency: "BRL" });
+import { formatBRL } from "../financeiro/dre";
 
 type View = "month" | "week" | "day";
 
@@ -54,7 +53,10 @@ export default function AgendaPage() {
     const { data } = await api.get<AgendaEvent[]>("/agenda/events", {
       params: paramsDaGrade(start, end),
     });
-    setEvents(data);
+    // `Array.isArray`, e aqui não havia operador nenhum: a grade chama `eventsOfDay(events, d)`
+    // para CADA dia visível, e `eventsOfDay` abre com `events.filter` (`grade.ts`). Payload fora de
+    // forma estoura no primeiro dia do mês — antes de qualquer célula existir, com a tela em branco.
+    setEvents(Array.isArray(data) ? data : []);
   }, [start, end]);
 
   useEffect(() => {
@@ -441,7 +443,7 @@ function EventDetailModal({ event, onClose }: { event: AgendaEvent; onClose: () 
           </p>
         )}
         {event.amount_cents != null && (
-          <p className="text-base font-bold text-neutral-800">{brl(event.amount_cents)}</p>
+          <p className="text-base font-bold text-neutral-800">{formatBRL(event.amount_cents)}</p>
         )}
         {event.description && <p className="text-neutral-600">{event.description}</p>}
 

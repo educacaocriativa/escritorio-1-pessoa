@@ -100,4 +100,16 @@ describe("splitGroupsAroundInvestment", () => {
     expect(before).toEqual(groups);
     expect(after).toEqual([]);
   });
+
+  it("group_by=cost_center: é o MODO que decide, não o nome da chave", () => {
+    // Achado por mutação (#214): apagar a guarda `groupBy !== "dre"` sobrevivia porque o teste
+    // acima usa chaves ("cc-a", "_unassigned") que o filtro não pegaria de qualquer jeito — a
+    // saída era idêntica com e sem a guarda. Aqui a chave COLIDE de propósito com os nomes de
+    // grupo DRE: em cost_center o `key` é o id do centro de custo (uuid) ou "_unassigned", e
+    // nenhum deles pode ser arrancado para a seção de investimento.
+    const groups = [group({ key: "INVESTIMENTO" }), group({ key: "SEM_CATEGORIA" })];
+    const { before, after } = splitGroupsAroundInvestment(groups, "cost_center");
+    expect(before.map((g) => g.key)).toEqual(["INVESTIMENTO", "SEM_CATEGORIA"]);
+    expect(after).toEqual([]);
+  });
 });
