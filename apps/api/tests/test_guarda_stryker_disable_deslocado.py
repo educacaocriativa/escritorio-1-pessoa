@@ -73,7 +73,7 @@ def _escreve(tmp_path: pathlib.Path, nome: str, conteudo: str) -> pathlib.Path:
     return caminho
 
 
-# ── CASO POSITIVO (CONTROLE) — diretiva encostada no alvo ──────────────────────────────────────────
+# ── CASO POSITIVO (CONTROLE) — diretiva encostada no alvo ────────────────────────────────────────
 
 
 def test_diretiva_encostada_no_alvo_passa(tmp_path: pathlib.Path) -> None:
@@ -112,7 +112,7 @@ def test_os_quatro_arquivos_reais_do_e1p_passam_limpo() -> None:
     assert r.stdout.startswith("OK: nenhuma diretiva")
 
 
-# ── CASO NEGATIVO (REGRESSÃO) — diretiva deslocada ──────────────────────────────────────────────────
+# ── CASO NEGATIVO (REGRESSÃO) — diretiva deslocada ──────────────────────────────────────────────
 
 
 def test_diretiva_seguida_de_comentario_reprova_com_arquivo_e_linha(tmp_path: pathlib.Path) -> None:
