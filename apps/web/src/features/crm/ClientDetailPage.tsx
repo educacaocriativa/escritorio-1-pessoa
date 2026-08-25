@@ -23,8 +23,8 @@ import BlocoDaConversa from "./BlocoDaConversa";
 import ClientTimeline from "./ClientTimeline";
 import { VOCAB_ENTRADA } from "../pagar/baixa";
 import { DialogDeBaixa, HOJE_DO_TENANT } from "../pagar/EscolhaDaBaixa";
+import { formatBRL } from "../financeiro/dre";
 
-const brl = (c: number) => (c / 100).toLocaleString("pt-BR", { style: "currency", currency: "BRL" });
 /** Aceita as DUAS espécies: `"2026-08-05"` (data de calendário) e ISO completo (instante). */
 const dt = (s: string, tz: string) => (s.length === 10 ? formatDay(s) : formatDate(s, tz));
 
@@ -151,9 +151,9 @@ export default function ClientDetailPage() {
           ("nada a receber") que ninguém verificou, não um resumo. */}
       {podeCobrancas && (
         <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
-          <Stat label="A receber (a vencer)" value={brl(openSum)} tone="text-neutral-700" />
-          <Stat label="Vencido" value={brl(overdueSum)} tone="text-danger" />
-          <Stat label="Recebido" value={brl(paidSum)} tone="text-accent-700" />
+          <Stat label="A receber (a vencer)" value={formatBRL(openSum)} tone="text-neutral-700" />
+          <Stat label="Vencido" value={formatBRL(overdueSum)} tone="text-danger" />
+          <Stat label="Recebido" value={formatBRL(paidSum)} tone="text-accent-700" />
           {/* [issue #154] Espelho EXATO do quarto cartão da `CobrancasPage` (Story 8.15): mesmo
               rótulo, mesmo tom âmbar e **some quando é zero**, pela mesma disciplina anti-ruído.
               Rótulo e semântica vêm de lá de propósito — a ficha e a tela de cobranças são a MESMA
@@ -164,7 +164,7 @@ export default function ClientDetailPage() {
               import atravessa feature de propósito e não inventa convenção — é a mesma forma do
               `VOCAB_ENTRADA` (`pagar/baixa.ts`) que esta tela já importa acima. */}
           {scheduledSum > 0 && (
-            <Stat label={AGENDADO_ENTRADA_LABEL} value={brl(scheduledSum)} tone="text-amber-700" />
+            <Stat label={AGENDADO_ENTRADA_LABEL} value={formatBRL(scheduledSum)} tone="text-amber-700" />
           )}
         </div>
       )}
@@ -253,7 +253,7 @@ export default function ClientDetailPage() {
               <li key={q.id} className="flex items-center justify-between py-2.5">
                 <button onClick={() => navigate(`/orcamentos/${q.id}`)} className="text-left text-sm font-medium text-neutral-700 hover:text-primary-600">
                   {q.title}
-                  <span className="ml-2 text-xs text-neutral-400">{brl(q.total_cents)}</span>
+                  <span className="ml-2 text-xs text-neutral-400">{formatBRL(q.total_cents)}</span>
                 </button>
                 <StatusBadge status={q.status} />
               </li>
@@ -312,7 +312,7 @@ export default function ClientDetailPage() {
         <DialogDeBaixa
           titulo="Recebi direto na conta"
           descricao={recebendo.description || client.name}
-          valor={`${brl(recebendo.amount_cents)} · vence ${dt(recebendo.due_date, fuso)}`}
+          valor={`${formatBRL(recebendo.amount_cents)} · vence ${dt(recebendo.due_date, fuso)}`}
           // `HOJE_DO_TENANT`: o hoje é resolvido (e validado) no fuso do tenant, dentro do
           // `useEscolhaDaBaixa` — não montado aqui pelo relógio do navegador (#136).
           dataPadrao={HOJE_DO_TENANT}
@@ -367,7 +367,7 @@ function ChargeRow({
     <li className="flex flex-wrap items-center justify-between gap-2 py-3">
       <div className="min-w-0">
         <p className="font-medium text-neutral-800">
-          {brl(c.amount_cents)}
+          {formatBRL(c.amount_cents)}
           {c.protested_at && (
             <span className="ml-2 rounded-pill bg-red-100 px-2 py-0.5 text-[10px] font-semibold text-danger">PROTESTADA</span>
           )}

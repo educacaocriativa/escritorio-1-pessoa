@@ -7,6 +7,7 @@ import { api } from "../../lib/api";
 import { formatDay, today } from "../../lib/datetime";
 import { useAuth, useFuso } from "../../store/auth";
 import { TOTAL_EM_CONTAS_LABEL, origemLabel } from "../financeiro/contas";
+import { formatBRL } from "../financeiro/dre";
 
 const EMPTY: CockpitSummary = {
   agenda: { today_count: 0, today_events: [], upcoming_critical: [] },
@@ -55,14 +56,13 @@ export default function CockpitPage() {
   }
 
   const conv = `${Math.round((summary.crm?.conversion_rate ?? 0) * 100)}%`;
-  const brl = (c: number) => (c / 100).toLocaleString("pt-BR", { style: "currency", currency: "BRL" });
   const faturamento = summary.finance?.net_revenue_cents != null
-    ? brl(summary.finance.net_revenue_cents)
+    ? formatBRL(summary.finance.net_revenue_cents)
     : "R$ —";
   // `null` = nenhuma conta cadastrada. Mostrar "R$ 0,00" aqui afirmaria "você não tem nada no
   // banco" — falso, e indistinguível de um saldo genuinamente zerado (princípio da Onda 0).
   const emConta = summary.finance?.saldo_em_conta_cents != null
-    ? brl(summary.finance.saldo_em_conta_cents)
+    ? formatBRL(summary.finance.saldo_em_conta_cents)
     : "R$ —";
 
   return (
@@ -148,7 +148,7 @@ export default function CockpitPage() {
                     <span className="ml-2 text-xs text-neutral-500">{o.description}</span>
                   )}
                   <span className="block text-xs text-neutral-400">
-                    {brl(o.amount_cents)} · venceu {formatDay(o.due_date)}
+                    {formatBRL(o.amount_cents)} · venceu {formatDay(o.due_date)}
                   </span>
                 </div>
                 <button

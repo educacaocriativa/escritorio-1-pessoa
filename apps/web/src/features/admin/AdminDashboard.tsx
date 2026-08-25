@@ -4,9 +4,7 @@ import { useEffect, useState } from "react";
 import { api, apiErrorMessage } from "../../lib/api";
 import PlatformCustomers from "./PlatformCustomers";
 import PlatformUsers from "./PlatformUsers";
-
-const brl = (cents: number) =>
-  (cents / 100).toLocaleString("pt-BR", { style: "currency", currency: "BRL" });
+import { formatBRL } from "../financeiro/dre";
 
 type Tab = "offices" | "customers" | "settings";
 
@@ -141,12 +139,12 @@ function PlatformEarningsCard() {
       <div className="space-y-3 text-sm">
         <div className="flex justify-between">
           <span className="text-neutral-500">Volume transacionado (GMV)</span>
-          <span className="font-medium tabular-nums">{e ? brl(e.gmv_cents) : "—"}</span>
+          <span className="font-medium tabular-nums">{e ? formatBRL(e.gmv_cents) : "—"}</span>
         </div>
         <div className="flex justify-between">
           <span className="text-neutral-500">Taxas retidas</span>
           <span className="font-bold tabular-nums text-accent-700">
-            {e ? brl(e.fees_cents) : "—"}
+            {e ? formatBRL(e.fees_cents) : "—"}
           </span>
         </div>
         <div className="flex justify-between">

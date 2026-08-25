@@ -1,10 +1,10 @@
 import { formatDay } from "../../lib/datetime";
+import { formatBRL } from "./dre";
 
-// Mesmo padrão de toda página do app (`AgendaPage`, `CobrancasPage`, `EstoquePage`, `CockpitPage`
-// …): cada uma define o seu. **Não** importe o `brl` exportado por `FinanceiroPage.tsx` — ela
-// importa este componente, e o ciclo quebraria o build. Unificar os ~8 `brl` do repo num helper
-// compartilhado é refactor legítimo, e não é desta onda.
-const brl = (c: number) => (c / 100).toLocaleString("pt-BR", { style: "currency", currency: "BRL" });
+// Issue #209 — a cópia local de `brl` que morava aqui virou `formatBRL` de `dre.ts`, a fonte única
+// já declarada (`costCenters.ts`, `projecao.ts`). O aviso antigo continua válido no que importava:
+// **não** importe dinheiro de `FinanceiroPage.tsx` — ela importa este componente, e o ciclo
+// quebraria o build. `dre.ts` não importa tela nenhuma (só `planoContas.ts`), então não há ciclo.
 
 export type Payout = {
   id: string;
@@ -59,7 +59,7 @@ export function PayoutHistory({
             </p>
           </div>
           <span className="whitespace-nowrap text-sm font-semibold text-neutral-800">
-            {brl(p.amount_cents)}
+            {formatBRL(p.amount_cents)}
           </span>
         </li>
       ))}
