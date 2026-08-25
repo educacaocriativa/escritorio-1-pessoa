@@ -807,13 +807,36 @@ motivo diferente.** Com título de pior caso (74 chars sem espaço), em 360×740
   nenhum, porque `line-clamp-3` já é `overflow: hidden` e ela RECORTA em vez de vazar. Não entrou —
   mudança que nenhuma régua vê é peso morto (§5.4).
 
-**Achado fora do escopo, não consertado:** em `/marketing`, `textoForaDaTela` acusa **+808,4px** num
-`div` dentro do `CarouselThumb`. Não é defeito do produto: o thumb desenha a arte em 1080px e a
-encolhe com `transform: scale()` dentro de um `overflow: hidden` (`CarouselSlideView.tsx:182-185`), e
-`scrollWidth` é medido ANTES do `transform`. É um falso positivo da régua na mesma família da
-exceção `.react-flow` do §5.4, e por isso `/marketing` **não** entrou no catálogo do
-`card-largo-360`. O card de `/marketing` em si está correto (`truncate` + `min-w-0` + `grid-cols-2`)
-— medido, zero sobra.
+**O falso positivo de `/marketing` era da RÉGUA, e foi consertado nela (#212, 2026-08-22).** Em
+`/marketing`, `textoForaDaTela` acusava **+808,4px** num `div` dentro do `CarouselThumb`. O thumb
+desenha a arte em 1080px e a encolhe com `transform: scale()` dentro de um `overflow: hidden`
+(`CarouselSlideView.tsx:179-185`), e `scrollWidth` é medido no espaço de LAYOUT do elemento, **antes
+do `transform`** — enquanto `getBoundingClientRect` já vem transformado. `Math.max(r.right, r.left +
+el.scrollWidth)` somava as duas réguas.
+
+- **O conserto:** `escalaHorizontal(el)` em `support/medidas.ts` — o comprimento, em px de tela, de
+  um vetor horizontal de 1px no espaço local, obtido multiplicando as matrizes de `transform` da
+  cadeia de ancestrais. É `Math.hypot(a, b)` e não `m.a`: para `scale(s)` os dois dão `s`, mas para
+  `rotate(θ)` `m.a` é `cos θ` e encolheria uma tinta que o giro não encolheu. Medido no app: **1**
+  site de `scale` (`CarouselSlideView.tsx:185`) e **2** de `rotate` (`PlatformUsers.tsx:256`,
+  `ContratoDrePage.tsx:264`) — o alcance é estreito, e a correção é exata nos três.
+- **O número, depois:** o mesmo `div` devolve **+2,7px**, e a régua está certa — o handle sobra 68px
+  do próprio bloco de 968px no espaço da arte, que a 0,222222 dão 15,1px, e a arte se recorta em
+  x=264. Mas isso é da ARTE (geometria fixa em px, igual num 4K), não do layout de 360px.
+- **`/marketing` é a SEXTA rota do catálogo**, com pior caso em `topic`, `caption`, `hashtags` e nos
+  quatro slides. O único campo fora do `LONGO` é o `handle`: **medido, a 40 chars já é zero**, e o
+  Instagram — dono do campo (`marketing/models.py:33`) — para em **30**, que é o valor usado. Zero
+  sobra, zero controle inalcançável.
+- ⚠️ **A exceção `.react-flow` do §5.4 NÃO some com isto, e a medição diz por quê:**
+  `controlesInalcancaveis` nunca usou `scrollWidth`, e os dois falsos positivos de `/funis/f1` já
+  vêm com a escala 0,5 aplicada (o nó de x=900 aterrissa em **493,5 → 568,5** contra uma lona que
+  termina em **335**). Está fora de verdade, em qualquer escala: a lona é panorâmica e se arrasta.
+  Mecanismos diferentes, donos diferentes.
+- **Achado fora do escopo, NÃO consertado:** no `/marketing` de 360px o thumb é **cortado em 92px**
+  — `ScaledSlide` pede `width: 240` e o `flex` da coluna o encolhe para **148**, então o terço
+  direito da arte não é desenhado. Nenhuma régua vê, porque `recorte()` para no ancestral MAIS
+  PRÓXIMO (a raiz da arte, que termina em x=264) e não no mais apertado (o wrapper, em x=172).
+  Vale uma issue própria.
 
 ## 6. Estado atual / roadmap
 - [x] Fundação do monorepo, docs, agentes de QA, CI local.

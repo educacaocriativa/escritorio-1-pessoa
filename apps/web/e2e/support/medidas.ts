@@ -243,6 +243,16 @@ export interface Inalcancavel {
  * (81 -> 531) e a `div` do nó de x=900 (493,5 -> 568,5) — que nenhum conserto de layout
  * resolve, porque a lona é para ser navegada e não para caber. Os CONTROLES DE TELA do construtor (cabeçalho, paleta,
  * painel lateral) ficam FORA de `.react-flow` e continuam medidos — é lá que mora o #144.
+ *
+ * ⚠️ **A correção de `transform` do #212 NÃO dispensa esta exceção, e a medição diz por quê.** A
+ * suspeita registrada no #212 era de que as duas fossem o mesmo mecanismo. Não são, em dois
+ * pontos: (a) esta régua não usa `scrollWidth` em lugar nenhum — ela mede `getBoundingClientRect`,
+ * que **já vem transformado**, e portanto nunca teve o defeito que `textoForaDaTela` tinha; (b)
+ * medido em `/funis/f1` em 22/08/2026, o `.react-flow__viewport` está em
+ * `matrix(0.5, 0, 0, 0.5, -233,5, 111,5)` e os dois falsos positivos têm escala **0,5** já
+ * aplicada: o nó de x=900 do desenho aterrissa em **493,5 → 568,5** na tela, contra uma lona que
+ * termina em **335**. Ele está fora de verdade, e continua fora em qualquer escala — porque a lona
+ * é panorâmica e o dono a arrasta. Não há número a converter; há uma pergunta que não se aplica.
  */
 export const EXCECOES_DE_ALCANCE = [".react-flow"];
 
@@ -319,6 +329,32 @@ export async function textoForaDaTela(page: Page, raiz?: string): Promise<Corte[
       }
       return document.documentElement;
     };
+    /**
+     * Comprimento, em px de TELA, de um vetor horizontal de 1px no espaco de LAYOUT do elemento.
+     *
+     * `scrollWidth` e medido no layout do proprio elemento, ANTES de qualquer `transform` de
+     * ancestral; `getBoundingClientRect` ja vem transformado. Somar um ao outro mistura duas
+     * reguas. Medido em `/marketing` (#212): o `div` do handle dentro do `CarouselThumb`
+     * (`scale(0.222222)`) reporta `scrollWidth` 1036 ocupando 215,1px de tela, e a regua acusava
+     * **+808,4px** de um elemento que cabe. Com a conversao, o mesmo elemento devolve +2,7px --
+     * que e a tinta que de fato sobra, medida na escala em que o dono a ve.
+     *
+     * `Math.hypot(a, b)` e o comprimento do vetor, nao `m.a`: para `scale(s)` os dois dao `s`,
+     * mas para `rotate(θ)` `m.a` e `cos θ` (encolheria uma tinta que o giro nao encolheu) e o
+     * comprimento e 1, que e o certo. Ha dois `rotate` no app (`PlatformUsers.tsx:256`,
+     * `ContratoDrePage.tsx:264`) e um `scale` (`CarouselSlideView.tsx:185`) -- medido.
+     */
+    const escalaHorizontal = (el: Element): number => {
+      let a = 1;
+      let b = 0;
+      for (let p: Element | null = el; p; p = p.parentElement) {
+        const t = getComputedStyle(p).transform;
+        if (t === "none") continue;
+        const m = new DOMMatrixReadOnly(t);
+        [a, b] = [m.a * a + m.c * b, m.b * a + m.d * b];
+      }
+      return Math.hypot(a, b);
+    };
     const vw = document.documentElement.clientWidth;
     const fora: { texto: string; descricao: string; forcaFora: number }[] = [];
     const escopo: ParentNode = raizSel ? (document.querySelector(raizSel) ?? document.body) : document.body;
@@ -341,7 +377,7 @@ export async function textoForaDaTela(page: Page, raiz?: string): Promise<Corte[
       // devia ficar mais afiada.
       const direita =
         getComputedStyle(el).overflowX === "visible" && el.scrollWidth > el.clientWidth + 0.5
-          ? Math.max(r.right, r.left + el.scrollWidth)
+          ? Math.max(r.right, r.left + el.scrollWidth * escalaHorizontal(el))
           : r.right;
       const sobra = +(direita - limite).toFixed(1);
       if (sobra > 0.5) {
