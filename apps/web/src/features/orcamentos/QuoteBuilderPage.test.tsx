@@ -106,3 +106,53 @@ describe("QuoteBuilderPage — salvar orçamento (Story 7.5, Task 4)", () => {
     expect(vi.mocked(api.patch)).not.toHaveBeenCalled();
   });
 });
+
+// ══════════════════════════════════════════════════════════════════════════════════════════════
+// Issue #224 — separador de milhar no valor digitado (parseCentsBRL)
+// ══════════════════════════════════════════════════════════════════════════════════════════════
+//
+// O `toCents` local desta tela (`Math.round(parseFloat((s||"").replace(",",".")||"0") * 100)`) só
+// trocava a PRIMEIRA vírgula por ponto e nunca removia o ponto de milhar: "1.234,56" virava
+// "1.234.56", `parseFloat` parava no segundo ponto e devolvia 1.234 → 123 centavos, não 123456. A
+// #224 removeu o `toCents` local e trocou os 4 usos por `parseCentsBRL` (contas.ts), que trata o
+// milhar corretamente. Os dois testes abaixo cobrem os dois SITES que recebem entrada distinta do
+// usuário (preço do serviço e desconto — `subtotal`/`total`/`preview` derivam dos mesmos valores).
+describe("QuoteBuilderPage — separador de milhar (#224)", () => {
+  it("Valor unitário do serviço: '1.234,56' vira unit_price_cents 123456, não 123", async () => {
+    const user = userEvent.setup();
+    vi.mocked(api.post).mockResolvedValue({ data: savedQuote } as never);
+    renderNew();
+
+    await user.type(screen.getByPlaceholderText("Proposta comercial"), "Proposta comercial");
+    await user.type(screen.getByPlaceholderText("Título exibido"), "Consultoria");
+    await user.type(screen.getByLabelText("Valor unitário (R$)"), "1.234,56");
+
+    await user.click(screen.getByRole("button", { name: "Salvar" }));
+
+    await waitFor(() => expect(vi.mocked(api.post)).toHaveBeenCalled());
+    expect(vi.mocked(api.post)).toHaveBeenCalledWith(
+      "/quotes",
+      expect.objectContaining({
+        items: [expect.objectContaining({ unit_price_cents: 123456 })],
+      }),
+    );
+  });
+
+  it("Desconto: '1.234,56' vira discount_cents 123456, não 123", async () => {
+    const user = userEvent.setup();
+    vi.mocked(api.post).mockResolvedValue({ data: savedQuote } as never);
+    renderNew();
+
+    await user.type(screen.getByPlaceholderText("Proposta comercial"), "Proposta comercial");
+    await user.type(screen.getByPlaceholderText("Título exibido"), "Consultoria");
+    await user.type(screen.getByLabelText("Desconto (R$)"), "1.234,56");
+
+    await user.click(screen.getByRole("button", { name: "Salvar" }));
+
+    await waitFor(() => expect(vi.mocked(api.post)).toHaveBeenCalled());
+    expect(vi.mocked(api.post)).toHaveBeenCalledWith(
+      "/quotes",
+      expect.objectContaining({ discount_cents: 123456 }),
+    );
+  });
+});

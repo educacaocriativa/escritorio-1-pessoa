@@ -497,3 +497,49 @@ describe("CobrancasPage — recebimento fora do trilho (Story 8.15)", () => {
     expect(screen.queryByText("Agendado para entrar")).toBeNull();
   });
 });
+
+// ══════════════════════════════════════════════════════════════════════════════════════════════
+// Issue #224 — separador de milhar no valor digitado (parseCentsBRL)
+// ══════════════════════════════════════════════════════════════════════════════════════════════
+//
+// A conta manual antiga (`Math.round(parseFloat(v.replace(",", ".")) * 100)`) só troca a PRIMEIRA
+// vírgula por ponto e nunca remove o ponto de milhar: "1.234,56" vira "1.234.56", `parseFloat` para
+// no segundo ponto e devolve 1.234 → 123 centavos, não 123456. `parseCentsBRL` (contas.ts) trata o
+// milhar corretamente; estes testes fixam esse contrato nos dois sites de CobrancasPage.
+describe("CobrancasPage — separador de milhar (#224)", () => {
+  it("Nova cobrança: '1.234,56' vira 123456 centavos, não 123 (regressão do parseFloat cru)", async () => {
+    const user = userEvent.setup();
+    vi.mocked(api.post).mockResolvedValue({ data: {} } as never);
+    renderPage();
+
+    await user.click(await screen.findByRole("button", { name: "Nova cobrança" }));
+    await user.type(screen.getByLabelText("Valor (R$)"), "1.234,56");
+    fireEvent.change(screen.getByLabelText("Vencimento"), { target: { value: "2026-09-10" } });
+    await user.click(screen.getByRole("button", { name: "Gerar cobrança" }));
+
+    await waitFor(() => expect(vi.mocked(api.post)).toHaveBeenCalled());
+    expect(vi.mocked(api.post)).toHaveBeenCalledWith(
+      "/receivables/charges",
+      expect.objectContaining({ amount_cents: 123456 }),
+    );
+  });
+
+  it("Editar cobrança: '1.234,56' vira 123456 centavos, não 123", async () => {
+    const user = userEvent.setup();
+    mockCobrancas([COBRANCA_ABERTA]);
+    vi.mocked(api.patch).mockResolvedValue({ data: {} } as never);
+    renderPage();
+
+    await user.click(await screen.findByRole("button", { name: "Editar" }));
+    const valor = await screen.findByLabelText("Valor (R$)");
+    await user.clear(valor);
+    await user.type(valor, "1.234,56");
+    await user.click(screen.getByRole("button", { name: "Salvar alterações" }));
+
+    await waitFor(() => expect(vi.mocked(api.patch)).toHaveBeenCalled());
+    expect(vi.mocked(api.patch)).toHaveBeenCalledWith(
+      "/receivables/charges/c-1",
+      expect.objectContaining({ amount_cents: 123456 }),
+    );
+  });
+});
