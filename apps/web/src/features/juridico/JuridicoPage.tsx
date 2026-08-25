@@ -12,11 +12,17 @@ export default function JuridicoPage() {
 
   const loadDocs = useCallback(async () => {
     const { data } = await api.get<LegalDocumentSummary[]>("/juridico/documents");
-    setDocs(data);
+    // `Array.isArray`, e aqui não havia operador nenhum: `docs.slice(0, 6).map` roda no render.
+    setDocs(Array.isArray(data) ? data : []);
   }, []);
 
   useEffect(() => {
-    api.get<LegalSkillSummary[]>("/juridico/skills").then(({ data }) => setSkills(data));
+    // `Array.isArray`, e aqui não havia operador nenhum. Este site escapa da varredura por
+    // `.map`/`.length`/`.filter`: o consumo é `for (const s of skills)` dentro do `useMemo` abaixo —
+    // igualmente em tempo de render, e igualmente fatal com payload não iterável.
+    api
+      .get<LegalSkillSummary[]>("/juridico/skills")
+      .then(({ data }) => setSkills(Array.isArray(data) ? data : []));
     loadDocs();
   }, [loadDocs]);
 

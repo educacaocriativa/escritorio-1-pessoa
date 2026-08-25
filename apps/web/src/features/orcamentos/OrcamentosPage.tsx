@@ -4,8 +4,7 @@ import { useNavigate } from "react-router-dom";
 import { api } from "../../lib/api";
 import GanchoDaVima from "../dna/GanchoDaVima";
 import { usePrimaryAction } from "../../store/pageActions";
-
-const brl = (c: number) => (c / 100).toLocaleString("pt-BR", { style: "currency", currency: "BRL" });
+import { formatBRL } from "../financeiro/dre";
 
 const statusInfo: Record<Quote["status"], { label: string; cls: string }> = {
   draft: { label: "Rascunho", cls: "bg-neutral-100 text-neutral-500" },
@@ -54,8 +53,8 @@ export default function OrcamentosPage() {
 
       <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
         <Stat label="Rascunhos" value={String(summary.draft_count)} tone="text-neutral-700" />
-        <Stat label="Enviados (aguardando)" value={brl(summary.sent_cents)} tone="text-blue-700" />
-        <Stat label="Aprovados" value={brl(summary.approved_cents)} tone="text-accent-700" />
+        <Stat label="Enviados (aguardando)" value={formatBRL(summary.sent_cents)} tone="text-blue-700" />
+        <Stat label="Aprovados" value={formatBRL(summary.approved_cents)} tone="text-accent-700" />
       </div>
 
       <div className="overflow-hidden rounded-2xl bg-white shadow-sm">
@@ -83,7 +82,7 @@ export default function OrcamentosPage() {
                 >
                   <td className="px-4 py-3 font-medium text-neutral-800">{q.client_name || "—"}</td>
                   <td className="px-4 py-3 text-neutral-600">{q.title}</td>
-                  <td className="px-4 py-3 font-medium tabular-nums">{brl(q.total_cents)}</td>
+                  <td className="px-4 py-3 font-medium tabular-nums">{formatBRL(q.total_cents)}</td>
                   <td className="px-4 py-3">
                     <span className={`rounded-pill px-2 py-0.5 text-xs ${statusInfo[q.status].cls}`}>
                       {statusInfo[q.status].label}

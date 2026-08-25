@@ -3,6 +3,7 @@ import userEvent from "@testing-library/user-event";
 import { MemoryRouter, Route, Routes } from "react-router-dom";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { api } from "../../lib/api";
+import { assentar } from "../../test/assentar";
 import ConversasPage from "./ConversasPage";
 
 vi.mock("../../lib/api", () => ({
@@ -620,5 +621,57 @@ describe("ConversasPage — carregando vs. vazia", () => {
     expect(await screen.findByPlaceholderText(/mensagem/i)).toBeInTheDocument();
     expect(visivelNoCelular(screen.getByTestId("lista-conversas"))).toBe(false);
     expect(visivelNoCelular(screen.getByTestId("painel-conversa"))).toBe(true);
+  });
+});
+
+// ── `GET /whatsapp-conversations` fora de forma (issue #207) ──────────────────
+//
+// `setConversations(data)` recebia o payload CRU, sem operador nenhum, e o `finally` do `load`
+// trata falha como "resolveu" — nunca como "resolveu com dado VÁLIDO". `conversations.find` roda
+// no CORPO do componente, em tempo de render, longe daquele `try`. Sem ErrorBoundary no app, é a
+// mesma armadilha que o `ClientTimeline` já derrubou nesta tela — agora pela lista principal, que
+// é a coluna de onde o dono navega.
+//
+// ⚠️ O `assentar()` é a metade que MATA o mutante — ver `src/test/assentar.ts`.
+describe("ConversasPage — lista de conversas fora de forma não derruba a tela (#207)", () => {
+  function mockLista(payload: unknown) {
+    vi.mocked(api.get).mockImplementation((url: string) => {
+      if (url === "/whatsapp-conversations") return Promise.resolve({ data: payload } as never);
+      return Promise.resolve({ data: [] } as never);
+    });
+  }
+
+  it.each([
+    ["envelope de erro devolvido com 200", { detail: "algo deu errado" }],
+    ["string no lugar da lista", "não é json"],
+    ["corpo vazio (204 / sem conteúdo)", null],
+    ["número no lugar da lista", 7],
+  ])("%s → a coluna mostra o estado vazio em vez de estourar", async (_rotulo, payload) => {
+    mockLista(payload);
+    renderNaRota("/conversas");
+    await assentar();
+
+    expect(screen.getByText("Nenhuma conversa ainda.")).toBeInTheDocument();
+    expect(screen.getByTestId("lista-conversas")).toBeInTheDocument();
+  });
+
+  it("contra-teste: conversa de verdade continua na coluna", async () => {
+    mockLista([
+      {
+        chat_id: "c1",
+        kind: "direct" as const,
+        title: "Doro Eventos",
+        phone: "5511999999999",
+        client_id: "c1",
+        last_message_at: "2026-07-19T10:00:00Z",
+        last_message_preview: "Oi, quero o cardápio",
+        unread: false,
+      },
+    ]);
+    renderNaRota("/conversas");
+    await assentar();
+
+    expect(screen.getByText("Doro Eventos")).toBeInTheDocument();
+    expect(screen.queryByText("Nenhuma conversa ainda.")).not.toBeInTheDocument();
   });
 });

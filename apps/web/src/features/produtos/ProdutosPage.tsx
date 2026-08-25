@@ -4,8 +4,7 @@ import { useCallback, useEffect, useState } from "react";
 import Modal, { Field } from "../../components/Modal";
 import { api, apiErrorMessage } from "../../lib/api";
 import { usePrimaryAction } from "../../store/pageActions";
-
-const brl = (c: number) => (c / 100).toLocaleString("pt-BR", { style: "currency", currency: "BRL" });
+import { formatBRL } from "../financeiro/dre";
 
 type Tab = "produtos" | "cupons" | "compradores";
 const TAB_LABELS: Record<Tab, string> = {
@@ -104,7 +103,7 @@ export default function ProdutosPage() {
                     </span>
                   )}
                 </div>
-                <p className="text-xl font-bold text-neutral-800">{brl(p.price_cents)}</p>
+                <p className="text-xl font-bold text-neutral-800">{formatBRL(p.price_cents)}</p>
                 <p className="mt-1 text-xs text-neutral-400">
                   {p.students} comprador(es){p.stock != null && ` · estoque ${p.stock}`}
                 </p>
@@ -143,7 +142,7 @@ export default function ProdutosPage() {
                     <td className="px-4 py-3 text-neutral-600">
                       {c.discount_type === "percent"
                         ? `${c.discount_value}%`
-                        : brl(c.discount_value)}
+                        : formatBRL(c.discount_value)}
                     </td>
                     <td className="px-4 py-3 tabular-nums text-neutral-500">
                       {c.uses}
@@ -189,7 +188,7 @@ export default function ProdutosPage() {
                       {a.email && <span className="block text-xs text-neutral-400">{a.email}</span>}
                     </td>
                     <td className="px-4 py-3 text-neutral-600">{a.product_name ?? "—"}</td>
-                    <td className="px-4 py-3 tabular-nums">{brl(a.amount_cents)}</td>
+                    <td className="px-4 py-3 tabular-nums">{formatBRL(a.amount_cents)}</td>
                     <td className="px-4 py-3">
                       <span className="rounded-pill bg-accent-50 px-2 py-0.5 text-xs text-accent-700">
                         {a.status === "active" ? "Ativo" : a.status}
@@ -419,7 +418,7 @@ function SellModal({
       testId="modal-vender-produto"
     >
       <div className="space-y-3">
-        <p className="text-sm text-neutral-500">Preço: {brl(product.price_cents)}</p>
+        <p className="text-sm text-neutral-500">Preço: {formatBRL(product.price_cents)}</p>
         <Field label="Nome do comprador" value={name} onChange={setName} />
         <Field label="E-mail" type="email" value={email} onChange={setEmail} />
         <div className="flex gap-2">

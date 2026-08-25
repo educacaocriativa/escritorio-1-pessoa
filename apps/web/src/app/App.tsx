@@ -48,6 +48,7 @@ import NucleoPage from "../features/dna/NucleoPage";
 import BriefingPage from "../features/vima/BriefingPage";
 import EntradaDoDia from "../features/vima/EntradaDoDia";
 import IdleWarningModal from "../components/IdleWarningModal";
+import { hasModule } from "../lib/access";
 import { AuthProvider, useAuth } from "../store/auth";
 import { useIdleTimeout } from "../store/useIdleTimeout";
 import { PageActionsProvider } from "../store/pageActions";
@@ -75,51 +76,51 @@ export default function App() {
               </EntradaDoDia>
             }
           />
-          <Route path="/agenda" element={<AgendaPage />} />
+          <Route path="/agenda" element={<Modulo m="agenda"><AgendaPage /></Modulo>} />
           <Route path="/busca" element={<BuscaPage />} />
-          <Route path="/crm" element={<CrmPage />} />
-          <Route path="/crm/clients/:id" element={<ClientDetailPage />} />
-          <Route path="/conversas" element={<ConversasPage />} />
+          <Route path="/crm" element={<Modulo m="crm"><CrmPage /></Modulo>} />
+          <Route path="/crm/clients/:id" element={<Modulo m="crm"><ClientDetailPage /></Modulo>} />
+          <Route path="/conversas" element={<Modulo m="crm"><ConversasPage /></Modulo>} />
           {/* A conversa tem URL própria desde a Onda 1: é assim que a ficha 360° aponta para ela, e
               de quebra o botão voltar do navegador passa a funcionar nesta tela. */}
-          <Route path="/conversas/:chatId" element={<ConversasPage />} />
-          <Route path="/financeiro" element={<FinanceiroPage />} />
-          <Route path="/financeiro/contas" element={<ContasSaldosPage />} />
+          <Route path="/conversas/:chatId" element={<Modulo m="crm"><ConversasPage /></Modulo>} />
+          <Route path="/financeiro" element={<Modulo m="wallet"><FinanceiroPage /></Modulo>} />
+          <Route path="/financeiro/contas" element={<Modulo m="bank"><ContasSaldosPage /></Modulo>} />
           {/* Story 8.7 — rota DELIBERADAMENTE fora da sidebar: a conferência é resposta a um
               sinal (o cartão de completude do diagnóstico / o "Conferir" de uma conta), não uma
               tarefa de rotina. Ver a docstring de ConferenciaPage.tsx antes de "consertar" isto. */}
-          <Route path="/financeiro/conferencia" element={<ConferenciaPage />} />
-          <Route path="/financeiro/plano-contas" element={<PlanoContasPage />} />
-          <Route path="/financeiro/centros-custo" element={<CentrosCustoPage />} />
-          <Route path="/financeiro/investimentos" element={<InvestimentosPage />} />
-          <Route path="/financeiro/dre" element={<DrePage />} />
-          <Route path="/financeiro/lucratividade" element={<LucratividadePage />} />
-          <Route path="/financeiro/projecao-caixa" element={<ProjecaoCaixaPage />} />
-          <Route path="/financeiro/fila-pagamentos" element={<FilaPagamentosPage />} />
-          <Route path="/financeiro/diagnostico" element={<DiagnosticoPage />} />
-          <Route path="/financeiro/contratos/:id/dre" element={<ContratoDrePage />} />
-          <Route path="/cobrancas" element={<CobrancasPage />} />
-          <Route path="/pagar" element={<PagarPage />} />
-          <Route path="/produtos" element={<ProdutosPage />} />
-          <Route path="/estoque" element={<EstoquePage />} />
-          <Route path="/config" element={<ConfiguracoesPage />} />
-          <Route path="/sites" element={<SitesPage />} />
-          <Route path="/sites/:id" element={<PageBuilderPage />} />
-          <Route path="/orcamentos" element={<OrcamentosPage />} />
-          <Route path="/orcamentos/novo" element={<QuoteBuilderPage />} />
-          <Route path="/orcamentos/:id" element={<QuoteBuilderPage />} />
-          <Route path="/contratos" element={<ContratosPage />} />
-          <Route path="/contratos/novo" element={<ContractBuilderPage />} />
-          <Route path="/contratos/:id" element={<ContractBuilderPage />} />
-          <Route path="/marketing" element={<MarketingPage />} />
-          <Route path="/marketing/novo" element={<CarrosselBuilderPage />} />
-          <Route path="/marketing/:id" element={<CarrosselBuilderPage />} />
-          <Route path="/juridico" element={<JuridicoPage />} />
-          <Route path="/juridico/novo" element={<JuridicoWizardPage />} />
-          <Route path="/juridico/:id" element={<JuridicoDocumentPage />} />
-          <Route path="/funis" element={<FunisPage />} />
-          <Route path="/funis/novo" element={<FunnelBuilderPage />} />
-          <Route path="/funis/:id" element={<FunnelBuilderPage />} />
+          <Route path="/financeiro/conferencia" element={<Modulo m="bank"><ConferenciaPage /></Modulo>} />
+          <Route path="/financeiro/plano-contas" element={<Modulo m="chart_of_accounts"><PlanoContasPage /></Modulo>} />
+          <Route path="/financeiro/centros-custo" element={<Modulo m="cost_centers"><CentrosCustoPage /></Modulo>} />
+          <Route path="/financeiro/investimentos" element={<Modulo m="investments"><InvestimentosPage /></Modulo>} />
+          <Route path="/financeiro/dre" element={<Modulo m="financial_intelligence"><DrePage /></Modulo>} />
+          <Route path="/financeiro/lucratividade" element={<Modulo m="financial_intelligence"><LucratividadePage /></Modulo>} />
+          <Route path="/financeiro/projecao-caixa" element={<Modulo m="financial_intelligence"><ProjecaoCaixaPage /></Modulo>} />
+          <Route path="/financeiro/fila-pagamentos" element={<Modulo m="payables"><FilaPagamentosPage /></Modulo>} />
+          <Route path="/financeiro/diagnostico" element={<Modulo m="financial_intelligence"><DiagnosticoPage /></Modulo>} />
+          <Route path="/financeiro/contratos/:id/dre" element={<Modulo m="financial_intelligence"><ContratoDrePage /></Modulo>} />
+          <Route path="/cobrancas" element={<Modulo m="receivables"><CobrancasPage /></Modulo>} />
+          <Route path="/pagar" element={<Modulo m="payables"><PagarPage /></Modulo>} />
+          <Route path="/produtos" element={<Modulo m="products"><ProdutosPage /></Modulo>} />
+          <Route path="/estoque" element={<Modulo m="stock"><EstoquePage /></Modulo>} />
+          <Route path="/config" element={<Modulo m="settings"><ConfiguracoesPage /></Modulo>} />
+          <Route path="/sites" element={<Modulo m="pages"><SitesPage /></Modulo>} />
+          <Route path="/sites/:id" element={<Modulo m="pages"><PageBuilderPage /></Modulo>} />
+          <Route path="/orcamentos" element={<Modulo m="quotes"><OrcamentosPage /></Modulo>} />
+          <Route path="/orcamentos/novo" element={<Modulo m="quotes"><QuoteBuilderPage /></Modulo>} />
+          <Route path="/orcamentos/:id" element={<Modulo m="quotes"><QuoteBuilderPage /></Modulo>} />
+          <Route path="/contratos" element={<Modulo m="contracts"><ContratosPage /></Modulo>} />
+          <Route path="/contratos/novo" element={<Modulo m="contracts"><ContractBuilderPage /></Modulo>} />
+          <Route path="/contratos/:id" element={<Modulo m="contracts"><ContractBuilderPage /></Modulo>} />
+          <Route path="/marketing" element={<Modulo m="marketing"><MarketingPage /></Modulo>} />
+          <Route path="/marketing/novo" element={<Modulo m="marketing"><CarrosselBuilderPage /></Modulo>} />
+          <Route path="/marketing/:id" element={<Modulo m="marketing"><CarrosselBuilderPage /></Modulo>} />
+          <Route path="/juridico" element={<Modulo m="juridico"><JuridicoPage /></Modulo>} />
+          <Route path="/juridico/novo" element={<Modulo m="juridico"><JuridicoWizardPage /></Modulo>} />
+          <Route path="/juridico/:id" element={<Modulo m="juridico"><JuridicoDocumentPage /></Modulo>} />
+          <Route path="/funis" element={<Modulo m="funnels"><FunisPage /></Modulo>} />
+          <Route path="/funis/novo" element={<Modulo m="funnels"><FunnelBuilderPage /></Modulo>} />
+          <Route path="/funis/:id" element={<Modulo m="funnels"><FunnelBuilderPage /></Modulo>} />
           <Route path="/admin" element={<AdminOnly />} />
           <Route path="*" element={<ComingSoon />} />
         </Route>
@@ -223,6 +224,28 @@ function AdminOnly() {
   const { user } = useAuth();
   if (!user?.is_platform_admin) return <Navigate to="/" replace />;
   return <AdminDashboard />;
+}
+
+/**
+ * Guarda de módulo por ROTA: espelha `require_module` do backend (mesmo nome de módulo) e
+ * impede a página de sequer MONTAR — logo de nunca disparar a requisição que voltaria 403.
+ *
+ * Antes disto a sidebar mostrava todo item a todo usuário (ver `navigation.ts`) e cada página
+ * tentava buscar seus dados de qualquer forma; um sub-usuário sem o módulo via a tela travar em
+ * "Carregando..." para sempre (o 403 vira promise rejeitada sem `.catch`, em vez de erro
+ * tratado). Complementa `visibleNavSections` — aquele esconde o item do menu, este protege
+ * contra link direto, favorito ou digitação da URL.
+ */
+export function Modulo({ m, children }: { m: string; children: ReactElement }) {
+  const { user } = useAuth();
+  if (!hasModule(user, m)) {
+    return (
+      <div className="flex h-full items-center justify-center text-center text-neutral-400">
+        Você não tem acesso a este módulo. Fale com o administrador da sua conta se precisar dele.
+      </div>
+    );
+  }
+  return children;
 }
 
 function ComingSoon() {

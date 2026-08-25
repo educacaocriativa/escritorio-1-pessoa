@@ -1,5 +1,10 @@
 import { describe, expect, it } from "vitest";
-import { monthKeyToRange, resolvePeriod } from "./periodRange";
+import {
+  monthKeyToRange,
+  PERIOD_SHORTCUT_LABEL,
+  type PeriodShortcut,
+  resolvePeriod,
+} from "./periodRange";
 
 const TODAY = new Date(Date.UTC(2026, 6, 21)); // 21/07/2026 (mês = 6 = julho, 0-indexed)
 
@@ -67,5 +72,29 @@ describe("monthKeyToRange", () => {
 
   it("respeita ano bissexto (fevereiro com 29 dias)", () => {
     expect(monthKeyToRange("2028-02")).toEqual({ start: "2028-02-01", end: "2028-02-29" });
+  });
+});
+
+describe("PERIOD_SHORTCUT_LABEL", () => {
+  it("tem entrada para TODO atalho do seletor", () => {
+    // Achado por mutação (#214): trocar o objeto inteiro por `{}` sobrevivia. Este mapa é lido
+    // direto no `<option>` do `PeriodPicker`; sem entrada, o seletor de período de TODA a área
+    // financeira (DRE, Lucratividade, Conferência, Contas) vira sete linhas em branco. O
+    // `PeriodPicker.test.tsx` não pega — ele dirige o `<select>` por `value`, nunca pelo texto —
+    // e a corrida de mutação exclui `.test.tsx` de propósito, então não havia rede nenhuma.
+    //
+    // A asserção é sobre a ESTRUTURA (existe rótulo para cada atalho), não sobre a redação: o
+    // texto de cada rótulo é escolha de produto e continua livre para mudar.
+    const atalhos: PeriodShortcut[] = [
+      "this_month",
+      "last_month",
+      "this_quarter",
+      "this_year",
+      "last_12_months",
+      "all",
+      "custom",
+    ];
+
+    expect(Object.keys(PERIOD_SHORTCUT_LABEL).sort()).toEqual([...atalhos].sort());
   });
 });

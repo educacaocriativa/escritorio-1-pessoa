@@ -4,8 +4,7 @@ import { useCallback, useEffect, useState } from "react";
 import Modal, { Field } from "../../components/Modal";
 import { api, apiErrorMessage } from "../../lib/api";
 import { usePrimaryAction } from "../../store/pageActions";
-
-const brl = (c: number) => (c / 100).toLocaleString("pt-BR", { style: "currency", currency: "BRL" });
+import { formatBRL } from "../financeiro/dre";
 
 export default function EstoquePage() {
   const empty: StockSummary = { item_count: 0, total_value_cents: 0, low_stock_count: 0 };
@@ -38,7 +37,7 @@ export default function EstoquePage() {
 
       <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
         <Stat label="Itens ativos" value={String(summary.item_count)} tone="text-neutral-700" />
-        <Stat label="Valor em estoque" value={brl(summary.total_value_cents)} tone="text-accent-700" />
+        <Stat label="Valor em estoque" value={formatBRL(summary.total_value_cents)} tone="text-accent-700" />
         <Stat
           label="Estoque baixo"
           value={String(summary.low_stock_count)}
@@ -84,8 +83,8 @@ export default function EstoquePage() {
                       </span>
                     )}
                   </td>
-                  <td className="px-4 py-3 tabular-nums text-neutral-600">{brl(i.unit_cost_cents)}</td>
-                  <td className="px-4 py-3 font-medium tabular-nums">{brl(i.value_cents)}</td>
+                  <td className="px-4 py-3 tabular-nums text-neutral-600">{formatBRL(i.unit_cost_cents)}</td>
+                  <td className="px-4 py-3 font-medium tabular-nums">{formatBRL(i.value_cents)}</td>
                   <td className="px-4 py-3 text-right">
                     <button
                       onClick={() => setAdjust(i)}
