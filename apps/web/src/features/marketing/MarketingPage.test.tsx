@@ -13,6 +13,19 @@ vi.mock("../../lib/api", () => ({
   apiErrorMessage: () => "Erro inesperado",
 }));
 
+// #243 — `CarouselThumb` passou a medir o próprio container com `ResizeObserver` (encolhe a
+// escala junto com o grid em vez de deixar o `overflow-hidden` recortar a arte). O jsdom não
+// implementa `ResizeObserver` nativamente; mesmo stub local já usado por
+// `FunnelBuilderPage.test.tsx` para o mesmo problema (`reactflow`) — sem dependência nova.
+vi.stubGlobal(
+  "ResizeObserver",
+  class {
+    observe() {}
+    unobserve() {}
+    disconnect() {}
+  },
+);
+
 function renderPage() {
   return render(
     <MemoryRouter>
