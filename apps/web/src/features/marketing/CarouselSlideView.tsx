@@ -1,7 +1,7 @@
 import type { Carousel, Slide } from "@e1p/shared-types";
 import html2canvas from "html2canvas";
 import { ChevronLeft, ChevronRight, Download } from "lucide-react";
-import { forwardRef, useRef, useState } from "react";
+import { forwardRef, useLayoutEffect, useRef, useState } from "react";
 import { useFuso } from "../../store/auth";
 
 const W = 1080;
@@ -189,10 +189,32 @@ function ScaledSlide({ slide, style, index, total, display = 380 }: {
   );
 }
 
-/** Miniatura (1º slide) para listas/cards. */
+/**
+ * Miniatura (1º slide) para listas/cards.
+ *
+ * `display` é o teto (240 por padrão) — mas o grid de `MarketingPage.tsx` aperta a coluna a bem
+ * menos do que isso a 360px (~148px disponíveis), e o `overflow-hidden` do wrapper cortava o terço
+ * direito da arte em vez de encolhê-la (#243). Em vez de confiar num valor fixo, mede o próprio
+ * container com `ResizeObserver` e usa o menor entre o teto e o espaço real — a arte encolhe junto
+ * com a coluna, nunca é recortada.
+ */
 export function CarouselThumb({ slides, style, display = 240 }: {
   slides: Slide[]; style: SlideStyle; display?: number;
 }) {
+  const containerRef = useRef<HTMLDivElement>(null);
+  const [containerWidth, setContainerWidth] = useState(0);
+
+  useLayoutEffect(() => {
+    const el = containerRef.current;
+    if (!el) return;
+    const observer = new ResizeObserver((entries) => {
+      const width = entries[0]?.contentRect.width;
+      if (width) setContainerWidth(width);
+    });
+    observer.observe(el);
+    return () => observer.disconnect();
+  }, []);
+
   if (slides.length === 0) {
     return (
       <div className="flex aspect-[4/5] items-center justify-center text-xs" style={{ background: style.bg_color, color: style.text_color }}>
@@ -200,7 +222,14 @@ export function CarouselThumb({ slides, style, display = 240 }: {
       </div>
     );
   }
-  return <ScaledSlide slide={slides[0]} style={style} index={0} total={slides.length} display={display} />;
+
+  const effectiveDisplay = containerWidth > 0 ? Math.min(display, containerWidth) : display;
+
+  return (
+    <div ref={containerRef} className="flex w-full justify-center">
+      <ScaledSlide slide={slides[0]} style={style} index={0} total={slides.length} display={effectiveDisplay} />
+    </div>
+  );
 }
 
 async function toPng(el: HTMLElement): Promise<string> {
