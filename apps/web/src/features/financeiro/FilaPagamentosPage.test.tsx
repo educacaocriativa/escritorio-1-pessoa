@@ -266,3 +266,46 @@ describe("Story 8.14 — a conta agendada não some da Fila", () => {
     expect(within(total).queryByText(/5\.300/)).toBeNull();
   });
 });
+
+// ── `GET /payables/queue` fora de forma (issue #247) ─────────────────────────────────────
+//
+// `setQueue({ ...EMPTY, ...data })` só cobre um CAMPO AUSENTE — o spread de `data` não sobrescreve
+// a chave que falta. Mas um campo PRESENTE com o tipo errado (`atrasados: null`, `summary: null`,
+// um balde que não é array) SOBRESCREVE o default do `EMPTY`, e `queue.atrasados.length` (linha
+// ~128) ou `s.atrasados_cents` (linha ~124, via `queue.summary`) estouram no render. `Array.isArray`
+// por campo, no molde de `CrmPage.tsx` (#225).
+describe("FilaPagamentosPage — fila fora de forma não derruba a tela (#247)", () => {
+  it("campo atrasados presente e não-array (null) não derruba a fila", async () => {
+    mockApi([CONTA], { ...FILA, atrasados: null });
+    render(<FilaPagamentosPage />);
+
+    expect(await screen.findByText("Página / Financeiro / Fila de pagamentos")).toBeInTheDocument();
+    // Sem a atrasada de verdade sobrando em nenhum balde, a fila fica vazia.
+    expect(await screen.findByText(/Nada a pagar nos próximos 30 dias/)).toBeInTheDocument();
+  });
+
+  it("campo summary presente e não-objeto (null) não derruba os cartões", async () => {
+    mockApi([CONTA], { ...FILA, summary: null });
+    render(<FilaPagamentosPage />);
+
+    expect(await screen.findByText("Página / Financeiro / Fila de pagamentos")).toBeInTheDocument();
+    expect(screen.getAllByText("R$ 0,00").length).toBeGreaterThan(0);
+  });
+
+  it("balde presente e não-array (string) não derruba o balde", async () => {
+    mockApi([CONTA], { ...FILA, proximos_7_dias: "não é json" });
+    render(<FilaPagamentosPage />);
+
+    expect(await screen.findByText("Página / Financeiro / Fila de pagamentos")).toBeInTheDocument();
+    // A atrasada de verdade continua aparecendo — só o balde fora de forma degrada para vazio.
+    expect(await screen.findByText("Energia")).toBeInTheDocument();
+  });
+
+  it("contra-teste: fila de verdade continua mostrando o balde de atrasados", async () => {
+    mockApi([CONTA], FILA);
+    render(<FilaPagamentosPage />);
+
+    expect(await screen.findByText("Atrasados")).toBeInTheDocument();
+    expect(await screen.findByText("Energia")).toBeInTheDocument();
+  });
+});

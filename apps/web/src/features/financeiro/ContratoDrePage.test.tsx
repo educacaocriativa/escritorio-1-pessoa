@@ -65,3 +65,70 @@ describe("ContratoDrePage — centros de custo fora de forma não derrubam a pá
     expect(screen.getByText("Sócio João")).toBeInTheDocument();
   });
 });
+
+/** DRE de contrato válido, com os TRÊS campos array que a página lê sem `?.`. */
+function dreValido() {
+  return {
+    contract_id: "ct-1",
+    start: "2026-08-01",
+    end: "2026-08-31",
+    receita: { grupo_dre: "RECEITA", total_cents: 500000, categorias: [] },
+    custo_direto: { grupo_dre: "CUSTO_DIRETO", total_cents: 100000, categorias: [] },
+    receita_cents: 500000,
+    custo_direto_cents: 100000,
+    margem_contribuicao_cents: 400000,
+    margem_contribuicao_pct: 0.8,
+    outros_resultado_cents: 0,
+    resultado_cents: 400000,
+    fixed_costs_allocated_cents: 0,
+    overhead_allocated_cents: 0,
+    break_even_reachable: true,
+    notes: [],
+  };
+}
+
+// ── `GET /financial-intelligence/contracts/{id}/dre` fora de forma (issue #247) ─────────
+//
+// `setDre(data)` recebia o payload CRU. `GroupRow` faz `group.categorias.reduce` sem `?.`, e o
+// render faz `view.notes.length` sem `?.` — `Array.isArray`, no molde de `CrmPage.tsx` (#225), nos
+// TRÊS campos array aninhados (`notes`, `receita.categorias`, `custo_direto.categorias`).
+describe("ContratoDrePage — DRE fora de forma não derruba a página (#247)", () => {
+  it.each([
+    ["envelope de erro devolvido com 200", { detail: "algo deu errado" }],
+    ["objeto sem a chave notes", { ...dreValido(), notes: undefined }],
+    ["receita sem categorias", { ...dreValido(), receita: { grupo_dre: "RECEITA", total_cents: 0 } }],
+    [
+      "custo_direto.categorias não é array",
+      { ...dreValido(), custo_direto: { ...dreValido().custo_direto, categorias: "x" } },
+    ],
+    ["array no lugar do objeto (raiz certa, campo errado)", [{ contract_id: "ct-1" }]],
+    ["corpo vazio (204 / sem conteúdo)", null],
+  ])("%s → a página segue montada, sem as métricas", async (_rotulo, payload) => {
+    vi.mocked(api.get).mockImplementation((url: string) => {
+      if (url === "/cost-centers") return Promise.resolve({ data: [] } as never);
+      if (url === "/contracts/ct-1") return Promise.resolve({ data: null } as never);
+      if (url === "/financial-intelligence/contracts/ct-1/dre")
+        return Promise.resolve({ data: payload } as never);
+      return Promise.resolve({ data: null } as never);
+    });
+    renderPage();
+    await assentar();
+
+    expect(screen.getByText("Página / Contratos / DRE")).toBeInTheDocument();
+    expect(screen.queryByText("Margem de contribuição")).not.toBeInTheDocument();
+  });
+
+  it("contra-teste: DRE de verdade continua mostrando as métricas", async () => {
+    vi.mocked(api.get).mockImplementation((url: string) => {
+      if (url === "/cost-centers") return Promise.resolve({ data: [] } as never);
+      if (url === "/contracts/ct-1") return Promise.resolve({ data: null } as never);
+      if (url === "/financial-intelligence/contracts/ct-1/dre")
+        return Promise.resolve({ data: dreValido() } as never);
+      return Promise.resolve({ data: null } as never);
+    });
+    renderPage();
+    await assentar();
+
+    expect(await screen.findByText("Margem de contribuição")).toBeInTheDocument();
+  });
+});

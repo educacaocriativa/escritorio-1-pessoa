@@ -40,7 +40,11 @@ export default function DiagnosticoPage() {
       const res = await api.get<Diagnostics>("/financial-intelligence/diagnostics", {
         params: { start, end },
       });
-      setData(res.data);
+      // Guarda de FORMA (issue #247): `countByLevel`/`completudeCaveat`/`completudeLevel` fazem
+      // `for (const s of signals)`/`.filter` sobre o campo sem `?.` — `Array.isArray`, no molde de
+      // `CrmPage.tsx` (#225). `null` é o mesmo estado seguro que a tela já tem ANTES da resposta
+      // chegar (a render checa `{data && (...)}`).
+      setData(Array.isArray(res.data?.signals) ? res.data : null);
     } catch (err) {
       setError(apiErrorMessage(err));
     } finally {

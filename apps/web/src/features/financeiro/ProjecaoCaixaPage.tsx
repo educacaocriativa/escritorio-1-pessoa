@@ -40,7 +40,14 @@ export default function ProjecaoCaixaPage() {
     setLoading(true);
     api
       .get<Projection>("/financial-intelligence/projection")
-      .then((r) => setProjection(r.data))
+      // Guarda de FORMA (issue #247): `projection.windows.map`/`.notes.length` rodam direto no
+      // render, sem `?.` — `Array.isArray`, no molde de `CrmPage.tsx` (#225). Guarda por CAMPO,
+      // com `null` de fallback (a própria render checa `{projection && (...)}`).
+      .then((r) =>
+        setProjection(
+          Array.isArray(r.data?.windows) && Array.isArray(r.data?.notes) ? r.data : null,
+        ),
+      )
       .catch((err) => setError(apiErrorMessage(err)))
       .finally(() => setLoading(false));
   }, []);

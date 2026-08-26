@@ -49,7 +49,11 @@ export default function CentrosCustoPage() {
         }),
       ]);
       setCenters(c.data);
-      setReport(r.data);
+      // Guarda de FORMA (issue #247): `report.buckets.length`/`.map` rodam direto no render, sem
+      // `?.`. `Array.isArray`, no molde de `CrmPage.tsx` (#225): guarda por CAMPO, com `null`
+      // quando o campo não é array — a render já checa `report && report.buckets...`, então
+      // `null` é o mesmo estado seguro que existe ANTES da resposta chegar.
+      setReport(Array.isArray(r.data?.buckets) ? r.data : null);
     } catch (err) {
       setError(apiErrorMessage(err));
     }
