@@ -23,8 +23,17 @@ export default function PublicContractPage() {
     setLoading(true);
     try {
       const { data } = await publicApi.get<PublicContract>(`/public/contracts/${slug}`);
-      setContract(data);
-      setSignedAt(data.signed_at);
+      // Guarda de FORMA (issue #247): `contract.clauses.map` roda direto no render, sem `?.` —
+      // `Array.isArray`, no molde de `CrmPage.tsx` (#225). Esta é uma rota PÚBLICA (sem sessão,
+      // sem tenant) — quem abre um link de contrato não pode ver a tela quebrar por um payload
+      // fora de forma. `null` reusa o estado "Contrato indisponível." que a página já tem para o
+      // instante ANTES da resposta chegar.
+      const valido =
+        data && typeof data === "object" && !Array.isArray(data) && Array.isArray(data.clauses)
+          ? data
+          : null;
+      setContract(valido);
+      setSignedAt(valido?.signed_at ?? null);
     } catch (err) {
       setError(apiErrorMessage(err));
     } finally {

@@ -13,11 +13,12 @@ const statusInfo: Record<Contract["status"], { label: string; cls: string }> = {
   cancelled: { label: "Cancelado", cls: "bg-red-50 text-danger" },
 };
 
+const EMPTY_SUMMARY: ContractsSummary = { draft_count: 0, sent_count: 0, signed_count: 0 };
+
 export default function ContratosPage() {
   const fuso = useFuso();
   const navigate = useNavigate();
-  const empty: ContractsSummary = { draft_count: 0, sent_count: 0, signed_count: 0 };
-  const [summary, setSummary] = useState<ContractsSummary>(empty);
+  const [summary, setSummary] = useState<ContractsSummary>(EMPTY_SUMMARY);
   const [contracts, setContracts] = useState<Contract[]>([]);
 
   const load = useCallback(async () => {
@@ -25,7 +26,11 @@ export default function ContratosPage() {
       api.get<ContractsSummary>("/contracts/summary"),
       api.get<Contract[]>("/contracts"),
     ]);
-    setSummary(s.data);
+    // Guarda de FORMA (issue #247): `summary.draft_count`/`sent_count`/`signed_count` são lidos
+    // direto no render, sem `?.`. Uma raiz fora de forma faz `null.draft_count` estourar.
+    setSummary(
+      s.data && typeof s.data === "object" && !Array.isArray(s.data) ? s.data : EMPTY_SUMMARY,
+    );
     setContracts(c.data);
   }, []);
 

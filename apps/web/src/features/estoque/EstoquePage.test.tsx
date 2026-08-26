@@ -156,3 +156,44 @@ describe("EstoquePage — produtos fora de forma não derrubam o modal Novo item
     expect(await screen.findByText("Camiseta P")).toBeInTheDocument();
   });
 });
+
+// ── `GET /stock/summary` fora de forma (issue #247) ─────────────────────────────────────
+//
+// `setSummary(s.data)` recebia o payload CRU. `summary.item_count`/`total_value_cents`/
+// `low_stock_count` são lidos direto nos três cartões do topo, sem `?.` — uma raiz fora de forma
+// (array, string, corpo vazio) faz `null.item_count` estourar. A guarda é por TIPO da raiz.
+describe("EstoquePage — resumo fora de forma não derruba a tela (#247)", () => {
+  it.each([
+    ["array no lugar do objeto", [{ item_count: 3 }]],
+    ["string no lugar do objeto", "não é json"],
+    ["corpo vazio (204 / sem conteúdo)", null],
+  ])("%s → a tela segue montada, com os cartões zerados", async (_rotulo, payload) => {
+    vi.mocked(api.get).mockImplementation((url: string) => {
+      if (url === "/stock/summary") return Promise.resolve({ data: payload } as never);
+      if (url === "/stock/items") return Promise.resolve({ data: [] } as never);
+      return Promise.resolve({ data: [] } as never);
+    });
+    renderPage();
+    await assentar();
+
+    expect(screen.getByText("Controle de Estoque")).toBeInTheDocument();
+    expect(screen.getByText("Itens ativos")).toBeInTheDocument();
+    expect(screen.getAllByText("0").length).toBeGreaterThan(0);
+  });
+
+  it("contra-teste: resumo de verdade continua aparecendo nos cartões", async () => {
+    vi.mocked(api.get).mockImplementation((url: string) => {
+      if (url === "/stock/summary")
+        return Promise.resolve({
+          data: { item_count: 7, total_value_cents: 12345, low_stock_count: 2 },
+        } as never);
+      if (url === "/stock/items") return Promise.resolve({ data: [] } as never);
+      return Promise.resolve({ data: [] } as never);
+    });
+    renderPage();
+    await assentar();
+
+    expect(await screen.findByText("7")).toBeInTheDocument();
+    expect(screen.getByText("R$ 123,45")).toBeInTheDocument();
+  });
+});
