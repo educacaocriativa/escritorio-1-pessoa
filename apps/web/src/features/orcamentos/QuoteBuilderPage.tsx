@@ -293,7 +293,11 @@ export default function QuoteBuilderPage() {
               </button>
             ))}
           </div>
-          <div className={`flex-1 space-y-3 overflow-auto p-4 ${readonly ? "pointer-events-none opacity-60" : ""}`}>
+          {/* `campos-tocaveis` (issue #227): o `inputCls` deste arquivo é a MESMA classe do `Field`
+              de `components/Modal.tsx` (`px-3 py-2 text-sm`, 38px medidos) — só que fora de modal.
+              Não é uma decisão de densidade nova, é a mesma inconsistência de estilo que a classe
+              já fecha em 16 telas; o container único cobre as 6 abas, não só a que a issue mediu. */}
+          <div className={`campos-tocaveis flex-1 space-y-3 overflow-auto p-4 ${readonly ? "pointer-events-none opacity-60" : ""}`}>
             {tab === "Serviços" && (
               <ServicesTab
                 services={services}

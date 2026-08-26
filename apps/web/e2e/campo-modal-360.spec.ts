@@ -255,3 +255,51 @@ test("os campos do WIZARD JURÍDICO são tocáveis com o polegar", async ({ page
   expect(await camposBaixos(page, "main"), "jurídico — campos abaixo de 44px").toEqual([]);
   expect((await medirPagina(page)).larguraDaPagina).toBe(360);
 });
+
+// ── `/orcamentos/novo` ──────────────────────────────────────────────────────────────
+// Issue #227: o CASO LIMITE que a issue separou dos outros 4 "construtores densos". A tabela da
+// issue media 90 campos abaixo de 44px fora de modal, em 5 telas de editor — mas só esta usa a
+// MESMA classe do `Field` (`inputCls` deste arquivo é `px-3 py-2 text-sm`, 38px medidos): não é
+// densidade de UI nova pedindo decisão de produto, é a mesma inconsistência de estilo que
+// `campos-tocaveis` já fecha em 16 outras telas, só que fora de modal. As outras 4 construtoras
+// da issue (`/marketing/m1` 30, `/sites/s1` 15, `/marketing/novo` 12, `/contratos/novo` 4) usam
+// `px-2 py-1.5 text-xs` — editores densos de propósito — e ficam de fora por decisão de produto,
+// com issue de acompanhamento própria.
+test("os campos do ORÇAMENTO (/orcamentos/novo) são tocáveis com o polegar", async ({ page }) => {
+  await semearSessao(page);
+  await mockarApi(page, {
+    "/crm/clients": [{ id: "c1", name: "Maria Silva" }],
+    "/settings/profile": {
+      logo_url: "",
+      primary_color: "#5D44F8",
+      bg_color: "#FFFFFF",
+      text_color: "#1F2937",
+      accent_color: "#3DD68C",
+    },
+  });
+  await page.goto("/orcamentos/novo");
+  // A tela não tem `heading`: a `marca` é o rótulo "Orçamentos" do link de voltar
+  // (`QuoteBuilderPage.tsx`) — sem ele, "zero campos baixos" poderia significar "não montou".
+  await expect(page.getByText("Orçamentos").first()).toBeVisible();
+
+  // Aba "Serviços" (a inicial): título + campo da IA + 1 serviço (descrição/subtítulo/qtd/valor)
+  // + desconto — os 7 campos que a issue #227 mediu a 38px.
+  expect(await contarCampos(page, "main"), "orçamento (Serviços): campos").toBeGreaterThanOrEqual(7);
+  expect(
+    await camposBaixos(page, "main"),
+    "orçamento (Serviços) — campos abaixo de 44px",
+  ).toEqual([]);
+
+  // A aba "Dados" tem outro conjunto de campos na MESMA classe (select de cliente, nome,
+  // WhatsApp, senha do link, condições de pagamento) — o `campos-tocaveis` foi aplicado no
+  // container que envolve as 6 abas, não só a que a issue mediu.
+  await page.getByRole("button", { name: "Dados" }).click();
+  await expect(page.getByText("Cliente do CRM (opcional — gera a cobrança ao aprovar)")).toBeVisible();
+  expect(await contarCampos(page, "main"), "orçamento (Dados): campos").toBeGreaterThanOrEqual(5);
+  expect(
+    await camposBaixos(page, "main"),
+    "orçamento (Dados) — campos abaixo de 44px",
+  ).toEqual([]);
+
+  expect((await medirPagina(page)).larguraDaPagina).toBe(360);
+});
