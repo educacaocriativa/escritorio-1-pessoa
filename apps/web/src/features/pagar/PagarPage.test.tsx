@@ -889,3 +889,76 @@ describe("PagarPage — contratos fora de forma não derrubam o modal Nova conta
     expect(await screen.findByText("Consultoria")).toBeInTheDocument();
   });
 });
+
+// ── `GET /payables/summary` fora de forma (issue #247) ──────────────────────────────────
+//
+// `setSummary(s.data)` recebia o payload CRU. `summary.open_cents`/etc. são lidos direto nos
+// cartões, sem `?.` — uma raiz fora de forma faz `null.open_cents` estourar.
+describe("PagarPage — resumo fora de forma não derruba a tela (#247)", () => {
+  it.each([
+    ["array no lugar do objeto", [{ open_cents: 100 }]],
+    ["string no lugar do objeto", "não é json"],
+    ["corpo vazio (204 / sem conteúdo)", null],
+  ])("%s → a tela segue montada, com os cartões zerados", async (_rotulo, payload) => {
+    vi.mocked(api.get).mockImplementation((url: string) => {
+      if (url === "/payables/summary") return Promise.resolve({ data: payload } as never);
+      if (url === "/payables/bills")
+        return Promise.resolve({ data: { items: [], total: 0 } } as never);
+      return Promise.resolve({ data: [] } as never);
+    });
+    // `mockClear()`: sem isto, `toHaveBeenCalledWith` abaixo acha uma chamada de um teste ANTERIOR
+    // (o mock nunca é limpo entre testes, só reimplementado) e o `waitFor` resolve na hora — antes
+    // mesmo do debounce de 300ms (linha ~182) desta montagem disparar. Medido: sem o `mockClear`,
+    // o teste "passa" mesmo com a guarda removida, porque nunca espera o bastante para o commit
+    // real acontecer — falsa confiança do mesmo tipo que o docstring de `assentar.ts` descreve.
+    vi.mocked(api.get).mockClear();
+    renderPage();
+    // `waitFor` polla com relógio de VERDADE (timeout default ~1s) até `/payables/summary` ter
+    // sido chamado NESTA montagem — só então o debounce já disparou e o commit de `setSummary`
+    // aconteceu. `assentar()` sozinho não basta: ele só esvazia microtarefas, não temporizadores.
+    await waitFor(() => expect(api.get).toHaveBeenCalledWith("/payables/summary"));
+    await assentar();
+
+    expect(screen.getByRole("button", { name: "Nova conta" })).toBeInTheDocument();
+    expect(screen.getAllByText("R$ 0,00").length).toBeGreaterThan(0);
+  });
+});
+
+// ── `GET /payables/bills` fora de forma (issue #247) ─────────────────────────────────────
+//
+// `setBills(b.data.items)`/`setTotal(b.data.total)` recebiam o CAMPO cru — `bills.map` roda no
+// render sem guarda, e `[...antes, ...b.data.items]` (página seguinte) estouraria num spread de
+// `undefined`. A guarda é por CAMPO (`Array.isArray(b.data?.items)`), não pela raiz.
+describe("PagarPage — página de contas fora de forma não derruba a lista (#247)", () => {
+  it.each([
+    ["envelope de erro devolvido com 200", { detail: "algo deu errado" }],
+    ["objeto sem a chave items", { total: 3 }],
+    ["array no lugar do objeto (raiz certa, campo errado)", [{ id: "x" }]],
+    ["corpo vazio (204 / sem conteúdo)", null],
+  ])("%s → a lista segue montada, vazia", async (_rotulo, payload) => {
+    vi.mocked(api.get).mockImplementation((url: string) => {
+      if (url === "/payables/summary") return Promise.resolve({ data: emptySummary } as never);
+      if (url === "/payables/bills") return Promise.resolve({ data: payload } as never);
+      return Promise.resolve({ data: [] } as never);
+    });
+    // `mockClear()` + `waitFor` na chamada real (não em "Nenhuma conta", que já está no DOM desde
+    // o estado inicial `bills = []` — a MESMA falsa confiança que o docstring de `assentar.ts`
+    // descreve): sem isto o teste passaria mesmo com a guarda removida, porque nunca esperaria o
+    // debounce de 300ms (linha ~182) o bastante para o commit de `setBills` realmente acontecer.
+    vi.mocked(api.get).mockClear();
+    renderPage();
+    await waitFor(() => expect(api.get).toHaveBeenCalledWith("/payables/summary"));
+    await assentar();
+
+    expect(screen.getByRole("button", { name: "Nova conta" })).toBeInTheDocument();
+    expect(await screen.findByText(/Nenhuma conta/i)).toBeInTheDocument();
+  });
+
+  it("contra-teste: conta de verdade continua aparecendo na lista", async () => {
+    mockComConta([CONTA]);
+    renderPage();
+    await assentar();
+
+    expect(await screen.findByText("Aluguel")).toBeInTheDocument();
+  });
+});

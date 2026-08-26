@@ -3,6 +3,7 @@ import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { MemoryRouter, Route, Routes, useParams } from "react-router-dom";
 import { api } from "../../lib/api";
+import { assentar } from "../../test/assentar";
 import ClientDetailPage from "./ClientDetailPage";
 
 // Issue #145 — a ficha do cliente NÃO é tela de leitura: ela dispara
@@ -1150,5 +1151,53 @@ describe("ClientDetailPage — RBAC (sub-usuário sem todos os módulos agregado
     expect(screen.getByText("Cobranças (6)")).toBeInTheDocument();
     // Contratos sobrevive à falha degradando para a lista vazia, não travando a página inteira.
     expect(screen.getByText("Contratos (0)")).toBeInTheDocument();
+  });
+});
+
+// ── `GET /crm/clients/{id}` fora de forma (issue #247) ──────────────────────────────────
+//
+// `setClient(c.data)` recebia o payload CRU. `client.tags.length`/`.map` (cabeçalho) rodam direto
+// no render, sem `?.` — `Array.isArray`, no molde de `ClientTimeline.tsx`/`CrmPage.tsx` (#225).
+describe("ClientDetailPage — cliente fora de forma não derruba a ficha (#247)", () => {
+  it.each([
+    ["array no lugar do objeto", [{ id: "cli-1" }]],
+    ["string no lugar do objeto", "não é json"],
+    ["corpo vazio (204 / sem conteúdo)", null],
+  ])("%s → a ficha não estoura (fica em 'Carregando ficha...')", async (_rotulo, payload) => {
+    vi.mocked(api.get).mockImplementation((url: string) => {
+      if (url === "/crm/clients/cli-1") return Promise.resolve({ data: payload } as never);
+      return Promise.resolve({ data: [] } as never);
+    });
+    renderFicha();
+    await assentar();
+
+    // `client` fica `null` (o guard não inventa uma ficha) — a página já tinha esse estado de
+    // espera para o instante ANTES da resposta chegar; aqui ele persiste em vez de estourar.
+    expect(screen.getByText("Carregando ficha...")).toBeInTheDocument();
+  });
+
+  it.each([
+    ["campo tags ausente", { ...CLIENTE, tags: undefined }],
+    ["campo tags não é array (objeto)", { ...CLIENTE, tags: { vip: true } }],
+    ["campo tags não é array (string)", { ...CLIENTE, tags: "vip" }],
+  ])("%s → a ficha monta sem tags, sem estourar", async (_rotulo, payload) => {
+    vi.mocked(api.get).mockImplementation((url: string) => {
+      if (url === "/crm/clients/cli-1") return Promise.resolve({ data: payload } as never);
+      return Promise.resolve({ data: [] } as never);
+    });
+    renderFicha();
+    await assentar();
+
+    expect(await screen.findByRole("heading", { name: "Joana Ré" })).toBeInTheDocument();
+    expect(screen.queryByText("vip")).not.toBeInTheDocument();
+  });
+
+  it("contra-teste: cliente de verdade continua mostrando as tags", async () => {
+    renderFicha();
+    await assentar();
+
+    expect(await screen.findByRole("heading", { name: "Joana Ré" })).toBeInTheDocument();
+    expect(screen.getByText("vip")).toBeInTheDocument();
+    expect(screen.getByText("recorrente")).toBeInTheDocument();
   });
 });

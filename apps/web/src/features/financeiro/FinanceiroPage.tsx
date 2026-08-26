@@ -33,15 +33,16 @@ const statusLabel: Record<Transaction["status"], string> = {
   refunded: "Estornado",
 };
 
+const EMPTY_SUMMARY: WalletSummary = {
+  available_cents: 0,
+  pending_cents: 0,
+  withdrawn_cents: 0,
+  gross_total_cents: 0,
+  fees_total_cents: 0,
+};
+
 export default function FinanceiroPage() {
-  const empty: WalletSummary = {
-    available_cents: 0,
-    pending_cents: 0,
-    withdrawn_cents: 0,
-    gross_total_cents: 0,
-    fees_total_cents: 0,
-  };
-  const [summary, setSummary] = useState<WalletSummary>(empty);
+  const [summary, setSummary] = useState<WalletSummary>(EMPTY_SUMMARY);
   const [txs, setTxs] = useState<Transaction[]>([]);
   const [chartAccounts, setChartAccounts] = useState<ChartAccount[]>([]);
   const [costCenters, setCostCenters] = useState<CostCenter[]>([]);
@@ -57,7 +58,12 @@ export default function FinanceiroPage() {
       api.get<WalletSummary>("/wallet/summary"),
       api.get<Transaction[]>("/wallet/transactions"),
     ]);
-    setSummary(s.data);
+    // Guarda de FORMA (issue #247): `summary.available_cents`/etc. são lidos direto no render
+    // (cartões + botão "Sacar"), sem `?.`. Uma raiz fora de forma faz `null.available_cents`
+    // estourar.
+    setSummary(
+      s.data && typeof s.data === "object" && !Array.isArray(s.data) ? s.data : EMPTY_SUMMARY,
+    );
     setTxs(t.data);
     // Rótulos são só um complemento de exibição — se o usuário não tiver acesso a esses módulos
     // (require_module), a lista de transações continua funcionando normalmente.

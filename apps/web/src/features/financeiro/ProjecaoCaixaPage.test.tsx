@@ -228,3 +228,35 @@ describe("ProjecaoCaixaPage — Story 8.8 (AC5): a soma entre planos nunca apare
     expect(screen.getByText(/^R\$\s*0,00$/)).toBeInTheDocument();
   });
 });
+
+// ── `GET /financial-intelligence/projection` fora de forma (issue #247) ─────────────────
+//
+// `setProjection(r.data)` recebia o payload CRU. `projection.windows.map` e
+// `projection.notes.length` rodam direto no render, sem `?.` — `Array.isArray`, no molde de
+// `CrmPage.tsx` (#225). Guarda pelos DOIS campos, com `null` de fallback (a própria render checa
+// `{projection && (...)}`).
+describe("ProjecaoCaixaPage — projeção fora de forma não derruba a tela (#247)", () => {
+  it.each([
+    ["envelope de erro devolvido com 200", { detail: "algo deu errado" }],
+    ["objeto sem as chaves windows/notes", { today: "2026-08-01" }],
+    ["array no lugar do objeto (raiz certa, campo errado)", [{ days: 30 }]],
+    ["string no lugar do objeto", "não é json"],
+    ["corpo vazio (204 / sem conteúdo)", null],
+  ])("%s → a tela segue montada, sem os cartões de janela", async (_rotulo, payload) => {
+    vi.mocked(api.get).mockResolvedValue({ data: payload } as never);
+
+    render(<ProjecaoCaixaPage />);
+    await waitFor(() => expect(api.get).toHaveBeenCalled());
+
+    expect(screen.getByText("Projeção de fluxo de caixa")).toBeInTheDocument();
+    expect(screen.queryByText(/Em \d+ dias/)).not.toBeInTheDocument();
+  });
+
+  it("contra-teste: projeção de verdade continua mostrando os cartões de janela", async () => {
+    vi.mocked(api.get).mockResolvedValue({ data: projecaoSuprimida } as never);
+
+    render(<ProjecaoCaixaPage />);
+
+    expect(await screen.findByText("Em 30 dias")).toBeInTheDocument();
+  });
+});

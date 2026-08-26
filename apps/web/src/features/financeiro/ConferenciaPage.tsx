@@ -67,7 +67,10 @@ export default function ConferenciaPage() {
           ...(accountId ? { bank_account_id: accountId } : {}),
         },
       });
-      setReport(res.data);
+      // Guarda de FORMA (issue #247): `ordenarContas(report.contas)` faz `.filter` sobre o campo
+      // sem `?.` — `Array.isArray`, no molde de `CrmPage.tsx` (#225). `null` é o mesmo estado
+      // seguro que a tela já tem ANTES da resposta chegar (`useMemo`s abaixo checam `report ?`).
+      setReport(Array.isArray(res.data?.contas) ? res.data : null);
     } catch (err) {
       setError(apiErrorMessage(err));
     } finally {

@@ -774,3 +774,39 @@ describe("o ciclo da conferência", () => {
     }
   });
 });
+
+// ── `GET /bank/reconciliation-report` fora de forma (issue #247) ────────────────────────
+//
+// `setReport(res.data)` recebia o payload CRU. `ordenarContas(report.contas)` faz `.filter` sobre
+// o campo sem `?.` — `Array.isArray`, no molde de `CrmPage.tsx` (#225). Guarda por CAMPO, com
+// `null` de fallback (a própria render checa `report && report.contas...`).
+describe("ConferenciaPage — relatório fora de forma não derruba a tela (#247)", () => {
+  it.each([
+    ["envelope de erro devolvido com 200", { detail: "algo deu errado" }],
+    ["objeto sem a chave contas", { start: "2026-01-01", end: "2026-12-31" }],
+    ["array no lugar do objeto (raiz certa, campo errado)", [{ bank_account_id: "x" }]],
+    ["string no lugar do objeto", "não é json"],
+    ["corpo vazio (204 / sem conteúdo)", null],
+  ])("%s → a tela segue montada, sem a lista de contas", async (_rotulo, payload) => {
+    vi.mocked(api.get).mockResolvedValue({ data: payload } as never);
+
+    renderPage();
+    await waitFor(() => expect(api.get).toHaveBeenCalled());
+
+    expect(screen.getByText("Conferência de saldos")).toBeInTheDocument();
+    expect(screen.queryByTestId("frase-conta")).not.toBeInTheDocument();
+    expect(
+      screen.queryByText("Você ainda não tem conta bancária cadastrada — não há o que conferir."),
+    ).not.toBeInTheDocument();
+  });
+
+  it("contra-teste: conta de verdade continua aparecendo na lista de frases", async () => {
+    vi.mocked(api.get).mockResolvedValue({
+      data: report([conta()]),
+    } as never);
+
+    renderPage();
+
+    expect(await screen.findByTestId("frase-conta")).toBeInTheDocument();
+  });
+});

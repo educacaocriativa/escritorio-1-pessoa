@@ -70,7 +70,29 @@ export default function FilaPagamentosPage() {
     setLoading(true);
     try {
       const { data } = await api.get<PaymentQueue>("/payables/queue");
-      setQueue({ ...EMPTY, ...data });
+      // Guarda de FORMA (issue #247): `{...EMPTY, ...data}` só cobre um CAMPO AUSENTE (o spread de
+      // `data` não sobrescreve a chave que falta) — mas um campo PRESENTE com o tipo errado (ex.:
+      // `atrasados: null`, ou um objeto sem `.length`) SOBRESCREVE o default do `EMPTY` e
+      // `queue.atrasados.length` (linha ~106) estoura no render. `Array.isArray` por campo, no
+      // molde de `CrmPage.tsx` (#225), fecha essa segunda metade; `summary` usa o mesmo TIPO de
+      // guarda das telas de resumo escalar (`EMPTY.summary` como fallback).
+      setQueue({
+        ...EMPTY,
+        ...data,
+        atrasados: Array.isArray(data?.atrasados) ? data.atrasados : EMPTY.atrasados,
+        hoje: Array.isArray(data?.hoje) ? data.hoje : EMPTY.hoje,
+        proximos_7_dias: Array.isArray(data?.proximos_7_dias)
+          ? data.proximos_7_dias
+          : EMPTY.proximos_7_dias,
+        proximos_30_dias: Array.isArray(data?.proximos_30_dias)
+          ? data.proximos_30_dias
+          : EMPTY.proximos_30_dias,
+        agendadas: Array.isArray(data?.agendadas) ? data.agendadas : EMPTY.agendadas,
+        summary:
+          data?.summary && typeof data.summary === "object" && !Array.isArray(data.summary)
+            ? { ...EMPTY.summary, ...data.summary }
+            : EMPTY.summary,
+      });
       setError(null);
     } catch (err) {
       setError(apiErrorMessage(err));

@@ -44,16 +44,17 @@ function statusInfo(c: Charge): { label: string; cls: string } {
   return { label: "A vencer", cls: "bg-blue-50 text-blue-700" };
 }
 
+const EMPTY_SUMMARY: ChargesSummary = {
+  open_cents: 0,
+  overdue_cents: 0,
+  paid_cents: 0,
+  open_count: 0,
+  overdue_count: 0,
+  scheduled_cents: 0,
+};
+
 export default function CobrancasPage() {
-  const empty: ChargesSummary = {
-    open_cents: 0,
-    overdue_cents: 0,
-    paid_cents: 0,
-    open_count: 0,
-    overdue_count: 0,
-    scheduled_cents: 0,
-  };
-  const [summary, setSummary] = useState<ChargesSummary>(empty);
+  const [summary, setSummary] = useState<ChargesSummary>(EMPTY_SUMMARY);
   const [charges, setCharges] = useState<Charge[]>([]);
   const [chartAccounts, setChartAccounts] = useState<ChartAccount[]>([]);
   const [costCenters, setCostCenters] = useState<CostCenter[]>([]);
@@ -75,7 +76,14 @@ export default function CobrancasPage() {
       api.get<ChargesSummary>("/receivables/summary"),
       api.get<Charge[]>("/receivables/charges"),
     ]);
-    setSummary(s.data);
+    // Guarda de FORMA (issue #247): `summary.open_cents`/`overdue_count`/etc. são lidos direto no
+    // render (cartões acima da tabela) sem `?.`. Um payload fora de forma — envelope de erro
+    // devolvido com 200, array em vez de objeto, corpo vazio — não pode quebrar os TRÊS cartões
+    // por causa de uma resposta malformada; degrada para o resumo zerado (`EMPTY_SUMMARY`), o mesmo
+    // que já é o estado inicial.
+    setSummary(
+      s.data && typeof s.data === "object" && !Array.isArray(s.data) ? s.data : EMPTY_SUMMARY,
+    );
     setCharges(c.data);
     // Rótulos são só um complemento de exibição — se o usuário não tiver acesso a esses módulos
     // (require_module), a lista de cobranças continua funcionando normalmente.

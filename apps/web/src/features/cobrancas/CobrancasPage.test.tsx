@@ -590,3 +590,62 @@ describe("CobrancasPage — clientes/contratos fora de forma não derrubam o mod
     expect(screen.getByText("Consultoria")).toBeInTheDocument();
   });
 });
+
+// ── `GET /receivables/summary` fora de forma (issue #247) ──────────────────────────────
+//
+// `setSummary(s.data)` recebia o payload CRU. `summary.open_cents`/`overdue_count`/etc. são lidos
+// direto nos três cartões do topo, sem `?.` — uma raiz fora de forma (array, string, corpo vazio)
+// faz `null.open_cents` estourar (ou pior, um setter de função como no ClientTimeline). A guarda é
+// por TIPO da raiz (objeto simples, não array, não nulo) — os campos em si são todos escalares, e
+// um objeto com a forma errada mas ainda um OBJETO (ex.: envelope de erro `{detail: ...}`) passa
+// pela guarda de tipo e degrada para `R$ NaN` sem estourar; não é o caso que esta guarda evita.
+describe("CobrancasPage — resumo fora de forma não derruba a tela (#247)", () => {
+  it.each([
+    ["array no lugar do objeto", [{ open_cents: 100 }]],
+    ["string no lugar do objeto", "não é json"],
+    ["corpo vazio (204 / sem conteúdo)", null],
+  ])("%s → a tela segue montada, com os cartões zerados", async (_rotulo, payload) => {
+    vi.mocked(api.get).mockImplementation((url: string) => {
+      if (url === "/receivables/summary") return Promise.resolve({ data: payload } as never);
+      if (url === "/receivables/charges") return Promise.resolve({ data: [] } as never);
+      return Promise.resolve({ data: [] } as never);
+    });
+    renderPage();
+    await assentar();
+
+    expect(screen.getByText("Contas a Receber")).toBeInTheDocument();
+    expect(screen.getAllByText("R$ 0,00").length).toBeGreaterThan(0);
+  });
+
+  // Um OBJETO com a forma errada (não array, não nulo) não é o caso que a guarda de TIPO cobre —
+  // ela não valida campo a campo. A tela não estoura (nenhum `TypeError`), mas os cartões
+  // degradam para `R$ NaN`/`undefined`: um resultado feio, e não o crash que a guarda existe para
+  // evitar. Documentado aqui para não ser confundido com uma regressão.
+  it("envelope de erro devolvido com 200: não crasha, mas os cartões degradam (fora do que a guarda cobre)", async () => {
+    vi.mocked(api.get).mockImplementation((url: string) => {
+      if (url === "/receivables/summary")
+        return Promise.resolve({ data: { detail: "algo deu errado" } } as never);
+      if (url === "/receivables/charges") return Promise.resolve({ data: [] } as never);
+      return Promise.resolve({ data: [] } as never);
+    });
+    renderPage();
+    await assentar();
+
+    expect(screen.getByText("Contas a Receber")).toBeInTheDocument();
+  });
+
+  it("contra-teste: resumo de verdade continua aparecendo nos cartões", async () => {
+    mockCobrancas([], [CONTA_BANCARIA], {
+      open_cents: 12345,
+      overdue_cents: 0,
+      paid_cents: 0,
+      open_count: 1,
+      overdue_count: 0,
+      scheduled_cents: 0,
+    });
+    renderPage();
+    await assentar();
+
+    expect(await screen.findByText("R$ 123,45")).toBeInTheDocument();
+  });
+});

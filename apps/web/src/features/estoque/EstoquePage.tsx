@@ -7,9 +7,10 @@ import { usePrimaryAction } from "../../store/pageActions";
 import { parseCentsBRL } from "../financeiro/contas";
 import { formatBRL } from "../financeiro/dre";
 
+const EMPTY_SUMMARY: StockSummary = { item_count: 0, total_value_cents: 0, low_stock_count: 0 };
+
 export default function EstoquePage() {
-  const empty: StockSummary = { item_count: 0, total_value_cents: 0, low_stock_count: 0 };
-  const [summary, setSummary] = useState<StockSummary>(empty);
+  const [summary, setSummary] = useState<StockSummary>(EMPTY_SUMMARY);
   const [items, setItems] = useState<StockItem[]>([]);
   const [newOpen, setNewOpen] = useState(false);
   const [adjust, setAdjust] = useState<StockItem | null>(null);
@@ -19,7 +20,12 @@ export default function EstoquePage() {
       api.get<StockSummary>("/stock/summary"),
       api.get<StockItem[]>("/stock/items"),
     ]);
-    setSummary(s.data);
+    // Guarda de FORMA (issue #247): `summary.item_count`/`total_value_cents`/`low_stock_count` são
+    // lidos direto no render, sem `?.`. Uma raiz fora de forma (array, string, corpo vazio) faz
+    // `null.item_count` estourar — degrada para o resumo zerado, igual ao estado inicial.
+    setSummary(
+      s.data && typeof s.data === "object" && !Array.isArray(s.data) ? s.data : EMPTY_SUMMARY,
+    );
     setItems(i.data);
   }, []);
 

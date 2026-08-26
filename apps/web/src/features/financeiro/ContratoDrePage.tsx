@@ -78,7 +78,18 @@ export default function ContratoDrePage() {
         `/financial-intelligence/contracts/${id}/dre`,
         { params },
       );
-      setDre(data);
+      // Guarda de FORMA (issue #247): `buildContractDreView` alimenta `GroupRow` — que faz
+      // `group.categorias.reduce` sem `?.` — e `view.notes.length` no render, ambos sem `?.`.
+      // `Array.isArray`, no molde de `CrmPage.tsx` (#225), nos TRÊS campos array aninhados;
+      // `null` é o mesmo estado seguro que a tela já tem ANTES da resposta chegar (a render checa
+      // `{view && (...)}`, via `dre ? buildContractDreView(dre) : null`).
+      setDre(
+        Array.isArray(data?.notes) &&
+          Array.isArray(data?.receita?.categorias) &&
+          Array.isArray(data?.custo_direto?.categorias)
+          ? data
+          : null,
+      );
     } catch (err) {
       setError(apiErrorMessage(err));
     } finally {
