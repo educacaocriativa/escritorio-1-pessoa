@@ -184,35 +184,41 @@ class FunnelError(Exception):
 
 
 # ── WhatsApp/E-mail: resolução de placeholders ({{cliente.*}} ou texto literal) ──
+# Assinatura uniforme (client, trigger_notes) mesmo quando um resolver ignora o 2º argumento —
+# só `cliente.notas` usa, mas manter os dois na mesma forma evita um branch especial no
+# despacho abaixo.
 _CLIENT_KEYWORDS = {
-    "cliente.nome": lambda c: c.name,
-    "cliente.telefone": lambda c: c.phone or "(não informado)",
-    "cliente.email": lambda c: c.email or "(não informado)",
+    "cliente.nome": lambda c, tn: c.name,
+    "cliente.telefone": lambda c, tn: c.phone or "(não informado)",
+    "cliente.email": lambda c, tn: c.email or "(não informado)",
     # Bloco de Observações do lead — já traz as respostas de campos customizados de
     # formulários (Sites/Integrações), sem precisar de uma keyword por campo (que varia
-    # de página pra página). Vazio fica "" (não é um valor único tipo telefone/e-mail).
-    "cliente.notas": lambda c: c.notes or "",
+    # de página pra página). Prefere `trigger_notes` (o ENVIO que disparou esta jornada) a
+    # `client.notes` (que só é preenchido na criação do contato — quem retorna pelo mesmo
+    # canal nunca o atualiza, de propósito, pra não apagar edição manual do dono; ver
+    # `crm.service.absorb_lead`). Vazio fica "" (não é um valor único tipo telefone/e-mail).
+    "cliente.notas": lambda c, tn: tn or c.notes or "",
 }
 _KEYWORD_PATTERN = re.compile(r"\{\{\s*(cliente\.\w+)\s*\}\}")
 
 
-def _resolve_template_variable(raw: str, client) -> str:
+def _resolve_template_variable(raw: str, client, trigger_notes: str = "") -> str:
     if raw.startswith("{{") and raw.endswith("}}"):
         key = raw[2:-2].strip()
         resolver = _CLIENT_KEYWORDS.get(key)
         if resolver is not None:
-            return resolver(client) or ""
+            return resolver(client, trigger_notes) or ""
     return raw  # texto fixo, literal
 
 
-def _render_client_placeholders(text: str, client) -> str:
+def _render_client_placeholders(text: str, client, trigger_notes: str = "") -> str:
     """Substitui `{{cliente.*}}` NO MEIO de um texto livre (assunto/corpo de e-mail) — ao
     contrário de `_resolve_template_variable` (variável posicional inteira do WhatsApp), aqui
     o placeholder pode aparecer misturado com texto fixo."""
 
     def _sub(m: re.Match[str]) -> str:
         resolver = _CLIENT_KEYWORDS.get(m.group(1))
-        return (resolver(client) or "") if resolver else m.group(0)
+        return (resolver(client, trigger_notes) or "") if resolver else m.group(0)
 
     return _KEYWORD_PATTERN.sub(_sub, text)
 
@@ -338,7 +344,8 @@ def _valid_amount(params: dict) -> int:
 
 
 def run_node(
-    db: Session, *, tenant_id: str, actor: str, action: str, client_id: str | None, params: dict
+    db: Session, *, tenant_id: str, actor: str, action: str, client_id: str | None, params: dict,
+    trigger_notes: str = "",
 ) -> dict:
     from datetime import timedelta
 
@@ -440,8 +447,10 @@ def run_node(
             raise FunnelError("Escreva a mensagem (ou gere com IA) antes de enviar", 422)
         to_team = params.get("recipient") == "team"
         recipient = _team_email() if to_team else (c.email or c.name)
-        subject = _render_client_placeholders((params.get("subject") or "Mensagem").strip(), c)
-        msg = _render_client_placeholders(msg, c)
+        subject = _render_client_placeholders(
+            (params.get("subject") or "Mensagem").strip(), c, trigger_notes
+        )
+        msg = _render_client_placeholders(msg, c, trigger_notes)
         status = email.send_email(to=recipient, subject=subject, body=msg)
         db.add(Notification(
             tenant_id=tenant_id, channel="email", recipient=recipient,
@@ -471,7 +480,8 @@ def run_node(
                 raise FunnelError("Escreva a mensagem do WhatsApp no nó antes de executar", 422)
             notifications_service.enqueue(
                 db, tenant_id=tenant_id, channel="whatsapp", recipient=recipient, client_id=c.id,
-                message=_render_client_placeholders(body, c), purpose=PURPOSE_FUNNEL_NODE,
+                message=_render_client_placeholders(body, c, trigger_notes),
+                purpose=PURPOSE_FUNNEL_NODE,
             )
         else:
             template_id = params.get("template_id")
@@ -481,7 +491,8 @@ def run_node(
             if tpl is None or tpl.status != STATUS_APPROVED:
                 raise FunnelError("Template não encontrado ou ainda não aprovado pela Meta", 422)
             resolved_vars = [
-                _resolve_template_variable(v, c) for v in (params.get("variables") or [])
+                _resolve_template_variable(v, c, trigger_notes)
+                for v in (params.get("variables") or [])
             ]
             notifications_service.enqueue(
                 db, tenant_id=tenant_id, channel="whatsapp", recipient=recipient, client_id=c.id,

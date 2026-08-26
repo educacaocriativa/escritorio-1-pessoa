@@ -165,6 +165,55 @@ def test_retorno_nao_reinscreve_quem_ja_esta_andando(db: Session, _fake_session)
     assert len(runs) == 1
 
 
+def test_criacao_carrega_notes_do_evento_para_o_run(db: Session, _fake_session):
+    tenant = _seed_tenant(db, slug="auto7", document="00000000000107")
+    funnel = _seed_funnel(db, tenant.id)
+    db.add(TenantProfile(tenant_id=tenant.id, default_entry_funnel_id=funnel.id))
+    client = Client(tenant_id=tenant.id, name="Lead Com Campos", source="landing")
+    db.add(client)
+    db.commit()
+
+    automation.on_client_created(
+        tenant_id=tenant.id, client_id=client.id, source="landing",
+        notes="Campos do formulário:\nQuando é a festa?: Dezembro",
+    )
+
+    run = _run_for(db, client.id)
+    assert run is not None
+    assert run.trigger_notes == "Campos do formulário:\nQuando é a festa?: Dezembro"
+
+
+def test_retorno_carrega_notes_do_envio_atual_nao_do_client_notes(db: Session, _fake_session):
+    """`client.notes` fica travado no primeiro envio (absorb_lead não sobrescreve pra não
+    apagar edição manual do dono) — o `trigger_notes` do run é o que garante que o e-mail de
+    alerta reflita o envio QUE ACABOU de chegar, não o primeiro."""
+    from app.modules.funnels.models import RUN_DONE
+
+    tenant = _seed_tenant(db, slug="auto8", document="00000000000108")
+    funnel = _seed_funnel(db, tenant.id)
+    db.add(TenantProfile(tenant_id=tenant.id, default_entry_funnel_id=funnel.id))
+    client = Client(
+        tenant_id=tenant.id, name="Lead Retorno", source="landing", notes="Primeiro envio"
+    )
+    db.add(client)
+    db.commit()
+
+    automation.on_client_created(tenant_id=tenant.id, client_id=client.id, source="landing")
+    primeira = _run_for(db, client.id)
+    primeira.status = RUN_DONE
+    db.commit()
+
+    automation.on_client_returned(
+        tenant_id=tenant.id, client_id=client.id, source="landing",
+        notes="Segundo envio: dados novos",
+    )
+
+    runs = list(db.scalars(select(FunnelRun).where(FunnelRun.client_id == client.id)).all())
+    assert len(runs) == 2
+    segunda = next(r for r in runs if r.id != primeira.id)
+    assert segunda.trigger_notes == "Segundo envio: dados novos"
+
+
 def test_retorno_de_source_manual_nao_inscreve(db: Session, _fake_session):
     tenant = _seed_tenant(db, slug="auto6", document="00000000000106")
     funnel = _seed_funnel(db, tenant.id)
