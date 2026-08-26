@@ -80,7 +80,16 @@ export default function ClientDetailPage() {
         ? api.get<FunnelRunSummary[]>(`/funnels/runs?client_id=${id}`).catch(() => ({ data: [] as FunnelRunSummary[] }))
         : Promise.resolve({ data: [] as FunnelRunSummary[] }),
     ]);
-    setClient(c.data);
+    // Guarda de FORMA (issue #247): `client.tags.length`/`.map` (cabeçalho) rodam direto no
+    // render, sem `?.`. `Array.isArray`, no molde de `crm/ClientTimeline.tsx`/`CrmPage.tsx`
+    // (#225): um payload cujo campo `tags` não é array (ou que não é objeto — string, array na
+    // raiz) faz `client.tags.length` estourar. Guarda por CAMPO — o resto da ficha (`name`,
+    // `notes`, etc.) já é lido com fallback (`||`) ou aceita `undefined` sem quebrar.
+    setClient(
+      c.data && typeof c.data === "object" && !Array.isArray(c.data)
+        ? { ...c.data, tags: Array.isArray(c.data.tags) ? c.data.tags : [] }
+        : null,
+    );
     setCharges(ch.data);
     setContracts(co.data);
     setQuotes(qu.data);
