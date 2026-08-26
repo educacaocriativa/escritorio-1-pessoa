@@ -21,7 +21,7 @@ export default function CostCenterSelect({
     const { data } = await api
       .get<CostCenter[]>("/cost-centers")
       .catch(() => ({ data: [] as CostCenter[] }));
-    setCenters(data);
+    setCenters(Array.isArray(data) ? data : []);
   }, []);
 
   useEffect(() => {

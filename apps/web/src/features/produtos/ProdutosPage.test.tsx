@@ -81,3 +81,49 @@ describe("ProdutosPage — Novo produto (Story 7.16, Task 2)", () => {
     expect(screen.getByRole("button", { name: "Criar produto" })).toBeEnabled();
   });
 });
+
+// ══════════════════════════════════════════════════════════════════════════════════════════════
+// Issue #224 — separador de milhar no valor digitado (parseCentsBRL)
+// ══════════════════════════════════════════════════════════════════════════════════════════════
+//
+// A conta manual antiga (`Math.round(parseFloat(v.replace(",", ".")) * 100)`) só troca a PRIMEIRA
+// vírgula por ponto e nunca remove o ponto de milhar: "1.234,56" vira "1.234.56", `parseFloat` para
+// no segundo ponto e devolve 1.234 → 123 centavos, não 123456. `parseCentsBRL` (contas.ts) trata o
+// milhar corretamente; estes testes fixam esse contrato nos dois sites de ProdutosPage.
+describe("ProdutosPage — separador de milhar (#224)", () => {
+  it("Novo produto: '1.234,56' vira price_cents 123456, não 123", async () => {
+    const user = userEvent.setup();
+    vi.mocked(api.post).mockResolvedValue({ data: {} } as never);
+    renderPage();
+
+    await user.click(await screen.findByRole("button", { name: "Novo produto" }));
+    await user.type(screen.getByLabelText("Nome"), "Mentoria anual");
+    await user.type(screen.getByLabelText("Preço (R$)"), "1.234,56");
+    await user.click(screen.getByRole("button", { name: "Criar produto" }));
+
+    await waitFor(() => expect(vi.mocked(api.post)).toHaveBeenCalled());
+    expect(vi.mocked(api.post)).toHaveBeenCalledWith(
+      "/products",
+      expect.objectContaining({ price_cents: 123456 }),
+    );
+  });
+
+  it("Novo cupom (desconto fixo): '1.234,56' vira discount_value 123456, não 123", async () => {
+    const user = userEvent.setup();
+    vi.mocked(api.post).mockResolvedValue({ data: {} } as never);
+    renderPage();
+
+    await user.click(await screen.findByRole("button", { name: "Cupons" }));
+    await user.click(await screen.findByRole("button", { name: "Novo cupom" }));
+    await user.type(screen.getByLabelText("Código"), "PROMO1234");
+    await user.selectOptions(screen.getByLabelText("Tipo"), "fixed");
+    await user.type(screen.getByLabelText("Desconto (R$)"), "1.234,56");
+    await user.click(screen.getByRole("button", { name: "Criar cupom" }));
+
+    await waitFor(() => expect(vi.mocked(api.post)).toHaveBeenCalled());
+    expect(vi.mocked(api.post)).toHaveBeenCalledWith(
+      "/products/coupons",
+      expect.objectContaining({ discount_value: 123456 }),
+    );
+  });
+});

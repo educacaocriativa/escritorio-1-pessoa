@@ -25,12 +25,21 @@ comentário lá.
 RLS/isolamento cross-tenant é validado à parte no Postgres real
 (`test_financial_intelligence_projection_rls.py`, marcado `rls_e2e`) — aqui a suíte roda em SQLite
 e a RLS não é exercida (ver `conftest.py`).
+
+⚠️ **issue #232.** `TODAY` era `tenant_today(...)` lido no IMPORT do módulo — mesma classe de
+defeito de `test_financial_intelligence_projection.py` (#84/#90/#101): o endpoint
+`/financial-intelligence/projection` (e as guardas `posted_at > opening_date`, `opening_date > hoje`
+do `bank.service`) não recebem `today=` e leem `hoje_do_tenant(db)` de novo, na hora da
+REQUISIÇÃO — se a meia-noite do tenant virasse entre o import e a chamada, fixture e serviço
+discordavam de um dia. `TODAY` agora vem de `tenant_today(..., now=FIXED_NOW)` (instante fixo) e
+`_hoje_travado_no_instante_fixo` tranca `hoje_do_tenant` no MESMO `FIXED_NOW` para toda chamada do
+serviço durante o teste.
 """
 from __future__ import annotations
 
 import re
 from dataclasses import asdict
-from datetime import timedelta
+from datetime import UTC, datetime, timedelta
 
 import pytest
 from fastapi.testclient import TestClient
@@ -60,6 +69,7 @@ from app.modules.financial_intelligence import dre as dre_service
 from app.modules.financial_intelligence import projection as projection_service
 from app.modules.payables.models import Payable
 from app.modules.receivables.models import Charge
+from app.modules.settings import service as settings_service
 from app.modules.wallet import service as wallet_service
 from app.modules.wallet.models import Transaction
 
@@ -72,15 +82,38 @@ REGISTER = {
     "password": "uma-senha-bem-grande",
 }
 
-TODAY = tenant_today(DEFAULT_TENANT_TIMEZONE)
+# Instante FIXO — nunca o relógio da máquina/CI (issue #232). Meio-dia UTC, longe de qualquer
+# virada de fuso (inclusive a do tenant, UTC−3).
+FIXED_NOW = datetime(2026, 8, 20, 12, 0, tzinfo=UTC)
+TODAY = tenant_today(DEFAULT_TENANT_TIMEZONE, now=FIXED_NOW)
 # Abertura bem no passado: dá espaço para lançar movimento em qualquer data recente sem esbarrar na
 # guarda `posted_at > opening_date` do service (Story 8.3).
 OPENING = (TODAY - timedelta(days=60)).isoformat()
 
+# A implementação REAL de `hoje_do_tenant`, capturada ANTES de qualquer monkeypatch.
+_HOJE_DO_TENANT_REAL = settings_service.hoje_do_tenant
+
 
 def _d(days: int) -> str:
-    """Data ISO de hoje + `days` (âncora UTC, a mesma que o serviço usa)."""
+    """Data ISO de hoje + `days` (âncora fixa, a mesma que o serviço usa via o patch abaixo)."""
     return (TODAY + timedelta(days=days)).isoformat()
+
+
+@pytest.fixture(autouse=True)
+def _hoje_travado_no_instante_fixo(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Tranca o "hoje" que o SERVIÇO enxerga no MESMO instante fixo de `TODAY` (issue #232).
+
+    `hoje_do_tenant` é sempre alcançado por import tardio (`bank.service._today`,
+    `payables.service._today`, `financial_intelligence.projection._hoje_do_tenant`, entre outros) —
+    todos fazem `from app.modules.settings.service import hoje_do_tenant` DENTRO da função, então o
+    patch no atributo do módulo é visto por toda chamada nova, inclusive as guardas de "data
+    futura" (`_validate_opening_date`) que este arquivo exercita ao cadastrar conta/movimento.
+    """
+    monkeypatch.setattr(
+        settings_service,
+        "hoje_do_tenant",
+        lambda db, *, now=None: _HOJE_DO_TENANT_REAL(db, now=FIXED_NOW),
+    )
 
 
 @pytest.fixture()

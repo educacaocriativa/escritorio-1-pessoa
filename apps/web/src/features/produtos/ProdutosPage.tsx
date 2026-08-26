@@ -4,6 +4,7 @@ import { useCallback, useEffect, useState } from "react";
 import Modal, { Field } from "../../components/Modal";
 import { api, apiErrorMessage } from "../../lib/api";
 import { usePrimaryAction } from "../../store/pageActions";
+import { parseCentsBRL } from "../financeiro/contas";
 import { formatBRL } from "../financeiro/dre";
 
 type Tab = "produtos" | "cupons" | "compradores";
@@ -259,7 +260,7 @@ function ProductModal({
       await api.post("/products", {
         name,
         kind,
-        price_cents: Math.round(parseFloat(value.replace(",", ".")) * 100),
+        price_cents: parseCentsBRL(value),
         description,
       });
       onCreated();
@@ -322,7 +323,7 @@ function CouponModal({
       const discount_value =
         type === "percent"
           ? parseInt(value, 10)
-          : Math.round(parseFloat(value.replace(",", ".")) * 100);
+          : parseCentsBRL(value);
       await api.post("/products/coupons", {
         code,
         discount_type: type,

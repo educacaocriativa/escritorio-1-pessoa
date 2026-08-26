@@ -281,13 +281,14 @@ export function faixasLivres(
 
   // −1 em qualquer outro dia: nada do passado a cortar.
   //
-  // Stryker disable next-line UnaryOperator: mutante EQUIVALENTE, e a issue #121 o cita pelo nome.
   // O −1 aqui é SENTINELA, não medida: o único uso de `corte` é `if (inicio <= corte) continue`,
   // e `inicio` começa em `HORA_ABERTURA * 60` = 480. Qualquer valor abaixo de 480 — −1, 0, +1 —
   // produz exatamente a mesma grade de faixas. Não existe teste capaz de distinguir os dois
   // programas, porque eles são o mesmo programa. Escrever um só fixaria o literal, e um teste
   // que fixa literal sem consequência observável é a família do `toContain("flex-wrap")` que o
   // CLAUDE.md §5.1 proíbe.
+  //
+  // Stryker disable next-line UnaryOperator: mutante EQUIVALENTE, e a issue #121 o cita pelo nome.
   const corte = today(fuso, agora) === ymd ? emMinutos(formatTime(agora.toISOString(), fuso)) : -1;
 
   const livres: Faixa[] = [];

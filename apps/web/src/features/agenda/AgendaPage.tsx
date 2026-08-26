@@ -391,7 +391,7 @@ function EventDetailModal({ event, onClose }: { event: AgendaEvent; onClose: () 
     if (!event.external_ref) return;
     api
       .get<Notification[]>(`/receivables/charges/${event.external_ref}/messages`)
-      .then(({ data }) => setMessages(data));
+      .then(({ data }) => setMessages(Array.isArray(data) ? data : []));
   }, [event.external_ref]);
 
   useEffect(() => {

@@ -31,8 +31,10 @@ export default function ContractBuilderPage() {
   const [savedAt, setSavedAt] = useState<string | null>(null);
 
   useEffect(() => {
-    api.get<Client[]>("/crm/clients").then(({ data }) => setClients(data));
-    api.get<ContractTemplate[]>("/contracts/templates").then(({ data }) => setTemplates(data));
+    api.get<Client[]>("/crm/clients").then(({ data }) => setClients(Array.isArray(data) ? data : []));
+    api
+      .get<ContractTemplate[]>("/contracts/templates")
+      .then(({ data }) => setTemplates(Array.isArray(data) ? data : []));
   }, []);
 
   const hydrate = useCallback((c: Contract) => {

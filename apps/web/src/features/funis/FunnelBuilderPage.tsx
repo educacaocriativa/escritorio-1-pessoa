@@ -29,6 +29,7 @@ import ReactFlow, {
 } from "reactflow";
 import "reactflow/dist/style.css";
 import { api, apiErrorMessage } from "../../lib/api";
+import { parseCentsBRL } from "../financeiro/contas";
 import { capabilitiesFor } from "../../lib/whatsappCapabilities";
 
 type NodeConfig = {
@@ -611,7 +612,8 @@ function RunNodeModal({
   const [busy, setBusy] = useState(false);
 
   useEffect(() => {
-    if (needsClient) api.get<Client[]>("/crm/clients").then(({ data }) => setClients(data));
+    if (needsClient)
+      api.get<Client[]>("/crm/clients").then(({ data }) => setClients(Array.isArray(data) ? data : []));
   }, [needsClient]);
 
   async function run() {
@@ -621,12 +623,12 @@ function RunNodeModal({
     if (action === "add_tag") params.tag = tag;
     if (action === "create_quote") {
       params.title = title;
-      params.amount_cents = Math.round(parseFloat(amount.replace(",", ".") || "0") * 100);
+      params.amount_cents = parseCentsBRL(amount);
     }
     if (action === "create_charge") {
       params.method = method;
       params.description = description;
-      params.amount_cents = Math.round(parseFloat(amount.replace(",", ".") || "0") * 100);
+      params.amount_cents = parseCentsBRL(amount);
     }
     if (action === "send_email") {
       params.subject = subject;
@@ -792,7 +794,7 @@ function NodeContentEditor({
     if (!isWhatsappTemplate) return;
     api
       .get<WhatsappTemplate[]>("/whatsapp-templates", { params: { status: "APPROVED" } })
-      .then(({ data }) => setTemplates(data));
+      .then(({ data }) => setTemplates(Array.isArray(data) ? data : []));
   }, [isWhatsappTemplate]);
 
   const selectedTemplate = templates.find((t) => t.id === templateId);

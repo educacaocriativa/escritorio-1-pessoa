@@ -23,10 +23,21 @@ o `saldo_projetado_cents` negativo continua asserido — suprime-se a afirmaçã
 RLS/isolamento cross-tenant é validado à parte no Postgres real
 (test_financial_intelligence_projection_rls.py, marcado `rls_e2e`) — aqui a suíte roda em SQLite e a
 RLS não é exercida (ver conftest).
+
+⚠️ **issue #232 (3ª rodada do mesmo defeito — #84, #90, #101).** `TODAY` era `tenant_today(...)` lido
+no IMPORT do módulo (relógio real). As fixtures (`_d(0)`, `amanha`, `ABERTURA_BANCO`...) ancoravam
+nesse valor, mas o ENDPOINT (`GET /financial-intelligence/projection`, `mark_paid`,
+`settle-externally`) chama `hoje_do_tenant(db)` de novo, na hora da REQUISIÇÃO — sem `today=`
+injetável na rota. Se a meia-noite do tenant virasse entre as duas leituras, fixture e serviço
+discordavam de um dia e a asserção quebrava. `TODAY` agora vem de
+`tenant_today(..., now=FIXED_NOW)` — um instante FIXO, não o relógio — e a fixture
+`_hoje_travado_no_instante_fixo` abaixo tranca `hoje_do_tenant` no MESMO `FIXED_NOW` para toda
+chamada feita pelo serviço durante o teste. Fixture e serviço passam a concordar por CONSTRUÇÃO,
+nunca por coincidência de horário.
 """
 from __future__ import annotations
 
-from datetime import timedelta
+from datetime import UTC, datetime, timedelta
 
 import pytest
 from fastapi.testclient import TestClient
@@ -39,6 +50,7 @@ from app.modules.financial_intelligence import diagnostics as diagnostics_servic
 from app.modules.financial_intelligence import projection as projection_service
 from app.modules.payables.models import Payable
 from app.modules.receivables.models import Charge
+from app.modules.settings import service as settings_service
 from app.modules.wallet.models import Transaction
 
 REGISTER = {
@@ -50,12 +62,39 @@ REGISTER = {
     "password": "uma-senha-bem-grande",
 }
 
-TODAY = tenant_today(DEFAULT_TENANT_TIMEZONE)
+# Instante FIXO — nunca o relógio da máquina/CI. Meio-dia UTC cai bem longe de qualquer virada de
+# fuso (inclusive a do tenant, UTC−3), então não há ambiguidade de "qual dia" mesmo se alguém mudar
+# o fuso padrão amanhã.
+FIXED_NOW = datetime(2026, 8, 20, 12, 0, tzinfo=UTC)
+TODAY = tenant_today(DEFAULT_TENANT_TIMEZONE, now=FIXED_NOW)
+
+# A implementação REAL de `hoje_do_tenant`, capturada ANTES de qualquer monkeypatch — é o que a
+# fixture abaixo chama por baixo, só que com `now=FIXED_NOW` amarrado. Preserva o comportamento de
+# resolver o fuso do tenant (`tenant_timezone(db)`); só o RELÓGIO deixa de ser o real.
+_HOJE_DO_TENANT_REAL = settings_service.hoje_do_tenant
 
 
 def _d(days: int) -> str:
-    """Data ISO de hoje + `days` (âncora UTC, a mesma que o serviço usa)."""
+    """Data ISO de hoje + `days` (âncora fixa, a mesma que o serviço usa via o patch abaixo)."""
     return (TODAY + timedelta(days=days)).isoformat()
+
+
+@pytest.fixture(autouse=True)
+def _hoje_travado_no_instante_fixo(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Tranca o "hoje" que o SERVIÇO enxerga no MESMO instante fixo da fixture `TODAY` (issue #232).
+
+    `hoje_do_tenant` é sempre alcançado por import tardio (`projection._hoje_do_tenant`,
+    `payables.service._today`, `receivables.service._today`) — todos fazem
+    `from app.modules.settings.service import hoje_do_tenant` DENTRO da função, então o patch no
+    atributo do módulo é visto por toda chamada nova, mesmo as que já estavam "importadas" antes
+    deste teste rodar. Sem isto, travar só `TODAY` não bastaria: o endpoint (que não recebe
+    `today=`) continuaria lendo o relógio real e podia discordar da fixture de novo.
+    """
+    monkeypatch.setattr(
+        settings_service,
+        "hoje_do_tenant",
+        lambda db, *, now=None: _HOJE_DO_TENANT_REAL(db, now=FIXED_NOW),
+    )
 
 
 @pytest.fixture()
