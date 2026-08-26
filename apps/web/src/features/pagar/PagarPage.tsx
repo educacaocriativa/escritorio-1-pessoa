@@ -85,17 +85,18 @@ function statusInfo(p: Payable): { label: string; cls: string } {
   return { label: "A pagar", cls: "bg-amber-50 text-amber-700" };
 }
 
+const EMPTY_SUMMARY: PayablesSummary = {
+  open_cents: 0,
+  overdue_cents: 0,
+  week_cents: 0,
+  month_cents: 0,
+  paid_month_cents: 0,
+  // Story 8.14 — o resumo ganhou o campo; os cinco antigos não mudaram de definição.
+  scheduled_cents: 0,
+};
+
 export default function PagarPage() {
-  const empty: PayablesSummary = {
-    open_cents: 0,
-    overdue_cents: 0,
-    week_cents: 0,
-    month_cents: 0,
-    paid_month_cents: 0,
-    // Story 8.14 — o resumo ganhou o campo; os cinco antigos não mudaram de definição.
-    scheduled_cents: 0,
-  };
-  const [summary, setSummary] = useState<PayablesSummary>(empty);
+  const [summary, setSummary] = useState<PayablesSummary>(EMPTY_SUMMARY);
   const [bills, setBills] = useState<Payable[]>([]);
   const [chartAccounts, setChartAccounts] = useState<ChartAccount[]>([]);
   const [costCenters, setCostCenters] = useState<CostCenter[]>([]);
@@ -144,14 +145,22 @@ export default function PagarPage() {
         }),
       ]);
       b = pagina;
-      setSummary(s.data);
+      // Guarda de FORMA (issue #247): `summary.open_cents`/etc. são lidos direto no render, sem
+      // `?.`. Uma raiz fora de forma faz `null.open_cents` estourar.
+      setSummary(
+        s.data && typeof s.data === "object" && !Array.isArray(s.data) ? s.data : EMPTY_SUMMARY,
+      );
     } finally {
       setCarregando(false);
     }
+    // Guarda de FORMA (issue #247, campo): `b.data.items` alimenta `bills.map` no render sem
+    // `?.`; um payload fora de forma (envelope de erro, `items` ausente) faria o spread
+    // `[...antes, ...undefined]` estourar (ou pior, `bills` virar `undefined` direto na página 1).
+    const itensDaPagina = Array.isArray(b.data?.items) ? b.data.items : [];
     // `proximoOffset > 0` é "carregar mais": ANEXA. Substituir aqui é o erro clássico de
     // paginação, e ele passa despercebido porque a primeira página sempre parece certa.
-    setBills((antes) => (proximoOffset === 0 ? b.data.items : [...antes, ...b.data.items]));
-    setTotal(b.data.total);
+    setBills((antes) => (proximoOffset === 0 ? itensDaPagina : [...antes, ...itensDaPagina]));
+    setTotal(typeof b.data?.total === "number" ? b.data.total : 0);
     setOffset(proximoOffset);
     // Rótulos são só um complemento de exibição — se o usuário não tiver acesso a esses módulos
     // (require_module), a lista de contas a pagar continua funcionando normalmente.

@@ -13,10 +13,16 @@ const statusInfo: Record<Quote["status"], { label: string; cls: string }> = {
   rejected: { label: "Recusado", cls: "bg-red-50 text-danger" },
 };
 
+const EMPTY_SUMMARY: QuotesSummary = {
+  draft_count: 0,
+  sent_cents: 0,
+  approved_cents: 0,
+  approved_count: 0,
+};
+
 export default function OrcamentosPage() {
   const navigate = useNavigate();
-  const empty: QuotesSummary = { draft_count: 0, sent_cents: 0, approved_cents: 0, approved_count: 0 };
-  const [summary, setSummary] = useState<QuotesSummary>(empty);
+  const [summary, setSummary] = useState<QuotesSummary>(EMPTY_SUMMARY);
   const [quotes, setQuotes] = useState<Quote[]>([]);
 
   const load = useCallback(async () => {
@@ -24,7 +30,11 @@ export default function OrcamentosPage() {
       api.get<QuotesSummary>("/quotes/summary"),
       api.get<Quote[]>("/quotes"),
     ]);
-    setSummary(s.data);
+    // Guarda de FORMA (issue #247): `summary.draft_count`/etc. são lidos direto no render, sem
+    // `?.`. Uma raiz fora de forma faz `null.draft_count` estourar.
+    setSummary(
+      s.data && typeof s.data === "object" && !Array.isArray(s.data) ? s.data : EMPTY_SUMMARY,
+    );
     setQuotes(q.data);
   }, []);
 

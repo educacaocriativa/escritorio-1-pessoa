@@ -4,6 +4,7 @@ import { MemoryRouter } from "react-router-dom";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { api } from "../../lib/api";
 import { PageActionsProvider } from "../../store/pageActions";
+import { assentar } from "../../test/assentar";
 import OrcamentosPage from "./OrcamentosPage";
 
 // Story 7.5 — Task 4 (aprovação). Rede sempre mockada (IV2): nenhum teste bate em /quotes real.
@@ -75,5 +76,44 @@ describe("OrcamentosPage — aprovar orçamento (Story 7.5, Task 4)", () => {
     expect(vi.mocked(api.post)).not.toHaveBeenCalled();
     // A tela continua funcional: o orçamento segue na lista.
     expect(screen.getByText("Consultoria tributária")).toBeInTheDocument();
+  });
+});
+
+// ── `GET /quotes/summary` fora de forma (issue #247) ────────────────────────────────────
+//
+// `setSummary(s.data)` recebia o payload CRU. `summary.draft_count`/`sent_cents`/etc. são lidos
+// direto nos três cartões, sem `?.` — uma raiz fora de forma faz `null.draft_count` estourar.
+describe("OrcamentosPage — resumo fora de forma não derruba a tela (#247)", () => {
+  it.each([
+    ["array no lugar do objeto", [{ draft_count: 3 }]],
+    ["string no lugar do objeto", "não é json"],
+    ["corpo vazio (204 / sem conteúdo)", null],
+  ])("%s → a tela segue montada, com os cartões zerados", async (_rotulo, payload) => {
+    vi.mocked(api.get).mockImplementation((url: string) => {
+      if (url === "/quotes/summary") return Promise.resolve({ data: payload } as never);
+      if (url === "/quotes") return Promise.resolve({ data: [] } as never);
+      return Promise.resolve({ data: [] } as never);
+    });
+    renderPage();
+    await assentar();
+
+    expect(screen.getByText("Orçamentos")).toBeInTheDocument();
+    expect(screen.getByText("Rascunhos")).toBeInTheDocument();
+    expect(screen.getAllByText("R$ 0,00").length).toBeGreaterThan(0);
+  });
+
+  it("contra-teste: resumo de verdade continua aparecendo nos cartões", async () => {
+    vi.mocked(api.get).mockImplementation((url: string) => {
+      if (url === "/quotes/summary")
+        return Promise.resolve({
+          data: { draft_count: 2, sent_cents: 30000, approved_cents: 0, approved_count: 0 },
+        } as never);
+      if (url === "/quotes") return Promise.resolve({ data: [] } as never);
+      return Promise.resolve({ data: [] } as never);
+    });
+    renderPage();
+    await assentar();
+
+    expect(await screen.findByText("R$ 300,00")).toBeInTheDocument();
   });
 });
