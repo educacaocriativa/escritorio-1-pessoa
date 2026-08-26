@@ -150,7 +150,7 @@ export default function NewEventModal({
               ))}
             </select>
           </label>
-          <label className="flex items-center gap-2 pb-2 text-sm text-neutral-600">
+          <label className="flex min-h-[44px] items-center gap-2 text-sm text-neutral-600">
             <input type="checkbox" checked={allDay} onChange={(e) => setAllDay(e.target.checked)} />
             Dia inteiro
           </label>

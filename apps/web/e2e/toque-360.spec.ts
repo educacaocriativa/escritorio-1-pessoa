@@ -322,3 +322,58 @@ test("as ações do centro de custo são tocáveis com o polegar", async ({ page
   expect(larguraDaPagina).toBe(360);
   await expect(page.getByTestId("comparativo-centros")).toBeVisible();
 });
+
+// ── `/agenda`, modal "Novo evento" — checkbox "Dia inteiro" ────────────────────────────────────
+// A forma LITERAL do PR #56 (issue #227, item "Dívida menor"): o alvo era um checkbox de 13×13
+// sem `min-h-[44px]` na LINHA do rótulo — e a consequência medida daquele PR foi uma conta real
+// marcada como paga sem o dono conseguir ver. Aqui o controle troca "conta paga" por "evento de
+// dia inteiro", mas o mecanismo do defeito é o mesmo dedo errando o mesmo alvo pequeno.
+//
+// Escopo deliberadamente pequeno: só a LINHA do rótulo ganha `min-h-[44px]` — mesma convenção do
+// `ContasSaldosPage.tsx:208` e do teste de `/financeiro/centros-custo` acima. O `<input>` em si
+// não muda de tamanho (a issue #227 é explícita: o alvo de toque é a linha inteira, não a
+// caixinha).
+test("o checkbox 'Dia inteiro' do modal de evento (/agenda) é tocável com o polegar", async ({
+  page,
+}) => {
+  // Relógio congelado: `/agenda` abre no mês corrente e o modal de evento nasce com a data de
+  // hoje. Sem isto o teste mede uma tela diferente a cada dia — mesma nota do bloco de
+  // `campo-modal-360.spec.ts` para esta mesma rota.
+  await page.clock.setFixedTime(new Date("2026-08-18T12:00:00Z"));
+  await semearSessao(page);
+  await mockarApi(page, {});
+  await page.goto("/agenda");
+
+  await page.getByRole("button", { name: "Novo evento" }).first().click();
+  await expect(page.getByRole("heading", { name: "Novo evento" })).toBeVisible();
+
+  const overlay = page.locator(".fixed.inset-0.z-50");
+  const caixaCheckbox = await overlay.getByText("Dia inteiro").boundingBox();
+  expect(caixaCheckbox, "Dia inteiro").not.toBeNull();
+  expect(caixaCheckbox!.height, "Dia inteiro").toBeGreaterThanOrEqual(44);
+
+  const { larguraDaPagina } = await medirPagina(page);
+  expect(larguraDaPagina).toBe(360);
+});
+
+// ── `/financeiro/plano-contas` — checkbox "Mostrar arquivadas" ─────────────────────────────────
+// Mesma dívida menor da issue #227: checkbox de 13×13 sem a classe `h-5 w-5` que é a convenção do
+// repo para o quadrado do checkbox (20×20 — ver `ContasSaldosPage.tsx:208` e
+// `CentrosCustoPage.tsx:86`). O `<label>` já cumpria os 44px? Não: também faltava `min-h-[44px]`
+// na linha, então as duas metades da convenção (caixinha 20×20 + linha 44px) foram aplicadas
+// juntas, exatamente como nas outras três telas de `/financeiro` que já seguem o padrão.
+test("o checkbox 'Mostrar arquivadas' de /financeiro/plano-contas é tocável com o polegar", async ({
+  page,
+}) => {
+  await semearSessao(page);
+  await mockarApi(page, { "/chart-of-accounts": [] });
+  await page.goto("/financeiro/plano-contas");
+  await expect(page.getByRole("heading", { name: "Plano de contas" })).toBeVisible();
+
+  const caixaCheckbox = await page.getByText("Mostrar arquivadas").boundingBox();
+  expect(caixaCheckbox, "Mostrar arquivadas").not.toBeNull();
+  expect(caixaCheckbox!.height, "Mostrar arquivadas").toBeGreaterThanOrEqual(44);
+
+  const { larguraDaPagina } = await medirPagina(page);
+  expect(larguraDaPagina).toBe(360);
+});
