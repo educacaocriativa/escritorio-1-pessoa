@@ -21,7 +21,11 @@ export default function CrmPage() {
     setLoading(true);
     try {
       const { data } = await api.get<Board>("/crm/board");
-      setBoard(data);
+      // `Array.isArray`, no molde de `ClientTimeline.tsx`: `board.columns.map` estoura no render
+      // se `columns` não for array — e sem ErrorBoundary isso desmonta a tela inteira, não só o
+      // quadro. `data?.columns` cobre tanto um payload que não é objeto quanto um objeto sem a
+      // chave `columns`.
+      setBoard(Array.isArray(data?.columns) ? data : { columns: [] });
     } finally {
       setLoading(false);
     }

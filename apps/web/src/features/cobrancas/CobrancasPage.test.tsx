@@ -3,6 +3,7 @@ import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { api } from "../../lib/api";
 import { PageActionsProvider, usePageActions } from "../../store/pageActions";
+import { assentar } from "../../test/assentar";
 import CobrancasPage from "./CobrancasPage";
 
 // Story 7.5 — Task 2. Rede sempre mockada (IV2): nenhum teste bate em /receivables real.
@@ -495,5 +496,97 @@ describe("CobrancasPage — recebimento fora do trilho (Story 8.15)", () => {
 
     await screen.findByRole("table");
     expect(screen.queryByText("Agendado para entrar")).toBeNull();
+  });
+});
+
+// ══════════════════════════════════════════════════════════════════════════════════════════════
+// Issue #224 — separador de milhar no valor digitado (parseCentsBRL)
+// ══════════════════════════════════════════════════════════════════════════════════════════════
+//
+// A conta manual antiga (`Math.round(parseFloat(v.replace(",", ".")) * 100)`) só troca a PRIMEIRA
+// vírgula por ponto e nunca remove o ponto de milhar: "1.234,56" vira "1.234.56", `parseFloat` para
+// no segundo ponto e devolve 1.234 → 123 centavos, não 123456. `parseCentsBRL` (contas.ts) trata o
+// milhar corretamente; estes testes fixam esse contrato nos dois sites de CobrancasPage.
+describe("CobrancasPage — separador de milhar (#224)", () => {
+  it("Nova cobrança: '1.234,56' vira 123456 centavos, não 123 (regressão do parseFloat cru)", async () => {
+    const user = userEvent.setup();
+    vi.mocked(api.post).mockResolvedValue({ data: {} } as never);
+    renderPage();
+
+    await user.click(await screen.findByRole("button", { name: "Nova cobrança" }));
+    await user.type(screen.getByLabelText("Valor (R$)"), "1.234,56");
+    fireEvent.change(screen.getByLabelText("Vencimento"), { target: { value: "2026-09-10" } });
+    await user.click(screen.getByRole("button", { name: "Gerar cobrança" }));
+
+    await waitFor(() => expect(vi.mocked(api.post)).toHaveBeenCalled());
+    expect(vi.mocked(api.post)).toHaveBeenCalledWith(
+      "/receivables/charges",
+      expect.objectContaining({ amount_cents: 123456 }),
+    );
+  });
+
+  it("Editar cobrança: '1.234,56' vira 123456 centavos, não 123", async () => {
+    const user = userEvent.setup();
+    mockCobrancas([COBRANCA_ABERTA]);
+    vi.mocked(api.patch).mockResolvedValue({ data: {} } as never);
+    renderPage();
+
+    await user.click(await screen.findByRole("button", { name: "Editar" }));
+    const valor = await screen.findByLabelText("Valor (R$)");
+    await user.clear(valor);
+    await user.type(valor, "1.234,56");
+    await user.click(screen.getByRole("button", { name: "Salvar alterações" }));
+
+    await waitFor(() => expect(vi.mocked(api.patch)).toHaveBeenCalled());
+    expect(vi.mocked(api.patch)).toHaveBeenCalledWith(
+      "/receivables/charges/c-1",
+      expect.objectContaining({ amount_cents: 123456 }),
+    );
+  });
+});
+
+// ── `GET /crm/clients` e `GET /contracts` fora de forma (issue #225) ──────────────────────────
+//
+// `setClients(data)`/`setContracts(data)` (dentro de `NewChargeModal`) recebiam o payload cru. Os
+// dois `<select>` ("Cliente" e "Vincular a contrato") são montados direto assim que o modal
+// "Nova cobrança" abre, sem guarda de `.length`.
+describe("CobrancasPage — clientes/contratos fora de forma não derrubam o modal Nova cobrança (#225)", () => {
+  it.each([
+    ["envelope de erro devolvido com 200", { detail: "algo deu errado" }],
+    ["string no lugar da lista", "não é json"],
+  ])("%s → o modal abre, com os selects vazios", async (_rotulo, payload) => {
+    const user = userEvent.setup();
+    vi.mocked(api.get).mockImplementation((url: string) => {
+      if (url === "/receivables/summary") return Promise.resolve({ data: emptySummary } as never);
+      if (url === "/receivables/charges") return Promise.resolve({ data: [] } as never);
+      if (url === "/crm/clients") return Promise.resolve({ data: payload } as never);
+      if (url === "/contracts") return Promise.resolve({ data: payload } as never);
+      return Promise.resolve({ data: [] } as never);
+    });
+    renderPage();
+    await user.click(await screen.findByRole("button", { name: "Nova cobrança" }));
+    await assentar();
+
+    expect(screen.getByText("Sem cliente")).toBeInTheDocument();
+    expect(screen.getByText("Empresa (sem contrato)")).toBeInTheDocument();
+  });
+
+  it("contra-teste: cliente e contrato de verdade continuam aparecendo nos selects", async () => {
+    const user = userEvent.setup();
+    vi.mocked(api.get).mockImplementation((url: string) => {
+      if (url === "/receivables/summary") return Promise.resolve({ data: emptySummary } as never);
+      if (url === "/receivables/charges") return Promise.resolve({ data: [] } as never);
+      if (url === "/crm/clients")
+        return Promise.resolve({ data: [{ id: "c-1", name: "Maria Silva" }] } as never);
+      if (url === "/contracts")
+        return Promise.resolve({ data: [{ id: "ct-1", title: "Consultoria", client_name: null }] } as never);
+      return Promise.resolve({ data: [] } as never);
+    });
+    renderPage();
+    await user.click(await screen.findByRole("button", { name: "Nova cobrança" }));
+    await assentar();
+
+    expect(await screen.findByText("Maria Silva")).toBeInTheDocument();
+    expect(screen.getByText("Consultoria")).toBeInTheDocument();
   });
 });

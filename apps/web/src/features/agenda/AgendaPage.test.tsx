@@ -236,3 +236,54 @@ describe("AgendaPage — eventos fora de forma não derrubam a grade (#207)", ()
     expect(screen.getByText("Atendimento real")).toBeInTheDocument();
   });
 });
+
+// ── `GET .../messages` fora de forma (issue #225) ────────────────────────────
+//
+// `setMessages(data)` (dentro de `EventDetailModal`) recebia o payload cru. `messages.map` está
+// atrás de `messages.length === 0`, mas a mesma armadilha do `runs`/`tokens` acima se aplica: um
+// payload cujo `.length` não é numérico (objeto) ou cuja string TEM `.length` > 0 cai no `.map`.
+describe("AgendaPage — histórico de mensagens fora de forma não derruba o modal do evento (#225)", () => {
+  function mockEventoReceber(payload: unknown) {
+    const evento = agendaEvent({
+      id: "ev-receber-msgs",
+      kind: "cobranca_receber",
+      external_ref: "chg-1",
+      title: "A receber: Fulana",
+    });
+    vi.mocked(api.get).mockImplementation((url: string) => {
+      if (url === "/agenda/events") return Promise.resolve({ data: [evento] } as never);
+      if (url === "/receivables/charges/chg-1/messages") return Promise.resolve({ data: payload } as never);
+      if (url === "/receivables/charges/chg-1") return Promise.resolve({ data: null } as never);
+      return Promise.resolve({ data: [] } as never);
+    });
+    return evento;
+  }
+
+  it.each([
+    ["envelope de erro devolvido com 200", { detail: "algo deu errado" }],
+    ["string no lugar da lista", "não é json"],
+  ])("%s → o modal do evento abre, sem histórico", async (_rotulo, payload) => {
+    const user = userEvent.setup();
+    const evento = mockEventoReceber(payload);
+    renderPage();
+
+    await user.click(await screen.findByTestId(`chip-evento-${evento.id}`));
+    await assentar();
+
+    expect(screen.getByText("Histórico de mensagens")).toBeInTheDocument();
+    expect(screen.getByText("Nenhuma mensagem enviada ainda.")).toBeInTheDocument();
+  });
+
+  it("contra-teste: mensagem de verdade continua aparecendo no histórico", async () => {
+    const user = userEvent.setup();
+    const evento = mockEventoReceber([
+      { id: "m-1", message: "Mensagem real", status: "sent", created_at: "2026-08-01T10:00:00Z" },
+    ]);
+    renderPage();
+
+    await user.click(await screen.findByTestId(`chip-evento-${evento.id}`));
+    await assentar();
+
+    expect(await screen.findByText("Mensagem real")).toBeInTheDocument();
+  });
+});

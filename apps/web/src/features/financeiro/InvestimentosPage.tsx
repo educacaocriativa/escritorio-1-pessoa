@@ -467,8 +467,9 @@ function RegisterYieldModal({
     api
       .get<ChartAccount[]>("/chart-of-accounts", { params: { grupo: "FINANCEIRO" } })
       .then(({ data }) => {
-        setFinanceiro(data);
-        if (data.length > 0) setChartAccountId(data[0].id);
+        const lista = Array.isArray(data) ? data : [];
+        setFinanceiro(lista);
+        if (lista.length > 0) setChartAccountId(lista[0].id);
       });
   }, [account]);
 

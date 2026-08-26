@@ -1,5 +1,5 @@
 import { act, render, screen, waitFor } from "@testing-library/react";
-import { useEffect, useRef } from "react";
+import { StrictMode, useEffect, useRef } from "react";
 import type { NavigateFunction } from "react-router-dom";
 import { MemoryRouter, Route, Routes, useNavigate, useNavigationType } from "react-router-dom";
 import { beforeEach, describe, expect, it, vi } from "vitest";
@@ -34,9 +34,9 @@ function TestProbe({ onReady }: { onReady: (handle: ProbeHandle) => void }) {
   return null;
 }
 
-function renderAt(url: string, extraRoutes: JSX.Element[] = []) {
+function renderAt(url: string, extraRoutes: JSX.Element[] = [], strict = false) {
   let handle: ProbeHandle | null = null;
-  render(
+  const tree = (
     <MemoryRouter initialEntries={[url]}>
       <TestProbe onReady={(h) => (handle = h)} />
       <Routes>
@@ -44,8 +44,9 @@ function renderAt(url: string, extraRoutes: JSX.Element[] = []) {
         <Route path="/comprovante/:id" element={<p>tela do comprovante</p>} />
         {extraRoutes}
       </Routes>
-    </MemoryRouter>,
+    </MemoryRouter>
   );
+  render(strict ? <StrictMode>{tree}</StrictMode> : tree);
   return {
     navigate: (to: string) => act(() => handle!.navigate(to)),
     getActionType: () => handle!.getActionType(),
@@ -151,5 +152,32 @@ describe("CompartilharPage", () => {
 
     await waitFor(() => expect(screen.queryByText("tela do comprovante")).toBeNull());
     expect(screen.getByText("outra tela")).toBeTruthy();
+  });
+
+  // Achado 5 (#226): sob React.StrictMode (produção real via main.tsx), a 2ª montagem do efeito
+  // via que `startedFor === token` e desistia SEM se inscrever no resultado. Quando a limpeza do
+  // StrictMode cancelava a 1ª montagem, ninguém vivo chamava setError/navigate e o spinner ficava
+  // preso em "Enviando comprovante..." para sempre. A 2ª montagem (a que sobrevive) precisa
+  // terminar — sucesso ou erro — mesmo reaproveitando a mesma requisição da 1ª.
+  it("sob StrictMode, a 2a montagem termina (sucesso) e nao trava em 'Enviando comprovante...'", async () => {
+    vi.mocked(takeSharedFile).mockResolvedValue(
+      new File(["x"], "comp.pdf", { type: "application/pdf" }),
+    );
+    vi.mocked(api.post).mockResolvedValue({ data: { id: "r-strict" } } as never);
+
+    renderAt("/compartilhar?k=strict1", [], true);
+
+    await waitFor(() => screen.getByText("tela do comprovante"), { timeout: 2000 });
+    // dedup: mesmo com StrictMode montando duas vezes, a chave só é buscada uma vez.
+    expect(vi.mocked(takeSharedFile)).toHaveBeenCalledTimes(1);
+  });
+
+  it("sob StrictMode, a 2a montagem termina (erro) e nao trava em 'Enviando comprovante...'", async () => {
+    vi.mocked(takeSharedFile).mockResolvedValue(null);
+
+    renderAt("/compartilhar?k=strict2", [], true);
+
+    await waitFor(() => screen.getByText(/não encontramos o arquivo/i), { timeout: 2000 });
+    expect(screen.queryByText(/enviando comprovante/i)).toBeNull();
   });
 });
