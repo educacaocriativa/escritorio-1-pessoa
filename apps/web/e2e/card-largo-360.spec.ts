@@ -352,6 +352,24 @@ test("a régua converte `scrollWidth` para a escala do `transform`", async ({ pa
     document.querySelector("main")!.appendChild(lona);
   }, LONGO);
 
+  // #236 — CORREÇÃO 1: espera a fonte web terminar de carregar ANTES de qualquer leitura de
+  // `scrollWidth`. Num runner frio a fonte ainda não chegou quando o primeiro `evaluate` abaixo
+  // media o `<p>`, e o texto refluía ANTES do segundo — o MESMO elemento devolvia `scrollWidth`
+  // diferente em cada leitura (CI mediu 2262 vs ~2164, 98px de diferença no mesmo `<p>`). Local,
+  // com a fonte já em cache, não existe essa janela — daí o teste nunca reproduzir no dev.
+  await page.evaluate(() => document.fonts.ready);
+
+  // #236 — CORREÇÃO 2: com a fonte estável, a régua real lê PRIMEIRO (nada entre a espera da fonte
+  // e esta leitura), e a expectativa é montada em seguida, sem qualquer navegação/reflow entre as
+  // duas chamadas. Antes, a ORDEM era invertida — a expectativa (`medido`) era computada ANTES da
+  // régua, então se a fonte ainda trocasse depois da espera (ou por qualquer outro motivo alheio à
+  // fonte), a leitura MAIS ANTIGA (a da expectativa) é que ficaria desatualizada. Comparar contra o
+  // que a régua leu, em vez de recomputar um valor esperado independentemente antes dela, fecha essa
+  // reentrada: uma expectativa recalculada a partir de um `scrollWidth` que muda com o tempo é
+  // frágil por construção, e isso vale mesmo se a fonte voltar a demorar no futuro.
+  const cortes = await textoForaDaTela(page, "main");
+  const corte = cortes.find((c) => c.descricao === "p.isca-212");
+
   const medido = await page.evaluate(() => {
     const el = document.querySelector(".isca-212")!;
     const r = el.getBoundingClientRect();
@@ -371,7 +389,6 @@ test("a régua converte `scrollWidth` para a escala do `transform`", async ({ pa
   expect(medido.caixaDireita).toBeLessThanOrEqual(360);
   expect(medido.cru).toBeGreaterThan(medido.naEscala * 3);
 
-  const corte = (await textoForaDaTela(page, "main")).find((c) => c.descricao === "p.isca-212");
   expect(corte, "a régua ficou CEGA para tinta dentro de um `transform: scale`").toBeDefined();
   expect(
     corte!.forcaFora,
