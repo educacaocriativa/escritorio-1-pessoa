@@ -8,6 +8,7 @@ import { PayoutHistory, type Payout } from "./PayoutHistory";
 import ChartAccountSelect from "./ChartAccountSelect";
 import type { CostCenter } from "./costCenters";
 import CostCenterSelect from "./CostCenterSelect";
+import { parseCentsBRL } from "./contas";
 import { type ChartAccount, GRUPOS_DRE } from "./planoContas";
 import { formatBRL } from "./dre";
 
@@ -273,7 +274,7 @@ function NewSaleModal({
     setError(null);
     setSaving(true);
     try {
-      const gross_cents = Math.round(parseFloat(value.replace(",", ".")) * 100);
+      const gross_cents = parseCentsBRL(value);
       await api.post("/wallet/transactions", {
         kind,
         method,

@@ -57,7 +57,7 @@ export default function ContratoDrePage() {
   useEffect(() => {
     api
       .get<CostCenter[]>("/cost-centers")
-      .then((r) => setCostCenters(r.data))
+      .then((r) => setCostCenters(Array.isArray(r.data) ? r.data : []))
       .catch(() => setCostCenters([]));
   }, []);
 

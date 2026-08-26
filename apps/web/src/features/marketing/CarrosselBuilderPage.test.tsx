@@ -3,6 +3,7 @@ import userEvent from "@testing-library/user-event";
 import { MemoryRouter, Route, Routes } from "react-router-dom";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { api } from "../../lib/api";
+import { assentar } from "../../test/assentar";
 import CarrosselBuilderPage from "./CarrosselBuilderPage";
 
 // Story 7.18 — Task 1. Rede sempre mockada (IV2): nenhum teste bate em /marketing real.
@@ -83,5 +84,41 @@ describe("CarrosselBuilderPage — gerar carrossel (Story 7.18, Task 1)", () => 
       await screen.findByText("Escreva um tema para a IA gerar o carrossel."),
     ).toBeInTheDocument();
     expect(vi.mocked(api.post)).not.toHaveBeenCalled();
+  });
+});
+
+// ── `GET /marketing/carousels/templates` fora de forma (issue #225) ────────────
+//
+// `setTemplates(data)` recebia o payload CRU. `templates.map` (linha ~194) é montado direto no
+// editor, sem guarda de `.length` nem passo condicional — todo load da página passa por ali.
+describe("CarrosselBuilderPage — templates fora de forma não derrubam o editor (#225)", () => {
+  it.each([
+    ["envelope de erro devolvido com 200", { detail: "algo deu errado" }],
+    ["string no lugar da lista", "não é json"],
+  ])("%s → o editor segue montado, sem os botões de template", async (_rotulo, payload) => {
+    vi.mocked(api.get).mockImplementation((url: string) => {
+      if (url === "/marketing/carousels/templates") return Promise.resolve({ data: payload } as never);
+      if (url === "/settings/profile") return Promise.resolve({ data: profile } as never);
+      return Promise.resolve({ data: [] } as never);
+    });
+    renderNew();
+    await assentar();
+
+    expect(screen.getByText("Template (clique e depois personalize)")).toBeInTheDocument();
+  });
+
+  it("contra-teste: template de verdade continua aparecendo", async () => {
+    vi.mocked(api.get).mockImplementation((url: string) => {
+      if (url === "/marketing/carousels/templates")
+        return Promise.resolve({
+          data: [{ key: "editorial", label: "Editorial", primary_color: "#000", bg_color: "#fff" }],
+        } as never);
+      if (url === "/settings/profile") return Promise.resolve({ data: profile } as never);
+      return Promise.resolve({ data: [] } as never);
+    });
+    renderNew();
+    await assentar();
+
+    expect(await screen.findByText("Editorial")).toBeInTheDocument();
   });
 });

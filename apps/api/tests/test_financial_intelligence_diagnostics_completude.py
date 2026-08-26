@@ -14,6 +14,19 @@ os estados degradados que existem hoje em produção:
 - **sem `ANTHROPIC_API_KEY`** — os sinais são os mesmos; só a narrativa cai para template.
 
 Nada aqui escreve nada além do seed: o diagnóstico é read-only (IV3) e a conferência também.
+
+⚠️ **issue #232.** `TODAY` era `tenant_today(...)` lido no IMPORT do módulo — mesma classe de defeito
+do `test_financial_intelligence_projection.py` (#84/#90/#101). O comentário original argumentava que
+"data ancorada em HOJE real" era necessário porque o endpoint não injeta `today` e as guardas de
+"data futura" (`_validate_opening_date`, checkpoint) ancoram no relógio; um período FIXO no passado
+"deixaria de conter os dados conforme o tempo passa". Isso é verdade só enquanto o relógio for o
+verdadeiro — a correção é a mesma dos outros arquivos: `TODAY`/`START`/`END`/`REF` vêm de
+`tenant_today(..., now=FIXED_NOW)` (instante fixo, não o relógio) e
+`_hoje_travado_no_instante_fixo` tranca `hoje_do_tenant` no MESMO `FIXED_NOW` para toda chamada do
+serviço durante o teste — inclusive as guardas de "data futura", que também passam a comparar
+contra `FIXED_NOW`. `START`/`END`/`REF`
+continuam válidas para SEMPRE (não só até a próxima virada de dia), porque a guarda que antes corria
+risco de as invalidar agora usa a MESMA âncora fixa.
 """
 from __future__ import annotations
 
@@ -28,6 +41,7 @@ from app.modules.financial_intelligence import ai_narrator, diagnostics, engine
 from app.modules.payables import service as payables_service
 from app.modules.payables.models import Payable
 from app.modules.receivables.models import Charge
+from app.modules.settings import service as settings_service
 
 REGISTER = {
     "legal_name": "Completude ME",
@@ -38,13 +52,37 @@ REGISTER = {
     "password": "uma-senha-bem-grande",
 }
 
-# Datas ancoradas em HOJE (e não em constantes fixas) porque o endpoint não injeta `today`: as
-# guardas de "data futura" de conta/checkpoint/movimento ancoram no relógio real, e um período fixo
-# no passado deixaria de conter os dados conforme o tempo passa.
-TODAY = tenant_today(DEFAULT_TENANT_TIMEZONE)
+# Instante FIXO — nunca o relógio da máquina/CI (issue #232). Meio-dia UTC, longe de qualquer
+# virada de fuso (inclusive a do tenant, UTC−3).
+FIXED_NOW = datetime(2026, 8, 20, 12, 0, tzinfo=UTC)
+TODAY = tenant_today(DEFAULT_TENANT_TIMEZONE, now=FIXED_NOW)
 START = TODAY - timedelta(days=20)
 END = TODAY
 REF = TODAY - timedelta(days=2)
+
+# A implementação REAL de `hoje_do_tenant`, capturada ANTES de qualquer monkeypatch.
+_HOJE_DO_TENANT_REAL = settings_service.hoje_do_tenant
+
+
+@pytest.fixture(autouse=True)
+def _hoje_travado_no_instante_fixo(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Tranca o "hoje" que o SERVIÇO enxerga no MESMO instante fixo de `TODAY` (issue #232).
+
+    `hoje_do_tenant` é sempre alcançado por import tardio (`bank.service._today`,
+    `payables.service._today`, `financial_intelligence.projection._hoje_do_tenant`, entre outros) —
+    todos fazem `from app.modules.settings.service import hoje_do_tenant` DENTRO da função, então o
+    patch no atributo do módulo é visto por toda chamada nova.
+    `compute_signals`/`collect_engine_input` chamam `cash_projection(db)` e
+    `_completeness(..., today=None)` SEM `today=` explícito (o router
+    de `/diagnostics` não aceita esse parâmetro) — sem este patch, elas leriam o relógio real e
+    poderiam divergir de `TODAY`/`START`/`END`/`REF` se a meia-noite do tenant passasse no meio do
+    teste, o mecanismo exato da issue #232.
+    """
+    monkeypatch.setattr(
+        settings_service,
+        "hoje_do_tenant",
+        lambda db, *, now=None: _HOJE_DO_TENANT_REAL(db, now=FIXED_NOW),
+    )
 
 
 @pytest.fixture()

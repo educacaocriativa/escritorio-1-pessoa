@@ -27,7 +27,7 @@ export default function JuridicoWizardPage() {
       .get<LegalWizardConfig>(`/juridico/skills/${skill}`)
       .then(({ data }) => setCfg(data))
       .catch(() => setError("Especialidade não encontrada."));
-    api.get<Client[]>("/crm/clients").then(({ data }) => setClients(data));
+    api.get<Client[]>("/crm/clients").then(({ data }) => setClients(Array.isArray(data) ? data : []));
   }, [skill]);
 
   const set = useCallback((key: string, value: string | string[]) => {
