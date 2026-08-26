@@ -663,13 +663,12 @@ export function resumoSaldos(accounts: BankAccount[]): ResumoSaldo[] {
  * "1.234,56" / "1234.56" / "1234" → centavos. Vazio ou inválido → `0`. Aceita sinal negativo
  * (saldo de abertura de conta no limite é legítimo).
  *
- * ⚠️ **Achado registrado, não corrigido aqui:** o repositório tem hoje ~8 conversões BRL→centavos
- * escritas inline (`Math.round(parseFloat(v.replace(",", ".")) * 100)`) espalhadas por
- * `CobrancasPage`, `FinanceiroPage`, `InvestimentosPage`, `EstoquePage`, `FunnelBuilderPage` e
- * `QuoteBuilderPage`, mais um `toCents` local em `ComprovantePage`. Nenhuma delas trata o ponto de
- * milhar ("1.234,56" vira 1,23 em metade delas). Consolidar tudo num helper único ao lado de
- * `formatBRL` é a correção certa — e está **fora do escopo desta story** (tocaria 7 telas que a
- * IV1 manda deixar intactas). Esta é a única versão testada; ver Dev Agent Record.
+ * ✅ **Consolidada (#224).** As 12 conversões inline (`Math.round(parseFloat(v.replace(",", "."))
+ * * 100)`) espalhadas por `CobrancasPage`, `PagarPage`, `ProdutosPage`, `FunnelBuilderPage`,
+ * `EstoquePage`, `FinanceiroPage`, `FunnelAutomation` e o `toCents` local de `QuoteBuilderPage`
+ * agora chamam esta função — nenhuma delas tratava o ponto de milhar ("1.234,56" virava 1,23).
+ * `ComprovantePage.toCents` (que já trata milhar de outro jeito) ficou fora: não estava na lista
+ * de 12 sites da #224.
  */
 export function parseCentsBRL(raw: string): number {
   const s = raw.trim().replace(/\s/g, "");
