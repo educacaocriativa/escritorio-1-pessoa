@@ -87,7 +87,7 @@ export default function FunisPage() {
                 onClick={(e) => remove(e, f.id)}
                 className="absolute right-5 top-1/2 -translate-y-1/2 text-neutral-300 hover:text-danger"
               >
-                <Trash2 size={16} />
+                <Trash2 size={14} />
               </button>
             </div>
           ))}
