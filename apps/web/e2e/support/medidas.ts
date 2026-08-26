@@ -293,29 +293,6 @@ export async function controlesInalcancaveis(
 }
 
 /**
- * Seletores cujo conteúdo `textoForaDaTela` NÃO acusa — cada um com a razão e o número medido ao
- * lado, no mesmo molde de `EXCECOES_DE_ALCANCE` acima. Diferente daquela, esta lista NÃO é "não é
- * defeito por construção": é um defeito REAL, medido, fora do escopo do ticket que ligou esta
- * régua para ele.
- *
- * `[data-testid^="abrir-carrossel-"]` — o card do carrossel em `/marketing`
- * (`MarketingPage.tsx:57`). O `CarouselThumb` pede `display: 240` e o wrapper que o recorta
- * (`div.flex.justify-center.overflow-hidden`, `MarketingPage.tsx:62`) é encolhido pela coluna do
- * grid a bem menos que isso a 360px — a mesma conta do #228 (240 pedido, ~148 disponível, 92px de
- * arte perdida). A régua corrigida para o ancestral mais apertado VÊ este corte pela primeira vez;
- * medido em 25/08/2026, com o catálogo de `card-largo-360.spec.ts`: 5 cortes em `/marketing` —
- * `span «@escritorio_de_uma_pessoa_1234»` +11,3px, `span «Agosto 2026 ®»` +83,1px,
- * `div «@escritorio_de_uma_pessoa_1234»` +79,6px, `span «Diagnostico»` +72,2px,
- * `p «RelatorioDeDiagnosticoFinanceiroConsolidadoDoExercicioDeDois»` +79,6px — nenhum nas outras
- * cinco rotas do catálogo. **Isto é o achado do #228, não um falso positivo da régua**: o thumb
- * está de fato cortado em produção. O CONSERTO pertence a outra issue — como o thumb deve se
- * comportar quando o grid o aperta (encolher a escala com o container? Rolar?) é decisão de UI,
- * não de régua — e esta exceção existe só para não travar #228 na correção do sintoma errado.
- * Remova-a quando essa issue fechar.
- */
-export const EXCECOES_DE_RECORTE = ['[data-testid^="abrir-carrossel-"]'];
-
-/**
  * Texto que só EXISTE se o dono rolar de lado — o defeito que a Onda 2b-ii achou na primeira
  * medição (`R$ 3.` no lugar de `R$ 3.000,00`). Para cada folha com texto, acha o ancestral que
  * recorta e mede quanto sobra fora dele.
@@ -327,9 +304,9 @@ export const EXCECOES_DE_RECORTE = ['[data-testid^="abrir-carrossel-"]'];
  * que não são defeito de ninguém. Escopo que deixou de casar cai no documento inteiro, e não em
  * lista vazia: um seletor podre tem de aparecer como ruído, nunca como aprovação.
  *
- * `excecoes` casa por `.closest()`, igual a `EXCECOES_DE_ALCANCE` — ver `EXCECOES_DE_RECORTE`
- * acima para a única em uso. Vazia por padrão: as outras 15 chamadas desta função no repo não
- * mudam de comportamento.
+ * `excecoes` casa por `.closest()`, igual a `EXCECOES_DE_ALCANCE`. Vazia por padrão: nenhuma das
+ * chamadas desta função no repo passa exceção hoje — o card do carrossel em `/marketing` que
+ * usava uma (#243) teve o corte real corrigido na TELA, não excecionado na régua.
  */
 export async function textoForaDaTela(
   page: Page,

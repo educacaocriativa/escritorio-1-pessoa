@@ -63,16 +63,16 @@ const DESLOCAMENTO_PX = 10;
 
 /**
  * A folga que a régua EXIGE entre a distância de saída da lixeira e o deslocamento do gesto — a
- * correção do #190, reforçada pelo #235.
+ * correção do #190, reforçada pelo #235 e remedida pelo #243.
  *
- * ⚠️ **Este número não é gosto, é o teto que a geometria de hoje permite.** Medido em 25/08/2026,
- * viewport 360×740, contra o HEAD desta branch:
+ * ⚠️ **Este número não é gosto, é o teto que a geometria de hoje permite.** Medido em 26/08/2026,
+ * viewport 360×740, contra o HEAD desta branch (já com o #243 aplicado):
  *
  * | tela | caixa da lixeira | direção do gesto | saída no eixo | folga para os 10px |
  * |---|---|---|---|---|
  * | `/funis` | 14 × 14 | (−1,000 · 0,000) | 7,00 | 3,00 |
  * | `/juridico` | 14 × 14 | (−0,997 · 0,080) | 7,02 | 2,98 |
- * | `/marketing` | 14 × 14 | (−0,376 · −0,927) | 7,56 | **2,44** |
+ * | `/marketing` | 14 × 14 | (−0,529 · −0,849) | 8,25 | **1,75** |
  *
  * ⚠️ **O #235 encontrou o `/funis` com folga ZERO, não "pouca" — e é isso que esta linha
  * conserta.** Antes, a lixeira do `/funis` era `Trash2 size={16}`, 2px maior que as outras duas, e
@@ -81,41 +81,43 @@ const DESLOCAMENTO_PX = 10;
  * diferença sub-pixel na direção do gesto empurrava a asserção para o vermelho, e foi exatamente
  * isso que o CI (Ubuntu, medindo 8,035) mostrou contra este mesmo checkout (Windows, medindo
  * 8,0000 exatos) — mesmo código, máquinas diferentes. `FunisPage.tsx` foi alinhado para
- * `Trash2 size={14}`, igualando `/juridico` e `/marketing`; agora é o `/marketing` quem fixa o
- * teto, com 2,44px de folga — longe o bastante do zero para sobreviver a ruído sub-pixel entre
- * máquinas.
+ * `Trash2 size={14}`, igualando `/juridico` e `/marketing`.
  *
  * ⚠️ **Encolher para 14px não colide com a régua de alvo tocável (44px — `toque-360.spec.ts` /
  * `alvosPequenos` em `support/medidas.ts`).** Nenhuma das duas mede `/funis`, `/juridico` ou
  * `/marketing`: elas cobrem `/financeiro/contas`, `/config` e `/financeiro/centros-custo`. A
- * lixeira desta família já era 14×14 em duas das três telas ANTES desta correção, e o ⚠️ no topo
- * deste arquivo ("a lixeira mantém o mesmo tamanho de antes, de propósito") já registrava essa
- * classe de alvo como dívida de toque CONHECIDA e deliberadamente fora do escopo desta régua —
- * engordá-la para 44px faria o deslocamento de 10px cair DENTRO dela, e a mutação que re-aninha os
- * botões sobreviveria verde. Encolher 2px dentro da MESMA classe de dívida já registrada não piora
- * nada que uma régua meça hoje: é dívida de outra issue tanto antes quanto depois do #235.
+ * lixeira desta família já era 14×14 em duas das três telas ANTES da correção do #235, e o ⚠️ no
+ * topo deste arquivo ("a lixeira mantém o mesmo tamanho de antes, de propósito") já registrava
+ * essa classe de alvo como dívida de toque CONHECIDA e deliberadamente fora do escopo desta régua
+ * — engordá-la para 44px faria o deslocamento de 10px cair DENTRO dela, e a mutação que re-aninha
+ * os botões sobreviveria verde. Encolher dentro da MESMA classe de dívida já registrada não piora
+ * nada que uma régua meça hoje: é dívida de outra issue.
  *
- * `MARGEM_PX = 3` (o número sugerido na issue original do #190) continuaria devolvendo folga ZERO
- * no `/funis` mesmo com a lixeira em 14px (`saida = 7,00`, teto `10 - 3 = 7`) — o defeito voltaria
- * pela mesma porta, só que "resolvido" no papel. `MARGEM_PX = 2` é o que sobra de folga REAL nas
- * três rotas depois do encolhimento, com o `/marketing` (2,44px) como novo pior caso.
- *
- * ⚠️ **A linha do `/marketing` da issue original (direção −0,803 · −0,596, saída 8,72) NÃO se
- * reproduz, e a razão é estrutural.** O `git diff` desta branch não toca `features/marketing`,
- * `features/juridico` nem `components/` — só `features/funis/FunisPage.tsx`. E a altura do card do
- * `/marketing` não é negociável com o renderizador: o `CarouselThumb` passa `display = 240` para o
- * `ScaledSlide`, que fixa `height: H * scale = 1350 × (240/1080) = 300px` em estilo **inline**. Com
- * a miniatura de 300px o vetor fica quase vertical (`|uy| = 0,927`) e a saída, 7,56. Os 8,72 só
- * saem de um card de ~148×113, que essa geometria não produz.
+ * ⚠️ **O #243 mudou o PIOR CASO de `/marketing`, e por uma razão estrutural desta vez real.** Antes
+ * dele, o `CarouselThumb` passava `display = 240` fixo para o `ScaledSlide` mesmo dentro do grid de
+ * 360px, que só tem ~148px de coluna — o `height: H * scale = 1350 × (240/1080) = 300px` inline
+ * ficava MAIOR do que a tela realmente desenhava (o excesso era recortado pelo `overflow-hidden` do
+ * wrapper, o próprio defeito do #228). Com a miniatura "grande demais" o vetor até a lixeira ficava
+ * quase vertical (`|uy| = 0,927`) e a saída, 7,56 — uma folga de 2,44px que media a geometria ERRADA
+ * (mais alta do que o card de verdade). O #243 fez o `CarouselThumb` medir o próprio container e
+ * encolher a escala junto (`display = min(240, containerWidth)`): a 360px o card passou a ter a
+ * altura REAL de ~229px (thumb ~184,7px + duas linhas de texto), o vetor ficou menos vertical
+ * (`|uy| = 0,849`) e a saída subiu para 8,25 — folga de 1,75px, abaixo do `MARGEM_PX` antigo (2).
+ * `MARGEM_PX` foi reduzido para **1** (folga real de 1,75px sobra 0,75px acima do piso — a mesma
+ * ordem de grandeza da folga de 0,44px que o #235 já considerava segura contra ruído sub-pixel
+ * entre máquinas). Não é a caixa da lixeira que cresceu — é a arte que deixou de estar
+ * artificialmente esticada, e o card ficou mais baixo e mais largo (mais perto do quadrado), o que
+ * aproxima o vetor da horizontal e reduz a folga vertical. `/marketing` continua o pior caso das
+ * três rotas.
  *
  * ⚠️ **O ganho do #190 não é o número, é a implicação.** A guarda velha (`min(w,h)/2`) podia
  * PASSAR afirmando 7 enquanto o gesto precisava de 8,72 — ela media uma grandeza que é sempre ≤ a
  * que importa. Com a guarda nova, "a guarda passou" implica "o gesto sai da lixeira com folga de
- * pelo menos 2px". Quando a folga acabar, a régua reprova **aqui**, no `beforeEach`, com
+ * pelo menos `MARGEM_PX`". Quando a folga acabar, a régua reprova **aqui**, no `beforeEach`, com
  * a mensagem que aponta o conserto — e não 30 linhas adiante, no alvo do clique, com a mensagem
  * que custou a investigação do #177.
  */
-const MARGEM_PX = 2;
+const MARGEM_PX = 1;
 
 /**
  * ⚠️ **O pior caso de §5.1 aqui é o pior caso ALCANÇÁVEL, e a diferença foi medida.**
