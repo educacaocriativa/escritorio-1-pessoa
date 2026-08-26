@@ -1,6 +1,11 @@
 import { expect, test } from "@playwright/test";
 import { mockarApi } from "./support/api";
-import { controlesInalcancaveis, medirPagina, textoForaDaTela } from "./support/medidas";
+import {
+  controlesInalcancaveis,
+  EXCECOES_DE_RECORTE,
+  medirPagina,
+  textoForaDaTela,
+} from "./support/medidas";
 import { FUNIS_LONGOS, JURIDICO_DOCS, JURIDICO_SKILLS, LONGO } from "./support/rotas";
 import { semearSessao } from "./support/sessao";
 
@@ -51,6 +56,15 @@ import { semearSessao } from "./support/sessao";
  * `escalaHorizontal`) e o mesmo elemento passou a devolver **+2,7px**, todos da ARTE e nenhum do
  * layout de 360px. O conserto foi na régua, não na exceção — ver o controle da escala no fim deste
  * arquivo, e a razão medida em `CARROSSEIS_LONGOS`.
+ *
+ * ⚠️ **O #228 achou um corte VERDADEIRO aqui, e este É excecionado.** `recorte()` parava no
+ * ancestral mais PRÓXIMO que recorta — a raiz da própria arte, que nunca recorta a si mesma —
+ * e nunca chegava ao wrapper de `MarketingPage.tsx` duas camadas acima, que o grid de 360px
+ * aperta bem mais (240px pedidos, ~148px disponíveis). Corrigida para o ancestral mais APERTADO,
+ * a régua passou a acusar 5 cortes reais em `/marketing` — não um falso positivo como o de cima,
+ * o próprio card cortado que a issue descreve. O CONSERTO da tela é de outra issue (decisão de
+ * UI: como o thumb deve reagir ao grid apertar), então `EXCECOES_DE_RECORTE` (`support/medidas.ts`)
+ * o exclui, com os 5 números medidos ao lado.
  *
  * As duas rotas de que a issue trata (`/funis` e `/juridico`) saíram do estado vazio no catálogo
  * TAMBÉM, porque é lá que mora a cegueira que a issue descreve — e as fixtures delas são
@@ -107,7 +121,10 @@ const INVESTIMENTOS_LONGOS = [
  * O `CarouselThumb` desenha uma ARTE de 1080×1350 e a encolhe com `transform: scale(0.222222)`
  * (`CarouselSlideView.tsx:179-185`). Tudo que o CARD desenha continua em pior caso aqui — `topic`
  * (o `p.truncate` da lista), `caption`, `hashtags` e os quatro slides com `heading`/`body`/
- * `secondary` em `LONGO`. Medido nesta issue, com a régua já convertendo a escala: **zero sobra**.
+ * `secondary` em `LONGO`. Medido nesta issue, com a régua já convertendo a escala: **zero sobra**
+ * contra a raiz da própria arte — que é a única conta que este fixture tenta provar. O corte real
+ * que o #228 achou é contra o WRAPPER de `MarketingPage.tsx` (o grid apertando o card, não o texto
+ * apertando a arte) e está documentado e excecionado em `EXCECOES_DE_RECORTE`, acima.
  *
  * Com `handle: `@${LONGO}`` (75 chars) a régua acusa **+2,7px** num `div` do rodapé da arte — e
  * ela está CERTA: aquele texto sobra 68px do próprio bloco de 968px no espaço de 1080px da arte,
@@ -221,7 +238,7 @@ for (const { rota, marcaDoCard, mocks } of CARDS) {
     // jeito — mas por outro motivo, e quem for ler o vermelho precisa saber qual.
     expect((await medirPagina(page)).larguraDaPagina).toBe(360);
 
-    const cortes = await textoForaDaTela(page, "main");
+    const cortes = await textoForaDaTela(page, "main", EXCECOES_DE_RECORTE);
     expect(
       cortes,
       `a rota ${rota} desenhou card além da borda de 360px:\n` +
