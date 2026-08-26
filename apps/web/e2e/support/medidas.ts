@@ -293,6 +293,29 @@ export async function controlesInalcancaveis(
 }
 
 /**
+ * Seletores cujo conteúdo `textoForaDaTela` NÃO acusa — cada um com a razão e o número medido ao
+ * lado, no mesmo molde de `EXCECOES_DE_ALCANCE` acima. Diferente daquela, esta lista NÃO é "não é
+ * defeito por construção": é um defeito REAL, medido, fora do escopo do ticket que ligou esta
+ * régua para ele.
+ *
+ * `[data-testid^="abrir-carrossel-"]` — o card do carrossel em `/marketing`
+ * (`MarketingPage.tsx:57`). O `CarouselThumb` pede `display: 240` e o wrapper que o recorta
+ * (`div.flex.justify-center.overflow-hidden`, `MarketingPage.tsx:62`) é encolhido pela coluna do
+ * grid a bem menos que isso a 360px — a mesma conta do #228 (240 pedido, ~148 disponível, 92px de
+ * arte perdida). A régua corrigida para o ancestral mais apertado VÊ este corte pela primeira vez;
+ * medido em 25/08/2026, com o catálogo de `card-largo-360.spec.ts`: 5 cortes em `/marketing` —
+ * `span «@escritorio_de_uma_pessoa_1234»` +11,3px, `span «Agosto 2026 ®»` +83,1px,
+ * `div «@escritorio_de_uma_pessoa_1234»` +79,6px, `span «Diagnostico»` +72,2px,
+ * `p «RelatorioDeDiagnosticoFinanceiroConsolidadoDoExercicioDeDois»` +79,6px — nenhum nas outras
+ * cinco rotas do catálogo. **Isto é o achado do #228, não um falso positivo da régua**: o thumb
+ * está de fato cortado em produção. O CONSERTO pertence a outra issue — como o thumb deve se
+ * comportar quando o grid o aperta (encolher a escala com o container? Rolar?) é decisão de UI,
+ * não de régua — e esta exceção existe só para não travar #228 na correção do sintoma errado.
+ * Remova-a quando essa issue fechar.
+ */
+export const EXCECOES_DE_RECORTE = ['[data-testid^="abrir-carrossel-"]'];
+
+/**
  * Texto que só EXISTE se o dono rolar de lado — o defeito que a Onda 2b-ii achou na primeira
  * medição (`R$ 3.` no lugar de `R$ 3.000,00`). Para cada folha com texto, acha o ancestral que
  * recorta e mede quanto sobra fora dele.
@@ -303,9 +326,17 @@ export async function controlesInalcancaveis(
  * ficam fora da viewport por construção, e sem o recorte elas afogam o resultado com três cortes
  * que não são defeito de ninguém. Escopo que deixou de casar cai no documento inteiro, e não em
  * lista vazia: um seletor podre tem de aparecer como ruído, nunca como aprovação.
+ *
+ * `excecoes` casa por `.closest()`, igual a `EXCECOES_DE_ALCANCE` — ver `EXCECOES_DE_RECORTE`
+ * acima para a única em uso. Vazia por padrão: as outras 15 chamadas desta função no repo não
+ * mudam de comportamento.
  */
-export async function textoForaDaTela(page: Page, raiz?: string): Promise<Corte[]> {
-  return page.evaluate((raizSel) => {
+export async function textoForaDaTela(
+  page: Page,
+  raiz?: string,
+  excecoes: string[] = [],
+): Promise<Corte[]> {
+  return page.evaluate(({ raizSel, excSel }) => {
     const descrever = (el: Element): string => {
       const cls =
         typeof el.className === "string"
@@ -319,15 +350,31 @@ export async function textoForaDaTela(page: Page, raiz?: string): Promise<Corte[
       const r = el.getBoundingClientRect();
       return r.width > 0 && r.height > 0;
     };
-    // Quem de fato recorta este elemento — o ancestral mais próximo com `overflow-x` que não seja
-    // `visible`. É contra a borda DELE que o texto sobra, não contra a da página: era exatamente
-    // isso que `main.overflow-x-hidden` escondia enquanto o `scrollWidth` da página dizia 360.
+    // Quem de fato recorta este elemento — o ancestral MAIS APERTADO (a borda direita mais à
+    // esquerda) entre TODOS os que têm `overflow-x` diferente de `visible`, não o mais PRÓXIMO.
+    //
+    // #228: um elemento pode ter dois ancestrais que recortam, o mais apertado sendo o mais
+    // DISTANTE — e parar no primeiro (o mais próximo) deixa a régua cega para esse caso. No
+    // `CarouselThumb` de `/marketing`, o ancestral mais próximo que recorta é a raiz da própria
+    // arte (`overflow:hidden` de `EditorialSlide`, que sempre cabe nela mesma — a tinta nunca
+    // sobra dali) e o mais apertado é o wrapper de `MarketingPage.tsx` duas camadas acima, que o
+    // grid de 360px encolhe de 240px para bem menos. Contra o mais próximo a conta sempre dava
+    // certo; contra o mais apertado é que o corte de verdade aparece. A busca não pode parar no
+    // primeiro achado: precisa continuar até `document.body` e ficar com o menor `right`, exatamente
+    // como `medirControles` já faz para `limiteDireito` — as duas réguas convergem na mesma regra.
     const recorte = (el: Element): Element => {
+      let apertado: Element | null = null;
+      let borda = Infinity;
       for (let p = el.parentElement; p && p !== document.body; p = p.parentElement) {
         const ox = getComputedStyle(p).overflowX;
-        if (ox === "hidden" || ox === "auto" || ox === "scroll" || ox === "clip") return p;
+        if (ox !== "hidden" && ox !== "auto" && ox !== "scroll" && ox !== "clip") continue;
+        const direita = p.getBoundingClientRect().right;
+        if (direita < borda) {
+          borda = direita;
+          apertado = p;
+        }
       }
-      return document.documentElement;
+      return apertado ?? document.documentElement;
     };
     /**
      * Comprimento, em px de TELA, de um vetor horizontal de 1px no espaco de LAYOUT do elemento.
@@ -360,6 +407,7 @@ export async function textoForaDaTela(page: Page, raiz?: string): Promise<Corte[
     const escopo: ParentNode = raizSel ? (document.querySelector(raizSel) ?? document.body) : document.body;
     for (const el of [...escopo.querySelectorAll("*")].filter(visivel)) {
       if (el.children.length > 0 || !(el.textContent ?? "").trim()) continue;
+      if (excSel.some((sel) => el.closest(sel) !== null)) continue;
       const r = el.getBoundingClientRect();
       const limite = Math.min(recorte(el).getBoundingClientRect().right, vw);
       // A CAIXA nem sempre é o CONTEÚDO. Um bloco sem `width` própria fica travado na largura do
@@ -389,5 +437,5 @@ export async function textoForaDaTela(page: Page, raiz?: string): Promise<Corte[
       }
     }
     return fora;
-  }, raiz);
+  }, { raizSel: raiz, excSel: excecoes });
 }

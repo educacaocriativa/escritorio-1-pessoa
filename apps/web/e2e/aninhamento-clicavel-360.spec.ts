@@ -63,38 +63,50 @@ const DESLOCAMENTO_PX = 10;
 
 /**
  * A folga que a régua EXIGE entre a distância de saída da lixeira e o deslocamento do gesto — a
- * correção do #190.
+ * correção do #190, reforçada pelo #235.
  *
- * ⚠️ **Este número não é gosto, é o teto que a geometria de hoje permite.** Medido em 21/08/2026,
- * viewport 360×740, contra o HEAD desta branch (base `c36a295`):
+ * ⚠️ **Este número não é gosto, é o teto que a geometria de hoje permite.** Medido em 25/08/2026,
+ * viewport 360×740, contra o HEAD desta branch:
  *
  * | tela | caixa da lixeira | direção do gesto | saída no eixo | folga para os 10px |
  * |---|---|---|---|---|
- * | `/funis` | 16 × 16 | (−1,000 · 0,000) | **8,00** | **2,00** |
+ * | `/funis` | 14 × 14 | (−1,000 · 0,000) | 7,00 | 3,00 |
  * | `/juridico` | 14 × 14 | (−0,997 · 0,080) | 7,02 | 2,98 |
- * | `/marketing` | 14 × 14 | (−0,376 · −0,927) | 7,55 | 2,45 |
+ * | `/marketing` | 14 × 14 | (−0,376 · −0,927) | 7,56 | **2,44** |
  *
- * O `/funis` é o que fixa o teto, e ele é **determinístico por construção**: o `Trash2 size={16}`
- * dá uma caixa de 16×16; `top-1/2` centra a lixeira na `<div relative>` e `-translate-y-1/2` a
- * centra em si mesma, então o centro dela coincide com o centro do card **exatamente**, `dy = 0`,
- * a direção é horizontal pura e a saída é `16/2 = 8,00` — sem depender de métrica de fonte nem de
- * quebra de linha. `MARGEM_PX = 3` (o número sugerido na issue) reprovaria o `/funis`.
+ * ⚠️ **O #235 encontrou o `/funis` com folga ZERO, não "pouca" — e é isso que esta linha
+ * conserta.** Antes, a lixeira do `/funis` era `Trash2 size={16}`, 2px maior que as outras duas, e
+ * centrada verticalmente no card (`top-1/2 -translate-y-1/2`, `dy = 0`, direção horizontal pura):
+ * a saída dava `16/2 = 8,00` — o MESMO valor do teto de então (`10 - MARGEM_PX(2) = 8`). Qualquer
+ * diferença sub-pixel na direção do gesto empurrava a asserção para o vermelho, e foi exatamente
+ * isso que o CI (Ubuntu, medindo 8,035) mostrou contra este mesmo checkout (Windows, medindo
+ * 8,0000 exatos) — mesmo código, máquinas diferentes. `FunisPage.tsx` foi alinhado para
+ * `Trash2 size={14}`, igualando `/juridico` e `/marketing`; agora é o `/marketing` quem fixa o
+ * teto, com 2,44px de folga — longe o bastante do zero para sobreviver a ruído sub-pixel entre
+ * máquinas.
  *
- * Chegar a 3 exigiria encolher a lixeira do `/funis` de `size={16}` para `size={14}` — ou seja,
- * **piorar um alvo de toque que já é pequeno demais**, que é dívida declarada de outra issue no ⚠️
- * do cabeçalho. Aumentar o `DESLOCAMENTO_PX` está fora de questão: os 10px são a afirmação medida
- * no #149 sobre o mundo real, não um parâmetro de conveniência do teste (#190, item 3). Por isso o
- * `/funis` fica **em cima do limite**, e isso é deliberado: a guarda está calibrada na tela mais
- * apertada, e qualquer inclinação futura da direção dele reprova — o que é sinal VERDADEIRO.
+ * ⚠️ **Encolher para 14px não colide com a régua de alvo tocável (44px — `toque-360.spec.ts` /
+ * `alvosPequenos` em `support/medidas.ts`).** Nenhuma das duas mede `/funis`, `/juridico` ou
+ * `/marketing`: elas cobrem `/financeiro/contas`, `/config` e `/financeiro/centros-custo`. A
+ * lixeira desta família já era 14×14 em duas das três telas ANTES desta correção, e o ⚠️ no topo
+ * deste arquivo ("a lixeira mantém o mesmo tamanho de antes, de propósito") já registrava essa
+ * classe de alvo como dívida de toque CONHECIDA e deliberadamente fora do escopo desta régua —
+ * engordá-la para 44px faria o deslocamento de 10px cair DENTRO dela, e a mutação que re-aninha os
+ * botões sobreviveria verde. Encolher 2px dentro da MESMA classe de dívida já registrada não piora
+ * nada que uma régua meça hoje: é dívida de outra issue tanto antes quanto depois do #235.
  *
- * ⚠️ **A linha do `/marketing` da issue (direção −0,803 · −0,596, saída 8,72) NÃO se reproduz, e a
- * razão é estrutural.** `git diff f41e134..HEAD` não toca `features/marketing`, `features/funis`,
- * `features/juridico` nem `components/` — o código é o mesmo. E a altura do card do `/marketing`
- * não é negociável com o renderizador: o `CarouselThumb` passa `display = 240` para o
+ * `MARGEM_PX = 3` (o número sugerido na issue original do #190) continuaria devolvendo folga ZERO
+ * no `/funis` mesmo com a lixeira em 14px (`saida = 7,00`, teto `10 - 3 = 7`) — o defeito voltaria
+ * pela mesma porta, só que "resolvido" no papel. `MARGEM_PX = 2` é o que sobra de folga REAL nas
+ * três rotas depois do encolhimento, com o `/marketing` (2,44px) como novo pior caso.
+ *
+ * ⚠️ **A linha do `/marketing` da issue original (direção −0,803 · −0,596, saída 8,72) NÃO se
+ * reproduz, e a razão é estrutural.** O `git diff` desta branch não toca `features/marketing`,
+ * `features/juridico` nem `components/` — só `features/funis/FunisPage.tsx`. E a altura do card do
+ * `/marketing` não é negociável com o renderizador: o `CarouselThumb` passa `display = 240` para o
  * `ScaledSlide`, que fixa `height: H * scale = 1350 × (240/1080) = 300px` em estilo **inline**. Com
- * a miniatura de 300px o vetor fica quase vertical (`|uy| = 0,927`) e a saída, 7,55. Os 8,72 só
- * saem de um card de ~148×113, que essa geometria não produz. Ou seja: a régua não está a 1,28px
- * do vermelho no `/marketing`; quem está no fio é o `/funis`, com 2,00px — e determinísticos.
+ * a miniatura de 300px o vetor fica quase vertical (`|uy| = 0,927`) e a saída, 7,56. Os 8,72 só
+ * saem de um card de ~148×113, que essa geometria não produz.
  *
  * ⚠️ **O ganho do #190 não é o número, é a implicação.** A guarda velha (`min(w,h)/2`) podia
  * PASSAR afirmando 7 enquanto o gesto precisava de 8,72 — ela media uma grandeza que é sempre ≤ a

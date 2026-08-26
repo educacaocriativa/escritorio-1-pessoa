@@ -92,7 +92,15 @@ beforeEach(() => {
 
 describe("PlatformUsers — cadastrar nova conta (Story 7.18, Task 4)", () => {
   it("caminho feliz: preenche os obrigatórios e cadastra → POST /admin/accounts + senha temporária", async () => {
-    const user = userEvent.setup();
+    // `delay: null` (em vez do default `0`) pula o `setTimeout` REAL entre cada tecla do
+    // `userEvent.type()`. Com `delay: 0` o user-event ainda faz `await` numa Promise resolvida
+    // por `setTimeout(fn, 0)` a cada caractere — sob contenção de CPU (várias worktrees/CI
+    // concorrente) esse `setTimeout(0)` pode custar dezenas de ms cada, e este teste digita ~80
+    // caracteres em 7 campos. Medido (issue #231): 2,1-2,4s isolado neste arquivo → risco real
+    // de aproximar-se do `testTimeout` de 15000ms sob carga, como o próprio `vitest.config.ts`
+    // documenta. `delay: null` não simula tempo nenhum (nem precisa de fake timers): ele só
+    // remove a espera artificial entre eventos de teclado, sem mudar o que é digitado/disparado.
+    const user = userEvent.setup({ delay: null });
     vi.mocked(api.post).mockResolvedValue({
       data: {
         temp_password: "senha-fake-123",
@@ -133,7 +141,7 @@ describe("PlatformUsers — cadastrar nova conta (Story 7.18, Task 4)", () => {
   });
 
   it("caminho infeliz: formulário incompleto mantém o botão disabled, SEM chamar a API", async () => {
-    const user = userEvent.setup();
+    const user = userEvent.setup({ delay: null }); // ver nota de perf no 1o teste deste arquivo
     renderPage();
 
     await user.click(await screen.findByRole("button", { name: "Nova conta" }));
@@ -163,7 +171,7 @@ describe("PlatformUsers/OfficeCard — suspender/excluir usuário: tratamento de
   }
 
   it("caminho infeliz (toggleUser falha): api.patch rejeita → erro no DOM e cartão segue renderizado (AC 1, 4, 5)", async () => {
-    const user = userEvent.setup();
+    const user = userEvent.setup({ delay: null }); // ver nota de perf no 1o teste deste arquivo
     vi.mocked(api.patch).mockRejectedValueOnce({
       response: { data: { detail: "Falha ao suspender o usuário." } },
     });
@@ -183,7 +191,7 @@ describe("PlatformUsers/OfficeCard — suspender/excluir usuário: tratamento de
   });
 
   it("caminho infeliz (removeUser falha): confirm=true e api.delete rejeita → erro no DOM e cartão segue renderizado (AC 2, 4, 6)", async () => {
-    const user = userEvent.setup();
+    const user = userEvent.setup({ delay: null }); // ver nota de perf no 1o teste deste arquivo
     vi.spyOn(window, "confirm").mockReturnValue(true);
     vi.mocked(api.delete).mockRejectedValueOnce({
       response: { data: { detail: "Falha ao excluir o usuário." } },
@@ -222,7 +230,7 @@ async function cadastrarConta(user: ReturnType<typeof userEvent.setup>) {
 
 describe("PlatformUsers — a confirmação do convite diz a verdade sobre a entrega", () => {
   it("'queued' é sucesso, não modo de teste", async () => {
-    const user = userEvent.setup();
+    const user = userEvent.setup({ delay: null }); // ver nota de perf no 1o teste deste arquivo
     vi.mocked(api.post).mockResolvedValue({
       data: {
         temp_password: "senha-fake-123",
@@ -241,7 +249,7 @@ describe("PlatformUsers — a confirmação do convite diz a verdade sobre a ent
   });
 
   it("sem transporte: avisa que NÃO foi enviada", async () => {
-    const user = userEvent.setup();
+    const user = userEvent.setup({ delay: null }); // ver nota de perf no 1o teste deste arquivo
     vi.mocked(api.post).mockResolvedValue({
       data: {
         temp_password: "senha-fake-123",
@@ -260,7 +268,7 @@ describe("PlatformUsers — a confirmação do convite diz a verdade sobre a ent
   });
 
   it("sem senha no corpo (produção): nenhuma caixa de senha vazia", async () => {
-    const user = userEvent.setup();
+    const user = userEvent.setup({ delay: null }); // ver nota de perf no 1o teste deste arquivo
     vi.mocked(api.post).mockResolvedValue({
       data: {
         temp_password: null,
