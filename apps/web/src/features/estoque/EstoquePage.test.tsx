@@ -3,6 +3,7 @@ import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { api } from "../../lib/api";
 import { PageActionsProvider, usePageActions } from "../../store/pageActions";
+import { assentar } from "../../test/assentar";
 import EstoquePage from "./EstoquePage";
 
 // Story 7.16 — Task 1. Rede sempre mockada (IV2): nenhum teste bate em /stock real.
@@ -84,5 +85,74 @@ describe("EstoquePage — Novo item de estoque (Story 7.16, Task 1)", () => {
     expect(await screen.findByText("Falha ao criar item de estoque.")).toBeInTheDocument();
     expect(screen.getByText("Novo item de estoque")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Criar item" })).toBeEnabled();
+  });
+});
+
+// ══════════════════════════════════════════════════════════════════════════════════════════════
+// Issue #224 — separador de milhar no valor digitado (parseCentsBRL)
+// ══════════════════════════════════════════════════════════════════════════════════════════════
+//
+// A conta manual antiga (`Math.round(parseFloat(v.replace(",", ".")) * 100)`) só troca a PRIMEIRA
+// vírgula por ponto e nunca remove o ponto de milhar: "1.234,56" vira "1.234.56", `parseFloat` para
+// no segundo ponto e devolve 1.234 → 123 centavos, não 123456. `parseCentsBRL` (contas.ts) trata o
+// milhar corretamente; este teste fixa esse contrato no único site de EstoquePage.
+describe("EstoquePage — separador de milhar (#224)", () => {
+  it("'1.234,56' vira unit_cost_cents 123456, não 123", async () => {
+    const user = userEvent.setup();
+    vi.mocked(api.post).mockResolvedValue({ data: {} } as never);
+    renderPage();
+
+    await user.click(await screen.findByRole("button", { name: "Novo item" }));
+    await user.type(screen.getByLabelText("Nome"), "Notebook usado");
+    await user.type(screen.getByLabelText("Custo unitário (R$)"), "1.234,56");
+    await user.click(screen.getByRole("button", { name: "Criar item" }));
+
+    await waitFor(() => expect(vi.mocked(api.post)).toHaveBeenCalled());
+    expect(vi.mocked(api.post)).toHaveBeenCalledWith(
+      "/stock/items",
+      expect.objectContaining({ unit_cost_cents: 123456 }),
+    );
+  });
+});
+
+// ── `GET /products` fora de forma (issue #225) ──────────────────────────────────
+//
+// `setProducts(data)` recebia o payload CRU. `products.map` (select "Ligar a um produto") está
+// SEM guarda de `.length` — dispara assim que o modal "Novo item" abre.
+describe("EstoquePage — produtos fora de forma não derrubam o modal Novo item (#225)", () => {
+  it.each([
+    ["envelope de erro devolvido com 200", { detail: "algo deu errado" }],
+    ["string no lugar da lista", "não é json"],
+  ])("%s → o modal abre, com o select de produto vazio", async (_rotulo, payload) => {
+    const user = userEvent.setup();
+    vi.mocked(api.get).mockImplementation((url: string) => {
+      if (url === "/stock/summary") return Promise.resolve({ data: emptySummary } as never);
+      if (url === "/stock/items") return Promise.resolve({ data: [] } as never);
+      if (url === "/products") return Promise.resolve({ data: payload } as never);
+      return Promise.resolve({ data: [] } as never);
+    });
+    renderPage();
+    await user.click(await screen.findByRole("button", { name: "Novo item" }));
+    await assentar();
+
+    expect(screen.getByLabelText("Nome")).toBeInTheDocument();
+    expect(screen.getByText("Não ligar")).toBeInTheDocument();
+  });
+
+  it("contra-teste: produto de verdade continua aparecendo no select", async () => {
+    const user = userEvent.setup();
+    vi.mocked(api.get).mockImplementation((url: string) => {
+      if (url === "/stock/summary") return Promise.resolve({ data: emptySummary } as never);
+      if (url === "/stock/items") return Promise.resolve({ data: [] } as never);
+      if (url === "/products") return Promise.resolve({ data: [{ id: "p-1", name: "Camiseta P" }] } as never);
+      return Promise.resolve({ data: [] } as never);
+    });
+    renderPage();
+    await user.click(await screen.findByRole("button", { name: "Novo item" }));
+    await assentar();
+
+    // "Camiseta P" também é o nome digitado no teste feliz acima, mas cada teste remonta a
+    // página — aqui só a opção do select existe.
+    expect(await screen.findByText("Camiseta P")).toBeInTheDocument();
   });
 });

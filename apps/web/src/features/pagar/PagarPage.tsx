@@ -10,6 +10,7 @@ import { usePrimaryAction } from "../../store/pageActions";
 import ChartAccountSelect from "../financeiro/ChartAccountSelect";
 import type { CostCenter } from "../financeiro/costCenters";
 import CostCenterSelect from "../financeiro/CostCenterSelect";
+import { parseCentsBRL } from "../financeiro/contas";
 import { type ChartAccount, GRUPOS_DRE } from "../financeiro/planoContas";
 import { DialogDeBaixa } from "./EscolhaDaBaixa";
 import FiltrosDaLista from "./FiltrosDaLista";
@@ -29,7 +30,10 @@ const PAGINA = 50;
 function ContractSelect({ value, onChange }: { value: string; onChange: (v: string) => void }) {
   const [contracts, setContracts] = useState<Contract[]>([]);
   useEffect(() => {
-    api.get<Contract[]>("/contracts").then((r) => setContracts(r.data)).catch(() => setContracts([]));
+    api
+      .get<Contract[]>("/contracts")
+      .then((r) => setContracts(Array.isArray(r.data) ? r.data : []))
+      .catch(() => setContracts([]));
   }, []);
   return (
     <label className="block">
@@ -500,7 +504,7 @@ function EditBillModal({
         chart_account_id: chartAccountId,
         cost_center_id: costCenterId,
         supplier,
-        amount_cents: Math.round(parseFloat(value.replace(",", ".")) * 100),
+        amount_cents: parseCentsBRL(value),
         due_date: dueDate,
         recurrence,
       });
@@ -678,7 +682,7 @@ function NewBillModal({
     setError(null);
     setSaving(true);
     try {
-      const amount_cents = Math.round(parseFloat(value.replace(",", ".")) * 100);
+      const amount_cents = parseCentsBRL(value);
       await api.post("/payables/bills", {
         description,
         chart_account_id: chartAccountId || null,

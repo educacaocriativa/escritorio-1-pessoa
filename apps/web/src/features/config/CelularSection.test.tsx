@@ -2,6 +2,7 @@ import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { api } from "../../lib/api";
+import { assentar } from "../../test/assentar";
 import CelularSection from "./CelularSection";
 
 vi.mock("../../lib/api", () => ({
@@ -64,5 +65,27 @@ describe("CelularSection", () => {
     await waitFor(() => screen.getByText(/falha ao revogar/i));
     // A lista continua visível — a tela não trava/some após a falha.
     expect(screen.getByText("iPhone da Revogacao")).toBeTruthy();
+  });
+});
+
+// ── `GET /settings/device-tokens` fora de forma (issue #225) ─────────────────
+//
+// `setTokens(data)` recebia o payload CRU. `tokens.map` está atrás de `tokens.length > 0`, mas
+// `.length` de um objeto/string/número não é 0 de forma confiável (string tem `.length`, objeto
+// devolve `undefined` — `undefined > 0` é falso, MAS `.map` de string funciona diferente e
+// qualquer mudança de forma no envelope de erro reabre o buraco). Sem ErrorBoundary, o estouro
+// no render desmontaria a seção inteira do celular, não só a lista de tokens.
+describe("CelularSection — lista de tokens fora de forma não derruba a seção (#225)", () => {
+  it.each([
+    ["envelope de erro devolvido com 200", { detail: "algo deu errado" }],
+    ["string no lugar da lista", "não é json"],
+    ["corpo vazio (204 / sem conteúdo)", null],
+  ])("%s → a seção continua montada, sem lista de tokens", async (_rotulo, payload) => {
+    vi.mocked(api.get).mockResolvedValue({ data: payload } as never);
+    render(<CelularSection />);
+    await assentar();
+
+    expect(screen.getByText("Celular — anexar comprovante")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /revogar/i })).not.toBeInTheDocument();
   });
 });

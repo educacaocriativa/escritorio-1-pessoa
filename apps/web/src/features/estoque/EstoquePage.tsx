@@ -4,6 +4,7 @@ import { useCallback, useEffect, useState } from "react";
 import Modal, { Field } from "../../components/Modal";
 import { api, apiErrorMessage } from "../../lib/api";
 import { usePrimaryAction } from "../../store/pageActions";
+import { parseCentsBRL } from "../financeiro/contas";
 import { formatBRL } from "../financeiro/dre";
 
 export default function EstoquePage() {
@@ -145,7 +146,8 @@ function NewItemModal({
   const [saving, setSaving] = useState(false);
 
   useEffect(() => {
-    if (open) api.get<Product[]>("/products").then(({ data }) => setProducts(data));
+    if (open)
+      api.get<Product[]>("/products").then(({ data }) => setProducts(Array.isArray(data) ? data : []));
   }, [open]);
 
   async function save() {
@@ -159,7 +161,7 @@ function NewItemModal({
         product_id: productId || null,
         quantity: parseInt(quantity, 10) || 0,
         min_quantity: parseInt(min, 10) || 0,
-        unit_cost_cents: Math.round(parseFloat(cost.replace(",", ".") || "0") * 100),
+        unit_cost_cents: parseCentsBRL(cost),
       });
       onCreated();
       onClose();
