@@ -45,7 +45,9 @@ export default function CarrosselBuilderPage() {
   const [savedAt, setSavedAt] = useState<string | null>(null);
 
   useEffect(() => {
-    api.get<CarouselTemplate[]>("/marketing/carousels/templates").then(({ data }) => setTemplates(data));
+    api
+      .get<CarouselTemplate[]>("/marketing/carousels/templates")
+      .then(({ data }) => setTemplates(Array.isArray(data) ? data : []));
   }, []);
 
   // Carrossel novo herda a cor da marca + fonte do Brand Kit (mantém o fundo editorial).
