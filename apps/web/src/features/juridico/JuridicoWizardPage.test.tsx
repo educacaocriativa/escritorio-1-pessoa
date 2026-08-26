@@ -3,6 +3,7 @@ import userEvent from "@testing-library/user-event";
 import { MemoryRouter, Route, Routes } from "react-router-dom";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { api } from "../../lib/api";
+import { assentar } from "../../test/assentar";
 import JuridicoWizardPage from "./JuridicoWizardPage";
 
 // Story 7.17 — Tasks 1 e 2. Rede sempre mockada (IV2/AC3): nenhum teste bate em /juridico real
@@ -172,5 +173,42 @@ describe("JuridicoWizardPage — anexo de peças (Story 7.17, Task 2)", () => {
     expect(await screen.findByText("Falha ao extrair o texto do arquivo.")).toBeInTheDocument();
     // `extracting` volta a false no finally → rótulo do upload volta ao normal, tela intacta.
     expect(screen.getByText("Enviar arquivo(s) — PDF, Word, imagem")).toBeInTheDocument();
+  });
+});
+
+// ── `GET /crm/clients` fora de forma (issue #225) ──────────────────────────────
+//
+// `setClients(data)` recebia o payload CRU. `clients.map` (linha ~145, "Cliente vinculado") está
+// SEM guarda de `.length` e é montado direto no wizard — não atrás de nenhum passo condicional.
+describe("JuridicoWizardPage — clientes fora de forma não derrubam o wizard (#225)", () => {
+  it.each([
+    ["envelope de erro devolvido com 200", { detail: "algo deu errado" }],
+    ["string no lugar da lista", "não é json"],
+  ])("%s → o wizard segue montado, com o select de cliente vazio", async (_rotulo, payload) => {
+    vi.mocked(api.get).mockImplementation((url: string) => {
+      if (url === "/juridico/skills/peticao-teste")
+        return Promise.resolve({ data: wizardText } as never);
+      if (url === "/crm/clients") return Promise.resolve({ data: payload } as never);
+      return Promise.resolve({ data: [] } as never);
+    });
+    renderWizard();
+    await assentar();
+
+    expect(screen.getByText("Cliente vinculado (opcional)")).toBeInTheDocument();
+    expect(screen.getByText("— Nenhum —")).toBeInTheDocument();
+  });
+
+  it("contra-teste: cliente de verdade continua aparecendo no select", async () => {
+    vi.mocked(api.get).mockImplementation((url: string) => {
+      if (url === "/juridico/skills/peticao-teste")
+        return Promise.resolve({ data: wizardText } as never);
+      if (url === "/crm/clients")
+        return Promise.resolve({ data: [{ id: "c-1", name: "Maria Silva" }] } as never);
+      return Promise.resolve({ data: [] } as never);
+    });
+    renderWizard();
+    await assentar();
+
+    expect(await screen.findByText("Maria Silva")).toBeInTheDocument();
   });
 });

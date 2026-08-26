@@ -270,13 +270,15 @@ function ConversationThread({
       api.get<TimelineEntry[]>(`/whatsapp-conversations/${chatId}/timeline`),
       api.get<{ within_session_window: boolean }>(`/whatsapp-conversations/${chatId}/window`),
     ]);
-    setTimeline(tl.data);
+    // Achado além dos 19 originais da issue #225 (recontagem própria): `setTimeline(tl.data)`
+    // também recebia o payload cru — o fio é `timeline.filter`/`.map` direto no render.
+    setTimeline(Array.isArray(tl.data) ? tl.data : []);
     setWithinWindow(win.data.within_session_window);
     if (!win.data.within_session_window) {
       const { data } = await api.get<WhatsappTemplate[]>("/whatsapp-templates", {
         params: { status: "APPROVED" },
       });
-      setApprovedTemplates(data);
+      setApprovedTemplates(Array.isArray(data) ? data : []);
     }
     await api.post(`/whatsapp-conversations/${chatId}/read`);
   }, [chatId]);

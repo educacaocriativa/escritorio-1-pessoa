@@ -675,3 +675,72 @@ describe("ConversasPage — lista de conversas fora de forma não derruba a tela
     expect(screen.queryByText("Nenhuma conversa ainda.")).not.toBeInTheDocument();
   });
 });
+
+// ── `GET .../timeline` e `GET /whatsapp-templates` fora de forma (issue #225) ────────────────
+//
+// `setTimeline(tl.data)` (achado além dos 19 originais — recontagem própria) e
+// `setApprovedTemplates(data)` recebiam o payload cru. O fio da conversa faz `timeline.filter`
+// logo no efeito seguinte (imagens pendentes) e depois `.map` no render das bolhas — os dois SEM
+// guarda. `approvedTemplates` só é buscado quando a janela de 24h da Meta está fechada.
+describe("ConversasPage — fio e templates fora de forma não derrubam a conversa aberta (#225)", () => {
+  function mockConversaAberta(timelinePayload: unknown, dentroDaJanela: boolean, templatesPayload: unknown) {
+    vi.mocked(api.get).mockImplementation((url: string) => {
+      if (url === "/whatsapp-conversations") {
+        return Promise.resolve({
+          data: [{
+            chat_id: "c1", kind: "direct" as const, title: "Doro Eventos", phone: "5511999999999",
+            client_id: "c1", last_message_at: "2026-07-19T10:00:00Z",
+            last_message_preview: "Oi", unread: false,
+          }],
+        } as never);
+      }
+      if (url === "/whatsapp-conversations/c1/timeline") return Promise.resolve({ data: timelinePayload } as never);
+      if (url === "/whatsapp-conversations/c1/window") {
+        return Promise.resolve({ data: { within_session_window: dentroDaJanela } } as never);
+      }
+      if (url === "/whatsapp-templates") return Promise.resolve({ data: templatesPayload } as never);
+      return Promise.resolve({ data: [] } as never);
+    });
+    vi.mocked(api.post).mockResolvedValue({ data: {} } as never);
+  }
+
+  it.each([
+    ["envelope de erro devolvido com 200", { detail: "algo deu errado" }],
+    ["string no lugar da lista", "não é json"],
+  ])("timeline %s → o fio abre, sem bolhas, sem estourar", async (_rotulo, payload) => {
+    mockConversaAberta(payload, true, []);
+    renderNaRota("/conversas/c1");
+    await assentar();
+
+    expect(screen.getByPlaceholderText(/mensagem/i)).toBeInTheDocument();
+  });
+
+  it.each([
+    ["envelope de erro devolvido com 200", { detail: "algo deu errado" }],
+    ["string no lugar da lista", "não é json"],
+  ])("templates %s (janela fechada) → o fio abre, sem estourar", async (_rotulo, payload) => {
+    mockConversaAberta([], false, payload);
+    renderNaRota("/conversas/c1");
+    await assentar();
+
+    // Janela fechada → TemplateReplyBox no lugar do input livre; a guarda faz `templates` cair
+    // em `[]`, e o próprio componente já trata lista vazia com este texto.
+    expect(screen.getByText("Nenhum template aprovado ainda.")).toBeInTheDocument();
+  });
+
+  it("contra-teste: mensagem de verdade continua virando bolha no fio", async () => {
+    mockConversaAberta(
+      [{
+        source: "conversation", direction: "in", kind: "text",
+        text_body: "Mensagem real", media_attachment_id: null, purpose_label: null,
+        sender_name: null, created_at: "2026-07-19T10:00:00Z",
+      }],
+      true,
+      [],
+    );
+    renderNaRota("/conversas/c1");
+    await assentar();
+
+    expect(await screen.findByText("Mensagem real")).toBeInTheDocument();
+  });
+});

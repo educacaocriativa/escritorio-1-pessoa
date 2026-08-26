@@ -20,7 +20,7 @@ export default function CelularSection() {
 
   const load = useCallback(async () => {
     const { data } = await api.get<DeviceToken[]>("/settings/device-tokens");
-    setTokens(data);
+    setTokens(Array.isArray(data) ? data : []);
   }, []);
 
   useEffect(() => {
