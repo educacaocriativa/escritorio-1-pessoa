@@ -561,8 +561,10 @@ function AccountDetail({
           params: { limit: 12 },
         }),
       ]);
-      setTxs(t.data);
-      setCheckpoints(c.data);
+      // Guarda de FORMA (issue #252): `txs`/`checkpoints` alimentam `.map`/`.length` direto no
+      // render, sem checar o payload. `Array.isArray`, no molde de `CrmPage.tsx` (#225).
+      setTxs(Array.isArray(t.data) ? t.data : []);
+      setCheckpoints(Array.isArray(c.data) ? c.data : []);
     } catch (err) {
       setError(apiErrorMessage(err));
     }

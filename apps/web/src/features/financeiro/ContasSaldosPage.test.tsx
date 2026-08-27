@@ -1303,6 +1303,53 @@ describe("checkpoints fora de formato não viram saldo declarado", () => {
   });
 });
 
+// ── `txs`/`checkpoints` DENTRO de `AccountDetail` fora de forma (issue #252) ──────────────
+//
+// `setTxs(t.data)`/`setCheckpoints(c.data)` (o `Promise.all` de `AccountDetail.load()`, disparado
+// ao abrir "Ver movimentos") recebiam o payload CRU. `txs.map`/`.length` e `checkpoints.map`/
+// `.length` rodam direto no render da seção de movimentos, sem `Array.isArray` — distinto do
+// checkpoint-resumo do cartão (issue #179, já guardado por `cps.data[0] ?? null`).
+describe("ContasSaldosPage — movimentos/checkpoints da conta aberta fora de forma (#252)", () => {
+  async function abrirMovimentos() {
+    renderPage();
+    await waitFor(() => expect(screen.getByText("Ver movimentos")).toBeInTheDocument());
+    screen.getByText("Ver movimentos").click();
+    await waitFor(() => expect(screen.getByText(/Movimentos — Itaú PJ/)).toBeInTheDocument());
+  }
+
+  it("txs fora de forma → a seção de movimentos mostra o estado vazio, sem estourar", async () => {
+    mockApi([conta({ id: "a", name: "Itaú PJ" })], [], "não é json" as never);
+    await abrirMovimentos();
+
+    expect(
+      screen.getByText("Nenhum movimento nesta conta no período selecionado."),
+    ).toBeInTheDocument();
+  });
+
+  it("checkpoints fora de forma → 'Saldos declarados' mostra o estado vazio, sem estourar", async () => {
+    mockApi([conta({ id: "a", name: "Itaú PJ" })], { detail: "erro" } as never, []);
+    await abrirMovimentos();
+
+    expect(
+      screen.getByText(/Nenhum saldo declarado\. Sem ele o e1p não tem contra o que conferir/),
+    ).toBeInTheDocument();
+  });
+
+  it("contra-teste: movimento e checkpoint de verdade continuam aparecendo na seção aberta", async () => {
+    mockApi(
+      [conta({ id: "a", name: "Itaú PJ" })],
+      [checkpoint],
+      [movimento({ id: "tx-real", description: "Aluguel de agosto" })],
+    );
+    await abrirMovimentos();
+
+    expect(await screen.findByText("Aluguel de agosto")).toBeInTheDocument();
+    // A linha do checkpoint na seção "Saldos declarados" — o botão "Remover declaração" só existe
+    // quando `checkpoints.map` de fato correu sobre a lista de verdade.
+    expect(screen.getByRole("button", { name: /Remover declaração/ })).toBeInTheDocument();
+  });
+});
+
 // ── `GET /bank/accounts` fora de forma (issue #207) ───────────────────────────
 //
 // `setAccounts(res.data)` recebia o payload CRU, sem operador nenhum — é um dos dois exemplos que

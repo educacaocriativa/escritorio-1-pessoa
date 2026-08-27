@@ -89,3 +89,47 @@ describe("CentrosCustoPage — comparativo fora de forma não derruba a tela (#2
     expect(await screen.findByTestId("comparativo-centros")).toBeInTheDocument();
   });
 });
+
+// ── `GET /cost-centers` fora de forma (issue #252) ───────────────────────────────────────
+//
+// `setCenters(c.data)` recebia o payload CRU. `centers.map`/`.length` rodam direto no render
+// (a lista) sem `Array.isArray` — um payload fora de forma faria `centers.map is not a
+// function` estourar.
+describe("CentrosCustoPage — lista de centros fora de forma não derruba a tela (#252)", () => {
+  it.each([
+    ["envelope de erro devolvido com 200", { detail: "algo deu errado" }],
+    ["corpo vazio (204 / sem conteúdo)", null],
+  ])("%s → a tela segue montada, com o estado vazio", async (_rotulo, payload) => {
+    vi.mocked(api.get).mockImplementation((url: string) => {
+      if (url === "/cost-centers") return Promise.resolve({ data: payload } as never);
+      if (url === "/financial-intelligence/by-cost-center")
+        return Promise.resolve({
+          data: { start: "2026-08-01", end: "2026-08-31", buckets: [], notes: [] },
+        } as never);
+      return Promise.resolve({ data: [] } as never);
+    });
+    renderPage();
+    await assentar();
+
+    expect(screen.getByText("Centros de custo")).toBeInTheDocument();
+    expect(
+      await screen.findByText('Nenhum centro de custo ainda. Clique em "Novo centro de custo".'),
+    ).toBeInTheDocument();
+  });
+
+  it("contra-teste: centro de verdade continua aparecendo na lista", async () => {
+    vi.mocked(api.get).mockImplementation((url: string) => {
+      if (url === "/cost-centers")
+        return Promise.resolve({ data: [{ id: "cc-1", name: "Sócio A", kind: "socio", archived_at: null }] } as never);
+      if (url === "/financial-intelligence/by-cost-center")
+        return Promise.resolve({
+          data: { start: "2026-08-01", end: "2026-08-31", buckets: [], notes: [] },
+        } as never);
+      return Promise.resolve({ data: [] } as never);
+    });
+    renderPage();
+    await assentar();
+
+    expect(await screen.findByText("Sócio A")).toBeInTheDocument();
+  });
+});

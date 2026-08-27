@@ -962,3 +962,79 @@ describe("PagarPage — página de contas fora de forma não derruba a lista (#2
     expect(await screen.findByText("Aluguel")).toBeInTheDocument();
   });
 });
+
+// ── chartAccounts/costCenters/inbox fora de forma (issue #252) ───────────────────────────
+//
+// `setChartAccounts(ca.data)`/`setCostCenters(cc.data)` alimentam `FiltrosDaLista` (`.map` direto,
+// sem `Array.isArray`), e `setInbox(pend.data)` alimenta o aviso da bandeja (`.length`/`[0].id`).
+// Um payload fora de forma faria `.map is not a function` (ou `.length` num objeto/string sem
+// sentido) estourar em qualquer um dos três.
+describe("PagarPage — filtros e bandeja fora de forma não derrubam a tela (#252)", () => {
+  it("chartAccounts/costCenters fora de forma → os filtros seguem montados, sem estourar", async () => {
+    vi.mocked(api.get).mockImplementation((url: string) => {
+      if (url === "/payables/summary") return Promise.resolve({ data: emptySummary } as never);
+      if (url === "/payables/bills")
+        return Promise.resolve({ data: { items: [], total: 0 } } as never);
+      if (url === "/chart-of-accounts")
+        return Promise.resolve({ data: { detail: "erro" } } as never);
+      if (url === "/cost-centers") return Promise.resolve({ data: "não é json" } as never);
+      return Promise.resolve({ data: [] } as never);
+    });
+    // `mockClear()` + `waitFor` na chamada real: sem isto o teste passaria mesmo com a guarda
+    // removida, porque nunca esperaria o debounce de 300ms (linha ~185) o bastante para o commit
+    // de `setChartAccounts`/`setCostCenters` realmente acontecer — a mesma falsa confiança que o
+    // docstring de `assentar.ts` descreve (medido: sem isto este mutante SOBREVIVE).
+    vi.mocked(api.get).mockClear();
+    renderPage();
+    await waitFor(() => expect(api.get).toHaveBeenCalledWith("/chart-of-accounts"));
+    await assentar();
+
+    expect(screen.getByText("Todas as categorias")).toBeInTheDocument();
+    expect(screen.getByText("Todos os centros")).toBeInTheDocument();
+  });
+
+  it("inbox (comprovantes) fora de forma → sem aviso, sem estourar", async () => {
+    vi.mocked(api.get).mockImplementation((url: string) => {
+      if (url === "/payables/summary") return Promise.resolve({ data: emptySummary } as never);
+      if (url === "/payables/bills")
+        return Promise.resolve({ data: { items: [], total: 0 } } as never);
+      // ⚠️ Um OBJETO (`{ detail: ... }`) não serve aqui: `inbox.length` sobre ele é `undefined`,
+      // `undefined > 0` é falso, e o aviso já nasce escondido pelo PRÓPRIO `inbox.length > 0` —
+      // o mutante (payload cru) sobrevive porque nunca chega a executar `inbox[0].id`. `null` é
+      // o payload que de fato força a leitura: `null.length` estoura sem a guarda.
+      if (url === "/payables/receipts") return Promise.resolve({ data: null } as never);
+      return Promise.resolve({ data: [] } as never);
+    });
+    // Mesma razão do teste acima: espera a chamada real antes de assentar.
+    vi.mocked(api.get).mockClear();
+    renderPage();
+    await waitFor(() => expect(api.get).toHaveBeenCalledWith("/payables/receipts"));
+    await assentar();
+
+    expect(screen.getByRole("button", { name: "Nova conta" })).toBeInTheDocument();
+    expect(screen.queryByText(/aguardando/i)).toBeNull();
+  });
+
+  it("contra-teste: categorias/centros/bandeja de verdade continuam aparecendo", async () => {
+    vi.mocked(api.get).mockImplementation((url: string) => {
+      if (url === "/payables/summary") return Promise.resolve({ data: emptySummary } as never);
+      if (url === "/payables/bills")
+        return Promise.resolve({ data: { items: [], total: 0 } } as never);
+      if (url === "/chart-of-accounts")
+        return Promise.resolve({ data: [{ id: "ca-1", categoria: "Estrutura" }] } as never);
+      if (url === "/cost-centers")
+        return Promise.resolve({ data: [{ id: "cc-1", name: "Sócio A" }] } as never);
+      if (url === "/payables/receipts")
+        return Promise.resolve({
+          data: [{ id: "r-1", filename: "a.pdf", content_type: "application/pdf", size: 1, created_at: "2026-07-28T10:00:00Z" }],
+        } as never);
+      return Promise.resolve({ data: [] } as never);
+    });
+    renderPage();
+    await assentar();
+
+    expect(await screen.findByText("Estrutura")).toBeInTheDocument();
+    expect(screen.getByText("Sócio A")).toBeInTheDocument();
+    expect(screen.getByText(/1 comprovante aguardando/i)).toBeInTheDocument();
+  });
+});

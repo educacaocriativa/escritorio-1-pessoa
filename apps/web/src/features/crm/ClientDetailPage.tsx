@@ -90,11 +90,15 @@ export default function ClientDetailPage() {
         ? { ...c.data, tags: Array.isArray(c.data.tags) ? c.data.tags : [] }
         : null,
     );
-    setCharges(ch.data);
-    setContracts(co.data);
-    setQuotes(qu.data);
-    setLegalDocs(ld.data);
-    setJourneys(jr.data);
+    // Guarda de FORMA (issue #252): as cinco alimentam `.length`/`.map` direto no render (contagem
+    // do título da seção + listas), sem checar o payload. `Array.isArray`, no molde de
+    // `CrmPage.tsx` (#225) — um payload fora de forma (envelope de erro, corpo vazio) degrada
+    // para a lista vazia, o mesmo estado que já existe antes da resposta chegar.
+    setCharges(Array.isArray(ch.data) ? ch.data : []);
+    setContracts(Array.isArray(co.data) ? co.data : []);
+    setQuotes(Array.isArray(qu.data) ? qu.data : []);
+    setLegalDocs(Array.isArray(ld.data) ? ld.data : []);
+    setJourneys(Array.isArray(jr.data) ? jr.data : []);
   }, [id, podeCobrancas, podeContratos, podeOrcamentos, podeJuridico, podeFunis]);
 
   useEffect(() => {
