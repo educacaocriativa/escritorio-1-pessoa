@@ -27,8 +27,13 @@ export default function PageBlocks({
   onLead?: (lead: LeadPayload) => Promise<void>;
 }) {
   return (
+    // `campos-tocaveis` (issue #249, fatia de /sites/s1): o `LeadForm` do bloco `form` usa
+    // `inp = "...px-3 py-2.5 text-sm..."` (≈42px medidos), abaixo do alvo. Este componente é
+    // compartilhado com `PublicPage.tsx` (`/p/:slug`, fora do escopo desta issue): a prévia
+    // dentro do editor (`/sites/s1`) e a página pública herdam a correção juntas, de propósito —
+    // o `LeadForm` é o MESMO componente nos dois lugares.
     <div
-      className="mx-auto max-w-xl space-y-5 px-6 py-10"
+      className="campos-tocaveis mx-auto max-w-xl space-y-5 px-6 py-10"
       style={{ background: style.bg_color, color: style.text_color, fontFamily: style.font }}
     >
       {safeSrc(style.logo_url) && (
