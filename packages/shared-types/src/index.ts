@@ -157,7 +157,9 @@ export type AgendaKind =
   | "prazo"
   | "cobranca_receber"
   | "cobranca_pagar"
-  | "lembrete";
+  | "lembrete"
+  /** Espelhado a partir do Google Calendar (sync Google → e1p) — sem tipo de negócio do e1p. */
+  | "google";
 
 export type AgendaStatus = "scheduled" | "confirmed" | "cancelled" | "done";
 export type AgendaPriority = "normal" | "high" | "critical";
