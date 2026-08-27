@@ -24,13 +24,16 @@ KIND_PRAZO = "prazo"
 KIND_COBRANCA_RECEBER = "cobranca_receber"
 KIND_COBRANCA_PAGAR = "cobranca_pagar"
 KIND_LEMBRETE = "lembrete"
+# Evento espelhado a partir do Google Calendar (sync Google → e1p) — não tem tipo de negócio do
+# e1p (não é reunião com cliente nem cobrança); ocupa horário de verdade na agenda do dono.
+KIND_GOOGLE = "google"
 
 ALL_KINDS = {
     KIND_ATENDIMENTO, KIND_REUNIAO, KIND_AUDIENCIA, KIND_BLOQUEIO,
-    KIND_PRAZO, KIND_COBRANCA_RECEBER, KIND_COBRANCA_PAGAR, KIND_LEMBRETE,
+    KIND_PRAZO, KIND_COBRANCA_RECEBER, KIND_COBRANCA_PAGAR, KIND_LEMBRETE, KIND_GOOGLE,
 }
 # Eventos que ocupam um intervalo de tempo (entram na checagem de conflito de agenda).
-OCCUPYING_KINDS = {KIND_ATENDIMENTO, KIND_REUNIAO, KIND_AUDIENCIA, KIND_BLOQUEIO}
+OCCUPYING_KINDS = {KIND_ATENDIMENTO, KIND_REUNIAO, KIND_AUDIENCIA, KIND_BLOQUEIO, KIND_GOOGLE}
 
 STATUS_SCHEDULED = "scheduled"
 STATUS_CONFIRMED = "confirmed"

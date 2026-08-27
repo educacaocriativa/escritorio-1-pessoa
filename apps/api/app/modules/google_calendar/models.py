@@ -13,7 +13,7 @@ from __future__ import annotations
 
 from datetime import datetime
 
-from sqlalchemy import DateTime, String
+from sqlalchemy import DateTime, String, Text
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.core.token_crypto import EncryptedToken
@@ -34,3 +34,6 @@ class GoogleCredential(Base, TenantMixin, TimestampMixin):
     refresh_token: Mapped[str] = mapped_column(EncryptedToken, default="", nullable=False)
     token_expiry: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     scope: Mapped[str] = mapped_column(String(255), default=DEFAULT_SCOPE, nullable=False)
+    # Cursor de sincronização incremental do Google (nextSyncToken). NULL = nunca sincronizado
+    # (ou expirou e foi limpo) — a próxima rodada faz um sync completo limitado por janela.
+    sync_token: Mapped[str | None] = mapped_column(Text, nullable=True)

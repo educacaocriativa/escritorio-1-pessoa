@@ -15,6 +15,7 @@ from app.core.facts import AGENDA_EVENTO_CANCELADO, AGENDA_EVENTO_REMARCADO
 from app.modules.agenda.models import (
     KIND_ATENDIMENTO,
     KIND_AUDIENCIA,
+    KIND_BLOQUEIO,
     KIND_REUNIAO,
     OCCUPYING_KINDS,
     STATUS_CANCELLED,
@@ -27,6 +28,10 @@ from app.modules.agenda.schemas import EventCreate, EventUpdate
 TERMINAL_STATUSES = {STATUS_CANCELLED, STATUS_DONE}
 # Tipos onde "reunião" faz sentido → candidatos a gerar Meet automático (Story 4.1).
 MEET_KINDS = {KIND_REUNIAO, KIND_ATENDIMENTO, KIND_AUDIENCIA}
+# Tipos espelhados no Google (create/reschedule/cancel), com ou sem Meet — mesmo conjunto de
+# `google_calendar/service.py::PUSHED_KINDS`, mantido local de propósito (o módulo-núcleo Agenda
+# não tem import real da integração opcional, só o lazy dentro da função abaixo).
+PUSHED_KINDS = MEET_KINDS | {KIND_BLOQUEIO}
 DEFAULT_LIST_LIMIT = 200
 MAX_LIST_LIMIT = 500
 
@@ -106,7 +111,7 @@ def create_event(
     # lazy do módulo de integração para não acoplar a Agenda-núcleo a uma extensão opcional
     # (mesmo padrão de quotes → contracts). Falha do Google não derruba a criação (IV1/IV2):
     # create_meet_event captura a exceção e retorna None.
-    if event.kind in MEET_KINDS and not data.meeting_url:
+    if event.kind in PUSHED_KINDS and not data.meeting_url:
         from app.modules.google_calendar import service as gcal
 
         result = gcal.create_meet_event(db, tenant_id=tenant_id, event=event)

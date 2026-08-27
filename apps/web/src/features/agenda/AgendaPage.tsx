@@ -1,4 +1,4 @@
-import type { AgendaEvent, Charge, Notification, Payable } from "@e1p/shared-types";
+import type { AgendaEvent, Charge, Client, Notification, Payable } from "@e1p/shared-types";
 import { ChevronLeft, ChevronRight, MapPin, Sparkles, Users, Video } from "lucide-react";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import Attachments from "../../components/Attachments";
@@ -161,6 +161,7 @@ function eventColor(e: AgendaEvent, hoje: string): string {
   if (e.kind === "cobranca_pagar") return overdue ? "bg-red-100 text-red-700" : "bg-orange-100 text-orange-700";
   if (e.priority === "critical") return "bg-red-100 text-red-700";
   if (e.kind === "prazo") return "bg-amber-100 text-amber-700";
+  if (e.kind === "google") return "bg-neutral-200 text-neutral-700";
   return "bg-primary-100 text-primary-700";
 }
 const hhmm = (iso: string, tz: string) => formatTime(iso, tz);
@@ -386,6 +387,8 @@ function EventDetailModal({ event, onClose }: { event: AgendaEvent; onClose: () 
   const [messages, setMessages] = useState<Notification[]>([]);
   const [newMsg, setNewMsg] = useState("");
   const [busy, setBusy] = useState(false);
+  const [clientId, setClientId] = useState(event.client_id);
+  const [clientName, setClientName] = useState(event.client_name);
 
   const loadMessages = useCallback(() => {
     if (!event.external_ref) return;
@@ -446,6 +449,18 @@ function EventDetailModal({ event, onClose }: { event: AgendaEvent; onClose: () 
           <p className="text-base font-bold text-neutral-800">{formatBRL(event.amount_cents)}</p>
         )}
         {event.description && <p className="text-neutral-600">{event.description}</p>}
+
+        {!isPagar && !isReceber && (
+          <ClienteVinculo
+            eventId={event.id}
+            clientId={clientId}
+            clientName={clientName}
+            onLinked={(id, name) => {
+              setClientId(id);
+              setClientName(name);
+            }}
+          />
+        )}
 
         {isPagar && payable && (
           <div className="rounded-lg bg-neutral-50 p-3">
@@ -540,5 +555,94 @@ function EventDetailModal({ event, onClose }: { event: AgendaEvent; onClose: () 
         )}
       </div>
     </Modal>
+  );
+}
+
+function ClienteVinculo({
+  eventId,
+  clientId,
+  clientName,
+  onLinked,
+}: {
+  eventId: string;
+  clientId: string | null;
+  clientName: string | null;
+  onLinked: (clientId: string, clientName: string) => void;
+}) {
+  const [showSearch, setShowSearch] = useState(false);
+  const [query, setQuery] = useState("");
+  const [results, setResults] = useState<Client[]>([]);
+  const [busy, setBusy] = useState(false);
+
+  async function search() {
+    if (!query.trim()) return;
+    const { data } = await api.get<Client[]>("/crm/clients", {
+      params: { search: query, limit: 10 },
+    });
+    setResults(Array.isArray(data) ? data : []);
+  }
+
+  async function link(client: Client) {
+    setBusy(true);
+    try {
+      await api.patch(`/agenda/events/${eventId}`, { client_id: client.id });
+      onLinked(client.id, client.name);
+      setShowSearch(false);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  if (clientId && !showSearch) {
+    return (
+      <p className="flex items-center justify-between text-neutral-600">
+        <span>
+          Cliente: <strong>{clientName ?? "vinculado"}</strong>
+        </span>
+        <button onClick={() => setShowSearch(true)} className="text-xs text-primary-600 hover:underline">
+          Trocar
+        </button>
+      </p>
+    );
+  }
+
+  if (!showSearch) {
+    return (
+      <button onClick={() => setShowSearch(true)} className="text-xs text-primary-600 hover:underline">
+        Vincular a um cliente
+      </button>
+    );
+  }
+
+  return (
+    <div className="space-y-1.5">
+      <div className="flex gap-1.5">
+        <input
+          value={query}
+          onChange={(e) => setQuery(e.target.value)}
+          onKeyDown={(e) => e.key === "Enter" && search()}
+          placeholder="Buscar cliente..."
+          className="min-w-0 flex-1 rounded-lg border border-neutral-200 px-2 py-1 text-xs outline-none focus:border-primary-400"
+        />
+        <button onClick={search} className="rounded-lg bg-neutral-100 px-2 py-1 text-xs">
+          Buscar
+        </button>
+      </div>
+      {results.length > 0 && (
+        <ul className="space-y-1">
+          {results.map((c) => (
+            <li key={c.id}>
+              <button
+                onClick={() => link(c)}
+                disabled={busy}
+                className="w-full rounded-lg bg-neutral-50 px-2 py-1 text-left text-xs hover:bg-neutral-100 disabled:opacity-60"
+              >
+                {c.name}
+              </button>
+            </li>
+          ))}
+        </ul>
+      )}
+    </div>
   );
 }

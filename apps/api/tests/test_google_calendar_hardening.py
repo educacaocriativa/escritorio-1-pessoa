@@ -114,11 +114,15 @@ def _make_event(db: Session, *, google_event_id: str | None) -> AgendaEvent:
 
 
 class _FakeResp:
-    def __init__(self, status_code: int = 200):
+    def __init__(self, status_code: int = 200, data: dict | None = None):
         self.status_code = status_code
+        self._data = data or {}
 
     def raise_for_status(self) -> None:
         return None
+
+    def json(self) -> dict:
+        return self._data
 
 
 def test_reschedule_patches_google_when_event_linked(db: Session, monkeypatch):
@@ -230,3 +234,34 @@ def test_cancel_treats_google_404_as_success(db: Session, monkeypatch):
 
     db.refresh(ev)
     assert gcal.delete_meet_event(db, tenant_id=TENANT, event=ev) is True
+
+
+# ── 3. Bloqueio de horário é espelhado no Google, mas SEM Meet ───────────────
+def test_bloqueio_is_pushed_without_conference_data(db: Session, monkeypatch):
+    """Bloqueio de horário vira evento espelho no Google, mas SEM gerar Meet — não é reunião."""
+    _connect_google(db)
+    captured = {}
+
+    def fake_post(url: str, **kw):
+        captured["json"] = kw.get("json")
+        return _FakeResp(200, {"id": "gcal-bloqueio-1"})
+
+    monkeypatch.setattr(httpx, "post", fake_post)
+
+    from app.modules.agenda import service as agenda
+    from app.modules.agenda.schemas import EventCreate
+
+    event, _ = agenda.create_event(
+        db,
+        tenant_id=TENANT,
+        actor="user-1",
+        by_ai=False,
+        data=EventCreate(
+            title="Bloqueio da tarde",
+            kind="bloqueio",
+            starts_at=datetime(2026, 9, 10, 13, 0, tzinfo=UTC),
+            ends_at=datetime(2026, 9, 10, 17, 0, tzinfo=UTC),
+        ),
+    )
+    assert event.google_event_id == "gcal-bloqueio-1"
+    assert "conferenceData" not in captured["json"]

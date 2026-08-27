@@ -182,6 +182,61 @@ describe("AgendaPage — chipLabel (Task 3, Onda 2): atalho de nome só para kin
   });
 });
 
+describe("AgendaPage — Google Calendar Sync: kind=\"google\" tem cor própria", () => {
+  it("evento kind=google recebe cor neutra própria no chip do mês", async () => {
+    mockEvents([
+      agendaEvent({
+        id: "ev-google-1",
+        title: "Aniversário de Vera",
+        kind: "google",
+        source: "google",
+        all_day: true,
+        google_event_id: "gcal-1",
+      }),
+    ]);
+    renderPage();
+    const chip = await screen.findByTestId("chip-evento-ev-google-1");
+    expect(chip.className).toContain("bg-neutral-200");
+  });
+});
+
+describe("AgendaPage — vínculo de cliente no detalhe do evento", () => {
+  it("EventDetailModal: vincula o evento a um cliente do CRM (evento sem client_id)", async () => {
+    const user = userEvent.setup();
+    const event = agendaEvent({
+      id: "ev-google-2",
+      title: "Visita",
+      kind: "google",
+      source: "google",
+      google_event_id: "gcal-2",
+      client_id: null,
+      client_name: null,
+    });
+    vi.mocked(api.get).mockImplementation((url: string) => {
+      if (url === "/agenda/events") return Promise.resolve({ data: [event] } as never);
+      if (url === "/crm/clients") {
+        return Promise.resolve({ data: [{ id: "c1", name: "Maria Cliente" }] } as never);
+      }
+      return Promise.resolve({ data: [] } as never);
+    });
+    vi.mocked(api.patch).mockResolvedValue({
+      data: { ...event, client_id: "c1", client_name: "Maria Cliente" },
+    } as never);
+
+    renderPage();
+    await user.click(await screen.findByTestId("chip-evento-ev-google-2"));
+    await user.click(await screen.findByRole("button", { name: "Vincular a um cliente" }));
+    await user.type(screen.getByPlaceholderText("Buscar cliente..."), "Maria");
+    await user.click(screen.getByRole("button", { name: "Buscar" }));
+    await user.click(await screen.findByRole("button", { name: "Maria Cliente" }));
+
+    expect(vi.mocked(api.patch)).toHaveBeenCalledWith("/agenda/events/ev-google-2", {
+      client_id: "c1",
+    });
+    expect(await screen.findByText(/Cliente:/)).toHaveTextContent("Maria Cliente");
+  });
+});
+
 // ── `GET /agenda/events` fora de forma (issue #207) ───────────────────────────
 //
 // `setEvents(data)` recebia o payload CRU, sem operador nenhum. A grade chama `eventsOfDay(events,

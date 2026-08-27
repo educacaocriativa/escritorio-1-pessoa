@@ -41,6 +41,10 @@ _HTTP_TIMEOUT = 10
 
 # Tipos de evento onde "reunião" faz sentido (geram Meet). Bloqueios/prazos/cobranças não.
 MEET_KINDS = {"reuniao", "atendimento", "audiencia"}
+# Tipos de evento espelhados no Google (create/reschedule/cancel), com ou sem Meet. Bloqueio
+# ocupa horário de verdade na agenda do dono e por isso é espelhado — mas não é reunião, então
+# não pede conferenceData (ver create_meet_event abaixo).
+PUSHED_KINDS = MEET_KINDS | {"bloqueio"}
 
 
 class GoogleNotConfiguredError(Exception):
@@ -221,13 +225,14 @@ def create_meet_event(
             "start": {"dateTime": _iso(event.starts_at)},
             "end": {"dateTime": _iso(event.ends_at)},
             "attendees": [{"email": g} for g in (event.guests or [])],
-            "conferenceData": {
+        }
+        if event.kind in MEET_KINDS:
+            body["conferenceData"] = {
                 "createRequest": {
                     "requestId": uuid.uuid4().hex,
                     "conferenceSolutionKey": {"type": "hangoutsMeet"},
                 }
-            },
-        }
+            }
         resp = httpx.post(
             _CALENDAR_EVENTS_URL,
             headers={"Authorization": f"Bearer {access_token}"},
