@@ -197,3 +197,43 @@ describe("EstoquePage — resumo fora de forma não derruba a tela (#247)", () =
     expect(screen.getByText("R$ 123,45")).toBeInTheDocument();
   });
 });
+
+// ── `GET /stock/items` fora de forma (issue #252) ────────────────────────────────────────
+//
+// `setItems(i.data)` recebia o payload CRU. `items.map`/`.length` rodam direto no render (a
+// tabela) sem `Array.isArray` — um payload fora de forma faria `items.map is not a function`
+// estourar.
+describe("EstoquePage — lista de itens fora de forma não derruba a tela (#252)", () => {
+  it.each([
+    ["envelope de erro devolvido com 200", { detail: "algo deu errado" }],
+    ["corpo vazio (204 / sem conteúdo)", null],
+  ])("%s → a tela segue montada, com o estado vazio", async (_rotulo, payload) => {
+    vi.mocked(api.get).mockImplementation((url: string) => {
+      if (url === "/stock/summary") return Promise.resolve({ data: emptySummary } as never);
+      if (url === "/stock/items") return Promise.resolve({ data: payload } as never);
+      return Promise.resolve({ data: [] } as never);
+    });
+    renderPage();
+    await assentar();
+
+    expect(screen.getByText("Controle de Estoque")).toBeInTheDocument();
+    expect(
+      await screen.findByText('Nenhum item. Clique em "Novo item".'),
+    ).toBeInTheDocument();
+  });
+
+  it("contra-teste: item de verdade continua aparecendo na tabela", async () => {
+    vi.mocked(api.get).mockImplementation((url: string) => {
+      if (url === "/stock/summary") return Promise.resolve({ data: emptySummary } as never);
+      if (url === "/stock/items")
+        return Promise.resolve({
+          data: [{ id: "i-1", name: "Camiseta P", quantity: 10, unit: "un", unit_cost_cents: 100, value_cents: 1000, low: false, min_quantity: 0 }],
+        } as never);
+      return Promise.resolve({ data: [] } as never);
+    });
+    renderPage();
+    await assentar();
+
+    expect(await screen.findByText("Camiseta P")).toBeInTheDocument();
+  });
+});
