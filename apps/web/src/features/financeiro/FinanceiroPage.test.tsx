@@ -127,3 +127,119 @@ describe("FinanceiroPage — resumo fora de forma não derruba a tela (#247)", (
     expect(await screen.findByText("R$ 500,00")).toBeInTheDocument();
   });
 });
+
+// ── As CINCO leituras secundárias fora de forma (issue #252) ─────────────────────────────
+//
+// `setTxs(t.data)`/`setChartAccounts(ca.data)`/`setCostCenters(cc.data)`/`setPayouts(po.data)`/
+// `setContas(bc.data)` recebiam o payload CRU. `txs.map`/`.length` roda na tabela principal; os
+// outros quatro alimentam rótulos (`accountLabel`/`costCenterLabel`) e o `PayoutHistory` — um
+// payload fora de forma faria `.map is not a function` estourar em qualquer um dos cinco.
+describe("FinanceiroPage — as cinco leituras secundárias fora de forma (#252)", () => {
+  it("txs fora de forma → tabela principal degrada para o estado vazio", async () => {
+    vi.mocked(api.get).mockImplementation((url: string) => {
+      if (url === "/wallet/summary") return Promise.resolve({ data: emptySummary } as never);
+      if (url === "/wallet/transactions")
+        return Promise.resolve({ data: { detail: "algo deu errado" } } as never);
+      return Promise.resolve({ data: [] } as never);
+    });
+    renderPage();
+    await assentar();
+
+    expect(screen.getByText("Carteira")).toBeInTheDocument();
+    expect(
+      await screen.findByText('Nenhuma transação. Clique em "Registrar venda".'),
+    ).toBeInTheDocument();
+  });
+
+  it("chartAccounts/costCenters fora de forma → linha da transação não estoura, rótulo cai no '—'", async () => {
+    vi.mocked(api.get).mockImplementation((url: string) => {
+      if (url === "/wallet/summary") return Promise.resolve({ data: emptySummary } as never);
+      if (url === "/wallet/transactions")
+        return Promise.resolve({
+          data: [
+            {
+              id: "t-1", kind: "service", method: "pix", description: "Consultoria",
+              chart_account_id: "ca-1", cost_center_id: "cc-1",
+              gross_cents: 10000, platform_fee_cents: 500, net_cents: 9500, status: "available",
+            },
+          ],
+        } as never);
+      if (url === "/chart-of-accounts") return Promise.resolve({ data: "não é json" } as never);
+      if (url === "/cost-centers") return Promise.resolve({ data: null } as never);
+      return Promise.resolve({ data: [] } as never);
+    });
+    renderPage();
+    await assentar();
+
+    expect(await screen.findByText("Consultoria")).toBeInTheDocument();
+    expect(screen.getAllByText("—").length).toBeGreaterThanOrEqual(2);
+  });
+
+  it("payouts fora de forma → histórico de saques mostra o estado vazio", async () => {
+    vi.mocked(api.get).mockImplementation((url: string) => {
+      if (url === "/wallet/summary") return Promise.resolve({ data: emptySummary } as never);
+      if (url === "/wallet/transactions") return Promise.resolve({ data: [] } as never);
+      if (url === "/wallet/payouts") return Promise.resolve({ data: { detail: "erro" } } as never);
+      return Promise.resolve({ data: [] } as never);
+    });
+    renderPage();
+    await assentar();
+
+    expect(
+      await screen.findByText("Nenhum saque ainda. O que você sacar aparece aqui e no extrato da sua conta."),
+    ).toBeInTheDocument();
+  });
+
+  it("contas (bank/accounts) fora de forma → nome da conta de destino não estoura", async () => {
+    vi.mocked(api.get).mockImplementation((url: string) => {
+      if (url === "/wallet/summary") return Promise.resolve({ data: emptySummary } as never);
+      if (url === "/wallet/transactions") return Promise.resolve({ data: [] } as never);
+      if (url === "/wallet/payouts")
+        return Promise.resolve({
+          data: [{ id: "po-1", amount_cents: 5000, paid_on: "2026-08-01", bank_account_id: "acc-1", bank_transaction_id: "bt-1" }],
+        } as never);
+      if (url === "/bank/accounts") return Promise.resolve({ data: "não é json" } as never);
+      return Promise.resolve({ data: [] } as never);
+    });
+    renderPage();
+    await assentar();
+
+    // Sem o nome resolvido (o `Object.fromEntries` ficou vazio), cai no fallback do próprio
+    // `PayoutHistory` — a tela não estoura.
+    expect(await screen.findByText("Conta removida")).toBeInTheDocument();
+  });
+
+  it("contra-teste: as cinco leituras de verdade continuam aparecendo", async () => {
+    vi.mocked(api.get).mockImplementation((url: string) => {
+      if (url === "/wallet/summary") return Promise.resolve({ data: emptySummary } as never);
+      if (url === "/wallet/transactions")
+        return Promise.resolve({
+          data: [
+            {
+              id: "t-1", kind: "service", method: "pix", description: "Consultoria",
+              chart_account_id: "ca-1", cost_center_id: "cc-1",
+              gross_cents: 10000, platform_fee_cents: 500, net_cents: 9500, status: "available",
+            },
+          ],
+        } as never);
+      if (url === "/chart-of-accounts")
+        return Promise.resolve({ data: [{ id: "ca-1", categoria: "Serviços" }] } as never);
+      if (url === "/cost-centers")
+        return Promise.resolve({ data: [{ id: "cc-1", name: "Sócio A" }] } as never);
+      if (url === "/wallet/payouts")
+        return Promise.resolve({
+          data: [{ id: "po-1", amount_cents: 5000, paid_on: "2026-08-01", bank_account_id: "acc-1", bank_transaction_id: "bt-1" }],
+        } as never);
+      if (url === "/bank/accounts")
+        return Promise.resolve({ data: [{ id: "acc-1", name: "Itaú PJ" }] } as never);
+      return Promise.resolve({ data: [] } as never);
+    });
+    renderPage();
+    await assentar();
+
+    expect(await screen.findByText("Consultoria")).toBeInTheDocument();
+    expect(screen.getByText("Serviços")).toBeInTheDocument();
+    expect(screen.getByText("Sócio A")).toBeInTheDocument();
+    expect(screen.getByText("Itaú PJ")).toBeInTheDocument();
+  });
+});

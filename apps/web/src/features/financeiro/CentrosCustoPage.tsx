@@ -48,7 +48,9 @@ export default function CentrosCustoPage() {
           params: { start, end },
         }),
       ]);
-      setCenters(c.data);
+      // Guarda de FORMA (issue #252): `centers.map`/`.length` rodam direto no render, sem checar o
+      // payload. `Array.isArray`, no molde de `CrmPage.tsx` (#225).
+      setCenters(Array.isArray(c.data) ? c.data : []);
       // Guarda de FORMA (issue #247): `report.buckets.length`/`.map` rodam direto no render, sem
       // `?.`. `Array.isArray`, no molde de `CrmPage.tsx` (#225): guarda por CAMPO, com `null`
       // quando o campo não é array — a render já checa `report && report.buckets...`, então

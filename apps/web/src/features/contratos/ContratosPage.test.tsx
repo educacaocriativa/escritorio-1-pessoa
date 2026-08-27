@@ -79,3 +79,49 @@ describe("ContratosPage — resumo fora de forma não derruba a tela (#247)", ()
     expect(screen.getByText("9")).toBeInTheDocument();
   });
 });
+
+// ── `GET /contracts` fora de forma (issue #252) ──────────────────────────────────────────
+//
+// `setContracts(c.data)` recebia o payload CRU. `contracts.map` roda direto no render (a
+// tabela) sem `Array.isArray` — um payload fora de forma (envelope de erro devolvido com 200,
+// objeto em vez de array) faria `contracts.map is not a function` estourar.
+describe("ContratosPage — lista de contratos fora de forma não derruba a tela (#252)", () => {
+  it.each([
+    ["envelope de erro devolvido com 200", { detail: "algo deu errado" }],
+    ["corpo vazio (204 / sem conteúdo)", null],
+  ])("%s → a tela segue montada, com o estado vazio", async (_rotulo, payload) => {
+    vi.mocked(api.get).mockImplementation((url: string) => {
+      if (url === "/contracts/summary")
+        return Promise.resolve({
+          data: { draft_count: 0, sent_count: 0, signed_count: 0 },
+        } as never);
+      if (url === "/contracts") return Promise.resolve({ data: payload } as never);
+      return Promise.resolve({ data: [] } as never);
+    });
+    renderPage();
+    await assentar();
+
+    expect(screen.getByText("Contratos")).toBeInTheDocument();
+    expect(
+      await screen.findByText('Nenhum contrato. Clique em "Novo contrato".'),
+    ).toBeInTheDocument();
+  });
+
+  it("contra-teste: contratos de verdade continuam aparecendo na tabela", async () => {
+    vi.mocked(api.get).mockImplementation((url: string) => {
+      if (url === "/contracts/summary")
+        return Promise.resolve({
+          data: { draft_count: 0, sent_count: 0, signed_count: 0 },
+        } as never);
+      if (url === "/contracts")
+        return Promise.resolve({
+          data: [{ id: "ct-1", title: "Consultoria", status: "draft", client_name: "Maria" }],
+        } as never);
+      return Promise.resolve({ data: [] } as never);
+    });
+    renderPage();
+    await assentar();
+
+    expect(await screen.findByText("Consultoria")).toBeInTheDocument();
+  });
+});

@@ -36,9 +36,12 @@ export default function ProdutosPage() {
       api.get<Coupon[]>("/products/coupons"),
       api.get<Enrollment[]>("/products/enrollments"),
     ]);
-    setProducts(p.data);
-    setCoupons(c.data);
-    setAlunos(e.data);
+    // Guarda de FORMA (issue #252): as três alimentam `.map`/`.length` direto no render (grade de
+    // produtos, tabela de cupons, tabela de compradores) sem checar o payload. `Array.isArray`,
+    // no molde de `CrmPage.tsx` (#225).
+    setProducts(Array.isArray(p.data) ? p.data : []);
+    setCoupons(Array.isArray(c.data) ? c.data : []);
+    setAlunos(Array.isArray(e.data) ? e.data : []);
   }, []);
 
   useEffect(() => {

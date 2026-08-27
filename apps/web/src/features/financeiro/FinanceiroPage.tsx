@@ -64,7 +64,9 @@ export default function FinanceiroPage() {
     setSummary(
       s.data && typeof s.data === "object" && !Array.isArray(s.data) ? s.data : EMPTY_SUMMARY,
     );
-    setTxs(t.data);
+    // Guarda de FORMA (issue #252): `txs.map`/`.length` rodam direto no render, sem checar o
+    // payload. `Array.isArray`, no molde de `CrmPage.tsx` (#225).
+    setTxs(Array.isArray(t.data) ? t.data : []);
     // Rótulos são só um complemento de exibição — se o usuário não tiver acesso a esses módulos
     // (require_module), a lista de transações continua funcionando normalmente.
     const [ca, cc, po, bc] = await Promise.all([
@@ -78,10 +80,12 @@ export default function FinanceiroPage() {
         .get<{ id: string; name: string }[]>("/bank/accounts")
         .catch(() => ({ data: [] as { id: string; name: string }[] })),
     ]);
-    setChartAccounts(ca.data);
-    setCostCenters(cc.data);
-    setPayouts(po.data);
-    setContas(bc.data);
+    // Guarda de FORMA (issue #252): os quatro alimentam `.map`/`.length` (rótulos, PayoutHistory,
+    // nome da conta de destino) sem checar o payload.
+    setChartAccounts(Array.isArray(ca.data) ? ca.data : []);
+    setCostCenters(Array.isArray(cc.data) ? cc.data : []);
+    setPayouts(Array.isArray(po.data) ? po.data : []);
+    setContas(Array.isArray(bc.data) ? bc.data : []);
   }, []);
 
   useEffect(() => {

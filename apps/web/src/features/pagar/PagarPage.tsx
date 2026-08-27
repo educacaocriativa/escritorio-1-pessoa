@@ -168,13 +168,15 @@ export default function PagarPage() {
       api.get<ChartAccount[]>("/chart-of-accounts").catch(() => ({ data: [] as ChartAccount[] })),
       api.get<CostCenter[]>("/cost-centers").catch(() => ({ data: [] as CostCenter[] })),
     ]);
-    setChartAccounts(ca.data);
-    setCostCenters(cc.data);
+    // Guarda de FORMA (issue #252): as três alimentam `.map`/`.length` (rótulos + bandeja de
+    // comprovantes) sem checar o payload.
+    setChartAccounts(Array.isArray(ca.data) ? ca.data : []);
+    setCostCenters(Array.isArray(cc.data) ? cc.data : []);
     // .catch: a bandeja é um extra da tela; se falhar, Contas a Pagar continua funcionando.
     const pend = await api
       .get<{ id: string }[]>("/payables/receipts")
       .catch(() => ({ data: [] as { id: string }[] }));
-    setInbox(pend.data);
+    setInbox(Array.isArray(pend.data) ? pend.data : []);
   }, [filtro]);
 
   useEffect(() => {

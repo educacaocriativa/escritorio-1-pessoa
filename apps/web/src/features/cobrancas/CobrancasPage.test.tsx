@@ -649,3 +649,54 @@ describe("CobrancasPage — resumo fora de forma não derruba a tela (#247)", ()
     expect(await screen.findByText("R$ 123,45")).toBeInTheDocument();
   });
 });
+
+// ── `GET /receivables/charges` e os três rótulos fora de forma (issue #252) ───────────────
+//
+// `setCharges(c.data)`/`setChartAccounts`/`setCostCenters`/`setBankAccounts` recebiam o payload
+// CRU. `charges.map` roda direto no render (a tabela); os três rótulos alimentam
+// `Object.fromEntries(x.map(...))` — um payload fora de forma faz `.map is not a function`
+// estourar em qualquer um dos quatro.
+describe("CobrancasPage — lista e rótulos fora de forma não derrubam a tela (#252)", () => {
+  it("charges fora de forma (envelope de erro com 200) → tela segue montada, estado vazio", async () => {
+    vi.mocked(api.get).mockImplementation((url: string) => {
+      if (url === "/receivables/summary") return Promise.resolve({ data: emptySummary } as never);
+      if (url === "/receivables/charges")
+        return Promise.resolve({ data: { detail: "algo deu errado" } } as never);
+      return Promise.resolve({ data: [] } as never);
+    });
+    renderPage();
+    await assentar();
+
+    expect(screen.getByText("Contas a Receber")).toBeInTheDocument();
+    expect(
+      await screen.findByText('Nenhuma cobrança. Clique em "Nova cobrança".'),
+    ).toBeInTheDocument();
+  });
+
+  it("chartAccounts/costCenters/bankAccounts fora de forma → rótulos degradam sem quebrar a linha", async () => {
+    vi.mocked(api.get).mockImplementation((url: string) => {
+      if (url === "/receivables/summary") return Promise.resolve({ data: emptySummary } as never);
+      if (url === "/receivables/charges")
+        return Promise.resolve({ data: [COBRANCA_ABERTA] } as never);
+      if (url === "/chart-of-accounts")
+        return Promise.resolve({ data: { detail: "erro" } } as never);
+      if (url === "/cost-centers") return Promise.resolve({ data: null } as never);
+      if (url === "/bank/accounts") return Promise.resolve({ data: "não é json" } as never);
+      return Promise.resolve({ data: [] } as never);
+    });
+    renderPage();
+    await assentar();
+
+    // A linha continua montada — o rótulo cai no fallback "—" em vez de estourar.
+    expect(await screen.findByRole("table")).toBeInTheDocument();
+    expect(screen.getAllByText("—").length).toBeGreaterThan(0);
+  });
+
+  it("contra-teste: cobrança/contas/centros de verdade continuam aparecendo", async () => {
+    mockCobrancas([COBRANCA_ABERTA]);
+    renderPage();
+    await assentar();
+
+    expect(await screen.findByText("Joana Ré")).toBeInTheDocument();
+  });
+});

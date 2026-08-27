@@ -31,7 +31,9 @@ export default function ContratosPage() {
     setSummary(
       s.data && typeof s.data === "object" && !Array.isArray(s.data) ? s.data : EMPTY_SUMMARY,
     );
-    setContracts(c.data);
+    // Guarda de FORMA (issue #252): `contracts.map`/`.length` rodam direto no render, sem checar
+    // o payload. `Array.isArray`, no molde de `CrmPage.tsx` (#225).
+    setContracts(Array.isArray(c.data) ? c.data : []);
   }, []);
 
   useEffect(() => {
