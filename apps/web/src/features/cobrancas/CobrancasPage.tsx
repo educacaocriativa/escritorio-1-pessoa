@@ -84,7 +84,10 @@ export default function CobrancasPage() {
     setSummary(
       s.data && typeof s.data === "object" && !Array.isArray(s.data) ? s.data : EMPTY_SUMMARY,
     );
-    setCharges(c.data);
+    // Guarda de FORMA (issue #252): `charges.map`/`.length` rodam direto no render, sem checar o
+    // payload. `Array.isArray`, no molde de `CrmPage.tsx`/`ClientTimeline.tsx` (#225): um payload
+    // fora de forma (envelope de erro devolvido com 200, corpo vazio) faz `charges.map` estourar.
+    setCharges(Array.isArray(c.data) ? c.data : []);
     // Rótulos são só um complemento de exibição — se o usuário não tiver acesso a esses módulos
     // (require_module), a lista de cobranças continua funcionando normalmente.
     const [ca, cc, ba] = await Promise.all([
@@ -94,9 +97,11 @@ export default function CobrancasPage() {
       // conta no registro é do `DialogDeBaixa`, que carrega a própria lista.
       api.get<BankAccount[]>("/bank/accounts").catch(() => ({ data: [] as BankAccount[] })),
     ]);
-    setChartAccounts(ca.data);
-    setCostCenters(cc.data);
-    setBankAccounts(ba.data);
+    // Guarda de FORMA (issue #252): os três alimentam `.map`/objectFromEntries usados nos rótulos
+    // (accountLabel/costCenterLabel/nomeDaContaBancaria) sem checar o payload.
+    setChartAccounts(Array.isArray(ca.data) ? ca.data : []);
+    setCostCenters(Array.isArray(cc.data) ? cc.data : []);
+    setBankAccounts(Array.isArray(ba.data) ? ba.data : []);
   }, []);
 
   useEffect(() => {
