@@ -347,7 +347,12 @@ def test_meet_failure_does_not_break_event(client: TestClient, headers, monkeypa
     assert resp.json()["event"]["meeting_url"] is None
 
 
-def test_bloqueio_kind_never_calls_google(client: TestClient, headers, monkeypatch):
+def test_bloqueio_kind_is_pushed_to_google(client: TestClient, headers, monkeypatch):
+    """[ATUALIZADO — Google Calendar Sync] Bloqueio de horário PASSOU a ser espelhado no
+    Google (para bloquear a agenda de verdade lá também) — mas sem gerar Meet, o que é a
+    invariante coberta em test_google_calendar_hardening.py::
+    test_bloqueio_is_pushed_without_conference_data. Este teste garante só a fiação
+    HTTP-a-HTTP: create_meet_event É chamado (nem sempre foi assim)."""
     from app.modules.google_calendar import service as gcal
 
     calls = {"n": 0}
@@ -359,7 +364,7 @@ def test_bloqueio_kind_never_calls_google(client: TestClient, headers, monkeypat
     monkeypatch.setattr(gcal, "create_meet_event", _spy)
     resp = client.post("/agenda/events", json=_event(kind="bloqueio"), headers=headers)
     assert resp.status_code == 201
-    assert calls["n"] == 0  # bloqueio não gera Meet
+    assert calls["n"] == 1
 
 
 def test_all_day_event_anchored_to_tenant_timezone(client: TestClient, headers):
