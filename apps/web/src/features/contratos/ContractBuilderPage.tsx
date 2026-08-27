@@ -186,7 +186,13 @@ export default function ContractBuilderPage() {
 
       <div className="grid flex-1 grid-cols-1 gap-6 overflow-hidden lg:grid-cols-2">
         {/* Editor */}
-        <div className={`flex flex-col gap-3 overflow-auto rounded-2xl bg-white p-4 shadow-sm ${readonly ? "pointer-events-none opacity-60" : ""}`}>
+        {/* `campos-tocaveis` (issue #249, fatia de /contratos/novo): título, cliente/template e
+            título da cláusula usam a MESMA classe do `Field` de `components/Modal.tsx`
+            (`px-3 py-2 text-sm`) ou a variante `px-2 py-1.5 text-sm` — 34-39px medidos, fora de
+            modal. Mesma inconsistência de estilo que a classe já fecha em 17 telas (issue #227,
+            `/orcamentos/novo`), não densidade de UI nova. O container único cobre título, cliente,
+            template, variáveis e cláusulas — todo o formulário do editor. */}
+        <div className={`campos-tocaveis flex flex-col gap-3 overflow-auto rounded-2xl bg-white p-4 shadow-sm ${readonly ? "pointer-events-none opacity-60" : ""}`}>
           <input value={title} onChange={(e) => setTitle(e.target.value)} placeholder="Título do contrato" className="w-full rounded-lg border border-neutral-200 px-3 py-2 text-sm font-medium outline-none focus:border-primary-400" />
 
           <div className="flex gap-2">
