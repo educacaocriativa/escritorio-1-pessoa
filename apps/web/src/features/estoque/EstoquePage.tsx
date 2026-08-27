@@ -26,7 +26,9 @@ export default function EstoquePage() {
     setSummary(
       s.data && typeof s.data === "object" && !Array.isArray(s.data) ? s.data : EMPTY_SUMMARY,
     );
-    setItems(i.data);
+    // Guarda de FORMA (issue #252): `items.map`/`.length` rodam direto no render, sem checar o
+    // payload. `Array.isArray`, no molde de `CrmPage.tsx` (#225).
+    setItems(Array.isArray(i.data) ? i.data : []);
   }, []);
 
   useEffect(() => {

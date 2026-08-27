@@ -117,3 +117,35 @@ describe("OrcamentosPage — resumo fora de forma não derruba a tela (#247)", (
     expect(await screen.findByText("R$ 300,00")).toBeInTheDocument();
   });
 });
+
+// ── `GET /quotes` fora de forma (issue #252) ─────────────────────────────────────────────
+//
+// `setQuotes(q.data)` recebia o payload CRU. `quotes.map`/`.length` rodam direto no render (a
+// tabela) sem `Array.isArray` — um payload fora de forma faria `quotes.map is not a function`
+// estourar.
+describe("OrcamentosPage — lista de orçamentos fora de forma não derruba a tela (#252)", () => {
+  it.each([
+    ["envelope de erro devolvido com 200", { detail: "algo deu errado" }],
+    ["corpo vazio (204 / sem conteúdo)", null],
+  ])("%s → a tela segue montada, com o estado vazio", async (_rotulo, payload) => {
+    vi.mocked(api.get).mockImplementation((url: string) => {
+      if (url === "/quotes/summary") return Promise.resolve({ data: emptySummary } as never);
+      if (url === "/quotes") return Promise.resolve({ data: payload } as never);
+      return Promise.resolve({ data: [] } as never);
+    });
+    renderPage();
+    await assentar();
+
+    expect(screen.getByText("Orçamentos")).toBeInTheDocument();
+    expect(
+      await screen.findByText('Nenhum orçamento. Clique em "Novo orçamento".'),
+    ).toBeInTheDocument();
+  });
+
+  it("contra-teste: orçamento de verdade continua aparecendo na tabela", async () => {
+    renderPage();
+    await assentar();
+
+    expect(await screen.findByText("Consultoria tributária")).toBeInTheDocument();
+  });
+});
