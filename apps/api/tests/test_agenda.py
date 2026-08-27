@@ -78,6 +78,33 @@ def test_invalid_kind_rejected(client: TestClient, headers):
     assert resp.status_code == 422
 
 
+def test_kind_google_is_valid_and_occupies_time(client: TestClient, headers):
+    resp = client.post(
+        "/agenda/events",
+        json={
+            "title": "Aniversário de Fulano",
+            "kind": "google",
+            "starts_at": "2026-09-10T10:00:00Z",
+            "ends_at": "2026-09-10T11:00:00Z",
+        },
+        headers=headers,
+    )
+    assert resp.status_code == 201, resp.text
+    # ocupa horário → um segundo evento no mesmo intervalo vem com conflito.
+    resp2 = client.post(
+        "/agenda/events",
+        json={
+            "title": "Outro compromisso",
+            "kind": "atendimento",
+            "starts_at": "2026-09-10T10:30:00Z",
+            "ends_at": "2026-09-10T11:30:00Z",
+        },
+        headers=headers,
+    )
+    assert resp2.status_code == 201, resp2.text
+    assert len(resp2.json()["conflicts"]) == 1
+
+
 def test_end_before_start_rejected(client: TestClient, headers):
     resp = client.post(
         "/agenda/events",
