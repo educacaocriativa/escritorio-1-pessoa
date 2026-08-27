@@ -11,7 +11,7 @@ from __future__ import annotations
 
 from datetime import datetime
 
-from sqlalchemy import JSON, DateTime, String
+from sqlalchemy import JSON, DateTime, String, Text
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.db.base import Base, TenantMixin, TimestampMixin, _uuid
@@ -48,3 +48,9 @@ class FunnelRun(Base, TenantMixin, TimestampMixin):
     # Log de execução: [{node_id, key, action, status, message, at}].
     steps: Mapped[list] = mapped_column(JSON, default=list, nullable=False)
     error: Mapped[str] = mapped_column(String(500), default="", nullable=False)
+    # Campos do formulário/gatilho QUE ORIGINOU esta jornada (ex.: respostas de uma página de
+    # captura). Existe porque `client.notes` só é preenchido na CRIAÇÃO do contato — quem
+    # retorna pelo mesmo canal (absorb_lead, crm/service.py) nunca sobrescreve `notes` pra não
+    # apagar edição manual do dono, o que travaria `{{cliente.notas}}` no primeiro envio pra
+    # sempre. `trigger_notes` é o snapshot DESTE envio, não o acumulado do contato.
+    trigger_notes: Mapped[str] = mapped_column(Text, default="", nullable=False)

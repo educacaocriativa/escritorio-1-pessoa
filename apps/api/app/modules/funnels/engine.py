@@ -245,6 +245,7 @@ def _drive(db: Session, *, tenant_id: str, actor: str, funnel: Funnel, run: Funn
                 result = service.run_node(
                     db, tenant_id=tenant_id, actor=actor, action=action,
                     client_id=run.client_id, params=_params(data),
+                    trigger_notes=run.trigger_notes,
                 )
                 _log(run, node, "ok", result.get("message", ""))
             except service.FunnelError as e:
@@ -264,7 +265,7 @@ def _drive(db: Session, *, tenant_id: str, actor: str, funnel: Funnel, run: Funn
 # ── API do motor ────────────────────────────────────────────────────────────
 def enroll(
     db: Session, *, tenant_id: str, actor: str, funnel_id: str,
-    client_id: str | None, start_node_id: str | None = None,
+    client_id: str | None, start_node_id: str | None = None, trigger_notes: str = "",
 ) -> FunnelRun:
     funnel = service.get_funnel(db, funnel_id)
     if not funnel.nodes:
@@ -277,7 +278,7 @@ def enroll(
 
     run = FunnelRun(
         tenant_id=tenant_id, funnel_id=funnel_id, client_id=client_id,
-        status=RUN_RUNNING, current_node_id=entry, steps=[],
+        status=RUN_RUNNING, current_node_id=entry, steps=[], trigger_notes=trigger_notes,
     )
     db.add(run)
     db.flush()

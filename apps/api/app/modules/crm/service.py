@@ -261,7 +261,8 @@ def create_client(db: Session, *, tenant_id: str, actor: str, data: ClientCreate
     # Gatilho de automação: outros módulos podem reagir (ex.: auto-enroll no funil de entrada
     # padrão do tenant, ver funnels/automation.py).
     events.emit(
-        EVENT_CLIENT_CREATED, tenant_id=tenant_id, client_id=client.id, source=client.source
+        EVENT_CLIENT_CREATED, tenant_id=tenant_id, client_id=client.id, source=client.source,
+        notes=data.notes,
     )
     return client
 
@@ -369,6 +370,9 @@ def absorb_lead(
         tenant_id=tenant_id,
         client_id=existente.id,
         source=data.source,
+        # `data.notes` (o envio ATUAL), não `corpo` (que mistura complementos tipo "telefone:
+        # X" — bom pro Histórico, ruim pra virar {{cliente.notas}} no e-mail de alerta).
+        notes=data.notes,
     )
     return existente, False
 

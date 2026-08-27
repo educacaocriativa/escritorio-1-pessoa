@@ -28,7 +28,9 @@ logger = logging.getLogger("e1p.funnels.automation")
 AUTO_ENROLL_SOURCES = {"landing", "api"}
 
 
-def on_client_created(*, tenant_id: str, client_id: str, source: str, **_: object) -> None:
+def on_client_created(
+    *, tenant_id: str, client_id: str, source: str, notes: str = "", **_: object
+) -> None:
     if source not in AUTO_ENROLL_SOURCES:
         return
     with tenant_session(tenant_id) as db:
@@ -39,6 +41,7 @@ def on_client_created(*, tenant_id: str, client_id: str, source: str, **_: objec
             engine.enroll(
                 db, tenant_id=tenant_id, actor="sistema:auto-enroll",
                 funnel_id=profile.default_entry_funnel_id, client_id=client_id,
+                trigger_notes=notes,
             )
         except service.FunnelError:
             # Funil apagado/inválido/vazio: não pode propagar e derrubar o publicador do
@@ -61,7 +64,9 @@ def _ja_esta_andando(db, *, funnel_id: str, client_id: str) -> bool:
     ) is not None
 
 
-def on_client_returned(*, tenant_id: str, client_id: str, source: str, **_: object) -> None:
+def on_client_returned(
+    *, tenant_id: str, client_id: str, source: str, notes: str = "", **_: object
+) -> None:
     """Contato conhecido voltou pela captura: reinscreve, se a jornada anterior já acabou.
 
     A guarda de "já está andando" vive AQUI e não dentro de `engine.enroll`: inscrição manual
@@ -83,6 +88,7 @@ def on_client_returned(*, tenant_id: str, client_id: str, source: str, **_: obje
             engine.enroll(
                 db, tenant_id=tenant_id, actor="sistema:auto-enroll",
                 funnel_id=profile.default_entry_funnel_id, client_id=client_id,
+                trigger_notes=notes,
             )
         except service.FunnelError:
             logger.warning(

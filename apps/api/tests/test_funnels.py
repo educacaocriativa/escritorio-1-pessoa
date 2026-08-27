@@ -433,6 +433,47 @@ def test_run_send_email_placeholder_shows_fallback_when_empty(client: TestClient
     assert notif["message"] == "E-mail: (não informado)\nWhatsApp: (não informado)"
 
 
+def test_run_send_email_prefers_trigger_notes_over_client_notes(
+    client: TestClient, headers, tenant_id, db
+):
+    # `{{cliente.notas}}` deve refletir o envio ATUAL do funil (trigger_notes), não o
+    # client.notes acumulado — `absorb_lead` (crm/service.py) só preenche `notes` na criação
+    # do contato; quem retorna pelo site não atualiza esse campo, então sem trigger_notes o
+    # e-mail de alerta ficaria travado nos dados do primeiro envio (ou vazio).
+    from app.modules.funnels import engine
+    from app.modules.funnels.models import Funnel
+
+    cl = client.post(
+        "/crm/clients",
+        json={"name": "Ana", "phone": "43999998888",
+              "notes": "Campos do formulário:\nOcasião: Casamento"},
+        headers=headers,
+    ).json()
+
+    funil = Funnel(
+        tenant_id=tenant_id, name="Alerta equipe",
+        nodes=[{"id": "n1", "data": {
+            "key": "enviar-email", "action": "send_email", "label": "Alertar",
+            "config": {"subject": "Novo lead", "body": "{{cliente.notas}}", "recipient": "team"},
+        }}],
+        edges=[],
+    )
+    db.add(funil)
+    db.commit()
+    db.refresh(funil)
+
+    engine.enroll(
+        db, tenant_id=tenant_id, actor="teste", funnel_id=funil.id, client_id=cl["id"],
+        trigger_notes="Campos do formulário:\nOcasião: Aniversário",
+    )
+    db.commit()
+
+    notifs = client.get("/notifications", headers=headers).json()
+    notif = next(n for n in notifs if n["client_id"] == cl["id"])
+    assert "Aniversário" in notif["message"]
+    assert "Casamento" not in notif["message"]
+
+
 def test_run_requires_client(client: TestClient, headers):
     resp = client.post(
         "/funnels/run-node",
