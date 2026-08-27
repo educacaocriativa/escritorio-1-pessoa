@@ -1201,3 +1201,72 @@ describe("ClientDetailPage — cliente fora de forma não derruba a ficha (#247)
     expect(screen.getByText("recorrente")).toBeInTheDocument();
   });
 });
+
+// ── As CINCO leituras secundárias fora de forma (issue #252) ─────────────────────────────
+//
+// `setCharges(ch.data)`/`setContracts(co.data)`/`setQuotes(qu.data)`/`setLegalDocs(ld.data)`/
+// `setJourneys(jr.data)` recebiam o payload CRU. Cada uma alimenta `.length` (no título da
+// seção) e `.map` (na lista) sem `Array.isArray` — um payload fora de forma faria
+// `charges.map is not a function` (ou o irmão de cada seção) estourar.
+describe("ClientDetailPage — as cinco listas secundárias fora de forma (#252)", () => {
+  it("charges fora de forma → seção de Cobranças degrada para vazia, sem estourar a ficha", async () => {
+    ficha.charges = { detail: "algo deu errado" } as unknown as unknown[];
+    renderFicha();
+    await assentar();
+
+    expect(await screen.findByRole("heading", { name: "Joana Ré" })).toBeInTheDocument();
+    expect(screen.getByText("Cobranças (0)")).toBeInTheDocument();
+    expect(screen.getByText("Nenhuma cobrança para este cliente.")).toBeInTheDocument();
+  });
+
+  it("contracts fora de forma → seção de Contratos degrada para vazia", async () => {
+    ficha.contracts = "não é json" as unknown as unknown[];
+    renderFicha();
+    await assentar();
+
+    expect(await screen.findByRole("heading", { name: "Joana Ré" })).toBeInTheDocument();
+    expect(screen.getByText("Contratos (0)")).toBeInTheDocument();
+    expect(screen.getByText("Nenhum contrato.")).toBeInTheDocument();
+  });
+
+  it("quotes fora de forma → seção de Orçamentos degrada para vazia", async () => {
+    ficha.quotes = null as unknown as unknown[];
+    renderFicha();
+    await assentar();
+
+    expect(await screen.findByRole("heading", { name: "Joana Ré" })).toBeInTheDocument();
+    expect(screen.getByText("Orçamentos (0)")).toBeInTheDocument();
+    expect(screen.getByText("Nenhum orçamento.")).toBeInTheDocument();
+  });
+
+  it("legalDocs fora de forma → seção de Documentos jurídicos degrada para vazia", async () => {
+    ficha.legalDocs = { detail: "erro" } as unknown as unknown[];
+    renderFicha();
+    await assentar();
+
+    expect(await screen.findByRole("heading", { name: "Joana Ré" })).toBeInTheDocument();
+    expect(screen.getByText("Documentos jurídicos (0)")).toBeInTheDocument();
+    expect(screen.getByText("Nenhum documento jurídico vinculado.")).toBeInTheDocument();
+  });
+
+  it("journeys fora de forma → seção de Jornadas no funil degrada para vazia", async () => {
+    ficha.journeys = "não é json" as unknown as unknown[];
+    renderFicha();
+    await assentar();
+
+    expect(await screen.findByRole("heading", { name: "Joana Ré" })).toBeInTheDocument();
+    expect(screen.getByText("Jornadas no funil (0)")).toBeInTheDocument();
+    expect(screen.getByText("Este contato não está em nenhum funil.")).toBeInTheDocument();
+  });
+
+  it("contra-teste: as cinco listas de verdade continuam contando e aparecendo", async () => {
+    renderFicha();
+    await assentar();
+
+    expect(await screen.findByText("Cobranças (6)")).toBeInTheDocument();
+    expect(screen.getByText("Contratos (1)")).toBeInTheDocument();
+    expect(screen.getByText("Orçamentos (1)")).toBeInTheDocument();
+    expect(screen.getByText("Documentos jurídicos (1)")).toBeInTheDocument();
+    expect(screen.getByText("Jornadas no funil (1)")).toBeInTheDocument();
+  });
+});
