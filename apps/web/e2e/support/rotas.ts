@@ -40,7 +40,7 @@ export const DRE_MATRIX = {
   notes: [],
 };
 
-const PAGINA = {
+export const PAGINA = {
   id: "s1", tenant_id: "t1", title: LONGO, model: "captura", status: "draft",
   public_slug: null, created_at: "2026-01-01T10:00:00Z",
   primary_color: "#123456", bg_color: "#ffffff", text_color: "#111111",
@@ -59,7 +59,7 @@ const slide = (kind: string) => ({
   highlight: "Diagnostico", photo_url: "", photo_position: "mid",
 });
 
-const CARROSSEL = {
+export const CARROSSEL = {
   id: "m1", tenant_id: "t1", topic: LONGO, platform: "instagram",
   slides: [slide("cover"), slide("editorial"), slide("accent"), slide("cta")],
   status: "draft", handle: `@${LONGO}`, caption: LONGO, hashtags: `#${LONGO}`,

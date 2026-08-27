@@ -130,7 +130,10 @@ export default function PageBuilderPage() {
 
   return (
     <div className="flex h-full flex-col">
-      <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
+      {/* `campos-tocaveis` (issue #249, fatia de /sites/s1): o título da página vive fora do grid do
+          editor (é da barra de ações), com a mesma classe densa `px-3 py-1.5 text-sm` — 34px
+          medidos. Isolado aqui porque o resto da barra é só botão. */}
+      <div className="campos-tocaveis mb-3 flex flex-wrap items-center justify-between gap-2">
         <button onClick={() => navigate("/sites")} className="flex items-center gap-1 text-sm text-neutral-500 hover:text-neutral-700">
           <ArrowLeft size={16} /> Sites
         </button>
@@ -161,7 +164,11 @@ export default function PageBuilderPage() {
 
       <div className="grid flex-1 grid-cols-1 gap-6 overflow-hidden lg:grid-cols-2">
         {/* Editor */}
-        <div className="flex flex-col gap-3 overflow-auto rounded-2xl bg-white p-4 shadow-sm">
+        {/* `campos-tocaveis` (issue #249, fatia de /sites/s1): aparência (fonte, URL do logo) e
+            todos os campos de cada bloco (`BlockFields`/`FormBlockFields`) usam `px-2 py-1.5
+            text-sm` — 34-38px medidos. O container único cobre o editor inteiro, incluindo os
+            blocos dinâmicos; a prévia usa a mesma classe já aplicada em `PageBlocks.tsx`. */}
+        <div className="campos-tocaveis flex flex-col gap-3 overflow-auto rounded-2xl bg-white p-4 shadow-sm">
           {/* Aparência */}
           <div className="grid grid-cols-2 gap-2 rounded-xl bg-neutral-50 p-3">
             {([
