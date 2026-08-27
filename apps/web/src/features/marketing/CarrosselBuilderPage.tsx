@@ -172,7 +172,12 @@ export default function CarrosselBuilderPage() {
 
       <div className="grid flex-1 grid-cols-1 gap-6 overflow-hidden lg:grid-cols-2">
         {/* Editor */}
-        <div className="flex flex-col gap-4 overflow-auto rounded-2xl bg-white p-4 shadow-sm">
+        {/* `campos-tocaveis` (issue #249, fatia de /marketing/m1 e /marketing/novo): tema, perfil,
+            nº de slides, cores, fonte e todos os campos de cada slide usam `px-2/3 py-1.5/2 text-sm`
+            ou `text-xs` — 27-38px medidos, o mesmo padrão de editor denso já fechado em
+            `/orcamentos/novo` e `/contratos/novo`. O container único cobre o editor inteiro; a
+            prévia (`CarouselViewer`) não tem campo de digitação. */}
+        <div className="campos-tocaveis flex flex-col gap-4 overflow-auto rounded-2xl bg-white p-4 shadow-sm">
           {/* Gerar com IA */}
           <div className="rounded-xl bg-primary-50 p-3">
             <label className="mb-1 block text-xs font-medium text-primary-700">Tema do carrossel</label>
