@@ -509,6 +509,13 @@ def test_o_sweep_NAO_ganhou_contador_novo(client: TestClient, db):
     com qualquer um deles não produziria número nenhum. Não é uma partição de `notifications_
     processed`: um briefing gerado pode não virar notificação alguma (dia sem novidade, WhatsApp
     desligado), e uma notificação pode não vir de briefing nenhum.
+
+    ⚠️ **`google_events_synced` entrou na Story do Google Calendar Sync (etapa 7) pelo MESMO
+    critério.** Responde *"quantos eventos da Agenda este sweep criou/atualizou/cancelou puxando
+    do Google Calendar?"* — pergunta que nenhum dos outros contadores responde. Não soma com
+    `funnel_resumed`/`notifications_processed`/`briefings_gerados` (planos de dado diferentes:
+    Agenda, não funil nem fila) nem é partição de nada — um evento tocado aqui não passa pelas
+    outras seis etapas.
     """
     client.post("/auth/register", json=REGISTER)
     cm = _cm_factory(db)
@@ -522,6 +529,7 @@ def test_o_sweep_NAO_ganhou_contador_novo(client: TestClient, db):
         "whatsapp_connections_dropped",
         "whatsapp_connections_promoted",
         "briefings_gerados",
+        "google_events_synced",
         "errors",
     }
 
@@ -656,3 +664,40 @@ def test_falha_no_expurgo_nao_derruba_o_sweep(db, monkeypatch):
 
     assert [e["stage"] for e in result["errors"]] == ["invite_secrets"]
     assert result["tenants_checked"] == 1
+
+
+# --- Etapa 7: sincroniza o Google Calendar do tenant (pull) ---------------------------------
+def test_run_sweep_syncs_google_calendar(db, monkeypatch):
+    tenant = _make_tenant(db, slug="gcal-sync")
+    db.commit()
+
+    calls: list[str] = []
+    monkeypatch.setattr(
+        worker.google_calendar_sync, "pull_changes",
+        lambda db, *, tenant_id: calls.append(tenant_id) or 3,
+    )
+
+    cm = _cm_factory(db)
+    result = run_sweep(session_factory=cm, tenant_session_factory=cm)
+
+    assert calls == [tenant.id]
+    assert result["google_events_synced"] == 3
+    assert result["errors"] == []
+
+
+def test_run_sweep_isolates_google_sync_failure(db, monkeypatch):
+    tenant = _make_tenant(db, slug="gcal-falha")
+    db.commit()
+
+    def _boom(_db, *, tenant_id):
+        raise RuntimeError("sync do google explodiu")
+
+    monkeypatch.setattr(worker.google_calendar_sync, "pull_changes", _boom)
+
+    cm = _cm_factory(db)
+    result = run_sweep(session_factory=cm, tenant_session_factory=cm)
+
+    assert result["google_events_synced"] == 0
+    assert len(result["errors"]) == 1
+    assert result["errors"][0]["stage"] == "google_calendar_sync"
+    assert result["errors"][0]["tenant_id"] == tenant.id

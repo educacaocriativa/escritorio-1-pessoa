@@ -33,6 +33,7 @@ from app.config import settings
 from app.db.session import SessionLocal, tenant_session
 from app.modules.auth.models import Tenant
 from app.modules.funnels import engine as funnels_engine
+from app.modules.google_calendar import sync as google_calendar_sync
 from app.modules.notifications import service as notifications_service
 from app.modules.payables import service as payables_service
 from app.modules.receivables import service as receivables_service
@@ -98,6 +99,9 @@ def run_sweep(
         # mesmo critério de `whatsapp_connections_promoted`: responde a uma pergunta que nenhum
         # dos outros responde, e somá-lo a qualquer um deles não produziria número nenhum.
         "briefings_gerados": 0,
+        # Story do Google Calendar Sync — quantos eventos locais este sweep tocou (criou,
+        # atualizou ou cancelou) puxando do Google Calendar do tenant.
+        "google_events_synced": 0,
         "errors": [],
     }
 
@@ -231,10 +235,22 @@ def run_sweep(
                 {"tenant_id": tenant_id, "stage": "vima_briefing", "error": str(exc)}
             )
 
+        # Etapa 7 — sincroniza o Google Calendar do tenant (pull), sessão SEPARADA das outras
+        # seis. Tenant sem Google conectado: `pull_changes` retorna 0 sem chamada HTTP nenhuma.
+        try:
+            with tenant_session_factory(tenant_id) as db:
+                synced = google_calendar_sync.pull_changes(db, tenant_id=tenant_id)
+            result["google_events_synced"] += synced
+        except Exception as exc:  # noqa: BLE001 — idem: isola a falha por tenant (IV2)
+            logger.exception("[worker] sync do google calendar falhou tenant=%s", tenant_id)
+            result["errors"].append(
+                {"tenant_id": tenant_id, "stage": "google_calendar_sync", "error": str(exc)}
+            )
+
     logger.info(
         "[worker] sweep: tenants=%s funil_resumido=%s notificacoes=%s midia_whatsapp=%s "
         "agendadas_promovidas=%s conexoes_whatsapp_promovidas=%s conexoes_whatsapp_caidas=%s "
-        "briefings=%s erros=%s",
+        "briefings=%s google_eventos_sincronizados=%s erros=%s",
         result["tenants_checked"],
         result["funnel_resumed"],
         result["notifications_processed"],
@@ -243,6 +259,7 @@ def run_sweep(
         result["whatsapp_connections_promoted"],
         result["whatsapp_connections_dropped"],
         result["briefings_gerados"],
+        result["google_events_synced"],
         len(result["errors"]),
     )
     return result
