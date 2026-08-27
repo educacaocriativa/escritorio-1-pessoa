@@ -182,6 +182,24 @@ describe("AgendaPage — chipLabel (Task 3, Onda 2): atalho de nome só para kin
   });
 });
 
+describe("AgendaPage — Google Calendar Sync: kind=\"google\" tem cor própria", () => {
+  it("evento kind=google recebe cor neutra própria no chip do mês", async () => {
+    mockEvents([
+      agendaEvent({
+        id: "ev-google-1",
+        title: "Aniversário de Vera",
+        kind: "google",
+        source: "google",
+        all_day: true,
+        google_event_id: "gcal-1",
+      }),
+    ]);
+    renderPage();
+    const chip = await screen.findByTestId("chip-evento-ev-google-1");
+    expect(chip.className).toContain("bg-neutral-200");
+  });
+});
+
 // ── `GET /agenda/events` fora de forma (issue #207) ───────────────────────────
 //
 // `setEvents(data)` recebia o payload CRU, sem operador nenhum. A grade chama `eventsOfDay(events,

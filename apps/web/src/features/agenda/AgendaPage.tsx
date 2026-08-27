@@ -161,6 +161,7 @@ function eventColor(e: AgendaEvent, hoje: string): string {
   if (e.kind === "cobranca_pagar") return overdue ? "bg-red-100 text-red-700" : "bg-orange-100 text-orange-700";
   if (e.priority === "critical") return "bg-red-100 text-red-700";
   if (e.kind === "prazo") return "bg-amber-100 text-amber-700";
+  if (e.kind === "google") return "bg-neutral-200 text-neutral-700";
   return "bg-primary-100 text-primary-700";
 }
 const hhmm = (iso: string, tz: string) => formatTime(iso, tz);
