@@ -2964,6 +2964,18 @@ os dados reais de Financeiro, Agenda e CRM.
   Toda falha de ferramenta vira `{"erro": ...}` em vez de subir crua: o loop de tool-use precisa
   de um `tool_result` sempre, e a Claude é instruída a dizer que não conseguiu, nunca a inventar
   (Artigo IV, No Invention).
+- [x] **`vima/tools.py` — Jurídico/Marketing/Estoque (2026-08-28, extensão)** — mais quatro
+  ferramentas, mesmo formato de wrapper fino: `consultar_documentos_juridicos`
+  (`juridico.list_documents`, com filtro opcional por cliente — resolvido via
+  `crm.list_clients` — e por janela de dias sobre `created_at`, filtrados aqui em Python porque
+  o serviço não tinha esses parâmetros), `consultar_campanhas_marketing`
+  (`marketing.list_carousels`, mesmo filtro de dias) e duas de `stock`:
+  `consultar_estoque_baixo` (`stock.low_stock`) e `consultar_item_estoque` (`stock.list_items`
+  filtrado por nome parcial em Python — o serviço não tem busca por nome). Datas comparadas com
+  o mesmo cuidado já usado em `vima/service.py` para `Briefing.created_at`: SQLite devolve
+  datetime sem fuso, então a comparação sempre normaliza para UTC antes (helper `_aware()` em
+  `tools.py`) — comparar naive com aware estoura `TypeError`, que o `try/except` de `executar()`
+  engoliria como `{"erro": ...}` em vez de filtrar corretamente.
 - [x] **`vima/pergunta.py`** — mascara a pergunta + histórico reenviado pelo front via
   `core/anonymizer` antes de mandar (Regra de Ouro nº 2), roda o loop, desmascara a resposta
   final, grava `vima.pergunta.respondida` no audit quando a IA de fato respondeu. Sem
