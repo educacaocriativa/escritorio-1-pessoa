@@ -68,10 +68,17 @@ class AgendaEvent(Base, TenantMixin, TimestampMixin):
     location: Mapped[str] = mapped_column(String(255), default="", nullable=False)
     meeting_url: Mapped[str | None] = mapped_column(String(512), nullable=True)  # link Meet/Zoom
     guests: Mapped[list[str]] = mapped_column(JSON, default=list, nullable=False)  # e-mails
-    # Id do evento espelhado no Google Calendar (quando o Meet foi gerado via OAuth Google).
-    # Usado para sincronizar reschedule/cancel de volta pro Google (ver agenda/service.py +
+    # Id do evento espelhado no Google Calendar (quando o Meet foi gerado via OAuth Google, ou
+    # quando o evento foi puxado de lá pelo sync — google_calendar/sync.py). Usado para
+    # sincronizar reschedule/cancel de volta pro Google (ver agenda/service.py +
     # google_calendar/service.py::patch_meet_event/delete_meet_event).
-    google_event_id: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    #
+    # 1024, não 128: o próprio Google Calendar gera ids de ~26 chars, mas eventos IMPORTADOS de
+    # calendários externos (Outlook/Exchange via interop do Workspace) chegam com ids de até
+    # ~180+ chars — medido ao vivo em produção (2026-08-27), 3 ocorrências reais causando
+    # `StringDataRightTruncation` e derrubando o lote de sync inteiro daquele tenant. 1024 é o
+    # máximo documentado pela Google para o campo `id` do evento.
+    google_event_id: Mapped[str | None] = mapped_column(String(1024), nullable=True)
 
     # Dinheiro SEMPRE em centavos inteiros (evita erro de float). Opcional (cobranças).
     amount_cents: Mapped[int | None] = mapped_column(Integer, nullable=True)
