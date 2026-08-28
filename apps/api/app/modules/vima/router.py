@@ -11,8 +11,9 @@ from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 
 from app.core.tenancy import CurrentUser, get_current_user, get_tenant_db
+from app.modules.vima import pergunta as pergunta_service
 from app.modules.vima import service
-from app.modules.vima.schemas import BriefingOut, to_out
+from app.modules.vima.schemas import BriefingOut, PerguntaIn, PerguntaOut, to_out
 
 router = APIRouter(prefix="/vima", tags=["vima"])
 
@@ -37,3 +38,20 @@ def marcar_lido(
         return to_out(service.marcar_lido(db, briefing_id=briefing_id, user=user))
     except service.VimaError as exc:
         raise HTTPException(status_code=exc.status_code, detail=exc.message) from exc
+
+
+@router.post("/pergunta", response_model=PerguntaOut)
+def perguntar(
+    corpo: PerguntaIn,
+    user: CurrentUser = Depends(get_current_user),
+    db: Session = Depends(get_tenant_db),
+) -> PerguntaOut:
+    """O dono pergunta, a Vima responde consultando os dados reais. Sem persistência: o
+    histórico vem do front a cada chamada (ver spec 2026-08-28)."""
+    historico = [
+        pergunta_service.Turno(papel=t.papel, texto=t.texto) for t in corpo.historico
+    ]
+    resultado = pergunta_service.responder(
+        db, user=user, pergunta=corpo.texto, historico=historico
+    )
+    return PerguntaOut(resposta=resultado.texto, por_ia=resultado.por_ia)
