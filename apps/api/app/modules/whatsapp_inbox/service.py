@@ -28,6 +28,7 @@ from app.modules.notifications.models import Notification
 from app.modules.settings import service as settings_service
 from app.modules.vima import scheduler as vima_scheduler
 from app.modules.whatsapp_inbox.models import (
+    CHAT_KIND_DIRECT,
     CHAT_KIND_GROUP,
     DIRECTION_IN,
     DIRECTION_OUT,
@@ -857,6 +858,46 @@ def _destination(db: Session, chat: WhatsappChat) -> str:
             "Responda pelo contato no CRM.", 422,
         )
     return chat.chat_jid
+
+
+def start_conversation(
+    db: Session, *, tenant_id: str, actor: str, client_id: str, text: str
+) -> WhatsappMessage:
+    """Abre a PRIMEIRA conversa com um cliente que nunca escreveu — sem chat prévio.
+
+    Só existe para o transporte Evolution: na Meta, abrir do zero exige template aprovado (a
+    janela de 24h nem entra em jogo, porque não há mensagem recebida nenhuma para contar a
+    partir dela). Ver app/core/whatsapp/capabilities.py e o `session_window` em
+    `is_within_session_window`."""
+    client = db.get(Client, client_id)
+    if client is None:
+        raise WhatsappInboxError("Cliente não encontrado", 404)
+    profile = settings_service.get_profile(db, tenant_id)
+    if whatsapp_capabilities.for_profile(profile).session_window:
+        raise WhatsappInboxError(
+            "Este WhatsApp exige contato prévio do cliente ou um template aprovado", 422
+        )
+    phone = normalize_br(client.phone)
+    if not phone:
+        raise WhatsappInboxError("Cliente sem telefone válido para WhatsApp", 422)
+
+    chat = _get_or_create_chat(
+        db, tenant_id=tenant_id, chat_jid=f"{phone}@s.whatsapp.net", kind=CHAT_KIND_DIRECT,
+        client=client, profile=profile,
+    )
+    status = whatsapp.send_text(to=phone, text=text, profile=profile)
+    msg = WhatsappMessage(
+        tenant_id=tenant_id, client_id=client.id, chat_id=chat.id,
+        direction=DIRECTION_OUT, kind=KIND_TEXT, text_body=text, status=status,
+    )
+    db.add(msg)
+    audit.record(
+        db, tenant_id=tenant_id, actor=actor, action="whatsapp_inbox.conversation.start",
+        target=chat.id,
+    )
+    db.commit()
+    db.refresh(msg)
+    return msg
 
 
 def send_reply_text(

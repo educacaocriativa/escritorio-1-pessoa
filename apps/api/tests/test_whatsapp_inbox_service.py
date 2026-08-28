@@ -696,6 +696,61 @@ def test_send_reply_text_raises_outside_window(db):
         )
 
 
+def test_start_conversation_evolution_cria_chat_e_envia(db, monkeypatch: pytest.MonkeyPatch):
+    """Evolution não tem janela de 24h nem template — pode abrir conversa do zero (sem nenhuma
+    mensagem prévia do contato). Ver app/core/whatsapp/capabilities.py."""
+    profile = _configure_credentials(db)
+    profile.whatsapp_provider = "evolution"
+    client = Client(tenant_id=TENANT_ID, name="Cliente", phone="5511900009999", source="manual")
+    db.add(client)
+    db.commit()
+
+    captured = {}
+    monkeypatch.setattr(
+        whatsapp, "send_text",
+        lambda **kw: (captured.update(kw), "sent")[1],
+    )
+    msg = inbox_service.start_conversation(
+        db, tenant_id=TENANT_ID, actor="user-1", client_id=client.id, text="Oi! Bem-vindo.",
+    )
+    assert msg.direction == DIRECTION_OUT
+    assert msg.status == "sent"
+    assert msg.text_body == "Oi! Bem-vindo."
+    assert captured["to"] == "5511900009999"
+
+    chat = db.scalar(select(WhatsappChat).where(WhatsappChat.id == msg.chat_id))
+    assert chat is not None
+    assert chat.chat_jid == "5511900009999@s.whatsapp.net"
+    assert chat.client_id == client.id
+
+
+def test_start_conversation_rejeita_transporte_meta(db):
+    """Na Meta abrir conversa do zero exige template aprovado — a mesma restrição que já
+    escondia o botão no frontend antes desta mudança."""
+    _configure_credentials(db)
+    client = Client(tenant_id=TENANT_ID, name="Cliente", phone="5511900001111", source="manual")
+    db.add(client)
+    db.commit()
+
+    with pytest.raises(inbox_service.WhatsappInboxError):
+        inbox_service.start_conversation(
+            db, tenant_id=TENANT_ID, actor="user-1", client_id=client.id, text="Oi!",
+        )
+
+
+def test_start_conversation_rejeita_cliente_sem_telefone(db):
+    profile = _configure_credentials(db)
+    profile.whatsapp_provider = "evolution"
+    client = Client(tenant_id=TENANT_ID, name="Cliente", phone=None, source="manual")
+    db.add(client)
+    db.commit()
+
+    with pytest.raises(inbox_service.WhatsappInboxError):
+        inbox_service.start_conversation(
+            db, tenant_id=TENANT_ID, actor="user-1", client_id=client.id, text="Oi!",
+        )
+
+
 def test_send_reply_media_rejects_disallowed_mime_type_before_sending(
     db, monkeypatch: pytest.MonkeyPatch
 ):
