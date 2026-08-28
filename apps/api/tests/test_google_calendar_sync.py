@@ -219,3 +219,20 @@ def test_network_failure_returns_zero_and_keeps_token(db: Session, monkeypatch):
     assert sync.pull_changes(db, tenant_id=TENANT) == 0
     db.refresh(cred)
     assert cred.sync_token == "token-v1"  # não corrompe o cursor numa falha
+
+
+# ── Incidente de produção (2026-08-27): google_event_id > 128 chars ──────────
+#
+# Confirmado em produção: eventos importados de calendários externos (Outlook/Exchange via
+# interop do Google Workspace) têm `id` de até 181 caracteres — bem além dos 26 chars do
+# formato próprio do Google. `google_event_id` era `String(128)`: o INSERT falhava com
+# `StringDataRightTruncation`, a transação inteira dava rollback, e NENHUM evento daquele
+# tenant sincronizava (não só o comprido — o `pull_changes` processa o lote inteiro numa
+# única transação). Google documenta até 1024 chars para `id` de evento.
+def test_google_event_id_column_accepts_external_calendar_ids():
+    """Regressão rápida (sem Postgres): a coluna precisa ser larga o bastante para IDs
+    importados de calendários externos. SQLite não aplica limite de VARCHAR (por isso este
+    teste confere o TAMANHO DECLARADO da coluna, não insere e deixa passar por acidente) —
+    a prova de que o banco REAL aceita mora em test_google_calendar_sync_rls.py."""
+    column = AgendaEvent.__table__.c.google_event_id
+    assert column.type.length is not None and column.type.length >= 1024
