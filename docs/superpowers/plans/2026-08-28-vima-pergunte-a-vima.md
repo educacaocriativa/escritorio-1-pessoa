@@ -828,7 +828,7 @@ def test_manda_a_pergunta_mascarada_e_desmascara_a_resposta(db: Session, monkeyp
     monkeypatch.setattr(pergunta.ai, "complete_with_tools", _fake_loop)
 
     resultado = pergunta.responder(
-        db, user=_usuario(), pergunta="qual o e-mail do joao@example.com?", historico=[]
+        db, user=_usuario(), pergunta="qual o e-mail do cliente joao@example.com", historico=[]
     )
 
     assert "joao@example.com" not in capturado["user_message"]
