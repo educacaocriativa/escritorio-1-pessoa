@@ -131,6 +131,10 @@ export default function AgendaPage() {
           events={events}
           onDayClick={openOnDay}
           onEventClick={setSelected}
+          onMoreClick={(d) => {
+            setAnchor(d);
+            setView("day");
+          }}
         />
       )}
       {view === "week" && (
@@ -184,12 +188,14 @@ function MonthGrid({
   events,
   onDayClick,
   onEventClick,
+  onMoreClick,
 }: {
   days: Date[];
   anchor: Date;
   events: AgendaEvent[];
   onDayClick: (d: Date) => void;
   onEventClick: (e: AgendaEvent) => void;
+  onMoreClick: (d: Date) => void;
 }) {
   const fuso = useFuso();
   const today = hojeDoTenant(fuso);
@@ -264,7 +270,13 @@ function MonthGrid({
                     </button>
                   ))}
                   {dayEvents.length > 3 && (
-                    <div className="text-[10px] text-neutral-400">+{dayEvents.length - 3} mais</div>
+                    <button
+                      data-testid={`mais-eventos-${localYmd(d)}`}
+                      onClick={() => onMoreClick(d)}
+                      className="pointer-events-auto block text-[10px] text-neutral-400 hover:text-primary-600 hover:underline"
+                    >
+                      +{dayEvents.length - 3} mais
+                    </button>
                   )}
                 </div>
               </div>
