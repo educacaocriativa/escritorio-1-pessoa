@@ -4,7 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { api } from "../../lib/api";
 import { localYmd } from "../../lib/datetime";
 import EscolherHorario from "./EscolherHorario";
-import { gradeDoMes } from "./grade";
+import { gradeDoMes, paramsDaGrade } from "./grade";
 import { agendaEvent } from "../../test/fixtures/agenda";
 
 vi.mock("../../lib/api", () => ({
@@ -143,7 +143,7 @@ describe("EscolherHorario", () => {
       expect(vi.mocked(api.get)).toHaveBeenLastCalledWith(
         "/agenda/events",
         expect.objectContaining({
-          params: expect.objectContaining({ start: `${localYmd(novembro.start)}T00:00:00.000Z` }),
+          params: expect.objectContaining({ start: paramsDaGrade(novembro.start, novembro.end).start }),
         }),
       ),
     );
