@@ -9,9 +9,10 @@ princípio de `vima/service.gerar_ou_ler` para o briefing.
 from __future__ import annotations
 
 import json
+from collections.abc import Callable
 from dataclasses import asdict, dataclass
 from datetime import date
-from typing import Any, Callable
+from typing import Any
 
 from sqlalchemy.orm import Session
 

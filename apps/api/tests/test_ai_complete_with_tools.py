@@ -39,7 +39,9 @@ def _bloco_tool_use(nome: str, entrada: dict, tool_id: str = "tu_1") -> SimpleNa
     return SimpleNamespace(type="tool_use", id=tool_id, name=nome, input=entrada)
 
 
-def _resposta(blocos: list, *, stop_reason: str, input_tokens=10, output_tokens=5) -> SimpleNamespace:
+def _resposta(
+    blocos: list, *, stop_reason: str, input_tokens=10, output_tokens=5
+) -> SimpleNamespace:
     return SimpleNamespace(
         content=blocos,
         usage=SimpleNamespace(input_tokens=input_tokens, output_tokens=output_tokens),
@@ -66,7 +68,9 @@ def _loop(db, **over):
 
 
 def test_para_direto_quando_a_primeira_rodada_nao_pede_ferramenta(db: Session, monkeypatch):
-    fila = _install_fake(monkeypatch, [_resposta([_bloco_texto("R$ 0,00")], stop_reason="end_turn")])
+    fila = _install_fake(
+        monkeypatch, [_resposta([_bloco_texto("R$ 0,00")], stop_reason="end_turn")]
+    )
     resultado = _loop(db)
     assert resultado.text == "R$ 0,00"
     assert resultado.turnos_usados == 1
@@ -76,7 +80,9 @@ def test_para_direto_quando_a_primeira_rodada_nao_pede_ferramenta(db: Session, m
 
 def test_chama_a_ferramenta_com_o_nome_e_o_input_pedidos_pela_claude(db: Session, monkeypatch):
     _install_fake(monkeypatch, [
-        _resposta([_bloco_tool_use("consultar_recebiveis", {"foo": "bar"})], stop_reason="tool_use"),
+        _resposta(
+            [_bloco_tool_use("consultar_recebiveis", {"foo": "bar"})], stop_reason="tool_use"
+        ),
         _resposta([_bloco_texto("resposta final")], stop_reason="end_turn"),
     ])
     chamadas_da_ferramenta = []
@@ -92,7 +98,9 @@ def test_chama_a_ferramenta_com_o_nome_e_o_input_pedidos_pela_claude(db: Session
 
 def test_o_resultado_da_ferramenta_volta_para_a_claude_como_tool_result(db: Session, monkeypatch):
     fila = _install_fake(monkeypatch, [
-        _resposta([_bloco_tool_use("consultar_recebiveis", {}, tool_id="tu_9")], stop_reason="tool_use"),
+        _resposta(
+            [_bloco_tool_use("consultar_recebiveis", {}, tool_id="tu_9")], stop_reason="tool_use"
+        ),
         _resposta([_bloco_texto("ok")], stop_reason="end_turn"),
     ])
     _loop(db, executar_ferramenta=lambda nome, entrada: '{"open_cents": 500}')
@@ -117,11 +125,15 @@ def test_grava_uma_linha_de_ledger_por_rodada_de_api(db: Session, monkeypatch):
     linhas = db.query(AIUsage).order_by(AIUsage.input_tokens).all()
     assert len(linhas) == 2
     assert [linha.input_tokens for linha in linhas] == [10, 20]
-    assert all(linha.task == "vima.pergunta" and linha.model == "claude-sonnet-5" for linha in linhas)
+    assert all(
+        linha.task == "vima.pergunta" and linha.model == "claude-sonnet-5" for linha in linhas
+    )
     assert all(linha.user_id == "u1" for linha in linhas)
 
 
-def test_estoura_o_teto_de_rodadas_e_forca_uma_resposta_final_sem_ferramentas(db: Session, monkeypatch):
+def test_estoura_o_teto_de_rodadas_e_forca_uma_resposta_final_sem_ferramentas(
+    db: Session, monkeypatch
+):
     fila = _install_fake(monkeypatch, [
         _resposta([_bloco_tool_use("consultar_recebiveis", {})], stop_reason="tool_use"),
         _resposta([_bloco_tool_use("consultar_recebiveis", {})], stop_reason="tool_use"),
