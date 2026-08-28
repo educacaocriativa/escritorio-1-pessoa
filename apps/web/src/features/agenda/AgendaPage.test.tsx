@@ -342,3 +342,36 @@ describe("AgendaPage — histórico de mensagens fora de forma não derruba o mo
     expect(await screen.findByText("Mensagem real")).toBeInTheDocument();
   });
 });
+
+// ── "+N mais" leva à visão Dia, não abre "Novo evento" ───────────────────────
+//
+// A célula do dia tem um <button> "Novo evento" absoluto por baixo de todo o conteúdo (ver o
+// comentário grande em MonthGrid sobre o #183): antes desta mudança, "+N mais" era um <div> sem
+// clique próprio, e tocar nele caía nesse botão de fundo. O controle "não abriu Novo evento" é o
+// que prova que o clique ficou contido no botão do "+N mais", e não escorregou para a célula.
+describe("AgendaPage — \"+N mais\" abre a visão Dia (issue relatada pelo usuário)", () => {
+  it("clicar em \"+1 mais\" muda para a visão Dia do dia clicado, sem abrir o cadastro de novo evento", async () => {
+    const user = userEvent.setup();
+    const hoje = new Date();
+    const ymd = `${hoje.getFullYear()}-${String(hoje.getMonth() + 1).padStart(2, "0")}-${String(
+      hoje.getDate(),
+    ).padStart(2, "0")}`;
+    const at = (h: number) =>
+      new Date(hoje.getFullYear(), hoje.getMonth(), hoje.getDate(), h, 0, 0).toISOString();
+    mockEvents([
+      agendaEvent({ id: "e-1", title: "Reunião A", starts_at: at(9), ends_at: at(10) }),
+      agendaEvent({ id: "e-2", title: "Reunião B", starts_at: at(11), ends_at: at(12) }),
+      agendaEvent({ id: "e-3", title: "Reunião C", starts_at: at(13), ends_at: at(14) }),
+      agendaEvent({ id: "e-4", title: "Reunião D", starts_at: at(15), ends_at: at(16) }),
+    ]);
+    renderPage();
+
+    await user.click(await screen.findByTestId(`mais-eventos-${ymd}`));
+
+    // Não caiu no botão de fundo da célula (que abriria o cadastro).
+    expect(screen.queryByRole("heading", { name: "Novo evento" })).not.toBeInTheDocument();
+    // Foi para a visão Dia: os 4 eventos aparecem em lista — no mês, só os 3 primeiros + "+1 mais".
+    expect(await screen.findByText("Reunião A")).toBeInTheDocument();
+    expect(screen.getByText("Reunião D")).toBeInTheDocument();
+  });
+});
