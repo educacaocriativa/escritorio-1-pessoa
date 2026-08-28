@@ -1,8 +1,9 @@
-import type { ConversationSummary, TimelineEntry } from "@e1p/shared-types";
+import type { ConversationSummary, TenantProfile, TimelineEntry } from "@e1p/shared-types";
 import { useCallback, useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 import { api } from "../../lib/api";
 import { formatTime } from "../../lib/datetime";
+import { capabilitiesFor } from "../../lib/whatsappCapabilities";
 import { useFuso } from "../../store/auth";
 
 /** Quantas falas cabem sem a ficha virar uma segunda tela de Conversas. */
@@ -18,12 +19,20 @@ const ULTIMAS = 5;
  * Não confundir com o `ClientTimeline` logo acima na ficha: aquele é a NARRATIVA do
  * relacionamento (chegou, moveu, pagou, escreveu); este é o TEOR, o que foi dito.
  */
-export default function BlocoDaConversa({ clientId }: { clientId: string }) {
+export default function BlocoDaConversa(
+  { clientId, clientPhone }: { clientId: string; clientPhone?: string | null },
+) {
   const fuso = useFuso();
   const [conversas, setConversas] = useState<ConversationSummary[]>([]);
   const [mensagens, setMensagens] = useState<TimelineEntry[]>([]);
   const [erro, setErro] = useState(false);
   const [carregando, setCarregando] = useState(true);
+  // Só a Evolution (QR code) permite abrir conversa do zero — a Meta exige template aprovado
+  // (ver app/core/whatsapp/capabilities.py). Busca própria, à parte do `load()`: uma falha aqui
+  // só deve esconder o compositor, nunca derrubar o resto do bloco.
+  const [podeIniciar, setPodeIniciar] = useState(false);
+  const [mensagemNova, setMensagemNova] = useState("");
+  const [enviando, setEnviando] = useState(false);
 
   const load = useCallback(async () => {
     // Falha aqui NÃO pode derrubar a ficha — mesma postura do `ClientTimeline`, que degrada
@@ -60,6 +69,26 @@ export default function BlocoDaConversa({ clientId }: { clientId: string }) {
     load();
   }, [load]);
 
+  useEffect(() => {
+    api
+      .get<TenantProfile>("/settings/profile")
+      .then(({ data }) => setPodeIniciar(!capabilitiesFor(data.whatsapp_provider).sessionWindow))
+      .catch(() => setPodeIniciar(false));
+  }, []);
+
+  const iniciar = useCallback(async () => {
+    const texto = mensagemNova.trim();
+    if (!texto) return;
+    setEnviando(true);
+    try {
+      await api.post("/whatsapp-conversations/start", { client_id: clientId, text: texto });
+      setMensagemNova("");
+      await load();
+    } finally {
+      setEnviando(false);
+    }
+  }, [clientId, mensagemNova, load]);
+
   if (carregando) return <p className="py-4 text-sm text-neutral-400">Carregando conversa...</p>;
   if (erro) {
     return (
@@ -71,8 +100,30 @@ export default function BlocoDaConversa({ clientId }: { clientId: string }) {
 
   const recente = maisRecente(conversas);
   if (!recente) {
-    // Sem botão de "iniciar conversa": a janela de 24h da Meta não permite abrir conversa do
-    // nada, e um botão que sempre falha é pior que nenhum.
+    if (podeIniciar && clientPhone) {
+      return (
+        <div className="space-y-2">
+          <textarea
+            className="w-full resize-none rounded-lg border border-neutral-200 p-2 text-sm text-neutral-800 focus:border-primary-400 focus:outline-none"
+            rows={2}
+            placeholder="Escreva a primeira mensagem..."
+            value={mensagemNova}
+            onChange={(e) => setMensagemNova(e.target.value)}
+          />
+          <button
+            type="button"
+            onClick={iniciar}
+            disabled={!mensagemNova.trim() || enviando}
+            className="w-full rounded-lg bg-primary-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-primary-700 disabled:opacity-50"
+          >
+            {enviando ? "Enviando..." : "Iniciar conversa"}
+          </button>
+        </div>
+      );
+    }
+    // Meta exige template aprovado pra abrir conversa do zero (janela de 24h da Cloud API) — um
+    // botão que sempre falha é pior que nenhum. `capabilitiesFor` decide isso; ver o comentário
+    // no `useEffect` de `podeIniciar` acima.
     return <p className="py-4 text-center text-sm text-neutral-400">Nenhuma conversa no WhatsApp.</p>;
   }
 

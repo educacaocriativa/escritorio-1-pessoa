@@ -196,7 +196,7 @@ export default function ClientDetailPage() {
           `rounded-2xl bg-white p-5 shadow-sm` não distingue esta da de Cobranças ou Contratos,
           e a régua de 360px precisa de um recorte que aponte só para esta. */}
       <Section icon={<MessageCircle size={16} />} title="Conversa" testId="secao-conversa">
-        <BlocoDaConversa clientId={id} />
+        <BlocoDaConversa clientId={id} clientPhone={client.phone} />
       </Section>
 
       {/* Agenda vem depois da Conversa e antes do operacional: a ficha conta uma história — o

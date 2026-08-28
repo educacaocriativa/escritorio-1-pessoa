@@ -12,7 +12,11 @@ from app.core import whatsapp
 from app.core.tenancy import CurrentUser, get_tenant_db, require_module
 from app.db.session import get_db, get_tenant_session_factory
 from app.modules.whatsapp_inbox import service
-from app.modules.whatsapp_inbox.schemas import SendTemplateRequest, SendTextRequest
+from app.modules.whatsapp_inbox.schemas import (
+    SendTemplateRequest,
+    SendTextRequest,
+    StartConversationRequest,
+)
 from app.modules.whatsapp_session import service as whatsapp_session_service
 from app.modules.whatsapp_templates import service as whatsapp_templates_service
 
@@ -240,6 +244,21 @@ def _msg_out(msg) -> dict:
         "id": msg.id, "direction": msg.direction, "kind": msg.kind,
         "text_body": msg.text_body, "status": msg.status, "created_at": msg.created_at,
     }
+
+
+@router.post("/start")
+def start_conversation(
+    data: StartConversationRequest,
+    user: CurrentUser = Depends(_guard), db: Session = Depends(get_tenant_db),
+) -> dict:
+    try:
+        msg = service.start_conversation(
+            db, tenant_id=user.tenant_id, actor=user.user_id,
+            client_id=data.client_id, text=data.text,
+        )
+    except service.WhatsappInboxError as e:
+        raise _err(e) from e
+    return {**_msg_out(msg), "chat_id": msg.chat_id}
 
 
 @router.post("/{chat_id}/messages/text")

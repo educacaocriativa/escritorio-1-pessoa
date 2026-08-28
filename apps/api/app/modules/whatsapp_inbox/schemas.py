@@ -38,6 +38,11 @@ class SendTextRequest(BaseModel):
     text: str
 
 
+class StartConversationRequest(BaseModel):
+    client_id: str
+    text: str
+
+
 class SendTemplateRequest(BaseModel):
     template_id: str
     variables: list[str] = []

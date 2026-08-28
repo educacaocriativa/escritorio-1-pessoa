@@ -89,6 +89,40 @@ def test_reply_text_endpoint_success_within_window(client, db, monkeypatch, auth
     assert resp.json()["status"] == "sent"
 
 
+def test_start_conversation_endpoint_evolution_success(client, db, monkeypatch, auth):
+    headers, tenant_id = auth
+    profile = settings_service.get_profile(db, tenant_id)
+    profile.whatsapp_provider = "evolution"
+    db.commit()
+    c = Client(tenant_id=tenant_id, name="Cliente", phone="5511900000004", source="manual")
+    db.add(c)
+    db.commit()
+    monkeypatch.setattr(whatsapp, "send_text", lambda **_kw: "sent")
+    resp = client.post(
+        "/whatsapp-conversations/start",
+        json={"client_id": c.id, "text": "Oi! Bem-vindo."},
+        headers=headers,
+    )
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["status"] == "sent"
+    assert body["chat_id"]
+
+
+def test_start_conversation_endpoint_rejects_meta(client, db, monkeypatch, auth):
+    headers, tenant_id = auth
+    _configure(db, tenant_id)
+    c = Client(tenant_id=tenant_id, name="Cliente", phone="5511900000005", source="manual")
+    db.add(c)
+    db.commit()
+    resp = client.post(
+        "/whatsapp-conversations/start",
+        json={"client_id": c.id, "text": "Oi!"},
+        headers=headers,
+    )
+    assert resp.status_code == 422
+
+
 def test_reply_template_endpoint_success(client, db, monkeypatch, auth):
     headers, tenant_id = auth
     _configure(db, tenant_id)
