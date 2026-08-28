@@ -138,10 +138,22 @@ export function densidadePorDia(eventos: AgendaEvent[], fuso: string): Map<strin
  * dois calendários — a tela de Agenda e o seletor da ficha — pedem o mesmo mês, e a regra vivia
  * num comentário copiado nos dois arquivos. Regra que mora em comentário duplicado é regra que
  * deriva.
+ *
+ * **A margem de 1 dia de cada lado, e por que sem ela a visão de Dia perde evento de verdade**
+ * (bug real, 2026-08-27): a fronteira UTC-date do rótulo "27/08" é `2026-08-27T00:00Z`, mas a
+ * meia-noite LOCAL do tenant cai em outro instante — em UTC−3, três horas DEPOIS
+ * (`2026-08-27T03:00Z`); em fuso positivo, mais cedo. Sem margem, um evento no fim (fuso
+ * negativo) ou no início (fuso positivo) do dia local simplesmente não entra na busca — não é
+ * filtrado depois, nunca chega ao array de eventos. Foi assim que um evento sincronizado do
+ * Google às 22h (BRT) sumiu da visão de Dia (e ficou escondido atrás de "+1 mais" na de Mês, cuja
+ * janela de 42 dias está longe da borda). 1 dia cobre qualquer offset real (UTC−12 a UTC+14).
+ * Evento de dia inteiro segue dentro da margem em qualquer direção — a folga não quebra o caso
+ * que a fronteira exata protegia. O agrupamento por célula (`eventsOfDay`/`eventYmd`) já filtra
+ * de volta pelo dia certo; a margem só evita que o SERVIDOR descarte cedo demais.
  */
 export const paramsDaGrade = (start: Date, end: Date) => ({
-  start: `${localYmd(start)}T00:00:00.000Z`,
-  end: `${localYmd(end)}T00:00:00.000Z`,
+  start: `${localYmd(addDays(start, -1))}T00:00:00.000Z`,
+  end: `${localYmd(addDays(end, 1))}T00:00:00.000Z`,
   limit: 500,
 });
 

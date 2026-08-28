@@ -484,15 +484,31 @@ describe("gradeDoMes", () => {
 });
 
 describe("paramsDaGrade", () => {
-  it("pede o range em meia-noite UTC da DATA do grid", () => {
+  it("pede o range em meia-noite UTC da DATA do grid, com 1 dia de margem de cada lado", () => {
     const { start, end, days } = gradeDoMes(new Date(2026, 9, 20));
 
     expect(paramsDaGrade(start, end)).toEqual({
-      start: "2026-09-27T00:00:00.000Z",
-      end: "2026-11-08T00:00:00.000Z",
+      start: "2026-09-26T00:00:00.000Z",
+      end: "2026-11-09T00:00:00.000Z",
       limit: 500,
     });
     expect(days).toHaveLength(42);
+  });
+
+  it("a margem cobre um evento às 22h num tenant em UTC-3, que a fronteira exata perdia", () => {
+    // Bug real em produção (2026-08-27): "Bora" (sync do Google) às 22h de 27/08 no fuso do
+    // tenant (America/Sao_Paulo, UTC-3) é armazenado como 2026-08-28T01:00:00Z. A visão de Dia
+    // pedia exatamente [2026-08-27T00:00Z, 2026-08-28T00:00Z) — a fronteira UTC-date do rótulo
+    // "27/08", sem compensar o offset do tenant. O evento ficava DEPOIS do fim dessa janela e
+    // nunca era sequer devolvido pela API: sumia da visão de Dia (e, na de Mês, sobrevivia só
+    // escondido atrás de "+1 mais", porque a janela de 42 dias está longe da borda). A margem de
+    // 1 dia cobre qualquer offset real de fuso (UTC-12 a UTC+14, bem abaixo de 24h).
+    const dia = new Date(2026, 7, 27); // 27/08/2026, meia-noite local
+    const params = paramsDaGrade(dia, addDays(dia, 1));
+
+    const bora = new Date("2026-08-28T01:00:00.000Z").getTime();
+    expect(new Date(params.start).getTime()).toBeLessThanOrEqual(bora);
+    expect(new Date(params.end).getTime()).toBeGreaterThan(bora);
   });
 });
 
