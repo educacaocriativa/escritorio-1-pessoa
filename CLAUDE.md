@@ -2935,6 +2935,67 @@ ficha..." para sempre** — e o mesmo em `/config` (exige o módulo `settings` i
   (`hasModule` recebe `string` solto); um typo no `module` de um item novo de menu não quebraria
   build nenhum, só esconderia o item em silêncio.
 
+## Vima: pergunte e receba resposta (2026-08-28)
+
+> Spec: `docs/superpowers/specs/2026-08-28-vima-pergunte-design.md` ·
+> Plano: `docs/superpowers/plans/2026-08-28-vima-pergunte-a-vima.md`
+
+Primeira fatia do caminho até um assistente quase autossuficiente e interagível por voz. Até
+aqui a Vima só **empurrava** — o briefing narrado numa hora fixa (seção abaixo). Agora o dono
+pode **perguntar**, em texto, dentro do app (`/vima/perguntas`), e a Vima responde consultando
+os dados reais de Financeiro, Agenda e CRM.
+
+- [x] **`core/ai.complete_with_tools`** — a PRIMEIRA consumidora da API de tool-use da Anthropic
+  neste repositório. Loop genérico: a Claude escolhe qual ferramenta chamar, o CHAMADOR a
+  executa (`vima/tools.py`) e devolve o resultado; a camada de IA continua sem conhecer dado
+  real (mesmo item 1 do docstring de `core/ai.py`). Cada rodada de `messages.create` grava sua
+  própria linha em `ai_usage` — o custo real de um loop que deu várias voltas fica visível, não
+  resumido no fim. Estourar o teto de rodadas (`max_tool_turns`, default 6) força uma última
+  chamada SEM ferramentas para fechar com texto, nunca trunca em silêncio. Nova tarefa
+  `vima.pergunta` roteia para `claude-sonnet-5` — a Claude também ESCOLHE a ferramenta aqui, não
+  só narra, e uma escolha errada custa mais do que texto mal-narrado.
+- [x] **`vima/tools.py`** — cinco ferramentas de leitura, cada uma um wrapper fino sobre um
+  serviço determinístico que já existe: `consultar_recebiveis`/`consultar_pagaveis`
+  (`receivables`/`payables.summary`), `consultar_projecao_caixa` (`financial_intelligence
+  .cash_projection`), `consultar_agenda` (`agenda.list_events`, com `day_window_utc` no fuso do
+  tenant — nunca UTC cru, regra §6.0) e `consultar_cliente` (`crm.list_clients` +
+  `crm.timeline.build` para a última interação). **O filtro de permissão decide quais
+  ferramentas a Claude VÊ**, não quais respostas aparecem depois — mesmo princípio do briefing.
+  Toda falha de ferramenta vira `{"erro": ...}` em vez de subir crua: o loop de tool-use precisa
+  de um `tool_result` sempre, e a Claude é instruída a dizer que não conseguiu, nunca a inventar
+  (Artigo IV, No Invention).
+- [x] **`vima/pergunta.py`** — mascara a pergunta + histórico reenviado pelo front via
+  `core/anonymizer` antes de mandar (Regra de Ouro nº 2), roda o loop, desmascara a resposta
+  final, grava `vima.pergunta.respondida` no audit quando a IA de fato respondeu. Sem
+  `ANTHROPIC_API_KEY`, degrada para uma frase fixa em vez de quebrar.
+  - ⚠️ **Decisão de PII:** a pergunta do dono e os RESULTADOS de ferramenta (nome de cliente,
+    valor, data) chegam à Claude sem anonimização de NOME — extensão explícita do risco aceito
+    pelo fundador em 2026-07-11 para o Diagnóstico Financeiro (§6.1, "Anonimizador sem NER").
+    PII estrutural (CPF/CNPJ/e-mail/telefone) continua mascarada normalmente.
+- [x] **`POST /vima/pergunta`** — sem `require_module`, mesma decisão de `/vima/briefing`: o
+  recorte de permissão acontece por ferramenta dentro da resposta, não na rota. Sem
+  persistência: `historico` vem no corpo da requisição a cada chamada; o backend nunca grava
+  transcript nenhum.
+- [x] **`/vima/perguntas`** (frontend) — tela de chat dentro do `ProtectedLayout` normal (COM
+  shell, ao contrário do Briefing/Núcleo do DNA), com item de menu "Pergunte à Vima" — também
+  sem `module`/`<Modulo>`, pelo mesmo motivo da rota. Histórico vive só no `useState` do React;
+  recarregar a página começa do zero. Medida em ~360px desde o primeiro commit
+  (`rotas-360.spec.ts` + `alcance-360.spec.ts`, fixture de pior caso com token sem espaço na
+  resposta) — passou sem conserto, porque as bolhas já nasceram com `break-words`/`min-w-0`.
+- [x] **Prova de RLS** (`test_vima_tools_rls.py`) — dois tenants cadastram cliente com o MESMO
+  nome; `consultar_cliente` só encontra o próprio, sob Postgres real.
+
+**Fora de escopo, declarado — a dívida que sobra do caminho até o Jarbes:**
+- WhatsApp como canal de pergunta — o número conectado do tenant hoje só trata mensagem
+  recebida como CLIENTE (`whatsapp_inbox`); "o dono fala com a própria Vima" pede resolver essa
+  ambiguidade de roteamento antes, fatia própria.
+- Voz (entrada ou saída) — depende da fatia de WhatsApp acima.
+- Persistência de conversa entre sessões.
+- Ações da Vima — hoje ela só LÊ; quando existir escrita, precisa do rastro "Ação executada
+  pela IA" que uma ferramenta de leitura não precisa.
+- Hardening do anonimizador para nome próprio (NER) — dívida pré-existente que esta fatia
+  ESTENDE o aceite de risco em vez de fechar.
+
 ## Vima: o Registro de Fatos e o briefing (PRs #85 e #90, 2026-08-06/07)
 
 > Spec: `docs/superpowers/specs/2026-08-06-vima-registro-de-fatos-e-briefing-design.md` ·

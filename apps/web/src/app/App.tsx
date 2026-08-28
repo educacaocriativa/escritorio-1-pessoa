@@ -47,6 +47,7 @@ import SitesPage from "../features/sites/SitesPage";
 import NucleoPage from "../features/dna/NucleoPage";
 import BriefingPage from "../features/vima/BriefingPage";
 import EntradaDoDia from "../features/vima/EntradaDoDia";
+import PerguntePage from "../features/vima/PerguntePage";
 import IdleWarningModal from "../components/IdleWarningModal";
 import { hasModule } from "../lib/access";
 import { AuthProvider, useAuth } from "../store/auth";
@@ -84,6 +85,9 @@ export default function App() {
           {/* A conversa tem URL própria desde a Onda 1: é assim que a ficha 360° aponta para ela, e
               de quebra o botão voltar do navegador passa a funcionar nesta tela. */}
           <Route path="/conversas/:chatId" element={<Modulo m="crm"><ConversasPage /></Modulo>} />
+          {/* Sem <Modulo> — mesma decisão de /vima/briefing: qualquer usuário abre o chat, e o
+              recorte de permissão acontece por FERRAMENTA dentro da resposta, não na rota. */}
+          <Route path="/vima/perguntas" element={<PerguntePage />} />
           <Route path="/financeiro" element={<Modulo m="wallet"><FinanceiroPage /></Modulo>} />
           <Route path="/financeiro/contas" element={<Modulo m="bank"><ContasSaldosPage /></Modulo>} />
           {/* Story 8.7 — rota DELIBERADAMENTE fora da sidebar: a conferência é resposta a um

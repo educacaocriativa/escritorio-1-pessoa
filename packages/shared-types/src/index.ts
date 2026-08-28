@@ -1172,6 +1172,23 @@ export interface Briefing {
   created_at: string;
 }
 
+// ── Vima: pergunte à Vima (chat em texto) ────────────────────────────────────
+
+export interface Turno {
+  papel: "usuario" | "vima";
+  texto: string;
+}
+
+export interface PerguntaRequest {
+  texto: string;
+  historico: Turno[];
+}
+
+export interface PerguntaResposta {
+  resposta: string;
+  por_ia: boolean;
+}
+
 export interface DnaOpcao {
   rotulo: string;
   valor: string | number | null;
