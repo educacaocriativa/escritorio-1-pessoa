@@ -9,8 +9,9 @@ from __future__ import annotations
 
 import json
 from datetime import date, datetime
+from typing import Literal
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
 
 from app.modules.vima.models import Briefing
 
@@ -64,3 +65,18 @@ def _payload(briefing: Briefing) -> dict:
     except (TypeError, ValueError):
         return {}
     return dados if isinstance(dados, dict) else {}
+
+
+class TurnoIn(BaseModel):
+    papel: Literal["usuario", "vima"]
+    texto: str
+
+
+class PerguntaIn(BaseModel):
+    texto: str = Field(min_length=1)
+    historico: list[TurnoIn] = []
+
+
+class PerguntaOut(BaseModel):
+    resposta: str
+    por_ia: bool
