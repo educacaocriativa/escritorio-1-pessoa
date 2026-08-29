@@ -43,6 +43,6 @@ def test_uma_linha_anthropic_e_uma_groq_convivem_sem_se_confundir(db: Session):
     )
     db.commit()
 
-    linhas = {l.provider: l for l in db.query(AIUsage).all()}
+    linhas = {linha.provider: linha for linha in db.query(AIUsage).all()}
     assert linhas["anthropic"].audio_seconds is None
     assert linhas["groq"].audio_seconds == 1.0
