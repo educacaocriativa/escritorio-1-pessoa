@@ -3060,9 +3060,15 @@ cabeça. **`facts` é a memória narrativa do negócio inteiro**, e o briefing �
   - Gate em `tests/test_fuso_do_tenant.py`: varredura AST sobre `app/modules/vima/` separando
     carimbar um INSTANTE (legítimo) de derivar QUE DIA É HOJE (regressão). `absences`,
     `composer` e `permissions` são puros e não podem ler o relógio nem para instante.
-- **Dívida:** `occurred_at` das mensagens de WhatsApp cai no default em vez do `messageTimestamp`
-  real (`InboundMessage` não carrega o campo) — janela de erro de segundos na virada do dia;
-  expurgo dos sujeitos polimórficos (LGPD) não tem rotina, só `client_id` cascateia;
+- ~~**Dívida:** `occurred_at` das mensagens de WhatsApp cai no default em vez do
+  `messageTimestamp` real (`InboundMessage` não carrega o campo) — janela de erro de segundos na
+  virada do dia.~~ **FECHADA em 2026-08-28.** `InboundMessage` ganhou `occurred_at`
+  (`app/core/whatsapp/inbound.py`), preenchido pelos dois parsers via `parse_epoch_seconds` —
+  `messageTimestamp` (irmão de `key`/`message` em `data`) na Evolution, `timestamp` **por
+  MENSAGEM** na Meta — e propagado a `facts.record(..., occurred_at=msg.occurred_at)` em
+  `whatsapp_inbox/service.py`. `None` (carimbo ausente no payload) continua caindo no `now()` de
+  sempre — não é regressão, é o mesmo fallback que `facts.record` sempre teve.
+- **Dívida:** expurgo dos sujeitos polimórficos (LGPD) não tem rotina, só `client_id` cascateia;
   `comercial.topo.sem_lead` é a única Ausência que lê o log, então enquanto o registro for novo
   ela dispara por falta de histórico e não por falta de lead; o anonimizador não mascara nomes
   apesar da docstring dizer que sim (pré-existente, o briefing herda).
