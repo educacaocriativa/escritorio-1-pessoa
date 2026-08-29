@@ -66,7 +66,7 @@ def tick(db: Session, *, tenant_id: str, agora: datetime) -> int:
     hoje = hoje_do_tenant(db, now=agora)
 
     gerados = 0
-    for user in _usuarios_ativos(db, tenant_id):
+    for user in usuarios_ativos(db, tenant_id):
         if not _ja_chegou(user.briefing_hour, local):
             continue
 
@@ -76,7 +76,7 @@ def tick(db: Session, *, tenant_id: str, agora: datetime) -> int:
             )
         )
         if existente is None:
-            briefing = service.gerar_ou_ler(db, user=_como_ator(user), hoje=hoje)
+            briefing = service.gerar_ou_ler(db, user=como_ator(user), hoje=hoje)
             gerados += 1
             _entregar_no_whatsapp(db, user=user, briefing=briefing)
 
@@ -84,10 +84,13 @@ def tick(db: Session, *, tenant_id: str, agora: datetime) -> int:
     return gerados
 
 
-def _usuarios_ativos(db: Session, tenant_id: str) -> list[User]:
+def usuarios_ativos(db: Session, tenant_id: str) -> list[User]:
     """⚠️ `users` é tabela GLOBAL, SEM RLS — o filtro por `tenant_id` aqui é explícito e
     obrigatório. É a exceção documentada da Regra de Ouro nº 1, a mesma de
-    `whatsapp_inbox.service._e_telefone_da_equipe`."""
+    `whatsapp_inbox.service._e_telefone_da_equipe`.
+
+    Pública porque tem dois consumidores desde a fatia do canal WhatsApp da Vima
+    (`vima/whatsapp_conversa.py`) — antes disso, só este módulo a usava."""
     return list(
         db.scalars(
             select(User)
@@ -98,10 +101,12 @@ def _usuarios_ativos(db: Session, tenant_id: str) -> list[User]:
     )
 
 
-def _como_ator(user: User) -> CurrentUser:
+def como_ator(user: User) -> CurrentUser:
     """O `CurrentUser` que o serviço espera. O `allowed_modules` vem do BANCO, não de um token:
     é ele que recorta quais fatos entram no briefing deste usuário (`vima/permissions.py`), e um
-    token não existe num job."""
+    token não existe num job.
+
+    Pública pelo mesmo motivo de `usuarios_ativos` acima."""
     return CurrentUser(
         user_id=user.id,
         tenant_id=user.tenant_id,
@@ -222,7 +227,7 @@ def responder_optin(db: Session, *, tenant_id: str, phone: str | None) -> bool:
     user = next(
         (
             u
-            for u in _usuarios_ativos(db, tenant_id)
+            for u in usuarios_ativos(db, tenant_id)
             if u.phone and normalize_br(u.phone) == chave
         ),
         None,

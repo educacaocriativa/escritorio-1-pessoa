@@ -15,7 +15,7 @@ import logging
 import httpx
 
 from app.config import settings
-from app.core.whatsapp.inbound import InboundMessage
+from app.core.whatsapp.inbound import InboundMessage, parse_epoch_seconds
 
 logger = logging.getLogger("e1p.whatsapp.evolution")
 
@@ -291,6 +291,9 @@ def parse_inbound(payload: dict) -> list[InboundMessage]:
             "from_me": from_me, "chat_jid": chat_jid or None,
             "chat_kind": "group" if is_group else "direct",
             "sender_phone": sender_phone, "sender_name": push_name or None,
+            # `messageTimestamp` é irmão de `key`/`pushName`/`message` no MESMO nível de `data`
+            # (confirmado no payload real capturado 2026-08-04), em segundos desde epoch.
+            "occurred_at": parse_epoch_seconds(data.get("messageTimestamp")),
         }
 
         media_kind, media_obj = _extract_media(message)

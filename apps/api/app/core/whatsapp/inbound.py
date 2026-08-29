@@ -11,6 +11,23 @@ NÃO de `app.core.whatsapp.providers.*` — há gate estrutural que barra
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import UTC, datetime
+
+
+def parse_epoch_seconds(value: object) -> datetime | None:
+    """Converte o carimbo de tempo cru de um provider (segundos desde epoch, `int` ou `str`)
+    no INSTANTE em que a mensagem aconteceu de verdade — não o instante em que a processamos.
+
+    Usado pelos dois parsers (`messageTimestamp` da Evolution, `timestamp` da Meta): a forma é a
+    mesma nos dois, só o nome do campo no payload muda. `None` para qualquer valor ausente ou
+    ilegível — o chamador cai no `datetime.now(UTC)` de sempre (`facts.record`), nunca aqui.
+    """
+    if value is None:
+        return None
+    try:
+        return datetime.fromtimestamp(int(value), tz=UTC)
+    except (TypeError, ValueError, OSError):
+        return None
 
 
 @dataclass(frozen=True)
@@ -55,6 +72,12 @@ class InboundMessage:
     # está ligado) — ingest cria o Attachment na hora, sem depender do worker.
     media_mime_type: str | None = None
     media_filename: str | None = None
+    # QUANDO a mensagem aconteceu de verdade, segundo o PRÓPRIO WhatsApp — não o instante em que
+    # o webhook chegou nem o instante em que o ingest processou. Alimenta `facts.record(...,
+    # occurred_at=...)`: sem isto, uma mensagem recebida às 23h59 e processada à 00h01 entrava no
+    # briefing do dia seguinte em vez do dia dela. `None` quando o provider não entregou o
+    # carimbo (nunca acontece em payload real; `facts.record` cai no `now()` de sempre nesse caso).
+    occurred_at: datetime | None = None
 
 
 @dataclass(frozen=True)
