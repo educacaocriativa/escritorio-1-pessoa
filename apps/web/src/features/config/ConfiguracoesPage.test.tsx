@@ -47,7 +47,6 @@ beforeEach(() => {
   vi.mocked(api.get).mockImplementation((url: string) => {
     if (url === "/settings/profile") return Promise.resolve({ data: profile } as never);
     if (url === "/funnels") return Promise.resolve({ data: [] } as never);
-    if (url === "/integrations/leads/keys") return Promise.resolve({ data: [] } as never);
     return Promise.resolve({ data: {} } as never);
   });
   vi.mocked(api.patch).mockReset();
@@ -177,26 +176,5 @@ describe("ConfiguracoesPage — carregamento (RBAC)", () => {
 
     expect(await screen.findByText("Sem acesso ao módulo 'settings'")).toBeInTheDocument();
     expect(screen.queryByText("Carregando...")).toBeNull();
-  });
-});
-
-describe("ConfiguracoesPage — aba Integrações", () => {
-  it("troca pra aba Integrações e lista as chaves", async () => {
-    const user = userEvent.setup();
-    vi.mocked(api.get).mockImplementation((url: string) => {
-      if (url === "/settings/profile") return Promise.resolve({ data: profile } as never);
-      if (url === "/integrations/leads/keys") {
-        return Promise.resolve({
-          data: [{ id: "k-1", label: "Site Dóro", key_prefix: "abcd1234", revoked_at: null, created_at: "" }],
-        } as never);
-      }
-      return Promise.resolve({ data: [] } as never);
-    });
-    render(<ConfiguracoesPage />);
-
-    await screen.findByText("Cor primária"); // espera o profile carregar
-    await user.click(screen.getByRole("button", { name: /Integrações/ }));
-
-    expect(await screen.findByText("Site Dóro")).toBeInTheDocument();
   });
 });

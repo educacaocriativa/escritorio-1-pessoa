@@ -3730,6 +3730,30 @@ reiniciava, e o ciclo não aparecia como falha em lugar nenhum — `docker ps` d
   (`CLOUDFLARE_API_TOKEN` vazio de propósito). Enquanto o override existir, ele vence: monta o
   `Caddyfile.single`, que não tem o `import` e portanto ignora os opcionais — **seguro, só redundante**.
 
+## Removida: a chave de API de "Integrações" (leads de site externo) — 2026-08-28
+
+**A feature nunca teve consumidor real, e o caso que motivou a pergunta usa outro mecanismo.**
+`POST /public/leads/{chave}` (módulo `integrations`, PR #32, 14/07/2026) existia para um site
+**externo, não construído no e1p**, empurrar leads via chave de API (`source=api`). O único caso
+com chave rotulada ("site Doro") já estava **revogado**, e o site real da Doro
+(doroeventos.com.br) nunca usou essa via — ele **embute a página pública do construtor de Sites**
+(`/p/:slug`) via `<iframe>` (PR #43, 20/07/2026, que teve que liberar `X-Frame-Options` pra isso
+funcionar). O formulário dessa página pública já cria o lead direto, com `source="landing"`, sem
+chave nenhuma — e é ESSE o mecanismo que qualquer tenant usa hoje para site externo próprio.
+
+- **Removido:** módulo `app/modules/integrations/` inteiro (router, service, models, schemas),
+  `apps/web/src/features/config/IntegrationsSection.tsx`, os tipos `IntegrationKey`/
+  `IntegrationKeyCreated` de `shared-types`, e as tabelas `integration_keys`/
+  `public_integration_keys` (migration 0083). A aba "Integrações" de `/config` continua existindo
+  — hoje com o Google Calendar e o pareamento por celular (`CelularSection`).
+- **NÃO removido:** `tenant_profiles.default_entry_funnel_id` (migration 0051, mesma story) — é o
+  funil de entrada padrão para QUALQUER lead novo (`landing`/`api`/manual/...), não exclusivo
+  desta feature; `pages/service.py` e `crm/service.py` continuam usando.
+- **Se um cliente futuro precisar** de um site de verdade fora do e1p enviando lead pra cá, a
+  resposta socialmente mais simples ainda é o padrão da Doro (iframe da página pública) — só
+  reconstrua a chave de API se aparecer um caso que a página pública embutida não cubra (ex.: site
+  headless que não pode embutir iframe).
+
 ## 7. Materiais de referência (fora do repo)
 - Spec mestre: `/Volumes/Extreme SSD/2026_e1p/Configuração do software.docx`
 - Design Figma exportado: `/Volumes/Extreme SSD/2026_Downloads de JUNHO/crm_export/` (PNGs do "Portal")

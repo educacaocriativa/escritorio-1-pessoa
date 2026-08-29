@@ -906,21 +906,6 @@ export interface DeviceToken {
   last_used_at: string | null;
 }
 
-// ── Integrações (captura de lead de sites externos) ────
-export interface IntegrationKey {
-  id: UUID;
-  label: string;
-  /** 8 primeiros caracteres da chave, só para identificar na lista. */
-  key_prefix: string;
-  revoked_at: string | null;
-  created_at: string;
-}
-
-/** Retorno da criação: única vez em que a chave crua fica visível. */
-export interface IntegrationKeyCreated extends IntegrationKey {
-  raw_key: string;
-}
-
 // ── Controle de Estoque ────────────────────────────────
 export interface StockItem {
   id: UUID;
