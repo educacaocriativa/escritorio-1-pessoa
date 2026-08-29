@@ -16,7 +16,7 @@ import logging
 import httpx
 
 from app.config import settings
-from app.core.whatsapp.inbound import InboundMessage, TemplateStatusEvent
+from app.core.whatsapp.inbound import InboundMessage, TemplateStatusEvent, parse_epoch_seconds
 
 logger = logging.getLogger("e1p.whatsapp")
 
@@ -379,6 +379,9 @@ def parse_inbound(payload: dict) -> list[InboundMessage]:
                         chat_jid=f"{from_phone}@s.whatsapp.net" if from_phone else None,
                         sender_phone=from_phone, sender_name=push_name or None,
                         button_payload=button_payload,
+                        # `timestamp` é string de segundos desde epoch, por MENSAGEM (não por
+                        # lote) — documentado pela Meta no schema de webhook de mensagens.
+                        occurred_at=parse_epoch_seconds(msg.get("timestamp")),
                     ))
                 except (AttributeError, TypeError, KeyError):
                     continue  # isola só esta mensagem — ver docstring

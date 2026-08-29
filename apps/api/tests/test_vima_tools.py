@@ -1,4 +1,4 @@
-"""As cinco ferramentas de leitura que a Vima oferece à Claude — permissão, delegação e o
+"""As nove ferramentas de leitura que a Vima oferece à Claude — permissão, delegação e o
 contrato "nunca deixa exceção subir crua" (o loop de tool-use precisa de um tool_result sempre).
 """
 import json
@@ -8,7 +8,10 @@ from sqlalchemy.orm import Session
 
 from app.core.tenancy import CurrentUser
 from app.modules.crm.models import Client
+from app.modules.juridico.models import LegalDocument
+from app.modules.marketing.models import Carousel
 from app.modules.receivables.models import METHOD_PIX, STATUS_OPEN, Charge
+from app.modules.stock.models import StockItem
 from app.modules.vima import tools
 from app.modules.wallet.models import KIND_SERVICE
 
@@ -25,12 +28,28 @@ def _usuario(role: str = "owner", modulos: list[str] | None = None) -> CurrentUs
 # ── Catálogo e permissão ────────────────────────────────────────────────────────────────────
 
 
-def test_owner_ve_as_cinco_ferramentas():
+def test_owner_ve_as_nove_ferramentas():
     nomes = {f.nome for f in tools.ferramentas_disponiveis(_usuario("owner"))}
     assert nomes == {
         "consultar_recebiveis", "consultar_pagaveis", "consultar_projecao_caixa",
-        "consultar_agenda", "consultar_cliente",
+        "consultar_agenda", "consultar_cliente", "consultar_documentos_juridicos",
+        "consultar_campanhas_marketing", "consultar_estoque_baixo", "consultar_item_estoque",
     }
+
+
+def test_sub_usuario_so_de_juridico_so_ve_a_ferramenta_de_documentos():
+    nomes = {f.nome for f in tools.ferramentas_disponiveis(_usuario("sub_user", ["juridico"]))}
+    assert nomes == {"consultar_documentos_juridicos"}
+
+
+def test_sub_usuario_so_de_marketing_so_ve_a_ferramenta_de_campanhas():
+    nomes = {f.nome for f in tools.ferramentas_disponiveis(_usuario("sub_user", ["marketing"]))}
+    assert nomes == {"consultar_campanhas_marketing"}
+
+
+def test_sub_usuario_so_de_stock_ve_as_duas_ferramentas_de_estoque():
+    nomes = {f.nome for f in tools.ferramentas_disponiveis(_usuario("sub_user", ["stock"]))}
+    assert nomes == {"consultar_estoque_baixo", "consultar_item_estoque"}
 
 
 def test_sub_usuario_so_de_crm_so_ve_a_ferramenta_de_cliente():
@@ -123,6 +142,116 @@ def test_consultar_cliente_encontra_por_nome_parcial(db: Session):
 def test_consultar_cliente_sem_match_devolve_lista_vazia(db: Session):
     resultado = json.loads(tools.executar(db, _usuario(), "consultar_cliente", {"nome": "Ninguém"}))
     assert resultado["clientes"] == []
+
+
+# ── consultar_documentos_juridicos ──────────────────────────────────────────────────────────
+
+
+def test_consultar_documentos_juridicos_filtra_por_cliente(db: Session):
+    cliente = Client(tenant_id=TENANT, name="Maria Souza", phone="11988887777", source="manual")
+    db.add(cliente)
+    db.flush()
+    db.add(LegalDocument(
+        tenant_id=TENANT, skill="peticao_inicial", title="Petição — Maria Souza",
+        client_id=cliente.id,
+    ))
+    db.add(LegalDocument(tenant_id=TENANT, skill="contrato", title="Contrato — outro cliente"))
+    db.commit()
+    resultado = json.loads(
+        tools.executar(db, _usuario(), "consultar_documentos_juridicos", {"cliente": "Maria"})
+    )
+    assert len(resultado["documentos"]) == 1
+    assert resultado["documentos"][0]["titulo"] == "Petição — Maria Souza"
+    assert resultado["documentos"][0]["cliente"] == "Maria Souza"
+
+
+def test_consultar_documentos_juridicos_sem_filtro_lista_tudo(db: Session):
+    db.add(LegalDocument(tenant_id=TENANT, skill="contrato", title="Contrato A"))
+    db.add(LegalDocument(tenant_id=TENANT, skill="parecer", title="Parecer B"))
+    db.commit()
+    resultado = json.loads(
+        tools.executar(db, _usuario(), "consultar_documentos_juridicos", {})
+    )
+    assert len(resultado["documentos"]) == 2
+
+
+def test_consultar_documentos_juridicos_filtra_por_dias(db: Session):
+    db.add(LegalDocument(tenant_id=TENANT, skill="contrato", title="Contrato recente"))
+    db.commit()
+    resultado = json.loads(
+        tools.executar(db, _usuario(), "consultar_documentos_juridicos", {"dias": 7})
+    )
+    assert len(resultado["documentos"]) == 1
+    resultado_antigo = json.loads(
+        tools.executar(db, _usuario(), "consultar_documentos_juridicos", {"dias": -1})
+    )
+    assert resultado_antigo["documentos"] == []
+
+
+def test_consultar_documentos_juridicos_cliente_sem_match_devolve_lista_vazia(db: Session):
+    resultado = json.loads(
+        tools.executar(db, _usuario(), "consultar_documentos_juridicos", {"cliente": "Ninguém"})
+    )
+    assert resultado["documentos"] == []
+
+
+# ── consultar_campanhas_marketing ───────────────────────────────────────────────────────────
+
+
+def test_consultar_campanhas_marketing_lista_as_geradas(db: Session):
+    db.add(Carousel(tenant_id=TENANT, topic="5 erros de precificação", platform="instagram"))
+    db.commit()
+    resultado = json.loads(
+        tools.executar(db, _usuario(), "consultar_campanhas_marketing", {})
+    )
+    assert len(resultado["campanhas"]) == 1
+    assert resultado["campanhas"][0]["tema"] == "5 erros de precificação"
+    assert resultado["campanhas"][0]["plataforma"] == "instagram"
+
+
+def test_consultar_campanhas_marketing_filtra_por_dias(db: Session):
+    db.add(Carousel(tenant_id=TENANT, topic="Tema antigo", platform="instagram"))
+    db.commit()
+    resultado = json.loads(
+        tools.executar(db, _usuario(), "consultar_campanhas_marketing", {"dias": -1})
+    )
+    assert resultado["campanhas"] == []
+
+
+# ── consultar_estoque_baixo / consultar_item_estoque ────────────────────────────────────────
+
+
+def test_consultar_estoque_baixo_so_lista_item_no_ou_abaixo_do_minimo(db: Session):
+    db.add(StockItem(
+        tenant_id=TENANT, name="Caneca personalizada", quantity=2, min_quantity=5, unit="un",
+    ))
+    db.add(StockItem(
+        tenant_id=TENANT, name="Camiseta P", quantity=50, min_quantity=5, unit="un",
+    ))
+    db.commit()
+    resultado = json.loads(tools.executar(db, _usuario(), "consultar_estoque_baixo", {}))
+    assert len(resultado["itens"]) == 1
+    assert resultado["itens"][0]["nome"] == "Caneca personalizada"
+
+
+def test_consultar_item_estoque_busca_por_nome_parcial(db: Session):
+    db.add(StockItem(
+        tenant_id=TENANT, name="Caneca personalizada", quantity=2, min_quantity=5, unit="un",
+    ))
+    db.commit()
+    resultado = json.loads(
+        tools.executar(db, _usuario(), "consultar_item_estoque", {"nome": "caneca"})
+    )
+    assert len(resultado["itens"]) == 1
+    assert resultado["itens"][0]["quantidade"] == 2
+    assert resultado["itens"][0]["baixo"] is True
+
+
+def test_consultar_item_estoque_sem_match_devolve_lista_vazia(db: Session):
+    resultado = json.loads(
+        tools.executar(db, _usuario(), "consultar_item_estoque", {"nome": "Ninguém"})
+    )
+    assert resultado["itens"] == []
 
 
 # ── Falha nunca sobe crua ───────────────────────────────────────────────────────────────────

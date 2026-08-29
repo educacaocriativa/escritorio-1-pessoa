@@ -3,10 +3,11 @@ Payloads de exemplo reais/realistas de cada provider."""
 from __future__ import annotations
 
 import base64
+from datetime import UTC, datetime
 
 import pytest
 
-from app.core.whatsapp.inbound import InboundMessage
+from app.core.whatsapp.inbound import InboundMessage, parse_epoch_seconds
 from app.core.whatsapp.providers import evolution, meta
 
 META_TEXT_PAYLOAD = {
@@ -400,3 +401,57 @@ def test_extract_waba_id_devolve_none_quando_nao_ha() -> None:
     assert meta.extract_waba_id({"entry": [{}]}) is None
     assert meta.extract_waba_id({"entry": "nao-e-lista"}) is None
     assert meta.extract_waba_id({"entry": [{"id": 123}]}) is None  # número não é WABA válido
+
+
+# ── `occurred_at` — o instante REAL da mensagem, não o instante em que a processamos ────────
+# (a dívida registrada em CLAUDE.md: sem isto, `facts.record` sempre caía no `now()`, e uma
+# mensagem recebida 23h59 entrava no briefing do dia seguinte).
+
+
+def test_parse_epoch_seconds_aceita_int_e_str() -> None:
+    esperado = datetime(2025, 8, 5, 13, 20, 0, tzinfo=UTC)  # 1754400000
+    assert parse_epoch_seconds(1754400000) == esperado
+    assert parse_epoch_seconds("1754400000") == esperado
+
+
+def test_parse_epoch_seconds_devolve_none_para_valor_ausente_ou_ilegivel() -> None:
+    assert parse_epoch_seconds(None) is None
+    assert parse_epoch_seconds("") is None
+    assert parse_epoch_seconds("não-é-número") is None
+
+
+def test_evolution_parse_inbound_le_o_messageTimestamp() -> None:
+    payload = {
+        "data": {
+            "key": {"id": "3EB0TS1", "remoteJid": "5511988887777@s.whatsapp.net"},
+            "pushName": "Maria Cliente",
+            "message": {"conversation": "oi"},
+            "messageTimestamp": 1754400000,
+        }
+    }
+    msg = evolution.parse_inbound(payload)[0]
+    assert msg.occurred_at == datetime(2025, 8, 5, 13, 20, 0, tzinfo=UTC)
+
+
+def test_evolution_parse_inbound_sem_messageTimestamp_devolve_none() -> None:
+    # EVOLUTION_TEXT_PAYLOAD (acima) não tem messageTimestamp — o caso comum de payload
+    # deliberadamente incompleto: occurred_at fica None, e quem grava o fato cai no `now()`.
+    assert evolution.parse_inbound(EVOLUTION_TEXT_PAYLOAD)[0].occurred_at is None
+
+
+def test_meta_parse_inbound_le_o_timestamp_da_mensagem() -> None:
+    payload = {
+        "entry": [{"changes": [{"value": {
+            "contacts": [{"profile": {"name": "Maria"}}],
+            "messages": [{
+                "id": "wamid.TS1", "from": "5511988887777", "type": "text",
+                "text": {"body": "oi"}, "timestamp": "1754400000",
+            }],
+        }}]}]
+    }
+    msg = meta.parse_inbound(payload)[0]
+    assert msg.occurred_at == datetime(2025, 8, 5, 13, 20, 0, tzinfo=UTC)
+
+
+def test_meta_parse_inbound_sem_timestamp_devolve_none() -> None:
+    assert meta.parse_inbound(META_TEXT_PAYLOAD)[0].occurred_at is None
