@@ -2986,15 +2986,70 @@ os dados reais de Financeiro, Agenda e CRM.
   nome; `consultar_cliente` só encontra o próprio, sob Postgres real.
 
 **Fora de escopo, declarado — a dívida que sobra do caminho até o Jarbes:**
-- WhatsApp como canal de pergunta — o número conectado do tenant hoje só trata mensagem
-  recebida como CLIENTE (`whatsapp_inbox`); "o dono fala com a própria Vima" pede resolver essa
-  ambiguidade de roteamento antes, fatia própria.
-- Voz (entrada ou saída) — depende da fatia de WhatsApp acima.
+- ~~WhatsApp como canal de pergunta~~ — **FEITO**, ver a seção logo abaixo (self-chat,
+  Evolution-only).
+- Voz (entrada ou saída) — depende da fatia de WhatsApp acima; o ponto de extensão já está
+  marcado (`kind == "audio"` no roteamento do self-chat).
 - Persistência de conversa entre sessões.
 - Ações da Vima — hoje ela só LÊ; quando existir escrita, precisa do rastro "Ação executada
   pela IA" que uma ferramenta de leitura não precisa.
 - Hardening do anonimizador para nome próprio (NER) — dívida pré-existente que esta fatia
   ESTENDE o aceite de risco em vez de fechar.
+
+## Vima: canal WhatsApp (self-chat, Evolution) (2026-08-28)
+
+> Spec: `docs/superpowers/specs/2026-08-28-vima-canal-whatsapp-design.md` ·
+> Plano: `docs/superpowers/plans/2026-08-28-vima-canal-whatsapp.md`
+
+Segunda fatia do caminho até o Jarbes. Deixa o dono perguntar à Vima pelo MESMO número de
+WhatsApp que ele já conectou via QR code (Evolution) — sem nenhuma peça nova de motor: reusa
+`vima/pergunta.responder` por inteiro, só troca a porta de entrada/saída.
+
+- [x] **Detecção por `from_me AND da_equipe`** — as duas peças já existiam (`InboundMessage
+  .from_me`, que o Baileys popula porque espelha tudo que é digitado no aparelho conectado; e
+  `whatsapp_inbox.service._e_telefone_da_equipe`, que já checava se a contraparte é um usuário
+  cadastrado do tenant), nunca combinadas para roteamento de conteúdo. Numa self-chat as DUAS
+  pontas são a mesma pessoa, então as duas condições fecham juntas — sem dado novo, sem
+  migration.
+  - ⚠️ **Evolution-only por construção, sem guarda explícita de transporte.** `from_me` é
+    estruturalmente `False` sempre na Meta (o webhook dela nunca entrega mensagem própria no
+    array `messages`) — a condição já é inalcançável lá. Um comentário no call site diz isso, para
+    quem ler não achar que é esquecimento.
+  - Mídia (áudio/imagem) no mesmo self-chat cai no comportamento JÁ EXISTENTE, inalterado — e é
+    o ponto de extensão da fatia de voz: trocar `kind == "text"` por também aceitar
+    `kind == "audio"` e transcrever antes de repassar ao mesmo `pergunta.responder`.
+- [x] **`vima/whatsapp_conversa.py`** — quando a condição bate, a mensagem NÃO segue o caminho
+  normal (nada de `_get_or_create_chat`/`_get_or_create_client`/`facts.record`): resolve o
+  `User` do telefone, chama `pergunta.responder` com o histórico do cache, manda a resposta pelo
+  MESMO despachante que já entrega o briefing (`core/whatsapp.send_text` → Evolution → mesma
+  instância `e1p-{tenant_id}`). Zero persistência: a conversa nunca toca
+  `whatsapp_chats`/`whatsapp_messages`/CRM — mesma disciplina da fatia anterior, e evita por
+  construção a classe de bug "o dono vira lead do próprio funil".
+  - Processamento é **síncrono, dentro do próprio webhook** — não entra na fila do worker. Uma
+    resposta que só chegasse no próximo sweep mataria a sensação de conversa.
+  - **Falha nunca fica muda** — diferente do resto de `whatsapp_inbox`, que hoje engole erro em
+    `except Exception` amplo (dívida já registrada abaixo, na seção do módulo): um erro ao
+    chamar `pergunta.responder` é capturado e uma mensagem de desculpa volta pelo mesmo canal.
+- [x] **Cache curto em processo, dois usos** — contexto de perguntas de acompanhamento
+  ("e essa semana?") e deduplicação de reentrega de webhook (sem gravar a mensagem, perdemos de
+  graça a proteção que `whatsapp_messages` já dava ao resto do módulo). TTL de poucos minutos,
+  sem tabela nova, sem Redis.
+  - ⚠️ **Limite conhecido, aceito para esta fatia:** não sobrevive a reiniciar o processo nem se
+    comporta corretamente sob múltiplas réplicas da API. Aceitável na escala atual (um processo,
+    um tenant real em produção); Redis (já presente na infra do Evolution) é o próximo passo se
+    um dia isso incomodar de verdade — decisão adiada até haver necessidade real de medir.
+- [x] **`scheduler.usuarios_ativos`/`scheduler.como_ator` viraram públicas** em
+  `vima/scheduler.py` — ganharam um segundo consumidor (`whatsapp_conversa.py`), mesmo critério
+  já documentado em `settings/service.hoje_do_tenant` para promover um símbolo privado em vez de
+  reimplementar ou importar o underscore.
+
+**Fora de escopo, declarado:**
+- Meta como transporte — sem `from_me`, sem self-chat possível no modelo da Meta.
+- Entrada por voz (nota de áudio) — o ponto de extensão fica marcado, a transcrição em si não é
+  desta fatia.
+- Saída por voz.
+- Ativação por palavra-chave — toda mensagem de texto no self-chat é pergunta, por decisão.
+- Qualquer persistência da conversa, permanente ou não além do cache curto acima.
 
 ## Vima: o Registro de Fatos e o briefing (PRs #85 e #90, 2026-08-06/07)
 
