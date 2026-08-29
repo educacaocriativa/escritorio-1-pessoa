@@ -179,6 +179,18 @@ const BRIEFING = {
 };
 
 /**
+ * `/vima/pergunta` devolve OBJETO (`PerguntaOut`, `apps/api/app/modules/vima/schemas.py`). Ao
+ * contrário do `/vima/briefing`, esta tela roda no `ProtectedLayout` normal — `main` é
+ * `overflow-x-hidden`, então o que não coubesse seria RECORTADO, não empurraria o documento
+ * (§5.4 do CLAUDE.md). A `marca` é o cabeçalho, visível mesmo sem nenhuma pergunta ainda; o mock
+ * só entra em jogo se um teste específico simular uma pergunta enviada.
+ */
+const PERGUNTA_RESPOSTA = {
+  resposta: `A última interação com ${LONGO} foi ${LONGO} atrás, e ela tem ${LONGO} a receber.`,
+  por_ia: true,
+};
+
+/**
  * `/dna/faltantes` devolve LISTA (`DnaPergunta[]`, `packages/shared-types/src/index.ts:1182`), e o
  * `[]` default de `mockarApi` é o pior mock que existe para esta rota: com a lista vazia a
  * `NucleoPage` chama `sair()` e **NAVEGA para a raiz** (`NucleoPage.tsx:110`). A régua mediria o
@@ -300,6 +312,11 @@ export const CASOS: Caso[] = [
   // logo sem o `main.overflow-x-hidden`: aqui o que não cabe faz a PÁGINA rolar em vez de ficar
   // recortado, e é a régua do #135 que o pega primeiro.
   { rota: "/vima", marca: "Seu dia", mocks: { "/vima/briefing": BRIEFING } },
+  {
+    rota: "/vima/perguntas",
+    marca: "Pergunte à Vima",
+    mocks: { "/vima/pergunta": PERGUNTA_RESPOSTA },
+  },
   // AS OUTRAS TRÊS DO `ProtectedBareLayout` (#208). Mesma caixa de layout da `/vima`, e foi a
   // FORMA dessa caixa — não a tela — que produziu os 649px do #178: sem shell não há
   // `main.overflow-x-hidden`, então o que não cabe VAZA em vez de ficar recortado. Entram no fim

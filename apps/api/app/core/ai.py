@@ -16,6 +16,7 @@ passagem é o único lugar onde elas são *garantidas*:
 """
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any
 
@@ -49,6 +50,9 @@ MODELO_POR_TAREFA: dict[str, str] = {
     "quotes.escopo": "claude-sonnet-5",
     "funnels.compose": "claude-sonnet-5",
     "marketing.carrossel": "claude-sonnet-5",
+    # Também escolhe QUAL ferramenta chamar, não só narra — erro de escolha custa mais do que
+    # texto mal-narrado, mesmo critério acima.
+    "vima.pergunta": "claude-sonnet-5",
     # Anti-alucinação é crítico e o dado é sensível (segredo de justiça).
     "juridico.documento": "claude-opus-5",
 }
@@ -143,3 +147,103 @@ def complete(
         user_id=user_id,
     )
     return resultado
+
+
+@dataclass
+class ToolCallLoopResult:
+    text: str
+    input_tokens: int
+    output_tokens: int
+    cache_read_tokens: int = 0
+    cache_creation_tokens: int = 0
+    turnos_usados: int = 0
+    # `True` só quando `max_tool_turns` estourou e a última rodada foi um wrap-up forçado sem
+    # ferramentas — nunca truncamento silencioso (ver docstring abaixo).
+    parou_no_teto: bool = False
+
+
+def complete_with_tools(
+    *,
+    db: Session,
+    tenant_id: str,
+    task: str,
+    system: str,
+    user_message: str,
+    tools: list[dict[str, Any]],
+    executar_ferramenta: Callable[[str, dict[str, Any]], str],
+    max_tokens: int = 1500,
+    max_tool_turns: int = 6,
+    model: str | None = None,
+    user_id: str | None = None,
+) -> ToolCallLoopResult:
+    """Completude com tool-use: a Claude escolhe ferramentas, o CHAMADOR as executa.
+
+    Esta camada continua sem conhecer dados reais (item 1 do docstring do módulo) — quem sabe o
+    que uma ferramenta faz é `executar_ferramenta`, fornecida pelo chamador. `user_message` deve
+    chegar já anonimizado; o resultado de CADA ferramenta NÃO passa por anonimização aqui — é
+    responsabilidade do chamador, se precisar (ver `vima/pergunta.py`).
+
+    Cada rodada de `messages.create` grava sua PRÓPRIA linha no ledger `ai_usage`: é uma chamada
+    de API por rodada, e cada uma custa dinheiro no instante em que acontece — resumir só no fim
+    esconderia o custo real de um loop que deu muitas voltas.
+
+    Estourar `max_tool_turns` sem uma resposta final não trunca em silêncio: uma última chamada
+    SEM `tools` força um texto de fechamento com o que já foi apurado (`parou_no_teto=True`).
+    """
+    modelo = model or modelo_da_tarefa(task)
+    client = _get_client()
+    messages: list[dict[str, Any]] = [{"role": "user", "content": user_message}]
+    total_input = total_output = total_cache_read = total_cache_creation = 0
+
+    def _grava(resp: Any) -> None:
+        nonlocal total_input, total_output, total_cache_read, total_cache_creation
+        cache_read = getattr(resp.usage, "cache_read_input_tokens", 0) or 0
+        cache_creation = getattr(resp.usage, "cache_creation_input_tokens", 0) or 0
+        total_input += resp.usage.input_tokens
+        total_output += resp.usage.output_tokens
+        total_cache_read += cache_read
+        total_cache_creation += cache_creation
+        ai_usage.record(
+            db, tenant_id=tenant_id, task=task, model=modelo,
+            input_tokens=resp.usage.input_tokens, output_tokens=resp.usage.output_tokens,
+            cache_read_tokens=cache_read, cache_creation_tokens=cache_creation,
+            user_id=user_id,
+        )
+
+    def _texto(resp: Any) -> str:
+        return "".join(bloco.text for bloco in resp.content if bloco.type == "text")
+
+    turnos = 0
+    while turnos < max_tool_turns:
+        turnos += 1
+        resp = client.messages.create(
+            model=modelo, max_tokens=max_tokens, system=system, tools=tools, messages=messages,
+        )
+        _grava(resp)
+        if resp.stop_reason != "tool_use":
+            return ToolCallLoopResult(
+                text=_texto(resp), input_tokens=total_input, output_tokens=total_output,
+                cache_read_tokens=total_cache_read, cache_creation_tokens=total_cache_creation,
+                turnos_usados=turnos,
+            )
+        messages.append({"role": "assistant", "content": resp.content})
+        resultados = [
+            {
+                "type": "tool_result",
+                "tool_use_id": bloco.id,
+                "content": executar_ferramenta(bloco.name, bloco.input),
+            }
+            for bloco in resp.content
+            if bloco.type == "tool_use"
+        ]
+        messages.append({"role": "user", "content": resultados})
+
+    resp_final = client.messages.create(
+        model=modelo, max_tokens=max_tokens, system=system, messages=messages,
+    )
+    _grava(resp_final)
+    return ToolCallLoopResult(
+        text=_texto(resp_final), input_tokens=total_input, output_tokens=total_output,
+        cache_read_tokens=total_cache_read, cache_creation_tokens=total_cache_creation,
+        turnos_usados=turnos + 1, parou_no_teto=True,
+    )
