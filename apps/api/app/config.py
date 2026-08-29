@@ -32,6 +32,12 @@ class Settings(BaseSettings):
     # Um valor global fazia narrar um briefing já calculado custar o mesmo que redigir peça
     # jurídica — dívida registrada na spec da Vima e fechada aqui.
 
+    # Groq (Whisper) — transcrição de voz da Vima (core/transcription.py). Segundo provedor de
+    # IA do repositório: `core/ai.py` só fala com a Anthropic, que não aceita áudio como entrada.
+    # Vazio = mensagens de áudio da self-chat degradam para uma desculpa (graceful degradation,
+    # NÃO bloqueante — ao contrário de `anthropic_api_key`, que é exigida em produção).
+    groq_api_key: str = ""
+
     # Auth
     jwt_secret: str = _DEV_SECRET
     jwt_algorithm: str = "HS256"
