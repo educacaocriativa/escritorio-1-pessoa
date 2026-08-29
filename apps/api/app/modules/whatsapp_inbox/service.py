@@ -27,6 +27,7 @@ from app.modules.crm.schemas import ClientCreate
 from app.modules.notifications.models import Notification
 from app.modules.settings import service as settings_service
 from app.modules.vima import scheduler as vima_scheduler
+from app.modules.vima import whatsapp_conversa as vima_whatsapp
 from app.modules.whatsapp_inbox.models import (
     CHAT_KIND_DIRECT,
     CHAT_KIND_GROUP,
@@ -318,6 +319,21 @@ def ingest_webhook_payload(
                 continue  # duplicata — ignora
 
             da_equipe = _e_telefone_da_equipe(db, tenant_id, msg.from_phone)
+
+            # Self-chat: o dono perguntando à Vima pelo próprio número conectado. Só existe no
+            # Evolution — `from_me` é exclusivo daquele transporte (a Meta nunca entrega mensagem
+            # própria no webhook, ver `core/whatsapp/inbound.py`) —, então não há guarda extra de
+            # "é Evolution?" aqui: a condição já é estruturalmente inalcançável na Meta. Mídia no
+            # mesmo self-chat cai no comportamento normal abaixo — ponto de extensão da fatia de
+            # voz (ver a spec).
+            if msg.from_me and da_equipe and msg.kind == KIND_TEXT:
+                vima_whatsapp.responder(
+                    db, tenant_id=tenant_id, phone=msg.from_phone,
+                    wa_message_id=msg.wa_message_id, texto=msg.text_body, profile=profile,
+                )
+                db.commit()
+                continue
+
             if msg.from_phone is None or da_equipe:
                 # Sem telefone (`@lid`) OU telefone do próprio time: a mensagem é
                 # gravada, mas NÃO vira contato do CRM.
