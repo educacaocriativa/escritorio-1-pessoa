@@ -4,6 +4,8 @@ O guard de telefone da equipe fecha um bug que já existe hoje (o dono que escre
 próprio número entra no funil de vendas) e que o opt-in do briefing por botão na Meta (Onda 4)
 tornaria diário.
 """
+from datetime import UTC, datetime
+
 import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy import select
@@ -60,6 +62,42 @@ def test_mensagem_do_proprio_time_nao_vira_lead_nem_fato(client: TestClient, db,
 
     assert db.query(Client).count() == antes
     assert db.query(Fact).filter(Fact.kind == COM_MENSAGEM_RECEBIDA).count() == 0
+
+
+def test_fato_usa_o_instante_real_da_mensagem_nao_o_do_processamento(
+    client: TestClient, db, tenant_id
+):
+    """A dívida registrada em CLAUDE.md: sem `occurred_at` vindo do provider, o fato sempre
+    nascia com `now()` — uma mensagem de 23h59 processada à 00h01 entrava no briefing do dia
+    seguinte em vez do dia dela."""
+    instante_real = datetime(2026, 8, 27, 23, 59, 0, tzinfo=UTC)
+    inbox.ingest_webhook_payload(
+        db, tenant_id=tenant_id,
+        messages=[InboundMessage(
+            wa_message_id="MSG-TS", from_phone="5511999998888", kind="text",
+            text_body="boa noite", media_ref=None, push_name="Contato",
+            chat_jid="5511999998888@s.whatsapp.net", occurred_at=instante_real,
+        )],
+    )
+
+    # SQLite (a suíte inteira roda contra ele) não preserva tzinfo na volta do banco — o
+    # `DateTime(timezone=True)` da coluna é honrado só no Postgres real. `.replace(tzinfo=UTC)`
+    # reafirma o que a coluna já promete, não uma suposição nova.
+    fato = db.query(Fact).filter(Fact.kind == COM_MENSAGEM_RECEBIDA).one()
+    assert fato.occurred_at.replace(tzinfo=UTC) == instante_real
+
+
+def test_fato_sem_carimbo_do_provider_cai_no_agora(client: TestClient, db, tenant_id):
+    """`occurred_at=None` (provider não entregou) não é erro — `facts.record` cai no
+    `datetime.now(UTC)` de sempre. Controle: `_msg` (acima) não passa `occurred_at`."""
+    antes = datetime.now(UTC)
+    inbox.ingest_webhook_payload(
+        db, tenant_id=tenant_id, messages=[_msg("5511999998888", "oi")]
+    )
+    depois = datetime.now(UTC)
+
+    fato = db.query(Fact).filter(Fact.kind == COM_MENSAGEM_RECEBIDA).one()
+    assert antes <= fato.occurred_at.replace(tzinfo=UTC) <= depois
 
 
 def test_mensagem_espelhada_do_dono_nao_vira_fato(client: TestClient, db, tenant_id):

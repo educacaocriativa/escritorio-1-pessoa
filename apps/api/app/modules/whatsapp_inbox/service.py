@@ -386,12 +386,11 @@ def ingest_webhook_payload(
             # e a vinda do telefone de um usuário do tenant (`da_equipe` — ex.: o toque no
             # botão do briefing na Meta, Onda 4).
             #
-            # ⚠️ DÍVIDA: `occurred_at` cai no default (agora), não no instante real da
-            # mensagem — `InboundMessage` não carrega o `messageTimestamp` do payload, e
-            # propagá-lo é mudança na camada de provider (os dois parsers). O efeito é uma
-            # janela de segundos: uma mensagem recebida 23h59 e processada 00h01 entra no
-            # briefing do dia seguinte em vez do dia dela. Fecha adicionando o campo ao
-            # `InboundMessage` e preenchendo em `evolution.parse_inbound`/`meta`.
+            # `occurred_at=msg.occurred_at` (o `messageTimestamp`/`timestamp` do provider, já
+            # convertido por `parse_epoch_seconds`): sem isto o fato nasceria com `now()`, e uma
+            # mensagem recebida 23h59 e processada 00h01 entraria no briefing do dia seguinte em
+            # vez do dia dela. `None` (provider não entregou o carimbo) cai no `now()` de sempre,
+            # dentro de `facts.record`.
             if direction == DIRECTION_IN and not da_equipe:
                 quem = (msg.sender_name or msg.push_name or msg.from_phone
                         or "contato não identificado")
@@ -402,6 +401,7 @@ def ingest_webhook_payload(
                     client_id=client_id,
                     subject_type="whatsapp_chat",
                     subject_id=chat.id if chat is not None else None,
+                    occurred_at=msg.occurred_at,
                 )
 
             # O toque no botão do aviso do briefing (Vima, Onda 4). Fica DEPOIS do registro da

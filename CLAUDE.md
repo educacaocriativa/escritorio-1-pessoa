@@ -3115,9 +3115,15 @@ cabeça. **`facts` é a memória narrativa do negócio inteiro**, e o briefing �
   - Gate em `tests/test_fuso_do_tenant.py`: varredura AST sobre `app/modules/vima/` separando
     carimbar um INSTANTE (legítimo) de derivar QUE DIA É HOJE (regressão). `absences`,
     `composer` e `permissions` são puros e não podem ler o relógio nem para instante.
-- **Dívida:** `occurred_at` das mensagens de WhatsApp cai no default em vez do `messageTimestamp`
-  real (`InboundMessage` não carrega o campo) — janela de erro de segundos na virada do dia;
-  expurgo dos sujeitos polimórficos (LGPD) não tem rotina, só `client_id` cascateia;
+- ~~**Dívida:** `occurred_at` das mensagens de WhatsApp cai no default em vez do
+  `messageTimestamp` real (`InboundMessage` não carrega o campo) — janela de erro de segundos na
+  virada do dia.~~ **FECHADA em 2026-08-28.** `InboundMessage` ganhou `occurred_at`
+  (`app/core/whatsapp/inbound.py`), preenchido pelos dois parsers via `parse_epoch_seconds` —
+  `messageTimestamp` (irmão de `key`/`message` em `data`) na Evolution, `timestamp` **por
+  MENSAGEM** na Meta — e propagado a `facts.record(..., occurred_at=msg.occurred_at)` em
+  `whatsapp_inbox/service.py`. `None` (carimbo ausente no payload) continua caindo no `now()` de
+  sempre — não é regressão, é o mesmo fallback que `facts.record` sempre teve.
+- **Dívida:** expurgo dos sujeitos polimórficos (LGPD) não tem rotina, só `client_id` cascateia;
   `comercial.topo.sem_lead` é a única Ausência que lê o log, então enquanto o registro for novo
   ela dispara por falta de histórico e não por falta de lead; o anonimizador não mascara nomes
   apesar da docstring dizer que sim (pré-existente, o briefing herda).
@@ -3448,9 +3454,18 @@ migration.
 - **Dívida:** `audit_entries` cresce — quatro eventos por tenant por passagem, mais um por resposta
   de gancho. Dezenas por tenant por ano; irrelevante hoje, anotado para não ser descoberto como
   surpresa.
-- **Dívida:** o script não tem teste `rls_e2e` (o `investment_audit.py` tem). A leitura por tenant é
-  coberta contra o SQLite dos testes, e o isolamento real depende do mesmo `tenant_session` que os
-  outros três scripts já usam em produção.
+- [x] **`test_nucleo_activation_rls.py` prova o isolamento real** (2026-08-28), no molde de
+  `test_investment_audit_rls.py`: dois tenants com roteiros DISTINTOS pelo núcleo (perguntas e
+  `exibidas` diferentes) — se a leitura trocasse A por B em vez de vazar as duas, o conteúdo
+  denunciaria. Sem GUC, `entradas_do_dna()` devolve zero linhas, o mesmo fail-closed do script
+  irmão.
+  - ⚠️ **A ordem NÃO é afirmada, e por um motivo que `investment_audit_rls` não tinha como expor:**
+    as três chamadas de `eventos.registrar` de uma passagem caem na MESMA transação, e
+    `AuditEntry.created_at` usa `server_default=func.now()` — em Postgres isso é o instante da
+    TRANSAÇÃO, não da linha. As três saem com o carimbo idêntico e o desempate cai no `id` (uuid),
+    arbitrário. A primeira versão deste teste afirmava lista e falhou na primeira execução; a
+    comparação é por conjunto, e é a MESMA lição que `test_entradas_do_dna_le_so_o_que_e_do_dna`
+    já registrava do lado do SQLite — aqui ela também vale no Postgres real.
 - **Dívida (a que NÃO fecha):** as 46 perguntas seguem nunca validadas com dono real. Não é
   instrumentável; é conversa com dono.
 
