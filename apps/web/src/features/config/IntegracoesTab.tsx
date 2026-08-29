@@ -8,14 +8,12 @@ import {
   getGoogleStatus,
 } from "../../lib/api";
 import CelularSection from "./CelularSection";
-import IntegrationsSection from "./IntegrationsSection";
 import { Card } from "./ui";
 
 /** Aba "Integrações": o que o e1p conversa com o mundo fora dele. */
 export default function IntegracoesTab() {
   return (
     <div className="space-y-6">
-      <IntegrationsSection />
       <GoogleSection />
       <CelularSection />
     </div>

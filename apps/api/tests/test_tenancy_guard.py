@@ -18,13 +18,10 @@ Allowlist (usos legítimos, documentados com guarda explícita no próprio códi
   - attachments → só a rota pública `serve_public_image` lê `public_images` (tabela GLOBAL sem
                   RLS, imagens intencionalmente públicas — Story 4.2). `Attachment` permanece
                   100% RLS via `get_tenant_db`; nenhuma rota pública toca boletos/contratos.
-  - integrations → idem, `capture_lead` (API pública de captura de lead) resolve a chave via
-                  `public_integration_keys` (snapshot GLOBAL sem RLS) antes de abrir a
-                  tenant_session real — mesmo padrão de pages/quotes/contracts.
   - whatsapp_inbox → idem, `verify_webhook`/`receive_webhook` (webhook público da Meta) resolvem
                   o tenant via `public_whatsapp_accounts` (snapshot GLOBAL sem RLS) pelo
                   `phone_number_id`/`verify_token` antes de abrir a tenant_session real — mesmo
-                  padrão de pages/quotes/contracts/integrations.
+                  padrão de pages/quotes/contracts.
   - device_tokens  → tabela GLOBAL sem RLS (nenhuma proteção por tenant). Isolamento vem do
                   filtro explícito por `user_id` do JWT nas rotas (`get_current_user` fornece o
                   `user_id` dos claims). Tabela contém apenas o hash sha256 do token (não o token
@@ -39,7 +36,7 @@ MODULES_DIR = pathlib.Path(__file__).resolve().parents[1] / "app" / "modules"
 
 # Módulos onde `get_db` (sessão global) é um uso legítimo e já auditado (ver docstring acima).
 ALLOWLIST = {
-    "auth", "platform", "contracts", "pages", "quotes", "wallet", "attachments", "integrations",
+    "auth", "platform", "contracts", "pages", "quotes", "wallet", "attachments",
     "whatsapp_inbox", "device_tokens",
 }
 

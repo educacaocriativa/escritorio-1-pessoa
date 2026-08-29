@@ -65,16 +65,14 @@ class LeadSubmit(BaseModel):
     email: EmailStr | None = None
     phone: str = Field(default="", max_length=32)
     # Respostas dos campos customizados do bloco Formulário (ex.: "Qual a ocasião?" → "Casamento")
-    # sem equivalente direto no CRM — viram um bloco de texto anexado às notas do lead, mesmo
-    # padrão de `integrations.LeadCapture.fields`.
+    # sem equivalente direto no CRM — viram um bloco de texto anexado às notas do lead.
     fields: dict[str, str] | None = None
 
     @field_validator("email", mode="before")
     @classmethod
     def _blank_email_to_none(cls, v: object) -> object:
         # Formulário externo com campo opcional vazio manda "", não omite a chave — sem isso o
-        # EmailStr rejeita string vazia com 422 e o lead se perde (mesmo bug já corrigido em
-        # integrations.LeadCapture).
+        # EmailStr rejeita string vazia com 422 e o lead se perde.
         if isinstance(v, str) and not v.strip():
             return None
         return v
