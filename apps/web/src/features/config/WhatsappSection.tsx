@@ -40,10 +40,15 @@ function countVariables(bodyText: string): number {
 export default function WhatsappSection() {
   return (
     <div className="space-y-6">
-      <CredentialsCard />
       <EvolutionQrCard />
-      <TemplatesCard />
-      <BindingsCard />
+      <div className="space-y-6 rounded-2xl border border-dashed border-neutral-200 p-4">
+        <p className="text-xs font-semibold uppercase tracking-wide text-neutral-400">
+          Meta Cloud API — credenciais e templates
+        </p>
+        <CredentialsCard />
+        <TemplatesCard />
+        <BindingsCard />
+      </div>
     </div>
   );
 }

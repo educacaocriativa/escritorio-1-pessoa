@@ -135,7 +135,7 @@ function VoltarAoPainel() {
   return (
     <Link
       to="/"
-      className="mt-8 block w-full rounded-md bg-primary px-4 py-3 text-center text-base font-medium text-white"
+      className="mt-8 block w-full rounded-md bg-primary-500 px-4 py-3 text-center text-base font-medium text-white"
     >
       Ir para o painel
     </Link>

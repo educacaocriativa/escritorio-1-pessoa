@@ -7,6 +7,7 @@ import {
   getGoogleConnectUrl,
   getGoogleStatus,
 } from "../../lib/api";
+import CelularSection from "./CelularSection";
 import IntegrationsSection from "./IntegrationsSection";
 import { Card } from "./ui";
 
@@ -16,6 +17,7 @@ export default function IntegracoesTab() {
     <div className="space-y-6">
       <IntegrationsSection />
       <GoogleSection />
+      <CelularSection />
     </div>
   );
 }

@@ -20,6 +20,7 @@ import {
   Scale,
   Settings,
   ShoppingBag,
+  Sparkles,
   TrendingUp,
   Trophy,
   Users,
@@ -99,6 +100,10 @@ export const navSections: NavSection[] = [
       { label: "CRM & Kanban", to: "/crm", icon: Users, ready: true, module: "crm" },
       // `whatsapp_inbox` usa o mesmo guard de `crm` no backend (mesma dona dos dados).
       { label: "Conversas", to: "/conversas", icon: MessageCircle, ready: true, module: "crm" },
+      // Sem `module`, de propósito — mesma decisão de /vima/briefing: qualquer usuário abre; o
+      // recorte de permissão acontece por FERRAMENTA dentro da resposta, não na visibilidade do
+      // menu.
+      { label: "Pergunte à Vima", to: "/vima/perguntas", icon: Sparkles, ready: true },
     ],
   },
   {

@@ -106,7 +106,7 @@ export default function PreferenciasSection({
         type="button"
         onClick={salvar}
         disabled={busy}
-        className="mt-4 w-full rounded-md bg-primary px-4 py-2.5 text-base font-medium text-white disabled:opacity-60 sm:w-auto"
+        className="mt-4 w-full rounded-md bg-primary-500 px-4 py-2.5 text-base font-medium text-white disabled:opacity-60 sm:w-auto"
       >
         {busy ? "Salvando…" : "Salvar"}
       </button>
