@@ -78,8 +78,8 @@ describe("IV2 — a navegação existente continua inteira", () => {
     for (const r of ROTAS_PRE_8_7) expect(rotas).toContain(r);
   });
 
-  it("esta story acrescentou exatamente UM item", () => {
-    expect(itens).toHaveLength(ROTAS_PRE_8_7.length + 1);
+  it("acrescentou DOIS itens desde a 8.7 (Contas & Saldos + Pergunte à Vima)", () => {
+    expect(itens).toHaveLength(ROTAS_PRE_8_7.length + 2);
   });
 
   it("nenhuma rota duplicada no menu", () => {
@@ -100,11 +100,13 @@ describe("visibleNavSections", () => {
     expect(visiveis).toEqual(itens);
   });
 
-  it("sub-usuário sem nenhum módulo não vê NENHUM item com `module` — a seção some inteira", () => {
+  it("sub-usuário sem nenhum módulo não vê NENHUM item de negócio — só 'Pergunte à Vima' sobra", () => {
     const secoes = visibleNavSections(() => false);
     const visiveis = secoes.flatMap((s) => s.items);
-    // O que sobra é só o que nunca teve `module` (hoje, nada — todo item de negócio tem um).
+    // "Pergunte à Vima" é o único item sem `module` hoje — mesma razão de /vima/briefing não
+    // ter require_module: o recorte acontece por ferramenta, não por rota/menu.
     expect(visiveis.every((i) => !i.module)).toBe(true);
+    expect(visiveis.map((i) => i.to)).toContain("/vima/perguntas");
   });
 
   it("um item sem `module` nunca é escondido, mesmo com hasModule sempre false", () => {
