@@ -50,10 +50,7 @@ def test_self_chat_roteia_para_vima_sem_gravar_no_crm(db, monkeypatch):
     assert db.scalar(select(Client)) is None
 
 
-def test_midia_na_self_chat_cai_no_caminho_normal_sem_erro(db, monkeypatch):
-    # Ponto de extensão da fatia de voz: hoje só TEXTO vira pergunta. Áudio/imagem no mesmo
-    # self-chat segue o comportamento JÁ EXISTENTE (grava mensagem, sem virar lead — a mesma
-    # guarda de `_e_telefone_da_equipe` que já protegia isso antes desta feature).
+def test_audio_na_self_chat_roteia_para_responder_audio(db, monkeypatch):
     user = User(
         tenant_id=TENANT_ID, email="dono2@example.com", name="Dono", password_hash="x",
         phone="5511988880001",
@@ -61,21 +58,64 @@ def test_midia_na_self_chat_cai_no_caminho_normal_sem_erro(db, monkeypatch):
     db.add(user)
     db.commit()
 
-    chamado = {"n": 0}
-    monkeypatch.setattr(vc, "responder", lambda *a, **kw: chamado.update(n=chamado["n"] + 1))
+    chamada = {}
+
+    def _fake_responder_audio(
+        db, *, tenant_id, phone, wa_message_id, audio_bytes, audio_mime_type, profile,
+    ):
+        chamada.update(
+            tenant_id=tenant_id, phone=phone, wa_message_id=wa_message_id,
+            audio_bytes=audio_bytes, audio_mime_type=audio_mime_type,
+        )
+
+    monkeypatch.setattr(vc, "responder_audio", _fake_responder_audio)
 
     inbox_service.ingest_webhook_payload(
         db, tenant_id=TENANT_ID,
         messages=[_self_chat_msg(
             wa_message_id="self.audio", kind="audio", text_body="",
             from_phone="5511988880001", chat_jid="5511988880001@s.whatsapp.net",
+            media_bytes=b"\x00\x01audio-bytes", media_mime_type="audio/ogg",
+        )],
+    )
+
+    assert chamada == {
+        "tenant_id": TENANT_ID, "phone": "5511988880001", "wa_message_id": "self.audio",
+        "audio_bytes": b"\x00\x01audio-bytes", "audio_mime_type": "audio/ogg",
+    }
+    assert db.scalar(select(WhatsappMessage)) is None  # não gravou no inbox normal
+    assert db.scalar(select(Client)) is None  # não virou lead
+
+
+def test_imagem_na_self_chat_continua_no_caminho_normal_sem_erro(db, monkeypatch):
+    # Só texto e áudio viram pergunta à Vima; outra mídia (imagem/documento/vídeo) continua
+    # caindo no comportamento JÁ EXISTENTE (grava mensagem, sem virar lead) — o ponto de
+    # extensão que a fatia de texto deixou marcado, agora restrito ao que não é áudio.
+    user = User(
+        tenant_id=TENANT_ID, email="dono2b@example.com", name="Dono", password_hash="x",
+        phone="5511988880009",
+    )
+    db.add(user)
+    db.commit()
+
+    chamado = {"n": 0}
+    monkeypatch.setattr(vc, "responder", lambda *a, **kw: chamado.update(n=chamado["n"] + 1))
+    monkeypatch.setattr(
+        vc, "responder_audio", lambda *a, **kw: chamado.update(n=chamado["n"] + 1)
+    )
+
+    inbox_service.ingest_webhook_payload(
+        db, tenant_id=TENANT_ID,
+        messages=[_self_chat_msg(
+            wa_message_id="self.imagem", kind="image", text_body="",
+            from_phone="5511988880009", chat_jid="5511988880009@s.whatsapp.net",
         )],
     )
 
     assert chamado["n"] == 0  # não roteou para a Vima
-    row = db.scalar(select(WhatsappMessage).where(WhatsappMessage.wa_message_id == "self.audio"))
+    row = db.scalar(select(WhatsappMessage).where(WhatsappMessage.wa_message_id == "self.imagem"))
     assert row is not None  # gravou normalmente, como antes desta feature
-    assert db.scalar(select(Client)) is None  # mas não virou lead — guarda pré-existente
+    assert db.scalar(select(Client)) is None
 
 
 def test_dono_respondendo_cliente_pelo_proprio_celular_nao_e_self_chat(db, monkeypatch):

@@ -33,6 +33,7 @@ from app.modules.whatsapp_inbox.models import (
     CHAT_KIND_GROUP,
     DIRECTION_IN,
     DIRECTION_OUT,
+    KIND_AUDIO,
     KIND_TEXT,
     LEGACY_CHAT_JID,
     MEDIA_STATUS_DOWNLOADED,
@@ -323,14 +324,22 @@ def ingest_webhook_payload(
             # Self-chat: o dono perguntando à Vima pelo próprio número conectado. Só existe no
             # Evolution — `from_me` é exclusivo daquele transporte (a Meta nunca entrega mensagem
             # própria no webhook, ver `core/whatsapp/inbound.py`) —, então não há guarda extra de
-            # "é Evolution?" aqui: a condição já é estruturalmente inalcançável na Meta. Mídia no
-            # mesmo self-chat cai no comportamento normal abaixo — ponto de extensão da fatia de
-            # voz (ver a spec).
-            if msg.from_me and da_equipe and msg.kind == KIND_TEXT:
-                vima_whatsapp.responder(
-                    db, tenant_id=tenant_id, phone=msg.from_phone,
-                    wa_message_id=msg.wa_message_id, texto=msg.text_body, profile=profile,
-                )
+            # "é Evolution?" aqui: a condição já é estruturalmente inalcançável na Meta. TEXTO e
+            # ÁUDIO (transcrito antes de responder, ver `vima/whatsapp_conversa
+            # .responder_audio`) viram pergunta; outra mídia (imagem/documento/vídeo) cai no
+            # comportamento normal abaixo.
+            if msg.from_me and da_equipe and msg.kind in (KIND_TEXT, KIND_AUDIO):
+                if msg.kind == KIND_TEXT:
+                    vima_whatsapp.responder(
+                        db, tenant_id=tenant_id, phone=msg.from_phone,
+                        wa_message_id=msg.wa_message_id, texto=msg.text_body, profile=profile,
+                    )
+                else:
+                    vima_whatsapp.responder_audio(
+                        db, tenant_id=tenant_id, phone=msg.from_phone,
+                        wa_message_id=msg.wa_message_id, audio_bytes=msg.media_bytes or b"",
+                        audio_mime_type=msg.media_mime_type or "", profile=profile,
+                    )
                 db.commit()
                 continue
 
