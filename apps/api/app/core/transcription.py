@@ -66,6 +66,16 @@ def transcribe(
         )
         resp.raise_for_status()
         payload = resp.json()
+        # A leitura do payload mora DENTRO do try de propósito: um 200 com corpo em formato
+        # inesperado (não é dict, `duration` não é numérico) é falha de terceiro do mesmo jeito
+        # que um erro HTTP — `.get` em algo que não é dict levanta AttributeError, `float()` em
+        # algo não numérico levanta ValueError/TypeError, e a promessa "nunca levanta" da
+        # assinatura não pode depender do corpo estar no formato certo.
+        texto = (payload.get("text") or "").strip()
+        duracao = payload.get("duration")
+        if not texto or duracao is None:
+            return None
+        audio_seconds = float(duracao)
     except Exception as exc:  # noqa: BLE001 — provedor externo, nunca derruba quem chamou
         logger.exception(
             "[transcription] falha ao transcrever áudio via Groq (corpo: %s)",
@@ -73,13 +83,8 @@ def transcribe(
         )
         return None
 
-    texto = (payload.get("text") or "").strip()
-    duracao = payload.get("duration")
-    if not texto or duracao is None:
-        return None
-
     ai_usage.record(
         db, tenant_id=tenant_id, task="vima.transcricao", model=_MODELO, provider="groq",
-        audio_seconds=float(duracao), user_id=user_id,
+        audio_seconds=audio_seconds, user_id=user_id,
     )
-    return TranscriptionResult(text=texto, audio_seconds=float(duracao))
+    return TranscriptionResult(text=texto, audio_seconds=audio_seconds)

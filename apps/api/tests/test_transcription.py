@@ -130,3 +130,19 @@ def test_texto_vazio_da_groq_devolve_none(db: Session, monkeypatch):
         db, tenant_id=TENANT, audio_bytes=b"audio", mime_type="audio/ogg",
     )
     assert resultado is None
+
+
+def test_duration_nao_numerico_da_groq_devolve_none_sem_levantar(db: Session, monkeypatch):
+    # 200 com corpo em formato inesperado — não é erro HTTP, mas `float(duracao)` levantaria
+    # ValueError se a leitura do payload não estivesse dentro do mesmo guard do erro de rede.
+    monkeypatch.setattr(settings, "groq_api_key", "gsk-fake")
+    monkeypatch.setattr(
+        httpx, "post",
+        lambda *a, **kw: _FakeResponse(200, {"text": "oi", "duration": "nao-e-numero"}),
+    )
+
+    resultado = transcription.transcribe(
+        db, tenant_id=TENANT, audio_bytes=b"audio", mime_type="audio/ogg",
+    )
+    assert resultado is None
+    assert db.query(AIUsage).count() == 0
