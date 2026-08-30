@@ -54,7 +54,7 @@ describe("ConversasPage", () => {
           data: [{
             chat_id: "c1", kind: "direct" as const, title: "Doro Eventos", phone: "5511999999999", client_id: "c1",
             last_message_at: "2026-07-19T10:00:00Z", last_message_preview: "Oi, quero o cardápio",
-            unread: true,
+            unread: true, unread_count: 1,
           }],
         });
       }
@@ -85,6 +85,48 @@ describe("ConversasPage", () => {
     expect(screen.getByPlaceholderText(/mensagem/i)).toBeInTheDocument();
   });
 
+  it("mostra o badge com a contagem de não lidas, com cap em 99+, e deixa a prévia em negrito", async () => {
+    vi.mocked(api.get).mockImplementation((url: string) => {
+      if (url === "/whatsapp-conversations") {
+        return Promise.resolve({
+          data: [
+            {
+              chat_id: "c1", kind: "direct" as const, title: "Poucas não lidas",
+              phone: "5511999999999", client_id: "c1",
+              last_message_at: "2026-07-19T10:00:00Z", last_message_preview: "oi",
+              unread: true, unread_count: 3,
+            },
+            {
+              chat_id: "c2", kind: "direct" as const, title: "Tudo lido",
+              phone: "5511977776666", client_id: "c2",
+              last_message_at: "2026-07-19T09:00:00Z", last_message_preview: "tudo certo",
+              unread: false, unread_count: 0,
+            },
+            {
+              chat_id: "c3", kind: "direct" as const, title: "Muitíssimas não lidas",
+              phone: "5511966665555", client_id: "c3",
+              last_message_at: "2026-07-19T08:00:00Z", last_message_preview: "spam",
+              unread: true, unread_count: 150,
+            },
+          ],
+        });
+      }
+      return Promise.resolve({ data: [] });
+    });
+
+    renderNaRota("/conversas");
+    await waitFor(() => screen.getByText("Poucas não lidas"));
+
+    expect(screen.getByText("3")).toBeInTheDocument();
+    // 150 > cap de 99 — mostra "99+", nunca o número exato (estouraria a linha da lista).
+    expect(screen.getByText("99+")).toBeInTheDocument();
+    expect(screen.queryByText("150")).not.toBeInTheDocument();
+
+    // Prévia da conversa não lida fica em negrito/escura; a já lida continua leve, como antes.
+    expect(screen.getByText("oi")).toHaveClass("font-semibold");
+    expect(screen.getByText("tudo certo")).not.toHaveClass("font-semibold");
+  });
+
   it("o separador de dia e o horário saem no fuso do TENANT, não no do navegador", async () => {
     // O fio agrupa por DIA (`dayKey`) e carimba cada bolha (`hhmm`), os dois no fuso do tenant.
     // O teste irmão abaixo mede as duas coisas com o tenant no MESMO fuso da máquina, e por isso
@@ -98,7 +140,7 @@ describe("ConversasPage", () => {
           data: [{
             chat_id: "c1", kind: "direct" as const, title: "Murilo Moreschi", phone: "5511977776666",
             client_id: "c1", last_message_at: "2026-07-19T23:30:00Z",
-            last_message_preview: "sempre na curva", unread: false,
+            last_message_preview: "sempre na curva", unread: false, unread_count: 0,
           }],
         });
       }
@@ -146,7 +188,7 @@ describe("ConversasPage", () => {
           data: [{
             chat_id: "c1", kind: "direct" as const, title: "Murilo Moreschi", phone: "5511977776666", client_id: "c1",
             last_message_at: "2026-07-20T17:19:00-03:00", last_message_preview: "Ok",
-            unread: false,
+            unread: false, unread_count: 0,
           }],
         });
       }
@@ -209,7 +251,7 @@ describe("ConversasPage", () => {
             chat_id: "g1", kind: "group" as const, title: "Automação Residencial",
             phone: null, client_id: null,
             last_message_at: "2026-07-20T11:05:00-03:00",
-            last_message_preview: "Gabriel B: alguém indica?", unread: true,
+            last_message_preview: "Gabriel B: alguém indica?", unread: true, unread_count: 1,
           }],
         });
       }
@@ -261,7 +303,7 @@ describe("ConversasPage", () => {
           data: [{
             chat_id: "c2", kind: "direct" as const, title: "Cliente Antigo", phone: "5511888888888", client_id: "c2",
             last_message_at: "2026-07-01T10:00:00Z", last_message_preview: "oi",
-            unread: false,
+            unread: false, unread_count: 0,
           }],
         });
       }
@@ -301,12 +343,12 @@ describe("ConversasPage", () => {
             {
               chat_id: "c1", kind: "direct" as const, title: "Cliente A", phone: "5511111111111", client_id: "c1",
               last_message_at: "2026-07-19T10:00:00Z", last_message_preview: "prévia A",
-              unread: false,
+              unread: false, unread_count: 0,
             },
             {
               chat_id: "c2", kind: "direct" as const, title: "Cliente B", phone: "5511222222222", client_id: "c2",
               last_message_at: "2026-07-19T11:00:00Z", last_message_preview: "prévia B",
-              unread: false,
+              unread: false, unread_count: 0,
             },
           ],
         });
@@ -361,13 +403,13 @@ describe("ConversasPage", () => {
 const CONVERSA_DIRETA = {
   chat_id: "c1", kind: "direct" as const, title: "Flavio Kato", phone: "5511999998888",
   client_id: "cli1", last_message_at: "2026-08-04T10:00:00Z",
-  last_message_preview: "Oi", unread: false,
+  last_message_preview: "Oi", unread: false, unread_count: 0,
 };
 
 const GRUPO = {
   chat_id: "g1", kind: "group" as const, title: "Turma 2026", phone: null,
   client_id: null, last_message_at: "2026-08-04T10:00:00Z",
-  last_message_preview: "Bom dia", unread: false,
+  last_message_preview: "Bom dia", unread: false, unread_count: 0,
 };
 
 const TIMELINE_DO_CRM = {
@@ -452,13 +494,13 @@ function mockarDuasConversas() {
             chat_id: "c1", kind: "direct" as const, title: "Doro Eventos",
             phone: "5511999999999", client_id: "cli-1",
             last_message_at: "2026-07-19T10:00:00Z",
-            last_message_preview: "Oi, quero o cardápio", unread: true,
+            last_message_preview: "Oi, quero o cardápio", unread: true, unread_count: 1,
           },
           {
             chat_id: "c2", kind: "direct" as const, title: "Murilo Moreschi",
             phone: "5511977776666", client_id: "cli-2",
             last_message_at: "2026-07-20T11:00:00Z",
-            last_message_preview: "Ok", unread: false,
+            last_message_preview: "Ok", unread: false, unread_count: 0,
           },
         ],
       });
@@ -595,7 +637,7 @@ describe("ConversasPage — carregando vs. vazia", () => {
       data: [{
         chat_id: "c1", kind: "direct" as const, title: "Ju", phone: "5511999998888",
         client_id: "cli-1", last_message_at: "2026-08-15T23:10:00Z",
-        last_message_preview: "Boa noite", unread: false,
+        last_message_preview: "Boa noite", unread: false, unread_count: 0,
       }],
     });
     // Resolveu e achou a conversa: o carregando neutro dá lugar ao fio de verdade.
@@ -665,7 +707,7 @@ describe("ConversasPage — lista de conversas fora de forma não derruba a tela
         client_id: "c1",
         last_message_at: "2026-07-19T10:00:00Z",
         last_message_preview: "Oi, quero o cardápio",
-        unread: false,
+        unread: false, unread_count: 0,
       },
     ]);
     renderNaRota("/conversas");
@@ -690,7 +732,7 @@ describe("ConversasPage — fio e templates fora de forma não derrubam a conver
           data: [{
             chat_id: "c1", kind: "direct" as const, title: "Doro Eventos", phone: "5511999999999",
             client_id: "c1", last_message_at: "2026-07-19T10:00:00Z",
-            last_message_preview: "Oi", unread: false,
+            last_message_preview: "Oi", unread: false, unread_count: 0,
           }],
         } as never);
       }

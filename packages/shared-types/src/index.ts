@@ -875,6 +875,9 @@ export interface ConversationSummary {
   last_message_at: string | null;
   last_message_preview: string;
   unread: boolean;
+  /** Quantas mensagens `in` chegaram desde `last_read_at` — o número do badge estilo WhatsApp
+   * Web. Independente de `unread`, que é o booleano legado usado pelo ponto do Kanban. */
+  unread_count: number;
 }
 
 export interface TimelineEntry {
