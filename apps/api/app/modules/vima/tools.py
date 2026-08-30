@@ -93,6 +93,28 @@ def _aware(dt: datetime) -> datetime:
     return dt if dt.tzinfo is not None else dt.replace(tzinfo=UTC)
 
 
+def _consultar_clientes_recentes(db: Session, entrada: dict[str, Any]) -> dict[str, Any]:
+    limite = int(entrada.get("limite") or 5)
+    clientes = crm_service.list_recent_clients(db, limit=200)
+    dias = entrada.get("dias")
+    if dias:
+        corte = datetime.now(UTC) - timedelta(days=int(dias))
+        clientes = [c for c in clientes if _aware(c.created_at) >= corte]
+    return {
+        "clientes": [
+            {
+                "id": c.id,
+                "nome": c.name,
+                "telefone": c.phone,
+                "tags": c.tags,
+                "origem": c.source,
+                "entrou_em": c.created_at.isoformat(),
+            }
+            for c in clientes[:limite]
+        ]
+    }
+
+
 def _consultar_documentos_juridicos(db: Session, entrada: dict[str, Any]) -> dict[str, Any]:
     client_id = None
     if entrada.get("cliente"):
@@ -272,6 +294,40 @@ FERRAMENTAS: list[Ferramenta] = [
             },
         },
         executar=_consultar_cliente,
+    ),
+    Ferramenta(
+        nome="consultar_clientes_recentes",
+        modulo="crm",
+        definicao={
+            "name": "consultar_clientes_recentes",
+            "description": (
+                "Lista os clientes mais recentemente adicionados ao CRM, do mais novo para o "
+                "mais antigo, com nome, telefone, tags, origem e quando entraram. Use para "
+                "perguntas como 'qual foi o último contato/cliente que entrou no CRM' (omita "
+                "'dias' e olhe o primeiro da lista) ou 'quem entrou ontem/essa semana' "
+                "(use 'dias': 1 para ontem, 7 para essa semana)."
+            ),
+            "input_schema": {
+                "type": "object",
+                "properties": {
+                    "dias": {
+                        "type": "integer",
+                        "description": (
+                            "Só considera clientes entrados nos últimos N dias. Omita para não "
+                            "filtrar por data."
+                        ),
+                    },
+                    "limite": {
+                        "type": "integer",
+                        "description": (
+                            "Quantos clientes retornar, do mais novo para o mais antigo. "
+                            "Padrão 5."
+                        ),
+                    },
+                },
+            },
+        },
+        executar=_consultar_clientes_recentes,
     ),
     Ferramenta(
         nome="consultar_documentos_juridicos",

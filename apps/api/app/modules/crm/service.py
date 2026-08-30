@@ -409,6 +409,20 @@ def list_clients(
     return list(db.scalars(stmt).all())
 
 
+def list_recent_clients(db: Session, *, limit: int = 20) -> list[Client]:
+    """Clientes mais recentemente adicionados ao CRM, do mais novo para o mais antigo.
+
+    Irmã de `list_clients` (que ordena por nome e serve o board), não uma variação dela: aqui
+    quem importa é QUANDO o cliente entrou, não a lista alfabética. Usada pela Vima para
+    responder "qual foi o último contato que entrou" — filtro por janela de dias fica a cargo
+    do chamador (mesmo motivo de `vima/tools._consultar_documentos_juridicos`: comparar
+    `created_at` direto no SQLite dos testes, sem fuso nativo, é terreno instável).
+    """
+    limit = max(1, min(limit, 100))
+    stmt = select(Client).order_by(Client.created_at.desc(), Client.id.desc()).limit(limit)
+    return list(db.scalars(stmt).all())
+
+
 def get_client(db: Session, client_id: str) -> Client:
     client = db.get(Client, client_id)
     if client is None:

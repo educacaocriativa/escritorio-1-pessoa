@@ -2976,6 +2976,21 @@ os dados reais de Financeiro, Agenda e CRM.
   datetime sem fuso, então a comparação sempre normaliza para UTC antes (helper `_aware()` em
   `tools.py`) — comparar naive com aware estoura `TypeError`, que o `try/except` de `executar()`
   engoliria como `{"erro": ...}` em vez de filtrar corretamente.
+- [x] **`vima/tools.py` — `consultar_clientes_recentes` (2026-08-30)** — a Vima não sabia
+  responder "qual foi o último contato que entrou no CRM?" nem "quem entrou ontem?": a única
+  ferramenta de CRM era `consultar_cliente`, que exige um NOME e não tem como listar por ordem
+  de entrada. Nova ferramenta, mesmo formato de wrapper fino: `crm.list_recent_clients`
+  (`created_at` desc, `limit` interno de 200) + filtro de `dias` em PYTHON — mesma decisão de
+  `consultar_documentos_juridicos`/`consultar_campanhas_marketing` acima, pela mesma razão
+  (SQLite sob teste não tem fuso nativo; comparar a coluna em SQL ali é terreno instável).
+  `limite` (padrão 5) corta a lista DEPOIS do filtro de dias, nunca antes — senão "quem entrou
+  esta semana" perderia gente se a semana tivesse mais de 5 entradas. `entrou_em` é o
+  `created_at` em ISO, sem reaproveitar `ultima_interacao` (que é sobre INTERAÇÃO, não entrada).
+  - ⚠️ **O teste de ordenação fixa `created_at` explícito, não confia no relógio real.** O
+    SQLite dos testes unitários tem `func.now()` com resolução de SEGUNDO — dois `Client`
+    criados no mesmo teste podem empatar e o desempate (`Client.id.desc()`, um uuid) embaralha a
+    ordem esperada. Mesma classe já registrada para `AuditEntry`/histórico de saques neste
+    arquivo; a correção é a mesma: datar os fixtures à mão.
 - [x] **`vima/pergunta.py`** — mascara a pergunta + histórico reenviado pelo front via
   `core/anonymizer` antes de mandar (Regra de Ouro nº 2), roda o loop, desmascara a resposta
   final, grava `vima.pergunta.respondida` no audit quando a IA de fato respondeu. Sem
