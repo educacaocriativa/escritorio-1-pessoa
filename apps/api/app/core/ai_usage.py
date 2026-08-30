@@ -1,4 +1,4 @@
-"""O ledger de uso de IA — quanto se gastou, por quem, em qual tarefa.
+"""O ledger de uso de IA — quanto se gastou, por quem, em qual tarefa, com qual PROVEDOR.
 
 Antes disto o e1p já gastava IA em produção e não sabia quanto: seis módulos chamavam
 `ai.complete` e cinco descartavam os tokens que a Anthropic devolvia. Só o `juridico` guardava,
@@ -21,7 +21,7 @@ from __future__ import annotations
 import logging
 from datetime import UTC, datetime
 
-from sqlalchemy import BigInteger, DateTime, String, func
+from sqlalchemy import BigInteger, DateTime, Float, String, func
 from sqlalchemy.orm import Mapped, Session, mapped_column
 
 from app.db.base import Base, TenantMixin, TimestampMixin, _uuid
@@ -30,7 +30,7 @@ logger = logging.getLogger("e1p.ai")
 
 
 class AIUsage(Base, TenantMixin, TimestampMixin):
-    """Uma chamada à Anthropic, com o que ela custou em tokens."""
+    """Uma chamada a um provedor de IA — Anthropic (texto) ou Groq (transcrição de voz)."""
 
     __tablename__ = "ai_usage"
 
@@ -42,6 +42,10 @@ class AIUsage(Base, TenantMixin, TimestampMixin):
     # responde "qual funcionalidade custa caro", e o mesmo eixo que escolhe o modelo em
     # `core/ai.py`. Um só vocabulário para as duas perguntas.
     task: Mapped[str] = mapped_column(String(48), nullable=False, index=True)
+    # 'anthropic' (default — todo call site pré-existente) ou 'groq' (transcrição de voz da
+    # Vima, ver core/transcription.py). Os dois cobram diferente — tokens vs. segundos de áudio
+    # — por isso `audio_seconds` é coluna IRMÃ, nunca achatada em `input_tokens`.
+    provider: Mapped[str] = mapped_column(String(32), default="anthropic", nullable=False)
     # O modelo que REALMENTE rodou, não o configurado. Divergem quando o roteamento muda, e é a
     # linha gravada que precisa valer para reconstruir a conta.
     model: Mapped[str] = mapped_column(String(64), nullable=False)
@@ -51,6 +55,9 @@ class AIUsage(Base, TenantMixin, TimestampMixin):
     # `input_tokens` produziria uma conta errada — para mais ou para menos, dependendo do mix.
     cache_read_tokens: Mapped[int] = mapped_column(BigInteger, default=0, nullable=False)
     cache_creation_tokens: Mapped[int] = mapped_column(BigInteger, default=0, nullable=False)
+    # Só preenchido em linhas de transcrição (provider='groq'); NULL em toda linha Anthropic.
+    # Nunca coexiste com os contadores de token acima.
+    audio_seconds: Mapped[float | None] = mapped_column(Float, nullable=True)
 
     # Default do lado do PYTHON: no Postgres `now()` é o instante da TRANSAÇÃO, e duas chamadas
     # de IA no mesmo commit sairiam com timestamp idêntico. Mesma lição de `Fact.created_at`.
@@ -68,13 +75,16 @@ def record(
     tenant_id: str,
     task: str,
     model: str,
+    provider: str = "anthropic",
     input_tokens: int = 0,
     output_tokens: int = 0,
     cache_read_tokens: int = 0,
     cache_creation_tokens: int = 0,
+    audio_seconds: float | None = None,
     user_id: str | None = None,
 ) -> AIUsage | None:
-    """Registra uma chamada de IA. **Nunca levanta** — devolve `None` se não conseguiu gravar.
+    """Registra uma chamada de IA (Anthropic ou Groq). **Nunca levanta** — devolve `None` se não
+    conseguiu gravar.
 
     O `begin_nested()` é o que torna a promessa acima verdadeira em vez de aspiracional. Um
     `db.add()` seguido de `flush()` que falha deixa a Session em estado de rollback pendente:
@@ -93,11 +103,13 @@ def record(
                 tenant_id=tenant_id,
                 user_id=user_id,
                 task=task,
+                provider=provider,
                 model=model,
                 input_tokens=input_tokens,
                 output_tokens=output_tokens,
                 cache_read_tokens=cache_read_tokens,
                 cache_creation_tokens=cache_creation_tokens,
+                audio_seconds=audio_seconds,
             )
             db.add(uso)
             db.flush()
@@ -105,7 +117,7 @@ def record(
     except Exception:  # noqa: BLE001 — a contabilidade nunca derruba quem já pagou pela chamada.
         logger.exception(
             "Falha ao registrar uso de IA (task=%s, model=%s, tenant=%s) — "
-            "a chamada à Anthropic já aconteceu e já custou; seguindo sem o registro.",
+            "a chamada já aconteceu e já custou; seguindo sem o registro.",
             task, model, tenant_id,
         )
         return None

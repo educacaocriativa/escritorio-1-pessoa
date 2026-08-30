@@ -232,3 +232,259 @@ def test_responder_falha_no_meio_manda_desculpa_em_vez_de_estourar(db: Session, 
         texto="oi", profile=None,
     )
     assert "não consegui" in capturado["texto"].lower()
+
+
+# ── responder_audio() — a voz vira pergunta, com eco ────────────────────────────────────────
+
+
+def test_responder_audio_transcreve_e_ecoa_a_pergunta_entendida(db: Session, monkeypatch):
+    from app.core.transcription import TranscriptionResult
+    from app.modules.vima.pergunta import Resposta
+
+    user = User(
+        tenant_id=TENANT, email="dono6@example.com", name="Dono", password_hash="x",
+        phone="5511999995555",
+    )
+    db.add(user)
+    db.commit()
+
+    capturado = {}
+
+    monkeypatch.setattr(
+        vc.transcription, "transcribe",
+        lambda db, *, tenant_id, audio_bytes, mime_type, user_id=None: TranscriptionResult(
+            text="quanto tenho a receber?", audio_seconds=2.1,
+        ),
+    )
+    monkeypatch.setattr(
+        vc.pergunta_service, "responder",
+        lambda db, *, user, pergunta, historico: Resposta(texto="R$ 500,00", por_ia=True),
+    )
+
+    def _fake_send_text(*, to, text, profile=None, **_kw):
+        capturado["texto_enviado"] = text
+        return "sent"
+
+    monkeypatch.setattr(vc.whatsapp, "send_text", _fake_send_text)
+
+    vc.responder_audio(
+        db, tenant_id=TENANT, phone="5511999995555", wa_message_id="wamid.audio1",
+        audio_bytes=b"audio-bytes", audio_mime_type="audio/ogg", profile=None,
+    )
+
+    assert capturado["texto_enviado"] == '🎤 "quanto tenho a receber?" — R$ 500,00'
+
+
+def test_responder_audio_guarda_o_turno_com_o_texto_transcrito(db: Session, monkeypatch):
+    from app.core.transcription import TranscriptionResult
+    from app.modules.vima.pergunta import Resposta
+
+    user = User(
+        tenant_id=TENANT, email="dono7@example.com", name="Dono", password_hash="x",
+        phone="5511999996666",
+    )
+    db.add(user)
+    db.commit()
+
+    monkeypatch.setattr(
+        vc.transcription, "transcribe",
+        lambda *a, **kw: TranscriptionResult(text="e essa semana?", audio_seconds=1.0),
+    )
+    monkeypatch.setattr(
+        vc.pergunta_service, "responder",
+        lambda db, *, user, pergunta, historico: Resposta(texto="R$ 100,00", por_ia=True),
+    )
+    monkeypatch.setattr(vc.whatsapp, "send_text", lambda **_kw: "sent")
+
+    vc.responder_audio(
+        db, tenant_id=TENANT, phone="5511999996666", wa_message_id="wamid.audio2",
+        audio_bytes=b"x", audio_mime_type="audio/ogg", profile=None,
+    )
+
+    historico = vc._historico(vc._chave(TENANT, "5511999996666"))
+    assert [(t.papel, t.texto) for t in historico] == [
+        ("usuario", "e essa semana?"), ("vima", "R$ 100,00"),
+    ]
+
+
+def test_responder_audio_sem_transcricao_manda_desculpa_sem_chamar_pergunta(
+    db: Session, monkeypatch,
+):
+    user = User(
+        tenant_id=TENANT, email="dono8@example.com", name="Dono", password_hash="x",
+        phone="5511999997778",
+    )
+    db.add(user)
+    db.commit()
+
+    chamado = {"n": 0}
+    capturado = {}
+
+    monkeypatch.setattr(vc.transcription, "transcribe", lambda *a, **kw: None)
+    monkeypatch.setattr(
+        vc.pergunta_service, "responder",
+        lambda *a, **kw: chamado.update(n=chamado["n"] + 1),
+    )
+
+    def _fake_send_text(*, to, text, profile=None, **_kw):
+        capturado["texto"] = text
+        return "sent"
+
+    monkeypatch.setattr(vc.whatsapp, "send_text", _fake_send_text)
+
+    vc.responder_audio(
+        db, tenant_id=TENANT, phone="5511999997778", wa_message_id="wamid.audiofalha",
+        audio_bytes=b"ruido", audio_mime_type="audio/ogg", profile=None,
+    )
+
+    assert chamado["n"] == 0  # nunca chegou a chamar pergunta.responder
+    assert "não consegui" in capturado["texto"].lower()
+
+
+def test_responder_audio_passa_user_id_correto_para_transcribe(db: Session, monkeypatch):
+    from app.core.transcription import TranscriptionResult
+    from app.modules.vima.pergunta import Resposta
+
+    user = User(
+        tenant_id=TENANT, email="dono10@example.com", name="Dono", password_hash="x",
+        phone="5511999999111",
+    )
+    db.add(user)
+    db.commit()
+
+    capturado = {}
+
+    def _fake_transcribe(db, *, tenant_id, audio_bytes, mime_type, user_id=None):
+        capturado["user_id"] = user_id
+        return TranscriptionResult(text="oi", audio_seconds=1.0)
+
+    monkeypatch.setattr(vc.transcription, "transcribe", _fake_transcribe)
+    monkeypatch.setattr(
+        vc.pergunta_service, "responder",
+        lambda db, *, user, pergunta, historico: Resposta(texto="ok", por_ia=True),
+    )
+    monkeypatch.setattr(vc.whatsapp, "send_text", lambda **_kw: "sent")
+
+    vc.responder_audio(
+        db, tenant_id=TENANT, phone="5511999999111", wa_message_id="wamid.useridok",
+        audio_bytes=b"x", audio_mime_type="audio/ogg", profile=None,
+    )
+
+    assert capturado["user_id"] == user.id
+
+
+def test_responder_audio_passa_user_id_none_quando_telefone_nao_bate(db: Session, monkeypatch):
+    # Mirror de `test_responder_sem_usuario_correspondente_nao_estoura` (caminho texto), mas
+    # aqui o ponto é `transcribe`: mesmo sem usuário correspondente, a transcrição AINDA roda
+    # (só o ledger fica sem user_id) — quem desiste em silêncio é `_responder`, não este ponto.
+    from app.core.transcription import TranscriptionResult
+
+    capturado = {}
+
+    def _fake_transcribe(db, *, tenant_id, audio_bytes, mime_type, user_id=None):
+        capturado["user_id"] = user_id
+        return TranscriptionResult(text="oi", audio_seconds=1.0)
+
+    monkeypatch.setattr(vc.transcription, "transcribe", _fake_transcribe)
+    monkeypatch.setattr(vc.whatsapp, "send_text", lambda **_kw: "sent")
+
+    vc.responder_audio(
+        db, tenant_id=TENANT, phone="5511900001234", wa_message_id="wamid.useridnone",
+        audio_bytes=b"x", audio_mime_type="audio/ogg", profile=None,
+    )
+
+    assert capturado["user_id"] is None
+
+
+def test_responder_audio_falha_apos_transcricao_preserva_ledger_da_groq_e_manda_desculpa(
+    db: Session, monkeypatch,
+):
+    # A transcrição AQUI é a real (`transcription.transcribe`, só o `httpx.post` é mockado) para
+    # que `ai_usage.record` grave de verdade uma linha `provider='groq'` na transação do `db` —
+    # é essa linha que precisa SOBREVIVER ao `db.rollback()` de dentro do except de `_responder`
+    # quando `pergunta.responder` explode em seguida. Prova mais convincente que mockar
+    # `db.commit()`: consulta real no banco de teste, depois da chamada inteira.
+    import httpx
+
+    from app.config import settings
+    from app.core.ai_usage import AIUsage
+
+    user = User(
+        tenant_id=TENANT, email="dono11@example.com", name="Dono", password_hash="x",
+        phone="5511999999222",
+    )
+    db.add(user)
+    db.commit()
+
+    monkeypatch.setattr(settings, "groq_api_key", "gsk-fake")
+
+    class _FakeGroqResponse:
+        status_code = 200
+
+        def raise_for_status(self) -> None:
+            return None
+
+        def json(self) -> dict:
+            return {"text": "quanto tenho a receber?", "duration": 2.5}
+
+    monkeypatch.setattr(httpx, "post", lambda *a, **kw: _FakeGroqResponse())
+
+    def _explode(db, *, user, pergunta, historico):
+        raise RuntimeError("Claude indisponível")
+
+    capturado = {}
+
+    def _fake_send_text(*, to, text, profile=None, **_kw):
+        capturado["texto"] = text
+        return "sent"
+
+    monkeypatch.setattr(vc.pergunta_service, "responder", _explode)
+    monkeypatch.setattr(vc.whatsapp, "send_text", _fake_send_text)
+
+    vc.responder_audio(  # não pode levantar, mesmo com a falha posterior em pergunta.responder
+        db, tenant_id=TENANT, phone="5511999999222", wa_message_id="wamid.audiofalhapos",
+        audio_bytes=b"x", audio_mime_type="audio/ogg", profile=None,
+    )
+
+    # (b) a desculpa foi mandada pelo mesmo canal, mesmo caminho do texto
+    assert "não consegui" in capturado["texto"].lower()
+
+    # a cobrança da Groq já tinha acontecido antes da falha — o rollback de _responder não pode
+    # apagar essa linha do ledger
+    linha = db.query(AIUsage).filter_by(provider="groq").one()
+    assert linha.user_id == user.id
+    assert linha.audio_seconds == 2.5
+    assert linha.tenant_id == TENANT
+
+
+def test_responder_audio_ignora_reentrega_do_mesmo_wa_message_id(db: Session, monkeypatch):
+    from app.core.transcription import TranscriptionResult
+    from app.modules.vima.pergunta import Resposta
+
+    user = User(
+        tenant_id=TENANT, email="dono9@example.com", name="Dono", password_hash="x",
+        phone="5511999998889",
+    )
+    db.add(user)
+    db.commit()
+
+    chamadas = {"n": 0}
+
+    def _fake_transcribe(*a, **kw):
+        chamadas["n"] += 1
+        return TranscriptionResult(text="oi", audio_seconds=1.0)
+
+    monkeypatch.setattr(vc.transcription, "transcribe", _fake_transcribe)
+    monkeypatch.setattr(
+        vc.pergunta_service, "responder",
+        lambda db, *, user, pergunta, historico: Resposta(texto="ok", por_ia=True),
+    )
+    monkeypatch.setattr(vc.whatsapp, "send_text", lambda **_kw: "sent")
+
+    for _ in range(2):
+        vc.responder_audio(
+            db, tenant_id=TENANT, phone="5511999998889", wa_message_id="wamid.audiodup",
+            audio_bytes=b"x", audio_mime_type="audio/ogg", profile=None,
+        )
+
+    assert chamadas["n"] == 1  # não paga a Groq de novo numa reentrega

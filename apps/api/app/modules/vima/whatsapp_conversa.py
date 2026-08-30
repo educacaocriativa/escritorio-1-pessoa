@@ -1,7 +1,9 @@
 """Vima por WhatsApp: quando o dono manda mensagem pro PRÓPRIO número conectado (self-chat,
-Evolution), essa mensagem vira pergunta à Vima em vez de virar mensagem de CRM.
+Evolution), essa mensagem vira pergunta à Vima em vez de virar mensagem de CRM — em TEXTO
+(`responder`) ou em ÁUDIO transcrito (`responder_audio`).
 
-Ver docs/superpowers/specs/2026-08-28-vima-canal-whatsapp-design.md.
+Ver docs/superpowers/specs/2026-08-28-vima-canal-whatsapp-design.md (texto) e
+docs/superpowers/specs/2026-08-29-vima-voz-entrada-design.md (voz).
 """
 from __future__ import annotations
 
@@ -10,7 +12,7 @@ import time
 
 from sqlalchemy.orm import Session
 
-from app.core import whatsapp
+from app.core import transcription, whatsapp
 from app.core.phone import normalize_br
 from app.modules.auth.models import User
 from app.modules.vima import pergunta as pergunta_service
@@ -81,14 +83,77 @@ def _usuario_do_telefone(db: Session, tenant_id: str, phone: str) -> User | None
 def responder(
     db: Session, *, tenant_id: str, phone: str, wa_message_id: str, texto: str, profile,
 ) -> None:
-    """O dono perguntou algo na self-chat — responde pelo MESMO canal.
+    """O dono perguntou algo em TEXTO na self-chat — responde pelo MESMO canal. Ver `_responder`
+    para o mecanismo compartilhado com `responder_audio`."""
+    _responder(
+        db, tenant_id=tenant_id, phone=phone, wa_message_id=wa_message_id, texto=texto,
+        profile=profile,
+    )
 
-    Chamado por `whatsapp_inbox.service.ingest_webhook_payload` quando reconhece a self-chat
-    (`msg.from_me and da_equipe and msg.kind == KIND_TEXT` — só existe no Evolution, porque só
-    lá `from_me` existe). NÃO grava nada em `whatsapp_chats`/`whatsapp_messages`/CRM — decisão
-    da spec, mesma disciplina de "zero persistência" do chat web (PR #266). NÃO commita — roda
-    dentro da transação-por-mensagem do `ingest`, que decide quando commitar (mesmo padrão de
-    `vima.scheduler.responder_optin`).
+
+def responder_audio(
+    db: Session, *, tenant_id: str, phone: str, wa_message_id: str, audio_bytes: bytes,
+    audio_mime_type: str, profile,
+) -> None:
+    """O dono mandou uma NOTA DE VOZ na self-chat — transcreve (Groq) e segue o MESMO caminho de
+    `responder`: a transcrição vira o `texto` que alimenta `pergunta.responder`, e a resposta
+    final ECOA o que foi entendido (`🎤 "..."`), porque o dono nunca vê a transcrição em lugar
+    nenhum — sem o eco, um erro de transcrição vira resposta certa pra pergunta errada, sem
+    nenhuma pista do porquê. Ver docs/superpowers/specs/2026-08-29-vima-voz-entrada-design.md.
+
+    Checa `_ja_processada` ANTES de transcrever — evita pagar a Groq de novo numa reentrega de
+    webhook que a checagem de dentro de `_responder` também pegaria, só que depois do gasto.
+
+    Resolve o usuário pelo telefone ANTES de transcrever — só para poder passar `user_id` ao
+    ledger da Groq (`transcription.transcribe`); note que `_responder` resolve o MESMO usuário de
+    novo logo em seguida (consulta duplicada, aceita deliberadamente: mais barata que restruturar
+    a assinatura de `_responder` ou seus testes existentes). Se ninguém bater aqui, a transcrição
+    ainda roda (só o ledger fica sem `user_id`) — quem desiste em silêncio por telefone sem
+    usuário é `_responder`, não este ponto.
+
+    Faz `db.commit()` logo após uma transcrição BEM-SUCEDIDA (antes de `_responder`) para isolar
+    a cobrança da Groq — que já aconteceu e já custou dinheiro — de uma falha posterior em
+    `pergunta.responder`: sem esse commit, o `db.rollback()` de dentro do except de `_responder`
+    apagaria a linha do ledger já gravada por `transcribe()`, mesmo a chamada à Groq tendo
+    genuinamente ocorrido. Seguro neste modelo de transação: o loop do webhook em
+    `whatsapp_inbox/service.py` já commita POR MENSAGEM (ver comentário "CRÍTICO" lá), então um
+    commit mais cedo dentro dessa mesma unidade de trabalho é só um subconjunto do que já
+    acontece, não um risco novo.
+    """
+    if _ja_processada(wa_message_id):
+        return  # reentrega do webhook — já respondida (ou já falhou e já pedimos desculpa)
+
+    user = _usuario_do_telefone(db, tenant_id, phone)
+    resultado = transcription.transcribe(
+        db, tenant_id=tenant_id, audio_bytes=audio_bytes, mime_type=audio_mime_type,
+        user_id=user.id if user else None,
+    )
+    if resultado is None:
+        _marcar_processada(wa_message_id)
+        whatsapp.send_text(
+            to=phone, text="Não consegui entender o áudio — tenta de novo em instantes.",
+            profile=profile,
+        )
+        return
+
+    db.commit()  # isola a cobrança da Groq (já ocorrida) de uma falha posterior em _responder
+
+    _responder(
+        db, tenant_id=tenant_id, phone=phone, wa_message_id=wa_message_id, texto=resultado.text,
+        profile=profile, eco=f'🎤 "{resultado.text}" — ',
+    )
+
+
+def _responder(
+    db: Session, *, tenant_id: str, phone: str, wa_message_id: str, texto: str, profile,
+    eco: str = "",
+) -> None:
+    """O mecanismo compartilhado por `responder` (texto) e `responder_audio` (voz, já
+    transcrita): resolve o usuário, chama `pergunta.responder`, grava o turno no cache e manda a
+    resposta pelo mesmo canal — com `eco` prefixado quando a pergunta veio de áudio.
+
+    NÃO commita: roda dentro da transação-por-mensagem do `ingest`, que decide quando commitar
+    (mesmo padrão de `vima.scheduler.responder_optin`).
 
     Nunca deixa uma falha muda: qualquer erro no meio do caminho ainda tenta mandar uma resposta
     de desculpa pelo mesmo canal — `whatsapp.send_text` nunca levanta (fire-and-forget por
@@ -123,4 +188,4 @@ def responder(
 
     _guardar_turno(chave, "usuario", texto)
     _guardar_turno(chave, "vima", resultado.texto)
-    whatsapp.send_text(to=phone, text=resultado.texto, profile=profile)
+    whatsapp.send_text(to=phone, text=f"{eco}{resultado.texto}", profile=profile)
