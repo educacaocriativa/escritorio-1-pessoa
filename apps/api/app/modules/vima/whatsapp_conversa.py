@@ -103,12 +103,30 @@ def responder_audio(
 
     Checa `_ja_processada` ANTES de transcrever — evita pagar a Groq de novo numa reentrega de
     webhook que a checagem de dentro de `_responder` também pegaria, só que depois do gasto.
+
+    Resolve o usuário pelo telefone ANTES de transcrever — só para poder passar `user_id` ao
+    ledger da Groq (`transcription.transcribe`); note que `_responder` resolve o MESMO usuário de
+    novo logo em seguida (consulta duplicada, aceita deliberadamente: mais barata que restruturar
+    a assinatura de `_responder` ou seus testes existentes). Se ninguém bater aqui, a transcrição
+    ainda roda (só o ledger fica sem `user_id`) — quem desiste em silêncio por telefone sem
+    usuário é `_responder`, não este ponto.
+
+    Faz `db.commit()` logo após uma transcrição BEM-SUCEDIDA (antes de `_responder`) para isolar
+    a cobrança da Groq — que já aconteceu e já custou dinheiro — de uma falha posterior em
+    `pergunta.responder`: sem esse commit, o `db.rollback()` de dentro do except de `_responder`
+    apagaria a linha do ledger já gravada por `transcribe()`, mesmo a chamada à Groq tendo
+    genuinamente ocorrido. Seguro neste modelo de transação: o loop do webhook em
+    `whatsapp_inbox/service.py` já commita POR MENSAGEM (ver comentário "CRÍTICO" lá), então um
+    commit mais cedo dentro dessa mesma unidade de trabalho é só um subconjunto do que já
+    acontece, não um risco novo.
     """
     if _ja_processada(wa_message_id):
         return  # reentrega do webhook — já respondida (ou já falhou e já pedimos desculpa)
 
+    user = _usuario_do_telefone(db, tenant_id, phone)
     resultado = transcription.transcribe(
         db, tenant_id=tenant_id, audio_bytes=audio_bytes, mime_type=audio_mime_type,
+        user_id=user.id if user else None,
     )
     if resultado is None:
         _marcar_processada(wa_message_id)
@@ -117,6 +135,8 @@ def responder_audio(
             profile=profile,
         )
         return
+
+    db.commit()  # isola a cobrança da Groq (já ocorrida) de uma falha posterior em _responder
 
     _responder(
         db, tenant_id=tenant_id, phone=phone, wa_message_id=wa_message_id, texto=resultado.text,

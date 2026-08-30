@@ -11,12 +11,12 @@ introduz a Groq (transcrição de áudio) como segundo provedor de IA do reposit
 sentido para a Groq (que cobra por SEGUNDO de áudio, não por token).
 
 `provider` nasce com `server_default='anthropic'` PERMANENTE — ao contrário de
-`opening_balance_is_known` (0074), aqui o default NÃO é removido depois: `ai_usage.record()`
-continua chamado por dezenas de call sites Anthropic existentes que não vão declarar `provider`,
-e forçar todos a mudar seria puro churn sem ganho — só o caminho novo (Groq) passa o valor
-explícito. Sem UPDATE: DDL puro (`ADD COLUMN` com `server_default`), a mesma disciplina segura
-das migrations 0074/0075/0077 contra a armadilha do backfill sob FORCE RLS (a RLS não alcança
-DDL, só DML).
+`opening_balance_is_known` (0074), aqui o default NÃO é removido depois: `ai_usage.record()` é
+chamado a partir de `core/ai.py` — o funil único de acesso à Anthropic —, então um default aqui
+custa zero mudança nesse funil e mantém a garantia de contabilidade obrigatória intacta; só o
+caminho novo (Groq) passa o valor explícito. Sem UPDATE: DDL puro (`ADD COLUMN` com
+`server_default`), a mesma disciplina segura das migrations 0074/0075/0077 contra a armadilha do
+backfill sob FORCE RLS (a RLS não alcança DDL, só DML).
 
 `audio_seconds` é nullable, sem default: preenchido SÓ em linhas de transcrição (provider='groq');
 toda linha Anthropic tem `audio_seconds IS NULL` para sempre. Os dois nunca coexistem numa linha.

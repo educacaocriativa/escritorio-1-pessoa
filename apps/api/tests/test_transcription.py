@@ -94,6 +94,43 @@ def test_transcricao_manda_o_arquivo_e_o_modelo_certo(db: Session, monkeypatch):
     assert capturado["files"]["file"][2] == "audio/ogg"
 
 
+def test_nome_do_arquivo_enviado_tem_extensao_ogg_para_mime_ogg(db: Session, monkeypatch):
+    # Groq espelha a API Whisper da OpenAI, que infere o container do áudio pela extensão do
+    # nome do arquivo — um nome sem extensão ("audio", sem sufixo) pode ser rejeitado. Notas de
+    # voz do WhatsApp via Baileys/Evolution são sempre audio/ogg.
+    monkeypatch.setattr(settings, "groq_api_key", "gsk-fake")
+    capturado = {}
+
+    def _fake_post(url, *, headers, files, data, timeout):
+        capturado.update(files=files)
+        return _FakeResponse(200, {"text": "oi", "duration": 1.0})
+
+    monkeypatch.setattr(httpx, "post", _fake_post)
+
+    transcription.transcribe(db, tenant_id=TENANT, audio_bytes=b"XYZ", mime_type="audio/ogg")
+
+    assert capturado["files"]["file"][0].endswith(".ogg")
+
+
+def test_nome_do_arquivo_enviado_cai_no_default_ogg_para_mime_desconhecido(
+    db: Session, monkeypatch,
+):
+    monkeypatch.setattr(settings, "groq_api_key", "gsk-fake")
+    capturado = {}
+
+    def _fake_post(url, *, headers, files, data, timeout):
+        capturado.update(files=files)
+        return _FakeResponse(200, {"text": "oi", "duration": 1.0})
+
+    monkeypatch.setattr(httpx, "post", _fake_post)
+
+    transcription.transcribe(
+        db, tenant_id=TENANT, audio_bytes=b"XYZ", mime_type="application/x-desconhecido",
+    )
+
+    assert capturado["files"]["file"][0].endswith(".ogg")
+
+
 def test_erro_http_da_groq_devolve_none_sem_gravar_ledger(db: Session, monkeypatch):
     monkeypatch.setattr(settings, "groq_api_key", "gsk-fake")
     monkeypatch.setattr(httpx, "post", lambda *a, **kw: _FakeResponse(401, {}))
@@ -140,6 +177,34 @@ def test_duration_nao_numerico_da_groq_devolve_none_sem_levantar(db: Session, mo
         httpx, "post",
         lambda *a, **kw: _FakeResponse(200, {"text": "oi", "duration": "nao-e-numero"}),
     )
+
+    resultado = transcription.transcribe(
+        db, tenant_id=TENANT, audio_bytes=b"audio", mime_type="audio/ogg",
+    )
+    assert resultado is None
+    assert db.query(AIUsage).count() == 0
+
+
+def test_duration_ausente_do_payload_devolve_none(db: Session, monkeypatch):
+    # Diferente do caso "duration não numérico": aqui a chave nem existe no payload — `.get()`
+    # devolve None, e o guard `duracao is None` precisa pegar isso sem nunca chegar em `float()`.
+    monkeypatch.setattr(settings, "groq_api_key", "gsk-fake")
+    monkeypatch.setattr(
+        httpx, "post", lambda *a, **kw: _FakeResponse(200, {"text": "oi"}),
+    )
+
+    resultado = transcription.transcribe(
+        db, tenant_id=TENANT, audio_bytes=b"audio", mime_type="audio/ogg",
+    )
+    assert resultado is None
+    assert db.query(AIUsage).count() == 0
+
+
+def test_payload_nao_e_dict_devolve_none_sem_levantar(db: Session, monkeypatch):
+    # Um corpo 200 que não é dict (lista, string...) faria `.get()` levantar AttributeError — a
+    # promessa "nunca levanta" da assinatura depende do guard `except Exception` cobrir isso.
+    monkeypatch.setattr(settings, "groq_api_key", "gsk-fake")
+    monkeypatch.setattr(httpx, "post", lambda *a, **kw: _FakeResponse(200, ["nao", "e", "dict"]))
 
     resultado = transcription.transcribe(
         db, tenant_id=TENANT, audio_bytes=b"audio", mime_type="audio/ogg",

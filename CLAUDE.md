@@ -3097,7 +3097,7 @@ ENTRADA: a resposta continua sempre em texto.
   fetch adicional, processamento continua síncrono dentro do próprio webhook. Outra mídia
   (imagem/documento/vídeo) no mesmo self-chat continua caindo no comportamento normal, como
   antes desta fatia.
-- **PII — decisão nova, não herdada por analogia:** o áudio bruto (voz do dono) sai para a Groq
+- ⚠️ **PII — decisão nova, não herdada por analogia:** o áudio bruto (voz do dono) sai para a Groq
   sem qualquer anonimização — não existe anonimização de voz. É diferente do risco aceito em
   2026-07-11 (aquele é sobre dado ESTRUTURADO); aqui é a gravação inteira. Aceito pelo dono do
   produto para esta fatia; o áudio em si nunca é persistido em lugar nenhum (nem banco, nem

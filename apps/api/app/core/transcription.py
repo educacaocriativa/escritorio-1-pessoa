@@ -25,6 +25,19 @@ logger = logging.getLogger("e1p.transcription")
 _MODELO = "whisper-large-v3"
 _URL = "https://api.groq.com/openai/v1/audio/transcriptions"
 
+_EXT_POR_MIME = {
+    "audio/ogg": ".ogg", "audio/mpeg": ".mp3", "audio/mp4": ".m4a", "audio/wav": ".wav",
+}
+
+
+def _nome_do_arquivo(mime_type: str) -> str:
+    """A Groq espelha a API da OpenAI/Whisper, que infere o container do áudio pela EXTENSÃO do
+    nome do arquivo — um nome sem extensão pode ser rejeitado. Notas de voz do WhatsApp via
+    Baileys/Evolution são sempre `audio/ogg`; qualquer mime não reconhecido cai no mesmo default,
+    porque é a extensão real do formato que quase sempre chega aqui."""
+    base = (mime_type or "").split(";")[0].strip()
+    return "audio" + _EXT_POR_MIME.get(base, ".ogg")
+
 
 @dataclass
 class TranscriptionResult:
@@ -60,7 +73,12 @@ def transcribe(
         resp = httpx.post(
             _URL,
             headers={"Authorization": f"Bearer {settings.groq_api_key}"},
-            files={"file": ("audio", audio_bytes, mime_type or "application/octet-stream")},
+            files={
+                "file": (
+                    _nome_do_arquivo(mime_type), audio_bytes,
+                    mime_type or "application/octet-stream",
+                ),
+            },
             data={"model": _MODELO, "response_format": "verbose_json"},
             timeout=30,
         )
@@ -74,6 +92,10 @@ def transcribe(
         texto = (payload.get("text") or "").strip()
         duracao = payload.get("duration")
         if not texto or duracao is None:
+            logger.warning(
+                "[transcription] resposta 200 da Groq sem texto ou duração utilizável "
+                "(texto=%r, duration=%r)", texto, duracao,
+            )
             return None
         audio_seconds = float(duracao)
     except Exception as exc:  # noqa: BLE001 — provedor externo, nunca derruba quem chamou
