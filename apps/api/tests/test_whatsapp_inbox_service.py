@@ -17,8 +17,10 @@ from app.modules.settings import service as settings_service
 from app.modules.settings.models import TenantProfile
 from app.modules.whatsapp_inbox import service as inbox_service
 from app.modules.whatsapp_inbox.models import (
+    CHAT_KIND_DIRECT,
     DIRECTION_IN,
     DIRECTION_OUT,
+    KIND_TEXT,
     MEDIA_STATUS_DOWNLOADED,
     MEDIA_STATUS_FAILED,
     MEDIA_STATUS_PENDING,
@@ -323,6 +325,84 @@ def test_ingest_evolution_media_over_size_limit_fails_gracefully(db):
     assert row.text_body == "foto gigante"
     assert row.media_status == MEDIA_STATUS_FAILED
     assert row.media_attachment_id is None
+
+
+def test_ingest_evolution_echo_of_own_send_backfills_instead_of_duplicating(db):
+    """Regressão (tenant Doro Eventos, 2026-08-30): mensagem enviada pela tela de Conversas virava
+    DUAS linhas, porque o eco (`SEND_MESSAGE`/`MESSAGES_UPSERT` com `fromMe=true`, ver
+    `whatsapp_session/service.py::connect`) não casava com a linha que o próprio envio já tinha
+    gravado sem `wa_message_id` (nenhum provider devolve o ID real na resposta do envio)."""
+    _configure_credentials(db)
+    client = Client(tenant_id=TENANT_ID, name="Flavio", phone="5543984074017", source="manual")
+    db.add(client)
+    db.commit()
+    chat = WhatsappChat(
+        tenant_id=TENANT_ID, chat_jid="5543984074017@s.whatsapp.net", kind=CHAT_KIND_DIRECT,
+        client_id=client.id, title=client.name,
+    )
+    db.add(chat)
+    db.flush()
+    sent = WhatsappMessage(
+        tenant_id=TENANT_ID, client_id=client.id, chat_id=chat.id,
+        direction=DIRECTION_OUT, kind=KIND_TEXT, text_body="oi teste", status="sent",
+    )
+    db.add(sent)
+    db.commit()
+
+    echo = InboundMessage(
+        wa_message_id="3EB0ECHO1", from_phone="5543984074017", kind="text",
+        text_body="oi teste", media_ref=None, push_name="Dono", from_me=True,
+        chat_jid="5543984074017@s.whatsapp.net", chat_kind="direct",
+    )
+    inbox_service.ingest_webhook_payload(db, tenant_id=TENANT_ID, messages=[echo])
+
+    rows = db.scalars(select(WhatsappMessage).where(WhatsappMessage.chat_id == chat.id)).all()
+    assert len(rows) == 1  # não duplicou
+    db.refresh(sent)
+    assert sent.wa_message_id == "3EB0ECHO1"
+
+
+def test_ingest_evolution_echo_matches_only_one_pending_row(db):
+    """Duas mensagens idênticas pendentes (mesmo chat/kind/texto, ambas sem `wa_message_id`): um
+    único eco deve casar com EXATAMENTE uma delas, nunca criar uma terceira linha nem backfillar
+    as duas. `created_at` empata facilmente no SQLite dos testes (resolução de segundo do
+    `CURRENT_TIMESTAMP`) — por isso este teste não afirma QUAL das duas ganha, só que o
+    resultado fica consistente (mesmo desempate documentado em
+    `list_conversations`/`unread_client_ids`)."""
+    _configure_credentials(db)
+    client = Client(tenant_id=TENANT_ID, name="Flavio", phone="5543984074017", source="manual")
+    db.add(client)
+    db.commit()
+    chat = WhatsappChat(
+        tenant_id=TENANT_ID, chat_jid="5543984074017@s.whatsapp.net", kind=CHAT_KIND_DIRECT,
+        client_id=client.id, title=client.name,
+    )
+    db.add(chat)
+    db.flush()
+    primeira = WhatsappMessage(
+        tenant_id=TENANT_ID, client_id=client.id, chat_id=chat.id,
+        direction=DIRECTION_OUT, kind=KIND_TEXT, text_body="segundo", status="sent",
+    )
+    segunda = WhatsappMessage(
+        tenant_id=TENANT_ID, client_id=client.id, chat_id=chat.id,
+        direction=DIRECTION_OUT, kind=KIND_TEXT, text_body="segundo", status="sent",
+    )
+    db.add(primeira)
+    db.commit()
+    db.add(segunda)
+    db.commit()
+
+    inbox_service.ingest_webhook_payload(db, tenant_id=TENANT_ID, messages=[
+        InboundMessage(
+            wa_message_id="3EB0ECHO_A", from_phone="5543984074017", kind="text",
+            text_body="segundo", media_ref=None, push_name="Dono", from_me=True,
+            chat_jid="5543984074017@s.whatsapp.net", chat_kind="direct",
+        ),
+    ])
+    rows = db.scalars(select(WhatsappMessage).where(WhatsappMessage.chat_id == chat.id)).all()
+    assert len(rows) == 2  # ainda 2, não virou 3
+    ids_preenchidos = [r.wa_message_id for r in rows if r.wa_message_id is not None]
+    assert ids_preenchidos == ["3EB0ECHO_A"]  # exatamente uma das duas casou, não as duas
 
 
 # NOTA (Onda 3): os testes de shape do LOTE malformado (`value` não-dict, `messages` não é uma
