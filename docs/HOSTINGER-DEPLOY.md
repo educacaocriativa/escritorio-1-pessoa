@@ -1,5 +1,14 @@
 # Deploy em VPS Hostinger (KVM) — 1 servidor, Docker Compose
 
+> ⚠️ **DESCOMISSIONADO em 2026-08-30.** A instância real que este guia documentava
+> (`e1p.doroeventos.com.br`, VPS `187.127.21.213`) foi **totalmente removida**: containers,
+> volumes (Postgres, uploads, Evolution, uptime-kuma), imagens locais, `/opt/e1p` e
+> `/opt/e1p-backups`, cron jobs, o remote `rclone` e os registros DNS (`e1p` e `monitor.e1p`
+> em `doroeventos.com.br`). A produção é **só a AWS** (`docs/AWS-DEPLOYMENT.md`) desde
+> 2026-08-20 — ver `docs/decisions/`. Este arquivo fica só como referência histórica de COMO
+> um deploy em VPS Hostinger funcionava; **não siga os passos abaixo contra um host real sem
+> antes confirmar que ele ainda existe.**
+
 Alternativa mais barata ao plano AWS (`docs/AWS-DEPLOYMENT.md`): tudo num único VPS.
 Como a app já é 100% conteinerizada (12-factor), a topologia é quase idêntica ao
 `docker-compose.yml` de dev — só troca o alvo. Ver ADR 0001 (`docs/decisions/`) para o
@@ -130,8 +139,9 @@ pro IP da VPS (`dig +short app.seudominio.com`) e se a porta 80 está mesmo aces
 > nomear serviço** e **prova** o resultado (health, alembic, e o hash do bundle servido, que
 > precisa ter mudado se e somente se o diff tocou `apps/web`). `--dry-run` imprime o plano.
 >
-> **Esta VPS é dev/teste desde 2026-08-20**; a produção é a AWS (`docs/AWS-DEPLOYMENT.md`). O mesmo
-> script serve as duas — muda só o host. Em produção ele exige confirmação digitada.
+> **Esta VPS foi DESCOMISSIONADA em 2026-08-30** (era dev/teste desde 2026-08-20; a produção
+> é a AWS, `docs/AWS-DEPLOYMENT.md`). O host `187.127.21.213` não roda mais nenhum serviço do
+> e1p — o `deploy.sh` acima não tem mais alvo aqui. O mesmo script segue servindo a AWS.
 
 > **Antes de dar `git pull` + rebuild em produção, confirme que o CI está VERDE** no
 > commit/branch que será deployado (`.github/workflows/ci.yml` — jobs `test-in-prod-image`
