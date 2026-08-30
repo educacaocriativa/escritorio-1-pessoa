@@ -27,13 +27,11 @@ from app.modules.crm.schemas import ClientCreate
 from app.modules.notifications.models import Notification
 from app.modules.settings import service as settings_service
 from app.modules.vima import scheduler as vima_scheduler
-from app.modules.vima import whatsapp_conversa as vima_whatsapp
 from app.modules.whatsapp_inbox.models import (
     CHAT_KIND_DIRECT,
     CHAT_KIND_GROUP,
     DIRECTION_IN,
     DIRECTION_OUT,
-    KIND_AUDIO,
     KIND_TEXT,
     LEGACY_CHAT_JID,
     MEDIA_STATUS_DOWNLOADED,
@@ -275,6 +273,29 @@ def _e_telefone_da_equipe(db: Session, tenant_id: str, phone: str | None) -> boo
     return any(normalize_br(f) == chave for f in fones)
 
 
+def _find_pending_echo(
+    db: Session, *, chat_id: str, kind: str, text_body: str
+) -> WhatsappMessage | None:
+    """A linha OUT que `send_reply_*`/`start_conversation` já gravou para esta mesma mensagem,
+    ainda SEM `wa_message_id` (ver nota no corpo de `ingest_webhook_payload` sobre o eco).
+
+    Casa por `(chat_id, direction=out, wa_message_id IS NULL, kind, text_body)`, a mais ANTIGA
+    primeiro — duas mensagens idênticas enviadas em sequência têm seus ecos casados na mesma
+    ordem de envio, cada eco com a linha pendente mais velha ainda sem ID."""
+    return db.scalar(
+        select(WhatsappMessage)
+        .where(
+            WhatsappMessage.chat_id == chat_id,
+            WhatsappMessage.direction == DIRECTION_OUT,
+            WhatsappMessage.wa_message_id.is_(None),
+            WhatsappMessage.kind == kind,
+            WhatsappMessage.text_body == text_body,
+        )
+        .order_by(WhatsappMessage.created_at, WhatsappMessage.id)
+        .limit(1)
+    )
+
+
 def ingest_webhook_payload(
     db: Session, *, tenant_id: str, messages: list[InboundMessage]
 ) -> None:
@@ -283,6 +304,19 @@ def ingest_webhook_payload(
     resolvido/validado pelo chamador. Genérico entre Meta e Evolution: nada aqui sabe de qual
     provider veio a mensagem. Idempotente: mensagens com `wa_message_id` já visto são ignoradas
     (o provider reentrega o mesmo evento às vezes).
+
+    ⚠️ **Eco do que o PRÓPRIO produto envia**: a Evolution está inscrita em `SEND_MESSAGE` e
+    também em `MESSAGES_UPSERT` (ver `whatsapp_session/service.py::connect`) — o segundo é o que
+    permite registrar mensagem que o PRODUTO dispara sozinho (funil, cobrança, contrato) sem
+    depender do worker. Mas o mesmo evento espelha de volta toda mensagem que o produto acabou de
+    mandar pela tela de Conversas — e essa já foi gravada por `send_reply_text`/`send_reply_media`/
+    `send_reply_template`/`start_conversation`, SEM `wa_message_id` (nenhum provider devolve o
+    `key.id` real na resposta do envio). A checagem de duplicata por `wa_message_id` não pega
+    esse caso — ela só compara IDs já vistos, e a linha original não tem nenhum —, então sem
+    `_find_pending_echo` toda mensagem enviada pelo produto virava DUAS linhas na tela (achado ao
+    vivo no tenant Doro Eventos, 2026-08-30, logo depois do webhook interno voltar a entregar).
+    O casamento abaixo é melhor esforço (chat+kind+texto): sinaliza pela linha pendente mais
+    antiga, então não perde a ordem mesmo com textos repetidos em sequência.
 
     `from_phone is None` (ex.: `@lid` da Evolution, que esconde o telefone) vira mensagem SEM
     cliente resolvido (`client_id=None` — bandeja "Não identificados" na tela de Conversas) em
@@ -320,29 +354,6 @@ def ingest_webhook_payload(
                 continue  # duplicata — ignora
 
             da_equipe = _e_telefone_da_equipe(db, tenant_id, msg.from_phone)
-
-            # Self-chat: o dono perguntando à Vima pelo próprio número conectado. Só existe no
-            # Evolution — `from_me` é exclusivo daquele transporte (a Meta nunca entrega mensagem
-            # própria no webhook, ver `core/whatsapp/inbound.py`) —, então não há guarda extra de
-            # "é Evolution?" aqui: a condição já é estruturalmente inalcançável na Meta. TEXTO e
-            # ÁUDIO (transcrito antes de responder, ver `vima/whatsapp_conversa
-            # .responder_audio`) viram pergunta; outra mídia (imagem/documento/vídeo) cai no
-            # comportamento normal abaixo.
-            if msg.from_me and da_equipe and msg.kind in (KIND_TEXT, KIND_AUDIO):
-                if msg.kind == KIND_TEXT:
-                    vima_whatsapp.responder(
-                        db, tenant_id=tenant_id, phone=msg.from_phone,
-                        wa_message_id=msg.wa_message_id, texto=msg.text_body, profile=profile,
-                    )
-                else:
-                    vima_whatsapp.responder_audio(
-                        db, tenant_id=tenant_id, phone=msg.from_phone,
-                        wa_message_id=msg.wa_message_id, audio_bytes=msg.media_bytes or b"",
-                        audio_mime_type=msg.media_mime_type or "", profile=profile,
-                    )
-                db.commit()
-                continue
-
             if msg.from_phone is None or da_equipe:
                 # Sem telefone (`@lid`) OU telefone do próprio time: a mensagem é
                 # gravada, mas NÃO vira contato do CRM.
@@ -377,6 +388,20 @@ def ingest_webhook_payload(
             # Conversas E abre indevidamente a janela de 24h (`is_within_session_window` conta
             # só `DIRECTION_IN` — a janela é reaberta pelo CLIENTE, não por nós).
             direction = DIRECTION_OUT if msg.from_me else DIRECTION_IN
+
+            if direction == DIRECTION_OUT and chat is not None and msg.wa_message_id:
+                pendente = _find_pending_echo(
+                    db, chat_id=chat.id, kind=msg.kind, text_body=msg.text_body
+                )
+                if pendente is not None:
+                    # Backfill do ID real na linha que o próprio envio já gravou — não cria
+                    # segunda linha (ver nota no topo da função sobre o eco de SEND_MESSAGE/
+                    # MESSAGES_UPSERT). Futuras reentregas deste MESMO evento agora casam pela
+                    # checagem de `wa_message_id` no topo do laço, não por aqui de novo.
+                    pendente.wa_message_id = msg.wa_message_id
+                    db.commit()
+                    continue
+
             msg_row = WhatsappMessage(
                 tenant_id=tenant_id, client_id=client_id, direction=direction, kind=msg.kind,
                 text_body=msg.text_body, media_status=MEDIA_STATUS_NONE,
@@ -395,11 +420,12 @@ def ingest_webhook_payload(
             # e a vinda do telefone de um usuário do tenant (`da_equipe` — ex.: o toque no
             # botão do briefing na Meta, Onda 4).
             #
-            # `occurred_at=msg.occurred_at` (o `messageTimestamp`/`timestamp` do provider, já
-            # convertido por `parse_epoch_seconds`): sem isto o fato nasceria com `now()`, e uma
-            # mensagem recebida 23h59 e processada 00h01 entraria no briefing do dia seguinte em
-            # vez do dia dela. `None` (provider não entregou o carimbo) cai no `now()` de sempre,
-            # dentro de `facts.record`.
+            # ⚠️ DÍVIDA: `occurred_at` cai no default (agora), não no instante real da
+            # mensagem — `InboundMessage` não carrega o `messageTimestamp` do payload, e
+            # propagá-lo é mudança na camada de provider (os dois parsers). O efeito é uma
+            # janela de segundos: uma mensagem recebida 23h59 e processada 00h01 entra no
+            # briefing do dia seguinte em vez do dia dela. Fecha adicionando o campo ao
+            # `InboundMessage` e preenchendo em `evolution.parse_inbound`/`meta`.
             if direction == DIRECTION_IN and not da_equipe:
                 quem = (msg.sender_name or msg.push_name or msg.from_phone
                         or "contato não identificado")
@@ -410,7 +436,6 @@ def ingest_webhook_payload(
                     client_id=client_id,
                     subject_type="whatsapp_chat",
                     subject_id=chat.id if chat is not None else None,
-                    occurred_at=msg.occurred_at,
                 )
 
             # O toque no botão do aviso do briefing (Vima, Onda 4). Fica DEPOIS do registro da
