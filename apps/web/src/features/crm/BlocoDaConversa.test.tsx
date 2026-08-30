@@ -24,7 +24,7 @@ vi.mock("../../store/auth", () => ({ useFuso: () => fusoDoTenant }));
 const conversa = (chat_id: string, title: string) => ({
   chat_id, kind: "direct", title, phone: "5511999998888",
   client_id: "cli-1", last_message_at: "2026-08-15T23:10:00Z",
-  last_message_preview: "Boa noite", unread: false,
+  last_message_preview: "Boa noite", unread: false, unread_count: 0,
 });
 
 const mensagens = [

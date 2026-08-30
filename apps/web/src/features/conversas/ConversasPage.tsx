@@ -43,6 +43,13 @@ function listStamp(iso: string | null, tz: string): string {
   return dayKey(iso, tz) === dayKey(new Date().toISOString(), tz) ? hhmm(iso, tz) : dayKey(iso, tz);
 }
 
+// Rótulo do badge de não lidas (estilo WhatsApp Web): número exato até 99, "99+" depois disso —
+// um contador de 3+ dígitos não cabe no badge sem esticar a linha da lista.
+const UNREAD_BADGE_CAP = 99;
+function unreadBadgeLabel(count: number): string {
+  return count > UNREAD_BADGE_CAP ? `${UNREAD_BADGE_CAP}+` : String(count);
+}
+
 export default function ConversasPage() {
   const fuso = useFuso();
   const [conversations, setConversations] = useState<ConversationSummary[]>([]);
@@ -141,10 +148,18 @@ export default function ConversasPage() {
                 </span>
                 <span className="flex shrink-0 items-center gap-1.5 text-[11px] text-neutral-400">
                   {listStamp(c.last_message_at, fuso)}
-                  {c.unread && <span className="h-2 w-2 rounded-full bg-primary-600" />}
+                  {c.unread_count > 0 && (
+                    <span className="flex h-4 min-w-4 items-center justify-center rounded-full bg-primary-600 px-1 text-[10px] font-semibold text-white">
+                      {unreadBadgeLabel(c.unread_count)}
+                    </span>
+                  )}
                 </span>
               </div>
-              <p className="mt-0.5 truncate text-xs text-neutral-400">
+              <p
+                className={`mt-0.5 truncate text-xs ${
+                  c.unread_count > 0 ? "font-semibold text-neutral-700" : "text-neutral-400"
+                }`}
+              >
                 {c.last_message_preview}
               </p>
             </button>

@@ -691,9 +691,21 @@ def list_conversations(
     #
     # Esta ordenação e o laço "última iteração vence" abaixo NÃO mudam com o filtro — só QUAIS
     # linhas entram na consulta muda.
+    unread_counts: dict[str, int] = {}
     for msg in db.scalars(consulta_msgs).all():
         if msg.chat_id is not None:
             last_msgs[msg.chat_id] = msg  # a última iteração (ordem crescente) vence
+            # Reaproveita este MESMO laço (que já materializa toda mensagem candidata) para
+            # contar quantas ficaram para trás do `last_read_at` — o número que o badge da tela
+            # mostra (estilo WhatsApp Web). Sem isto seria uma segunda consulta agregada por
+            # chat, pagando de novo o custo que este laço já cobre.
+            chat = chats.get(msg.chat_id)
+            if (
+                chat is not None
+                and msg.direction == DIRECTION_IN
+                and (chat.last_read_at is None or msg.created_at > chat.last_read_at)
+            ):
+                unread_counts[msg.chat_id] = unread_counts.get(msg.chat_id, 0) + 1
 
     out = []
     for chat_id, last_msg in last_msgs.items():
@@ -714,7 +726,12 @@ def list_conversations(
             "client_id": chat.client_id,
             "last_message_at": last_msg.created_at,
             "last_message_preview": _preview(last_msg, chat),
+            # Mantido por compatibilidade (e pela paridade com `unread_client_ids`, ver nota
+            # acima) — não é derivado de `unread_count` de propósito: são duas leituras
+            # independentes que já coincidem hoje, e trocar por `unread_count > 0` arriscaria
+            # divergir da regra que o board usa sem nenhum teste avisando.
             "unread": unread,
+            "unread_count": unread_counts.get(chat_id, 0),
         })
     out.sort(key=lambda c: c["last_message_at"], reverse=True)
     return out

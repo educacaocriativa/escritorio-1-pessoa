@@ -123,6 +123,26 @@ def test_list_conversations_filtra_por_client_id(db):
     assert {c["client_id"] for c in do_contato} == {"cli-5"}
 
 
+def test_list_conversations_unread_count_conta_mensagens_atras_do_last_read_at(db):
+    """`unread_count` é uma contagem de verdade (o número do badge estilo WhatsApp Web), não o
+    booleano `unread` — que só olha a ÚLTIMA mensagem da conversa. As duas podem divergir de
+    propósito: em c3 e c6 o dono respondeu por cima de uma mensagem do contato sem nunca marcar
+    a conversa como lida. `unread` diz "em dia" (a última mensagem é nossa), mas ainda existe 1
+    mensagem do contato nunca lida — e é isso que `unread_count` mostra, sem que isso quebre a
+    paridade de `unread` com `unread_client_ids` (não mexe nesse campo)."""
+    _cenario_completo(db)
+    por_jid = {
+        c["title"]: c["unread_count"] for c in inbox_service.list_conversations(db, TENANT_ID)
+    }
+    assert por_jid["5511900000001@s.whatsapp.net"] == 1  # c1: nunca lida
+    assert por_jid["5511900000002@s.whatsapp.net"] == 0  # c2: lida depois da mensagem
+    assert por_jid["5511900000003@s.whatsapp.net"] == 1  # c3: respondeu, mas nunca leu
+    assert por_jid["120363000000000000@g.us"] == 1  # grupo: mesma regra de `unread`, conta igual
+    assert por_jid["5511900000005@s.whatsapp.net"] == 0  # c5a: lida
+    assert por_jid["99995@lid"] == 1  # c5b: não lida
+    assert por_jid["5511900000006@s.whatsapp.net"] == 1  # c6: empate, mas a `in` ainda conta
+
+
 def test_list_conversations_sem_filtro_continua_trazendo_grupo(db):
     """O filtro é OPCIONAL e não pode mudar o comportamento da tela de Conversas."""
     _cenario_completo(db)
