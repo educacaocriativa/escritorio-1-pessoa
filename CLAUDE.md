@@ -3057,11 +3057,59 @@ WhatsApp que ele já conectou via QR code (Evolution) — sem nenhuma peça nova
 
 **Fora de escopo, declarado:**
 - Meta como transporte — sem `from_me`, sem self-chat possível no modelo da Meta.
-- Entrada por voz (nota de áudio) — o ponto de extensão fica marcado, a transcrição em si não é
-  desta fatia.
+- ~~Entrada por voz (nota de áudio)~~ — **FEITO**, ver a seção logo abaixo.
 - Saída por voz.
 - Ativação por palavra-chave — toda mensagem de texto no self-chat é pergunta, por decisão.
 - Qualquer persistência da conversa, permanente ou não além do cache curto acima.
+
+## Vima: voz na entrada (self-chat, Evolution) (2026-08-29)
+
+> Spec: `docs/superpowers/specs/2026-08-29-vima-voz-entrada-design.md` ·
+> Plano: `docs/superpowers/plans/2026-08-29-vima-voz-entrada.md`
+
+Terceira fatia do caminho até o Jarbes. O dono manda uma nota de voz para a própria self-chat —
+o mesmo gatilho da fatia de texto (PR #268), agora também para `kind == "audio"` — e a Vima
+transcreve (Groq, Whisper) antes de responder pelo MESMO mecanismo que já atende texto. Só
+ENTRADA: a resposta continua sempre em texto.
+
+- [x] **`core/transcription.py` — segundo provedor de IA do repositório, irmão de `core/ai.py`.**
+  A API de mensagens da Anthropic não aceita áudio como entrada; a Groq (Whisper) é quem
+  transcreve. `transcribe(db, *, tenant_id, audio_bytes, mime_type, user_id=None)` segue a
+  MESMA obrigatoriedade de `core/ai.py` (`db`/`tenant_id` obrigatórios — impossível chamar a
+  Groq sem contabilizar) e nunca levanta: `None` em qualquer falha (sem `GROQ_API_KEY`, erro
+  HTTP, erro de rede, texto vazio), para o chamador decidir a desculpa.
+- [x] **`ai_usage` ganhou `provider` e `audio_seconds`** (migration 0084). `provider` tem
+  default `'anthropic'` PERMANENTE — os call sites existentes não mudaram; só `vima.transcricao`
+  passa `provider='groq'` explícito, com `audio_seconds` preenchido (a Groq cobra por segundo de
+  áudio, não por token — por isso a coluna é irmã, nunca achatada em `input_tokens`).
+- [x] **`vima/whatsapp_conversa.responder_audio`** — transcreve e delega para o MESMO mecanismo
+  interno (`_responder`) que `responder()` (texto) já usava; a assinatura pública de `responder`
+  não mudou. A resposta final ecoa o que foi entendido (`🎤 "pergunta entendida" — resposta`),
+  porque o dono nunca vê a transcrição em lugar nenhum — sem o eco, um erro de transcrição vira
+  resposta certa para a pergunta errada, sem nenhuma pista do porquê.
+  - **Falha na transcrição:** mesma disciplina de "falha nunca fica muda" da fatia anterior —
+    desculpa padrão pelo mesmo canal, sem chamar `pergunta.responder`.
+  - **Dedup ANTES de transcrever:** uma reentrega do webhook não paga a Groq de novo — o mesmo
+    `wa_message_id` é checado antes da chamada cara, não só dentro do mecanismo compartilhado.
+- [x] **`whatsapp_inbox/service.py`** — a condição de self-chat passou de
+  `msg.kind == KIND_TEXT` para `msg.kind in (KIND_TEXT, KIND_AUDIO)`. Os bytes/mime do áudio já
+  chegam decodificados no parse do provider Evolution (`media_bytes`/`media_mime_type`) — sem
+  fetch adicional, processamento continua síncrono dentro do próprio webhook. Outra mídia
+  (imagem/documento/vídeo) no mesmo self-chat continua caindo no comportamento normal, como
+  antes desta fatia.
+- **PII — decisão nova, não herdada por analogia:** o áudio bruto (voz do dono) sai para a Groq
+  sem qualquer anonimização — não existe anonimização de voz. É diferente do risco aceito em
+  2026-07-11 (aquele é sobre dado ESTRUTURADO); aqui é a gravação inteira. Aceito pelo dono do
+  produto para esta fatia; o áudio em si nunca é persistido em lugar nenhum (nem banco, nem
+  disco, nem cache) além da chamada síncrona à Groq.
+
+**Fora de escopo, declarado:**
+- Saída por voz (TTS) — a resposta da Vima continua sempre em texto.
+- Ativação por palavra-chave — inalterado, toda mensagem (texto OU áudio) é pergunta.
+- Limite de duração/tamanho de áudio — sem validação própria; um áudio acima do teto da Groq
+  falha na chamada e cai no caminho de erro já descrito.
+- Qualquer persistência de áudio ou transcrição além do cache curto de texto que
+  `whatsapp_conversa.py` já mantinha para a fatia de texto.
 
 ## Vima: o Registro de Fatos e o briefing (PRs #85 e #90, 2026-08-06/07)
 
