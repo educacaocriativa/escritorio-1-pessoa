@@ -13,6 +13,7 @@ def setup_function():
     # teste vazaria pro próximo e a ordem de execução passaria a importar.
     vc._VISTAS.clear()
     vc._HISTORICO.clear()
+    vc._ULTIMAS_RESPOSTAS.clear()
 
 
 # ── Dedup de reentrega ──────────────────────────────────────────────────────────────────────
@@ -205,6 +206,82 @@ def test_responder_sem_usuario_correspondente_nao_estoura(db: Session, monkeypat
         texto="oi", profile=None,
     )
     assert chamado["n"] == 0  # nunca chegou a chamar pergunta.responder
+
+
+def test_responder_ignora_eco_da_propria_resposta(db: Session, monkeypatch):
+    """A Evolution ecoa de volta, via MESSAGES_UPSERT, toda mensagem que o próprio produto manda
+    pro self-chat — inclusive a resposta que a Vima acabou de enviar (mesmo mecanismo do eco de
+    `whatsapp_inbox.service`, ver comentário em `ingest_webhook_payload`). Esse eco chega com um
+    `wa_message_id` NOVO e genuíno (não é reentrega do mesmo evento, então `_ja_processada` não
+    pega) e bate na MESMA condição de roteamento que uma pergunta real (`from_me` + `da_equipe` +
+    texto) — sem uma guarda, a Vima responde à própria resposta, que ecoa nova, para sempre."""
+    from app.modules.vima.pergunta import Resposta
+
+    user = User(
+        tenant_id=TENANT, email="dono12@example.com", name="Dono", password_hash="x",
+        phone="5511999990001",
+    )
+    db.add(user)
+    db.commit()
+
+    chamadas = {"n": 0}
+
+    def _fake_pergunta_responder(db, *, user, pergunta, historico):
+        chamadas["n"] += 1
+        return Resposta(texto="Combinado! Fico por aqui.", por_ia=True)
+
+    monkeypatch.setattr(vc.pergunta_service, "responder", _fake_pergunta_responder)
+    monkeypatch.setattr(vc.whatsapp, "send_text", lambda **_kw: "sent")
+
+    vc.responder(
+        db, tenant_id=TENANT, phone="5511999990001", wa_message_id="wamid.pergunta",
+        texto="e essa semana, quanto tenho a pagar?", profile=None,
+    )
+    assert chamadas["n"] == 1
+
+    vc.responder(
+        db, tenant_id=TENANT, phone="5511999990001", wa_message_id="wamid.eco",
+        texto="Combinado! Fico por aqui.", profile=None,
+    )
+    assert chamadas["n"] == 1  # o eco da própria resposta não vira pergunta nova
+
+
+def test_responder_nao_ignora_pergunta_igual_ao_eco_depois_do_ttl(db: Session, monkeypatch):
+    """A guarda do eco é por TEMPO curto (mesmo TTL do dedup), não para sempre — se o dono
+    realmente perguntar de novo o mesmo texto que a Vima respondeu, depois do TTL isso volta a
+    ser uma pergunta válida."""
+    from app.modules.vima.pergunta import Resposta
+
+    user = User(
+        tenant_id=TENANT, email="dono13@example.com", name="Dono", password_hash="x",
+        phone="5511999990002",
+    )
+    db.add(user)
+    db.commit()
+
+    agora = [3000.0]
+    monkeypatch.setattr(vc.time, "monotonic", lambda: agora[0])
+
+    chamadas = {"n": 0}
+    monkeypatch.setattr(
+        vc.pergunta_service, "responder",
+        lambda db, *, user, pergunta, historico: chamadas.update(n=chamadas["n"] + 1)
+        or Resposta(texto="oi", por_ia=True),
+    )
+    monkeypatch.setattr(vc.whatsapp, "send_text", lambda **_kw: "sent")
+
+    vc.responder(
+        db, tenant_id=TENANT, phone="5511999990002", wa_message_id="wamid.p1",
+        texto="pergunta original", profile=None,
+    )
+    assert chamadas["n"] == 1
+
+    agora[0] += vc.TTL_DEDUP_SEGUNDOS + 1
+    vc.responder(
+        db, tenant_id=TENANT, phone="5511999990002", wa_message_id="wamid.p2",
+        texto="oi", profile=None,
+    )
+    assert chamadas["n"] == 2  # TTL expirado — texto igual à resposta antiga é pergunta válida
 
 
 def test_responder_falha_no_meio_manda_desculpa_em_vez_de_estourar(db: Session, monkeypatch):
