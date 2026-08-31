@@ -30,6 +30,15 @@ TTL_DEDUP_SEGUNDOS = 5 * 60
 _HISTORICO: dict[str, list[tuple[float, pergunta_service.Turno]]] = {}
 _VISTAS: dict[str, float] = {}
 
+# Última resposta que A PRÓPRIA VIMA mandou para cada telefone, por (texto, expira). A Evolution
+# está inscrita em MESSAGES_UPSERT e ecoa de volta toda mensagem que o produto manda (mesmo
+# mecanismo do eco em `whatsapp_inbox.service.ingest_webhook_payload`) — numa self-chat, esse eco
+# tem `from_me=True` igual a uma pergunta real do dono, e chega com um `wa_message_id` NOVO
+# (`_VISTAS` não pega, pois não é reentrega do MESMO evento). Sem esta guarda, o eco bate na
+# mesma condição de roteamento e vira "pergunta nova": a Vima responde à própria resposta, que
+# ecoa de novo, indefinidamente (achado ao vivo em produção, 2026-08-31).
+_ULTIMAS_RESPOSTAS: dict[str, tuple[str, float]] = {}
+
 
 def _chave(tenant_id: str, phone: str) -> str:
     return f"{tenant_id}:{normalize_br(phone) or phone}"
@@ -60,6 +69,18 @@ def _guardar_turno(chave: str, papel: str, texto: str) -> None:
     _HISTORICO.setdefault(chave, []).append(
         (expira, pergunta_service.Turno(papel=papel, texto=texto))
     )
+
+
+def _e_eco_da_propria_resposta(chave: str, texto: str) -> bool:
+    registrada = _ULTIMAS_RESPOSTAS.get(chave)
+    if registrada is None:
+        return False
+    texto_anterior, expira = registrada
+    return expira > time.monotonic() and texto_anterior == texto
+
+
+def _marcar_resposta_enviada(chave: str, texto: str) -> None:
+    _ULTIMAS_RESPOSTAS[chave] = (texto, time.monotonic() + TTL_DEDUP_SEGUNDOS)
 
 
 def _usuario_do_telefone(db: Session, tenant_id: str, phone: str) -> User | None:
@@ -163,6 +184,12 @@ def _responder(
         return  # reentrega do webhook — já respondida
     _marcar_processada(wa_message_id)
 
+    chave = _chave(tenant_id, phone)
+    if _e_eco_da_propria_resposta(chave, texto):
+        # O eco (ver `_ULTIMAS_RESPOSTAS`) da resposta que A PRÓPRIA VIMA acabou de mandar —
+        # não é pergunta nova, e respondê-lo criaria um loop infinito de auto-resposta.
+        return
+
     user = _usuario_do_telefone(db, tenant_id, phone)
     if user is None:
         # Defensivo: o chamador já confirmou que o telefone é de um usuário ativo
@@ -170,8 +197,6 @@ def _responder(
         # melhor desistir em silêncio do que estourar.
         logger.warning("[vima] self-chat sem usuário correspondente: tenant=%s", tenant_id)
         return
-
-    chave = _chave(tenant_id, phone)
 
     try:
         resultado = pergunta_service.responder(
@@ -188,4 +213,6 @@ def _responder(
 
     _guardar_turno(chave, "usuario", texto)
     _guardar_turno(chave, "vima", resultado.texto)
-    whatsapp.send_text(to=phone, text=f"{eco}{resultado.texto}", profile=profile)
+    resposta_final = f"{eco}{resultado.texto}"
+    _marcar_resposta_enviada(chave, resposta_final)
+    whatsapp.send_text(to=phone, text=resposta_final, profile=profile)
