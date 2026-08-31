@@ -120,9 +120,9 @@ describe("paraQuery", () => {
 
 describe("paraQuery — a ORDEM da lista (olhar para tras x olhar para a frente)", () => {
   // Provado por mutacao (issue #191): o unico caso de ordenacao que existia era `status: ["paid"]`
-  // ⇒ `desc`. Isso deixava metade do predicado solto — o `.every` podia virar `.some`, o
-  // `"canceled"` podia virar `""` e o `status.length > 0` podia virar `>= 0`, tudo verde. Os tres
-  // casos abaixo sao os que separam esses programas, e cada um e uma tela que o dono abre.
+  // ⇒ `desc`. Isso deixava metade do predicado solto — o `.every` podia virar `.some` e o
+  // `"canceled"` podia virar `""`, tudo verde. Os tres casos abaixo sao os que separam esses
+  // programas, e cada um e uma tela que o dono abre.
   const base = filtroPadrao("2026-08-18");
 
   it("historico cancelado tambem e olhar para tras", () => {
@@ -140,11 +140,11 @@ describe("paraQuery — a ORDEM da lista (olhar para tras x olhar para a frente)
     expect(paraQuery({ ...base, status: ["paid", "open"], ate: null }, 50, 0).order).toBe("asc");
   });
 
-  it("sem nenhum status marcado ('todos') a ordem e crescente, nao decrescente", () => {
-    // Pegadinha real do `every`: `[].every(...)` e `true` por vacuidade, entao o `status.length > 0`
-    // e a UNICA coisa segurando o caso "todos" no lado certo. Trocado por `>= 0`, a visao "todos"
-    // abriria pelo mais antigo — a lista que ninguem quer ver primeiro.
-    expect(paraQuery({ ...base, status: [], ate: null }, 50, 0).order).toBe("asc");
+  it("sem nenhum status marcado ('todos') a ordem e decrescente, como historico", () => {
+    // "Todos" carrega anos de contas pagas por baixo das abertas; abrir pelo vencimento mais
+    // antigo enterraria o que e recente. Por isso o caso vazio e tratado ANTES do `.every` —
+    // `[].every(...)` e `true` por vacuidade e cairia no ramo errado se dependesse dele.
+    expect(paraQuery({ ...base, status: [], ate: null }, 50, 0).order).toBe("desc");
   });
 });
 
