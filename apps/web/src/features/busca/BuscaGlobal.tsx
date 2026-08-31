@@ -83,6 +83,12 @@ export default function BuscaGlobal() {
         aria-controls="busca-resultados"
         aria-autocomplete="list"
         placeholder="Buscar cliente, contrato ou documento"
+        // Sem isto o Chrome preenche este campo com o e-mail salvo do autofill de
+        // contato — o mesmo endereço treinado pelo `type="email"` da tela de login,
+        // no mesmo domínio. O preenchimento silencioso dispara `onChange` e abre o
+        // dropdown de "nada encontrado" sozinho, sem o usuário ter digitado nada.
+        autoComplete="off"
+        name="busca-global"
         value={termo}
         onChange={(e) => {
           setTermo(e.target.value);
