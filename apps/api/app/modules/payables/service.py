@@ -252,6 +252,7 @@ def update_payable(db: Session, *, payable_id: str, tenant_id: str, actor: str, 
     """Edita a conta (dados + boleto/Pix). Mexer em valor/vencimento exige conta em aberto e
     sincroniza o evento da Agenda (move o vencimento, atualiza valor/título)."""
     p = get_payable(db, payable_id)
+    due_date_antigo = p.due_date
     core = (data.description, data.category, data.supplier, data.amount_cents,
             data.due_date, data.recurrence)
     if any(v is not None for v in core) and p.status != STATUS_OPEN:
@@ -303,6 +304,16 @@ def update_payable(db: Session, *, payable_id: str, tenant_id: str, actor: str, 
     if data.recurrence is not None:
         p.recurrence = data.recurrence
     if data.due_date is not None:
+        # Nenhuma tela oferece campo de competência: o único jeito de ela divergir do vencimento
+        # é o PATCH explícito tratado acima. Enquanto `competence_date` ainda vale o fallback da
+        # criação (== o vencimento ANTIGO), ela nunca foi reclassificada de propósito — editar o
+        # vencimento tem de levá-la junto, senão a DRE fica presa no mês do vencimento original
+        # enquanto Contas a Pagar já mostra a data nova (achado em produção, conta "Carlos
+        # PublIA": vencimento editado de 20/12 para 05/09, competência ficou órfã em 2026-12).
+        # Se `competence_date` já foi reclassificada (diverge do vencimento antigo), ela fica
+        # intocada — a mesma regra de `update_payment`/`apply_paid` para caixa × competência.
+        if data.competence_date is None and p.competence_date == due_date_antigo:
+            p.competence_date = data.due_date
         p.due_date = data.due_date
 
     # reverbera na Agenda (evento de vencimento vinculado)

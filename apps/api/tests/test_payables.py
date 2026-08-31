@@ -299,6 +299,39 @@ def test_reclassify_payable(client: TestClient, headers):
     assert out["chart_account_id"] == acc["id"]
 
 
+def test_edit_due_date_moves_unreclassified_competence(client: TestClient, headers):
+    """Achado em produção: conta criada com vencimento 2026-12-20 (competência default = mesma
+    data) tem o vencimento editado para 2026-09-05 sem nunca reclassificar a competência — ela
+    tem de seguir o vencimento novo, senão a DRE fica presa no mês antigo."""
+    b = client.post("/payables/bills", json=_bill(due_date="2026-12-20"), headers=headers).json()
+    assert b["competence_date"] == "2026-12-20"
+    resp = client.patch(
+        f"/payables/bills/{b['id']}", json={"due_date": "2026-09-05"}, headers=headers
+    )
+    assert resp.status_code == 200, resp.text
+    out = resp.json()
+    assert out["due_date"] == "2026-09-05"
+    assert out["competence_date"] == "2026-09-05"
+
+
+def test_edit_due_date_keeps_explicitly_reclassified_competence(client: TestClient, headers):
+    """Competência reclassificada de propósito (diverge do vencimento) NÃO segue o vencimento numa
+    edição posterior — só o PATCH explícito de `competence_date` pode mudá-la (mesma regra de
+    caixa × competência de `update_payment`/`apply_paid`)."""
+    b = client.post(
+        "/payables/bills",
+        json=_bill(due_date="2026-12-20", competence_date="2026-11-30"),
+        headers=headers,
+    ).json()
+    resp = client.patch(
+        f"/payables/bills/{b['id']}", json={"due_date": "2026-09-05"}, headers=headers
+    )
+    assert resp.status_code == 200, resp.text
+    out = resp.json()
+    assert out["due_date"] == "2026-09-05"
+    assert out["competence_date"] == "2026-11-30"
+
+
 def test_unset_payable_chart_account(client: TestClient, headers):
     """"" desvincula (→ sem categoria), mesmo padrão de contract_id/cost_center_id."""
     acc = client.post(
