@@ -275,6 +275,36 @@ def _e_telefone_da_equipe(db: Session, tenant_id: str, phone: str | None) -> boo
     return any(normalize_br(f) == chave for f in fones)
 
 
+def _e_o_dono(db: Session, tenant_id: str, phone: str | None) -> bool:
+    """O telefone é do DONO (`role == "owner"`) deste tenant — não de QUALQUER membro ativo da
+    equipe (isso é `_e_telefone_da_equipe`, que continua servindo pro propósito mais amplo: não
+    criar contato de CRM quando quem escreve é alguém do time).
+
+    Usado só para restringir o gatilho da self-chat da Vima (`vima/whatsapp_conversa.py`) à
+    self-chat DE VERDADE — o dono mandando mensagem pro PRÓPRIO número que ele mesmo conectou,
+    como a spec sempre descreveu (`docs/superpowers/specs/2026-08-28-vima-canal-whatsapp-
+    design.md`: "o dono manda mensagem pro próprio número conectado"). `_e_telefone_da_equipe`
+    bate com o telefone de QUALQUER usuário ativo do tenant, dono ou `sub_user` — e uma
+    conversa comum entre o dono e um `sub_user` cadastrado (ex.: para receber o briefing) batia
+    na MESMA condição, fazendo a Vima responder no lugar da pessoa (achado ao vivo em produção,
+    2026-08-31, tenant real: um `sub_user` sofreu exatamente isso).
+
+    Assume um único `owner` ativo por tenant (é o papel padrão do cadastro via `/register`,
+    nunca duplicado no fluxo normal de convite de `sub_user`) — não pagamos o custo de resolver
+    ambiguidade que a arquitetura de hoje não produz."""
+    chave = normalize_br(phone) if phone else None
+    if chave is None:
+        return False
+    fones = db.scalars(
+        select(User.phone)
+        .where(User.tenant_id == tenant_id)
+        .where(User.role == "owner")
+        .where(User.is_active.is_(True))
+        .where(User.phone.is_not(None))
+    ).all()
+    return any(normalize_br(f) == chave for f in fones)
+
+
 def _find_pending_echo(
     db: Session, *, chat_id: str, kind: str, text_body: str
 ) -> WhatsappMessage | None:
@@ -357,14 +387,21 @@ def ingest_webhook_payload(
 
             da_equipe = _e_telefone_da_equipe(db, tenant_id, msg.from_phone)
 
-            # Self-chat: o dono perguntando à Vima pelo próprio número conectado. Só existe no
-            # Evolution — `from_me` é exclusivo daquele transporte (a Meta nunca entrega mensagem
-            # própria no webhook, ver `core/whatsapp/inbound.py`) —, então não há guarda extra de
-            # "é Evolution?" aqui: a condição já é estruturalmente inalcançável na Meta. TEXTO e
-            # ÁUDIO (transcrito antes de responder, ver `vima/whatsapp_conversa
-            # .responder_audio`) viram pergunta; outra mídia (imagem/documento/vídeo) cai no
+            # Self-chat: o dono perguntando à Vima pelo próprio número conectado — checado por
+            # `_e_o_dono` (só o `owner`), NÃO por `da_equipe` (qualquer usuário ativo, incluindo
+            # `sub_user`): uma conversa comum com um colega de equipe cadastrado não pode virar
+            # self-chat só porque o telefone dele também está em `users` (ver docstring de
+            # `_e_o_dono`). Só existe no Evolution — `from_me` é exclusivo daquele transporte (a
+            # Meta nunca entrega mensagem própria no webhook, ver `core/whatsapp/inbound.py`) —,
+            # então não há guarda extra de "é Evolution?" aqui: a condição já é estruturalmente
+            # inalcançável na Meta. TEXTO e ÁUDIO (transcrito antes de responder, ver
+            # `vima/whatsapp_conversa.responder_audio`) viram pergunta; outra mídia
+            # (imagem/documento/vídeo) cai no
             # comportamento normal abaixo.
-            if msg.from_me and da_equipe and msg.kind in (KIND_TEXT, KIND_AUDIO):
+            if (
+                msg.from_me and msg.kind in (KIND_TEXT, KIND_AUDIO)
+                and _e_o_dono(db, tenant_id, msg.from_phone)
+            ):
                 if msg.kind == KIND_TEXT:
                     vima_whatsapp.responder(
                         db, tenant_id=tenant_id, phone=msg.from_phone,

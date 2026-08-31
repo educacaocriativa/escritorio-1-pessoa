@@ -145,6 +145,41 @@ def test_dono_respondendo_cliente_pelo_proprio_celular_nao_e_self_chat(db, monke
     assert row.direction == "out"  # comportamento pré-existente, inalterado
 
 
+def test_conversa_com_sub_user_cadastrado_nao_e_self_chat(db, monkeypatch):
+    """`from_me=True` e a contraparte é telefone de um usuário ATIVO do tenant — mas um
+    `sub_user` (ex.: funcionário cadastrado pra receber o briefing), não o `owner`. Isso não é
+    self-chat de verdade (o dono conversando consigo mesmo): é o dono conversando NORMALMENTE
+    com um colega de equipe pelo mesmo WhatsApp. Achado ao vivo em produção 2026-08-31: bater
+    com QUALQUER telefone de equipe (não só o do próprio dono) fazia a Vima sequestrar essa
+    conversa e responder no lugar da pessoa."""
+    User_owner = User(
+        tenant_id=TENANT_ID, email="dono3@example.com", name="Dono", password_hash="x",
+        phone="5511988880099", role="owner",
+    )
+    sub_user = User(
+        tenant_id=TENANT_ID, email="colega@example.com", name="Colega", password_hash="x",
+        phone="5511977778888", role="sub_user",
+    )
+    db.add_all([User_owner, sub_user])
+    db.commit()
+
+    chamado = {"n": 0}
+    monkeypatch.setattr(vc, "responder", lambda *a, **kw: chamado.update(n=chamado["n"] + 1))
+
+    inbox_service.ingest_webhook_payload(
+        db, tenant_id=TENANT_ID,
+        messages=[_self_chat_msg(
+            wa_message_id="colega.1", from_phone="5511977778888",
+            text_body="te mandei o link do produto", chat_jid="5511977778888@s.whatsapp.net",
+        )],
+    )
+
+    assert chamado["n"] == 0  # não roteou para a Vima
+    row = db.scalar(select(WhatsappMessage).where(WhatsappMessage.wa_message_id == "colega.1"))
+    assert row is not None  # grava normalmente, como qualquer conversa com a equipe
+    assert row.direction == "out"
+
+
 def test_cliente_comum_nao_aciona_a_vima(db, monkeypatch):
     chamado = {"n": 0}
     monkeypatch.setattr(vc, "responder", lambda *a, **kw: chamado.update(n=chamado["n"] + 1))
