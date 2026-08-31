@@ -1,4 +1,4 @@
-"""As nove ferramentas de leitura que a Vima oferece à Claude — permissão, delegação e o
+"""As onze ferramentas de leitura que a Vima oferece à Claude — permissão, delegação e o
 contrato "nunca deixa exceção subir crua" (o loop de tool-use precisa de um tool_result sempre).
 """
 import json
@@ -7,13 +7,19 @@ from datetime import UTC, date, datetime, timedelta
 from sqlalchemy.orm import Session
 
 from app.core.tenancy import CurrentUser
-from app.modules.crm.models import Client
+from app.modules.crm.models import Client, PipelineStage
 from app.modules.juridico.models import LegalDocument
 from app.modules.marketing.models import Carousel
 from app.modules.receivables.models import METHOD_PIX, STATUS_OPEN, Charge
 from app.modules.stock.models import StockItem
 from app.modules.vima import tools
 from app.modules.wallet.models import KIND_SERVICE
+from app.modules.whatsapp_inbox.models import (
+    CHAT_KIND_DIRECT,
+    DIRECTION_IN,
+    WhatsappChat,
+    WhatsappMessage,
+)
 
 TENANT = "t1"
 
@@ -28,13 +34,13 @@ def _usuario(role: str = "owner", modulos: list[str] | None = None) -> CurrentUs
 # ── Catálogo e permissão ────────────────────────────────────────────────────────────────────
 
 
-def test_owner_ve_as_dez_ferramentas():
+def test_owner_ve_as_onze_ferramentas():
     nomes = {f.nome for f in tools.ferramentas_disponiveis(_usuario("owner"))}
     assert nomes == {
         "consultar_recebiveis", "consultar_pagaveis", "consultar_projecao_caixa",
         "consultar_agenda", "consultar_cliente", "consultar_clientes_recentes",
         "consultar_documentos_juridicos", "consultar_campanhas_marketing",
-        "consultar_estoque_baixo", "consultar_item_estoque",
+        "consultar_estoque_baixo", "consultar_item_estoque", "consultar_clientes_atencao",
     }
 
 
@@ -56,6 +62,11 @@ def test_sub_usuario_so_de_stock_ve_as_duas_ferramentas_de_estoque():
 def test_sub_usuario_so_de_crm_ve_as_duas_ferramentas_de_cliente():
     nomes = {f.nome for f in tools.ferramentas_disponiveis(_usuario("sub_user", ["crm"]))}
     assert nomes == {"consultar_cliente", "consultar_clientes_recentes"}
+
+
+def test_sub_usuario_so_de_comercial_so_ve_a_ferramenta_de_atencao():
+    nomes = {f.nome for f in tools.ferramentas_disponiveis(_usuario("sub_user", ["comercial"]))}
+    assert nomes == {"consultar_clientes_atencao"}
 
 
 def test_toda_ferramenta_declara_um_input_schema_valido():
@@ -313,6 +324,55 @@ def test_consultar_item_estoque_sem_match_devolve_lista_vazia(db: Session):
         tools.executar(db, _usuario(), "consultar_item_estoque", {"nome": "Ninguém"})
     )
     assert resultado["itens"] == []
+
+
+# ── consultar_clientes_atencao ──────────────────────────────────────────────────────────────
+
+
+def test_consultar_clientes_atencao_traz_contato_sem_resposta_nossa(db: Session):
+    chat = WhatsappChat(
+        tenant_id=TENANT, chat_jid="5511999998888@s.whatsapp.net",
+        kind=CHAT_KIND_DIRECT, title="Carlos",
+    )
+    db.add(chat)
+    db.flush()
+    db.add(WhatsappMessage(
+        tenant_id=TENANT, chat_id=chat.id, direction=DIRECTION_IN,
+        text_body="Bom dia, conseguiu ver aquilo?",
+        created_at=datetime.now(UTC) - timedelta(hours=48),
+    ))
+    db.commit()
+    resultado = json.loads(
+        tools.executar(db, _usuario(), "consultar_clientes_atencao", {})
+    )
+    motivos = {c["tipo"] for c in resultado["clientes_em_atencao"]}
+    assert "comercial.contato.esperando_resposta" in motivos
+
+
+def test_consultar_clientes_atencao_traz_card_parado(db: Session):
+    etapa = PipelineStage(tenant_id=TENANT, name="Em contato", position=1)
+    db.add(etapa)
+    db.flush()
+    db.add(Client(
+        tenant_id=TENANT, name="Carlos", stage_id=etapa.id,
+        stage_entered_at=datetime.now(UTC) - timedelta(days=15),
+    ))
+    db.commit()
+    resultado = json.loads(
+        tools.executar(db, _usuario(), "consultar_clientes_atencao", {})
+    )
+    parado = next(
+        c for c in resultado["clientes_em_atencao"] if c["tipo"] == "comercial.card.parado"
+    )
+    assert "Carlos" in parado["descricao"]
+    assert parado["dias"] >= 15
+
+
+def test_consultar_clientes_atencao_sem_nada_pendente_devolve_lista_vazia(db: Session):
+    resultado = json.loads(
+        tools.executar(db, _usuario(), "consultar_clientes_atencao", {})
+    )
+    assert resultado["clientes_em_atencao"] == []
 
 
 # ── Falha nunca sobe crua ───────────────────────────────────────────────────────────────────

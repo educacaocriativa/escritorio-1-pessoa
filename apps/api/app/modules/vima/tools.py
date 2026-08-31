@@ -26,8 +26,9 @@ from app.modules.juridico import service as juridico_service
 from app.modules.marketing import service as marketing_service
 from app.modules.payables import service as payables_service
 from app.modules.receivables import service as receivables_service
-from app.modules.settings.service import tenant_timezone
+from app.modules.settings.service import hoje_do_tenant, tenant_timezone
 from app.modules.stock import service as stock_service
+from app.modules.vima import absences
 from app.modules.vima.permissions import pode_ver
 
 
@@ -191,6 +192,23 @@ def _consultar_item_estoque(db: Session, entrada: dict[str, Any]) -> dict[str, A
                 "baixo": i.quantity <= i.min_quantity,
             }
             for i in itens
+        ]
+    }
+
+
+def _consultar_clientes_atencao(db: Session, _entrada: dict[str, Any]) -> dict[str, Any]:
+    agora = datetime.now(UTC)
+    hoje = hoje_do_tenant(db, now=agora)
+    ausencias = absences.clientes_em_atencao(db, hoje=hoje, agora=agora)
+    return {
+        "clientes_em_atencao": [
+            {
+                "descricao": a.title,
+                "tipo": a.kind,
+                "dias": a.dias,
+                "cliente_id": a.client_id,
+            }
+            for a in ausencias
         ]
     }
 
@@ -416,6 +434,22 @@ FERRAMENTAS: list[Ferramenta] = [
             },
         },
         executar=_consultar_item_estoque,
+    ),
+    Ferramenta(
+        nome="consultar_clientes_atencao",
+        modulo="comercial",
+        definicao={
+            "name": "consultar_clientes_atencao",
+            "description": (
+                "Lista clientes que precisam de atenção agora: conversa de WhatsApp que "
+                "escreveu e ainda não foi respondida, contato que sumiu (sem falar há muitos "
+                "dias) ou negociação parada na mesma etapa do funil há tempo demais. Use para "
+                "perguntas como 'qual cliente precisa de atenção hoje?', 'estou deixando "
+                "alguém esperando?' ou 'algum contato sumiu?'."
+            ),
+            "input_schema": {"type": "object", "properties": {}},
+        },
+        executar=_consultar_clientes_atencao,
     ),
 ]
 
