@@ -4,8 +4,13 @@ import type { CostCenter } from "../financeiro/costCenters";
 import type { ChartAccount } from "../financeiro/planoContas";
 import type { FiltroPagar } from "./filtros";
 
-/** Os recortes de status que a tela oferece. "Em aberto" são DOIS status, não um. */
+/**
+ * Os recortes de status que a tela oferece. "Em aberto" são DOIS status, não um; "Todos" é
+ * ZERO status — `paraQuery`/`paraUrl`/`ordem` (`filtros.ts`) já tratam `status: []` como "sem
+ * filtro", então este recorte não precisa de nenhum código novo fora desta lista.
+ */
 const RECORTES: { value: string; label: string; status: PayableStatus[] }[] = [
+  { value: "todos", label: "Todos", status: [] },
   { value: "abertas", label: "Em aberto", status: ["open", "scheduled"] },
   { value: "paid", label: "Pago", status: ["paid"] },
   { value: "scheduled", label: "Agendada", status: ["scheduled"] },
@@ -73,7 +78,10 @@ export default function FiltrosDaLista({
             const r = RECORTES.find((x) => x.value === e.target.value)!;
             // Histórico não tem por que herdar o horizonte de "o que eu devo": quem procura o que
             // já pagou quer olhar para trás, e um teto no fim do mês que vem não recorta nada ali.
-            const olhandoParaTras = r.status.every((s) => s === "paid" || s === "canceled");
+            // `r.status.length > 0` evita que "Todos" (status: []) caia aqui por vacuidade do
+            // `.every` — mesma guarda que `ordem()` usa em `filtros.ts`.
+            const olhandoParaTras =
+              r.status.length > 0 && r.status.every((s) => s === "paid" || s === "canceled");
             onChange({ ...valor, status: r.status, ate: olhandoParaTras ? null : valor.ate });
           }}
           className={`${campo} min-w-0 flex-1 sm:flex-none`}
