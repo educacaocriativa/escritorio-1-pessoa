@@ -50,10 +50,15 @@ export function filtroPadrao(hojeYmd: string): FiltroPagar {
   };
 }
 
-/** Histórico se lê do mais recente para o mais antigo; o que se deve, do mais próximo em diante. */
+/**
+ * Histórico se lê do mais recente para o mais antigo; o que se deve, do mais próximo em diante.
+ * "Todos" (status: []) entra no balde de histórico: sem recorte, a lista tem anos de contas pagas
+ * por baixo, e abrir pelo vencimento mais antigo enterraria tudo que é recente.
+ */
 function ordem(status: PayableStatus[]): "asc" | "desc" {
+  if (status.length === 0) return "desc";
   const olhandoParaTras = status.every((s) => s === "paid" || s === "canceled");
-  return status.length > 0 && olhandoParaTras ? "desc" : "asc";
+  return olhandoParaTras ? "desc" : "asc";
 }
 
 /** Serializa para os `params` do axios. Chave vazia é OMITIDA, nunca mandada como null. */

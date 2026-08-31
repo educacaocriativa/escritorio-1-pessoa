@@ -78,8 +78,10 @@ export default function FiltrosDaLista({
             const r = RECORTES.find((x) => x.value === e.target.value)!;
             // Histórico não tem por que herdar o horizonte de "o que eu devo": quem procura o que
             // já pagou quer olhar para trás, e um teto no fim do mês que vem não recorta nada ali.
-            // `r.status.length > 0` evita que "Todos" (status: []) caia aqui por vacuidade do
-            // `.every` — mesma guarda que `ordem()` usa em `filtros.ts`.
+            // "Todos" fica de fora: mistura contas ainda abertas, então o teto continua valendo
+            // para elas — diferente de `ordem()` (`filtros.ts`), que trata "Todos" como histórico
+            // só para efeito de ordenação. `r.status.length > 0` evita que "Todos" (status: [])
+            // caia aqui por vacuidade do `.every`.
             const olhandoParaTras =
               r.status.length > 0 && r.status.every((s) => s === "paid" || s === "canceled");
             onChange({ ...valor, status: r.status, ate: olhandoParaTras ? null : valor.ate });
