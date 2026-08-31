@@ -15,7 +15,7 @@ from app.modules.crm.models import Client, PipelineStage
 from app.modules.payables.models import STATUS_OPEN, Payable
 from app.modules.receivables.models import STATUS_OPEN as CHARGE_OPEN
 from app.modules.receivables.models import Charge
-from app.modules.vima.absences import LIMIARES_PADRAO, coletar
+from app.modules.vima.absences import LIMIARES_PADRAO, clientes_em_atencao, coletar
 from app.modules.whatsapp_inbox.models import (
     CHAT_KIND_DIRECT,
     DIRECTION_IN,
@@ -460,4 +460,67 @@ def test_nenhum_limiar_novo_foi_introduzido():
     retroativa existe, então avisar depois do fechamento não perde nada.
     """
     assert "saldo_do_mes_dias" not in LIMIARES_PADRAO
+
+
+# ── clientes_em_atencao (Vima: consultar_clientes_atencao) ─────────────────────────────────
+
+AGORA = datetime(2026, 8, 6, 23, 59, 59, tzinfo=UTC)
+
+
+@pytest.fixture()
+def conversa_sumida(db: Session) -> WhatsappChat:
+    """Última mensagem é posterior ao corte de autoria e, na data de referência do teste que a
+    usa (10/09), já passou o limiar padrão de 30 dias sem falar."""
+    chat = _chat(db, jid="5511955554444@s.whatsapp.net", titulo="Renata")
+    db.add(
+        WhatsappMessage(
+            tenant_id=TENANT, chat_id=chat.id, direction=DIRECTION_IN,
+            text_body="Oi, tudo bem?",
+            created_at=datetime(2026, 8, 6, 9, 0, tzinfo=UTC),
+        )
+    )
+    db.commit()
+    return chat
+
+
+def test_clientes_em_atencao_junta_as_tres_familias_comerciais(
+    db, conversa_esperando_resposta, conversa_sumida, card_parado_ha_12_dias,
+):
+    # Data de referência própria: "sumido" só cruza o limiar de 30 dias bem depois do corte de
+    # autoria (05/08) — HOJE/AGORA do módulo (06/08) não deixam essa janela existir.
+    hoje = date(2026, 9, 10)
+    agora = datetime(2026, 9, 10, 23, 59, 59, tzinfo=UTC)
+    kinds = {a.kind for a in clientes_em_atencao(db, hoje=hoje, agora=agora)}
+    assert kinds == {
+        "comercial.contato.esperando_resposta",
+        "comercial.contato.sumido",
+        "comercial.card.parado",
+    }
+
+
+def test_clientes_em_atencao_nao_traz_familias_de_fora_do_comercial(
+    db, conta_vencendo_amanha,
+):
+    """Financeiro e Agenda não são "atenção ao cliente" — ficam de fora por escopo, não por
+    permissão (esta função não recebe `user`; quem gateia é o `Ferramenta.modulo` da Vima)."""
+    kinds = {a.kind for a in clientes_em_atencao(db, hoje=HOJE, agora=AGORA)}
+    assert not any(k.startswith("financeiro.") or k.startswith("agenda.") for k in kinds)
+
+
+def test_clientes_em_atencao_nao_aplica_o_silencio_do_briefing(db, card_parado_ha_12_dias):
+    """Diferente de `coletar`, não existe `ja_reportadas` aqui: quem pergunta agora quer o
+    estado inteiro, não só a escalada desde o último briefing."""
+    ausencias = clientes_em_atencao(db, hoje=HOJE, agora=AGORA)
+    assert any(a.kind == "comercial.card.parado" for a in ausencias)
+
+
+def test_clientes_em_atencao_respeita_limiares_injetados(db, card_parado_ha_12_dias):
+    ausencias = clientes_em_atencao(
+        db, hoje=HOJE, agora=AGORA, limiares={**LIMIARES_PADRAO, "card_parado_dias": 30},
+    )
+    assert not any(a.kind == "comercial.card.parado" for a in ausencias)
+
+
+def test_clientes_em_atencao_sem_nada_pendente_devolve_lista_vazia(db):
+    assert clientes_em_atencao(db, hoje=HOJE, agora=AGORA) == []
     assert not [k for k in LIMIARES_PADRAO if "conferencia" in k or "saldo" in k]

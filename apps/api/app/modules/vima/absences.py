@@ -152,6 +152,25 @@ def coletar(
     )
 
 
+def clientes_em_atencao(
+    db: Session, *, hoje: date, agora: datetime, limiares: dict[str, int] | None = None,
+) -> list[Ausencia]:
+    """As três Ausências comerciais ligadas a um cliente, para a Vima responder sob demanda
+    (`consultar_clientes_atencao`) — contato sem resposta nossa, contato sumido, card parado.
+
+    Reusa as MESMAS regras de `coletar`, sem o filtro de "já dito" (`_calada`) e sem `pode_ver`:
+    quem perguntou agora quer o estado atual inteiro, não só a escalada desde o último briefing,
+    e a permissão já foi decidida antes de chegar aqui — pelo `Ferramenta.modulo="comercial"`
+    que filtra o que a Claude sequer vê (`vima/tools.py`).
+    """
+    lim = {**LIMIARES_PADRAO, **(limiares or {})}
+    return [
+        *_silencio_nosso(db, hoje, lim, agora),
+        *_contato_sumido(db, hoje, lim),
+        *_cards_parados(db, hoje, lim),
+    ]
+
+
 def _proximo_marco(anterior: int) -> int:
     """Em que intensidade esta ausência volta a ser notícia.
 
