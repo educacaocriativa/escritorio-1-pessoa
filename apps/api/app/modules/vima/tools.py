@@ -32,19 +32,19 @@ from app.modules.vima import absences
 from app.modules.vima.permissions import pode_ver
 
 
-def _consultar_recebiveis(db: Session, _entrada: dict[str, Any]) -> dict[str, Any]:
+def _consultar_recebiveis(db: Session, _user: CurrentUser, _entrada: dict[str, Any]) -> dict[str, Any]:
     return receivables_service.summary(db)
 
 
-def _consultar_pagaveis(db: Session, _entrada: dict[str, Any]) -> dict[str, Any]:
+def _consultar_pagaveis(db: Session, _user: CurrentUser, _entrada: dict[str, Any]) -> dict[str, Any]:
     return payables_service.summary(db)
 
 
-def _consultar_projecao_caixa(db: Session, _entrada: dict[str, Any]) -> dict[str, Any]:
+def _consultar_projecao_caixa(db: Session, _user: CurrentUser, _entrada: dict[str, Any]) -> dict[str, Any]:
     return asdict(projection_service.cash_projection(db))
 
 
-def _consultar_agenda(db: Session, entrada: dict[str, Any]) -> dict[str, Any]:
+def _consultar_agenda(db: Session, _user: CurrentUser, entrada: dict[str, Any]) -> dict[str, Any]:
     tz = tenant_timezone(db)
     inicio = date.fromisoformat(entrada["data_inicio"])
     fim = date.fromisoformat(entrada.get("data_fim") or entrada["data_inicio"])
@@ -68,7 +68,7 @@ def _consultar_agenda(db: Session, entrada: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def _consultar_cliente(db: Session, entrada: dict[str, Any]) -> dict[str, Any]:
+def _consultar_cliente(db: Session, _user: CurrentUser, entrada: dict[str, Any]) -> dict[str, Any]:
     nome = entrada["nome"]
     clientes = crm_service.list_clients(db, search=nome, limit=5)
     resultado = []
@@ -94,7 +94,7 @@ def _aware(dt: datetime) -> datetime:
     return dt if dt.tzinfo is not None else dt.replace(tzinfo=UTC)
 
 
-def _consultar_clientes_recentes(db: Session, entrada: dict[str, Any]) -> dict[str, Any]:
+def _consultar_clientes_recentes(db: Session, _user: CurrentUser, entrada: dict[str, Any]) -> dict[str, Any]:
     limite = int(entrada.get("limite") or 5)
     clientes = crm_service.list_recent_clients(db, limit=200)
     dias = entrada.get("dias")
@@ -116,7 +116,7 @@ def _consultar_clientes_recentes(db: Session, entrada: dict[str, Any]) -> dict[s
     }
 
 
-def _consultar_documentos_juridicos(db: Session, entrada: dict[str, Any]) -> dict[str, Any]:
+def _consultar_documentos_juridicos(db: Session, _user: CurrentUser, entrada: dict[str, Any]) -> dict[str, Any]:
     client_id = None
     if entrada.get("cliente"):
         clientes = crm_service.list_clients(db, search=entrada["cliente"], limit=1)
@@ -143,7 +143,7 @@ def _consultar_documentos_juridicos(db: Session, entrada: dict[str, Any]) -> dic
     }
 
 
-def _consultar_campanhas_marketing(db: Session, entrada: dict[str, Any]) -> dict[str, Any]:
+def _consultar_campanhas_marketing(db: Session, _user: CurrentUser, entrada: dict[str, Any]) -> dict[str, Any]:
     campanhas = marketing_service.list_carousels(db)
     dias = entrada.get("dias")
     if dias:
@@ -162,7 +162,7 @@ def _consultar_campanhas_marketing(db: Session, entrada: dict[str, Any]) -> dict
     }
 
 
-def _consultar_estoque_baixo(db: Session, _entrada: dict[str, Any]) -> dict[str, Any]:
+def _consultar_estoque_baixo(db: Session, _user: CurrentUser, _entrada: dict[str, Any]) -> dict[str, Any]:
     itens = stock_service.low_stock(db)
     return {
         "itens": [
@@ -177,7 +177,7 @@ def _consultar_estoque_baixo(db: Session, _entrada: dict[str, Any]) -> dict[str,
     }
 
 
-def _consultar_item_estoque(db: Session, entrada: dict[str, Any]) -> dict[str, Any]:
+def _consultar_item_estoque(db: Session, _user: CurrentUser, entrada: dict[str, Any]) -> dict[str, Any]:
     nome = entrada["nome"].strip().lower()
     itens = [
         i for i in stock_service.list_items(db, only_active=True) if nome in i.name.lower()
@@ -196,7 +196,7 @@ def _consultar_item_estoque(db: Session, entrada: dict[str, Any]) -> dict[str, A
     }
 
 
-def _consultar_clientes_atencao(db: Session, _entrada: dict[str, Any]) -> dict[str, Any]:
+def _consultar_clientes_atencao(db: Session, _user: CurrentUser, _entrada: dict[str, Any]) -> dict[str, Any]:
     agora = datetime.now(UTC)
     hoje = hoje_do_tenant(db, now=agora)
     ausencias = absences.clientes_em_atencao(db, hoje=hoje, agora=agora)
@@ -220,7 +220,9 @@ class Ferramenta:
     modulo: str
     # Schema no formato de tool-use da Anthropic (`name`/`description`/`input_schema`).
     definicao: dict[str, Any]
-    executar: Callable[[Session, dict[str, Any]], dict[str, Any]]
+    # `user` existe para as ferramentas de ESCRITA carimbarem tenant_id/actor — as de leitura
+    # ignoram (mesma convenção de parâmetro não usado do resto do arquivo: `_user`).
+    executar: Callable[[Session, CurrentUser, dict[str, Any]], dict[str, Any]]
 
 
 FERRAMENTAS: list[Ferramenta] = [
@@ -464,15 +466,19 @@ def executar(db: Session, user: CurrentUser, nome: str, entrada: dict[str, Any])
     """Executa uma ferramenta pelo nome, respeitando a MESMA lista que foi oferecida à Claude.
 
     Nunca deixa uma exceção subir crua: o loop de tool-use precisa de um `tool_result` sempre,
-    mesmo quando a consulta falha — a Claude é instruída (ver `vima/pergunta.py`) a dizer que
-    não conseguiu, nunca a inventar (Artigo IV, No Invention).
+    mesmo quando a consulta/escrita falha — a Claude é instruída (ver `vima/pergunta.py`) a
+    dizer que não conseguiu, nunca a inventar (Artigo IV, No Invention). Erro de domínio
+    (`AgendaError`) e de formato (`ValueError`) chegam com a mensagem REAL — a genérica é só
+    para o que não se sabe explicar.
     """
     disponiveis = {f.nome: f for f in ferramentas_disponiveis(user)}
     ferramenta = disponiveis.get(nome)
     if ferramenta is None:
         return json.dumps({"erro": "ferramenta indisponível para este usuário"})
     try:
-        resultado = ferramenta.executar(db, entrada)
+        resultado = ferramenta.executar(db, user, entrada)
+    except (agenda_service.AgendaError, ValueError) as exc:
+        return json.dumps({"erro": str(exc)})
     except Exception:  # noqa: BLE001 — tool_result sempre existe; a Claude decide o que dizer.
         return json.dumps({"erro": "não foi possível consultar isso agora"})
     return json.dumps(resultado, default=str, ensure_ascii=False)
