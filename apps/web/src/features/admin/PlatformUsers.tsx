@@ -1,6 +1,6 @@
 import type { AccountInvite, StaffInvite, TenantUsers, User } from "@e1p/shared-types";
 import {
-  Building2, ChevronDown, GraduationCap, Power, Search, Trash2, UserPlus, Users,
+  Building2, ChevronDown, GraduationCap, Pencil, Power, Search, Trash2, UserPlus, Users,
 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import Modal, { Field } from "../../components/Modal";
@@ -97,21 +97,59 @@ function InviteResult({
 }
 
 // Módulos que um funcionário pode receber (vazio = acesso a tudo).
-const MODULES: { key: string; label: string }[] = [
-  { key: "crm", label: "CRM" },
+//
+// ⚠️ Precisa espelhar o conjunto de `module` usado em `app/navigation.ts` — é o mesmo nome que
+// `require_module` usa no backend. Faltava aqui `cockpit`, `bank`, `financial_intelligence`,
+// `investments`, `cost_centers`, `pages` e `settings`: o Master nunca teve como CONCEDER esses
+// módulos a um funcionário, porque a lista que alimenta este seletor nunca os teve. Foi assim
+// que um funcionário cadastrado com módulos restritos ficou sem acesso a Configurações — não dava
+// para marcar essa caixa, porque a caixa não existia.
+export const MODULES: { key: string; label: string }[] = [
+  { key: "cockpit", label: "Dashboard" },
   { key: "agenda", label: "Agenda" },
+  { key: "crm", label: "CRM" },
+  { key: "wallet", label: "Financeiro" },
+  { key: "bank", label: "Contas & Saldos" },
   { key: "receivables", label: "Cobranças" },
   { key: "payables", label: "Contas a Pagar" },
+  { key: "financial_intelligence", label: "DRE, Lucratividade & Projeção" },
+  { key: "investments", label: "Investimentos" },
   { key: "chart_of_accounts", label: "Plano de contas" },
-  { key: "wallet", label: "Financeiro" },
+  { key: "cost_centers", label: "Centros de custo" },
   { key: "quotes", label: "Orçamentos" },
   { key: "contracts", label: "Contratos" },
   { key: "products", label: "Produtos" },
   { key: "stock", label: "Estoque" },
   { key: "marketing", label: "Marketing" },
-  { key: "funnels", label: "Funis" },
+  { key: "funnels", label: "Funil de Vendas" },
+  { key: "pages", label: "Sites" },
   { key: "juridico", label: "Jurídico" },
+  { key: "settings", label: "Configurações" },
 ];
+
+/** Grade de módulos reutilizada pelo cadastro e pela edição — a mesma lista, o mesmo toggle. */
+function ModulePicker({ selected, onToggle }: { selected: string[]; onToggle: (key: string) => void }) {
+  return (
+    <div>
+      <p className="mb-1.5 text-sm font-medium text-neutral-600">Acesso a módulos</p>
+      <p className="mb-2 text-xs text-neutral-400">Nenhum marcado = acesso a tudo.</p>
+      <div className="flex flex-wrap gap-1.5">
+        {MODULES.map((m) => (
+          <button
+            key={m.key}
+            type="button"
+            onClick={() => onToggle(m.key)}
+            className={`rounded-pill px-2.5 py-1 text-xs font-medium ${
+              selected.includes(m.key) ? "bg-primary-500 text-white" : "bg-neutral-100 text-neutral-600 hover:bg-neutral-200"
+            }`}
+          >
+            {m.label}
+          </button>
+        ))}
+      </div>
+    </div>
+  );
+}
 
 export default function PlatformUsers() {
   const [nodes, setNodes] = useState<TenantUsers[]>([]);
@@ -213,6 +251,7 @@ function OfficeCard({
   onChanged: () => void;
 }) {
   const [addStaff, setAddStaff] = useState(false);
+  const [editUser, setEditUser] = useState<User | null>(null);
   const [error, setError] = useState<string | null>(null);
   const active = node.admin?.is_active ?? true;
 
@@ -281,7 +320,9 @@ function OfficeCard({
             {node.staff.length === 0 ? (
               <Empty text="Nenhum funcionário." />
             ) : (
-              node.staff.map((u) => <UserRow key={u.id} user={u} onToggle={toggleUser} onDelete={removeUser} />)
+              node.staff.map((u) => (
+                <UserRow key={u.id} user={u} onToggle={toggleUser} onEdit={setEditUser} onDelete={removeUser} />
+              ))
             )}
           </Group>
 
@@ -308,6 +349,14 @@ function OfficeCard({
           tenantId={node.tenant.id}
           onClose={() => setAddStaff(false)}
           onCreated={() => { setAddStaff(false); onChanged(); }}
+        />
+      )}
+
+      {editUser && (
+        <EditPermissionsModal
+          user={editUser}
+          onClose={() => setEditUser(null)}
+          onSaved={() => { setEditUser(null); onChanged(); }}
         />
       )}
     </div>
@@ -337,7 +386,14 @@ function Group({ title, action, children }: { title: string; action?: React.Reac
   );
 }
 
-function UserRow({ user, onToggle, onDelete }: { user: User; onToggle: (u: User) => void; onDelete?: (u: User) => void }) {
+function UserRow({
+  user, onToggle, onEdit, onDelete,
+}: {
+  user: User;
+  onToggle: (u: User) => void;
+  onEdit?: (u: User) => void;
+  onDelete?: (u: User) => void;
+}) {
   return (
     <div className="flex items-center justify-between py-2">
       <div className="min-w-0">
@@ -348,6 +404,15 @@ function UserRow({ user, onToggle, onDelete }: { user: User; onToggle: (u: User)
         <p className="truncate text-xs text-neutral-400">{user.email}</p>
       </div>
       <div className="flex shrink-0 gap-1">
+        {onEdit && (
+          <button
+            onClick={() => onEdit(user)}
+            title="Editar permissões"
+            className="rounded-lg p-1.5 text-neutral-500 hover:bg-neutral-100"
+          >
+            <Pencil size={15} />
+          </button>
+        )}
         <button
           onClick={() => onToggle(user)}
           title={user.is_active ? "Suspender" : "Reativar"}
@@ -447,24 +512,7 @@ function AddStaffModal({ tenantId, onClose, onCreated }: { tenantId: string; onC
           </div>
         </div>
 
-        <div>
-          <p className="mb-1.5 text-sm font-medium text-neutral-600">Acesso a módulos</p>
-          <p className="mb-2 text-xs text-neutral-400">Nenhum marcado = acesso a tudo (você ajusta depois).</p>
-          <div className="flex flex-wrap gap-1.5">
-            {MODULES.map((m) => (
-              <button
-                key={m.key}
-                type="button"
-                onClick={() => toggle(m.key)}
-                className={`rounded-pill px-2.5 py-1 text-xs font-medium ${
-                  modules.includes(m.key) ? "bg-primary-500 text-white" : "bg-neutral-100 text-neutral-600 hover:bg-neutral-200"
-                }`}
-              >
-                {m.label}
-              </button>
-            ))}
-          </div>
-        </div>
+        <ModulePicker selected={modules} onToggle={toggle} />
         {error && <p className="rounded-lg bg-red-50 p-2 text-sm text-danger">{error}</p>}
         <button
           onClick={save}
@@ -472,6 +520,60 @@ function AddStaffModal({ tenantId, onClose, onCreated }: { tenantId: string; onC
           className="w-full rounded-pill bg-accent-400 py-2.5 font-semibold text-white transition hover:bg-accent-500 disabled:opacity-60"
         >
           {saving ? "Cadastrando..." : "Cadastrar e enviar senha"}
+        </button>
+      </div>
+    </Modal>
+  );
+}
+
+/**
+ * Edita `allowed_modules` de um funcionário JÁ cadastrado. `AddStaffModal` só marca o acesso na
+ * criação; até aqui não havia nenhum jeito de VER ou AJUSTAR depois — o Master tinha de consultar
+ * a rede do navegador para descobrir por que um item da sidebar sumiu para alguém.
+ *
+ * Só faz sentido para `role === "sub_user"`: o dono (`owner`) sempre vê tudo, independente de
+ * `allowed_modules` (`lib/access.ts::hasModule`), então editar a lista dele não teria efeito
+ * nenhum — `OfficeCard` não oferece este modal para a linha do admin.
+ */
+function EditPermissionsModal({
+  user, onClose, onSaved,
+}: {
+  user: User;
+  onClose: () => void;
+  onSaved: () => void;
+}) {
+  const [modules, setModules] = useState<string[]>(user.allowed_modules);
+  const [error, setError] = useState<string | null>(null);
+  const [saving, setSaving] = useState(false);
+
+  function toggle(key: string) {
+    setModules((m) => (m.includes(key) ? m.filter((k) => k !== key) : [...m, key]));
+  }
+
+  async function save() {
+    setError(null);
+    setSaving(true);
+    try {
+      await api.patch(`/admin/users/${user.id}`, { allowed_modules: modules });
+      onSaved();
+    } catch (err) {
+      setError(apiErrorMessage(err));
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  return (
+    <Modal title={`Permissões de ${user.name}`} open onClose={onClose}>
+      <div className="space-y-3">
+        <ModulePicker selected={modules} onToggle={toggle} />
+        {error && <p className="rounded-lg bg-red-50 p-2 text-sm text-danger">{error}</p>}
+        <button
+          onClick={save}
+          disabled={saving}
+          className="w-full rounded-pill bg-accent-400 py-2.5 font-semibold text-white transition hover:bg-accent-500 disabled:opacity-60"
+        >
+          {saving ? "Salvando..." : "Salvar permissões"}
         </button>
       </div>
     </Modal>
