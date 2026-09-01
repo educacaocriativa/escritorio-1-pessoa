@@ -134,6 +134,36 @@ def test_contato_sem_resposta_nossa_aparece(db, usuario_owner, conversa_esperand
     assert any(a.kind == "comercial.contato.esperando_resposta" for a in ausencias)
 
 
+def test_silencio_e_sumido_contam_certo_perto_da_meia_noite_utc(db, usuario_owner):
+    """Mesmo achado de `test_card_parado_conta_certo_perto_da_meia_noite_utc`, agora para as
+    duas regras que leem `WhatsappMessage.created_at` — 01h UTC de 06/08 é 22h de 05/08 em São
+    Paulo (UTC-3): dia de calendário DIFERENTE do de `.date()` cru sobre o instante UTC.
+
+    Precisa vir DEPOIS de `CORTE_AUTORIA` (05/08/2026, ver `_ultimas_mensagens`) para não ser
+    filtrada por um motivo alheio a este teste — por isso `hoje`/`agora` ficam bem à frente
+    (15/09), com folga sobre os dois limiares padrão (30 dias de `contato_sumido_dias`, 24h de
+    `sem_resposta_nossa_horas`)."""
+    chat = _chat(db, jid="5511955554444@s.whatsapp.net", titulo="Roberto")
+    db.add(
+        WhatsappMessage(
+            tenant_id=TENANT, chat_id=chat.id, direction=DIRECTION_IN,
+            text_body="oi, tudo bem?", created_at=datetime(2026, 8, 6, 1, 0, tzinfo=UTC),
+        )
+    )
+    db.commit()
+
+    ausencias = coletar(
+        db, user=usuario_owner, hoje=date(2026, 9, 15),
+        agora=datetime(2026, 9, 15, 2, 0, tzinfo=UTC),
+    ).ditas
+
+    # 15/09 - 05/08 (local) = 41, não 40 (15/09 - 06/08 UTC)
+    silencio = next(a for a in ausencias if a.kind == "comercial.contato.esperando_resposta")
+    assert silencio.dias == 41
+    sumido = next(a for a in ausencias if a.kind == "comercial.contato.sumido")
+    assert sumido.dias == 41
+
+
 def test_ignora_mensagens_anteriores_a_correcao_de_autoria(
     db, usuario_owner, conversa_antiga_toda_in
 ):
@@ -149,6 +179,24 @@ def test_card_parado_usa_stage_entered_at(db, usuario_owner, card_parado_ha_12_d
     ausencias = coletar(db, user=usuario_owner, hoje=HOJE).ditas
     parado = next(a for a in ausencias if a.kind == "comercial.card.parado")
     assert parado.dias == 12
+
+
+def test_card_parado_conta_certo_perto_da_meia_noite_utc(db, usuario_owner):
+    """01h UTC de 25/07 é 22h de 24/07 em São Paulo (UTC-3, o fuso padrão) — dia de calendário
+    DIFERENTE do de `stage_entered_at.date()` cru. Achado ao vivo no CI (madrugada de
+    2026-09-01): comparar por essa data crua em vez de convertê-la pro fuso do tenant fazia a
+    conta sair 1 dia curta (mesma janela de 3h se repete toda madrugada, `America/Sao_Paulo`)."""
+    etapa = PipelineStage(tenant_id=TENANT, name="Em contato", position=1)
+    db.add(etapa)
+    db.flush()
+    db.add(Client(
+        id="c-madrugada", tenant_id=TENANT, name="Carlos", stage_id=etapa.id,
+        stage_entered_at=datetime(2026, 7, 25, 1, 0, tzinfo=UTC),
+    ))
+    db.commit()
+    ausencias = coletar(db, user=usuario_owner, hoje=HOJE).ditas
+    parado = next(a for a in ausencias if a.kind == "comercial.card.parado")
+    assert parado.dias == 13  # 06/08 - 24/07 (local) = 13, não 12 (06/08 - 25/07 UTC)
 
 
 def test_topo_seco_quando_nao_ha_formulario_na_janela(db, usuario_owner):
