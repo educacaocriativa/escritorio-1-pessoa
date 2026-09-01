@@ -14,6 +14,8 @@ def setup_function():
     vc._VISTAS.clear()
     vc._HISTORICO.clear()
     vc._ULTIMAS_RESPOSTAS.clear()
+    vc._ENVIOS_RECENTES.clear()
+    vc._BREAKER_ACIONADO.clear()
 
 
 # ── Dedup de reentrega ──────────────────────────────────────────────────────────────────────
@@ -791,3 +793,288 @@ def test_responder_audio_ignora_reentrega_do_mesmo_wa_message_id(db: Session, mo
         )
 
     assert chamadas["n"] == 1  # não paga a Groq de novo numa reentrega
+
+
+# ── Achado ao vivo, tenant Dóro Eventos, 2026-09-01 ─────────────────────────────────────────
+#
+# Card movido → notificação de CRM mandada pro MESMO número da self-chat (fora deste módulo,
+# `notifications/service.py`) → nunca registrada aqui → o eco dela virou "pergunta nova" →
+# `pergunta.responder` explodiu nesse texto → a DESCULPA também nunca foi registrada → o eco DA
+# DESCULPA virou "pergunta nova" de novo → mesma exceção → mesma desculpa → loop sem fim (6+
+# repetições no WhatsApp do dono, até ele desconectar a conta pelo celular).
+
+
+def test_responder_registra_a_desculpa_contra_o_proprio_eco(db: Session, monkeypatch):
+    """A desculpa mandada quando `pergunta.responder` falha precisa entrar na MESMA guarda de
+    eco que a resposta de sucesso — senão, se ela mesma ecoar, vira "pergunta nova", gera a
+    MESMA exceção, gera a MESMA desculpa, e o loop nunca para."""
+    user = User(
+        tenant_id=TENANT, email="dono21@example.com", name="Dono", password_hash="x",
+        phone="5511999990018",
+    )
+    db.add(user)
+    db.commit()
+
+    chamadas = {"n": 0}
+
+    def _explode(db, *, user, pergunta, historico):
+        chamadas["n"] += 1
+        raise RuntimeError("Claude indisponível")
+
+    monkeypatch.setattr(vc.pergunta_service, "responder", _explode)
+    monkeypatch.setattr(vc.whatsapp, "send_text", lambda **_kw: "sent")
+
+    resultado = vc.responder(
+        db, tenant_id=TENANT, phone="5511999990018", wa_message_id="wamid.falhaeco1",
+        texto="oi", profile=None,
+    )
+    assert chamadas["n"] == 1
+
+    eco_da_desculpa = vc.responder(
+        db, tenant_id=TENANT, phone="5511999990018", wa_message_id="wamid.falhaeco2",
+        texto=resultado.resposta, profile=None,
+    )
+
+    assert eco_da_desculpa is None  # o eco da PRÓPRIA desculpa não pode virar pergunta nova
+    assert chamadas["n"] == 1  # e portanto não chama pergunta.responder de novo
+
+
+def test_registrar_envio_externo_evita_que_uma_notificacao_vire_pergunta(
+    db: Session, monkeypatch,
+):
+    """`notifications/service.py::process_pending` manda notificações de CRM (ex.: aviso de card
+    movido) pro MESMO número que a self-chat escuta — sem registrar esse envio aqui, o eco dessa
+    notificação bate na condição de roteamento de self-chat e vira "pergunta nova" pra Vima."""
+    chamadas = {"n": 0}
+    monkeypatch.setattr(
+        vc.pergunta_service, "responder",
+        lambda *a, **kw: chamadas.update(n=chamadas["n"] + 1),
+    )
+    monkeypatch.setattr(vc.whatsapp, "send_text", lambda **_kw: "sent")
+
+    texto_notificacao = (
+        '📌 O cliente Aldemiro Cassetulla Jr foi movido para a etapa "Contrato Fechado".'
+    )
+    vc.registrar_envio_externo(
+        tenant_id=TENANT, phone="5511999990019", texto=texto_notificacao,
+    )
+
+    resultado = vc.responder(
+        db, tenant_id=TENANT, phone="5511999990019", wa_message_id="wamid.notif.eco",
+        texto=texto_notificacao, profile=None,
+    )
+
+    assert resultado is None
+    assert chamadas["n"] == 0  # nunca virou pergunta pra Vima
+
+
+# ── Circuit breaker: barreira dura contra QUALQUER loop, conhecido ou não ──────────────────
+#
+# A guarda de eco acima cobre o mecanismo específico já mapeado (texto idêntico ecoado). O
+# circuit breaker é a barreira de ÚLTIMA linha, indiferente ao MOTIVO: se a Vima mandar mais que
+# `LIMITE_BREAKER` respostas pro mesmo número em menos de `TTL_BREAKER_JANELA_SEGUNDOS`, para de
+# mandar — mesmo que um bug futuro faça o eco chegar com texto levemente diferente a cada vez, ou
+# gere uma pergunta "nova" de verdade a cada rodada.
+
+
+def _usuario_breaker(db: Session, phone: str, sufixo: str) -> User:
+    user = User(
+        tenant_id=TENANT, email=f"breaker{sufixo}@example.com", name="Dono", password_hash="x",
+        phone=phone, role="owner",
+    )
+    db.add(user)
+    db.commit()
+    return user
+
+
+def test_circuit_breaker_bloqueia_apos_o_limite_de_respostas_na_janela(
+    db: Session, monkeypatch,
+):
+    from app.modules.vima.pergunta import Resposta
+
+    _usuario_breaker(db, "5511999990020", "1")
+
+    agora = [4000.0]
+    monkeypatch.setattr(vc.time, "monotonic", lambda: agora[0])
+
+    chamadas = {"n": 0}
+
+    def _fake_pergunta_responder(db, *, user, pergunta, historico):
+        chamadas["n"] += 1
+        return Resposta(texto=f"resposta {chamadas['n']}", por_ia=True)
+
+    monkeypatch.setattr(vc.pergunta_service, "responder", _fake_pergunta_responder)
+    monkeypatch.setattr(vc.whatsapp, "send_text", lambda **_kw: "sent")
+
+    for i in range(vc.LIMITE_BREAKER + 2):
+        agora[0] += 1  # todas dentro da janela de vc.TTL_BREAKER_JANELA_SEGUNDOS
+        vc.responder(
+            db, tenant_id=TENANT, phone="5511999990020", wa_message_id=f"wamid.breaker.{i}",
+            texto=f"pergunta distinta {i}", profile=None,
+        )
+
+    assert chamadas["n"] == vc.LIMITE_BREAKER  # bloqueou a partir do limite — nunca passou dele
+
+
+def test_circuit_breaker_loga_critical_quando_aciona(db: Session, monkeypatch, caplog):
+    from app.modules.vima.pergunta import Resposta
+
+    _usuario_breaker(db, "5511999990022", "2")
+
+    agora = [5000.0]
+    monkeypatch.setattr(vc.time, "monotonic", lambda: agora[0])
+    monkeypatch.setattr(
+        vc.pergunta_service, "responder",
+        lambda db, *, user, pergunta, historico: Resposta(texto="ok", por_ia=True),
+    )
+    monkeypatch.setattr(vc.whatsapp, "send_text", lambda **_kw: "sent")
+
+    for i in range(vc.LIMITE_BREAKER):
+        agora[0] += 1
+        vc.responder(
+            db, tenant_id=TENANT, phone="5511999990022", wa_message_id=f"wamid.critlog.{i}",
+            texto=f"pergunta {i}", profile=None,
+        )
+
+    with caplog.at_level("CRITICAL", logger="e1p.vima"):
+        vc.responder(
+            db, tenant_id=TENANT, phone="5511999990022", wa_message_id="wamid.critlog.extra",
+            texto="pergunta extra", profile=None,
+        )
+
+    assert any("circuit breaker" in r.message.lower() for r in caplog.records)
+
+
+def test_circuit_breaker_alerta_o_owner_por_email_quando_aciona(db: Session, monkeypatch):
+    from app.modules.vima.pergunta import Resposta
+
+    _usuario_breaker(db, "5511999990023", "3")
+
+    agora = [6000.0]
+    monkeypatch.setattr(vc.time, "monotonic", lambda: agora[0])
+    monkeypatch.setattr(
+        vc.pergunta_service, "responder",
+        lambda db, *, user, pergunta, historico: Resposta(texto="ok", por_ia=True),
+    )
+    monkeypatch.setattr(vc.whatsapp, "send_text", lambda **_kw: "sent")
+
+    capturado = {}
+    monkeypatch.setattr(
+        vc.email, "send_email",
+        lambda *, to, subject, body: capturado.update(to=to, subject=subject, body=body)
+        or "sent",
+    )
+
+    for i in range(vc.LIMITE_BREAKER):
+        agora[0] += 1
+        vc.responder(
+            db, tenant_id=TENANT, phone="5511999990023", wa_message_id=f"wamid.mail.{i}",
+            texto=f"pergunta {i}", profile=None,
+        )
+    vc.responder(
+        db, tenant_id=TENANT, phone="5511999990023", wa_message_id="wamid.mail.extra",
+        texto="pergunta extra", profile=None,
+    )
+
+    # NUNCA por WhatsApp (é o canal sob suspeita) — o alerta sai por e-mail, canal
+    # estruturalmente separado do que pode estar em loop.
+    assert capturado["to"] == "breaker3@example.com"
+    assert "5511999990023" in capturado["body"]
+
+
+def test_circuit_breaker_nao_manda_mais_nada_uma_vez_acionado(db: Session, monkeypatch):
+    """Depois de acionar, nem a PRÓPRIA tentativa que estourou o limite manda mensagem — o
+    breaker decide ANTES de chamar `pergunta.responder`, não depois."""
+    from app.modules.vima.pergunta import Resposta
+
+    _usuario_breaker(db, "5511999990024", "4")
+
+    agora = [7000.0]
+    monkeypatch.setattr(vc.time, "monotonic", lambda: agora[0])
+    monkeypatch.setattr(
+        vc.pergunta_service, "responder",
+        lambda db, *, user, pergunta, historico: Resposta(texto="ok", por_ia=True),
+    )
+
+    enviados = {"n": 0}
+    monkeypatch.setattr(
+        vc.whatsapp, "send_text", lambda **_kw: enviados.update(n=enviados["n"] + 1) or "sent",
+    )
+
+    for i in range(vc.LIMITE_BREAKER):
+        agora[0] += 1
+        vc.responder(
+            db, tenant_id=TENANT, phone="5511999990024", wa_message_id=f"wamid.semenvio.{i}",
+            texto=f"pergunta {i}", profile=None,
+        )
+    assert enviados["n"] == vc.LIMITE_BREAKER
+
+    resultado = vc.responder(
+        db, tenant_id=TENANT, phone="5511999990024", wa_message_id="wamid.semenvio.extra",
+        texto="pergunta extra", profile=None,
+    )
+
+    assert resultado is None
+    assert enviados["n"] == vc.LIMITE_BREAKER  # a tentativa que estourou não manda nada
+
+
+def test_circuit_breaker_libera_depois_do_cooldown(db: Session, monkeypatch):
+    from app.modules.vima.pergunta import Resposta
+
+    _usuario_breaker(db, "5511999990025", "5")
+
+    agora = [8000.0]
+    monkeypatch.setattr(vc.time, "monotonic", lambda: agora[0])
+
+    chamadas = {"n": 0}
+
+    def _fake_pergunta_responder(db, *, user, pergunta, historico):
+        chamadas["n"] += 1
+        return Resposta(texto=f"resposta {chamadas['n']}", por_ia=True)
+
+    monkeypatch.setattr(vc.pergunta_service, "responder", _fake_pergunta_responder)
+    monkeypatch.setattr(vc.whatsapp, "send_text", lambda **_kw: "sent")
+
+    for i in range(vc.LIMITE_BREAKER + 1):
+        agora[0] += 1
+        vc.responder(
+            db, tenant_id=TENANT, phone="5511999990025", wa_message_id=f"wamid.cooldown.{i}",
+            texto=f"pergunta {i}", profile=None,
+        )
+    assert chamadas["n"] == vc.LIMITE_BREAKER  # bloqueado
+
+    agora[0] += vc.TTL_BREAKER_COOLDOWN_SEGUNDOS + 1
+    vc.responder(
+        db, tenant_id=TENANT, phone="5511999990025", wa_message_id="wamid.cooldown.depois",
+        texto="pergunta depois do cooldown", profile=None,
+    )
+    assert chamadas["n"] == vc.LIMITE_BREAKER + 1  # cooldown passou — volta a responder
+
+
+def test_circuit_breaker_e_por_numero_nao_bloqueia_outro_telefone(db: Session, monkeypatch):
+    from app.modules.vima.pergunta import Resposta
+
+    _usuario_breaker(db, "5511999990026", "6a")
+    _usuario_breaker(db, "5511999990027", "6b")
+
+    agora = [9000.0]
+    monkeypatch.setattr(vc.time, "monotonic", lambda: agora[0])
+    monkeypatch.setattr(
+        vc.pergunta_service, "responder",
+        lambda db, *, user, pergunta, historico: Resposta(texto="ok", por_ia=True),
+    )
+    monkeypatch.setattr(vc.whatsapp, "send_text", lambda **_kw: "sent")
+
+    for i in range(vc.LIMITE_BREAKER + 1):
+        agora[0] += 1
+        vc.responder(
+            db, tenant_id=TENANT, phone="5511999990026", wa_message_id=f"wamid.tel1.{i}",
+            texto=f"pergunta {i}", profile=None,
+        )
+
+    resultado_outro_telefone = vc.responder(
+        db, tenant_id=TENANT, phone="5511999990027", wa_message_id="wamid.tel2.1",
+        texto="pergunta em outro número", profile=None,
+    )
+
+    assert resultado_outro_telefone is not None  # o breaker do telefone 1 não afeta o telefone 2

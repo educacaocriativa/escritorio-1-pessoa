@@ -287,6 +287,21 @@ def process_pending(db: Session, *, tenant_id: str, limit: int = 50) -> int:
                     text=notification.message,
                     profile=profile,
                 )
+                if status == "sent":
+                    # Import tardio (não no topo do módulo): `vima.whatsapp_conversa` importa
+                    # `vima.scheduler`, que por sua vez importa ESTE módulo — import circular se
+                    # feito no nível do módulo. Este texto foi mandado pro `recipient`, que pode
+                    # ser o MESMO número que a self-chat da Vima escuta (ex.: aviso de card
+                    # movido pro dono, `on_client_moved`) — sem registrar aqui, o eco dessa
+                    # notificação bate na condição de roteamento de self-chat e vira "pergunta
+                    # nova" pra Vima (achado ao vivo em produção, tenant Dóro Eventos,
+                    # 2026-09-01; ver `vima/whatsapp_conversa.py::registrar_envio_externo`).
+                    from app.modules.vima.whatsapp_conversa import registrar_envio_externo
+
+                    registrar_envio_externo(
+                        tenant_id=notification.tenant_id, phone=notification.recipient,
+                        texto=notification.message,
+                    )
             notification.status = status
         except Exception as exc:  # noqa: BLE001 — isola a falha de UMA notificação (IV2)
             logger.exception(

@@ -11,9 +11,10 @@ import logging
 import time
 from dataclasses import dataclass
 
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.core import transcription, whatsapp
+from app.core import email, transcription, whatsapp
 from app.core.phone import normalize_br
 from app.modules.auth.models import User
 from app.modules.vima import pergunta as pergunta_service
@@ -38,7 +39,28 @@ _VISTAS: dict[str, float] = {}
 # (`_VISTAS` não pega, pois não é reentrega do MESMO evento). Sem esta guarda, o eco bate na
 # mesma condição de roteamento e vira "pergunta nova": a Vima responde à própria resposta, que
 # ecoa de novo, indefinidamente (achado ao vivo em produção, 2026-08-31).
+#
+# NÃO é escrita só pelas respostas de sucesso (`_marcar_resposta_enviada`, dentro de
+# `_enviar_e_registrar`) — `registrar_envio_externo` deixa QUALQUER outro módulo que mande
+# mensagem pro mesmo número (hoje: `notifications.service.process_pending`, que despacha
+# `on_client_moved` e outros avisos de CRM pro telefone do dono) avisar esta guarda também. Sem
+# isso, o eco de uma notificação normal bate na mesma condição de roteamento de self-chat e vira
+# "pergunta nova" (achado ao vivo em produção, tenant Dóro Eventos, 2026-09-01 — ver também o
+# circuit breaker abaixo, a barreira de última linha para quando um mecanismo de eco NOVO e ainda
+# não mapeado aparecer).
 _ULTIMAS_RESPOSTAS: dict[str, tuple[str, float]] = {}
+
+# Circuit breaker: barreira dura e AGNÓSTICA a mecanismo — cobre qualquer loop de auto-resposta,
+# não só o eco de texto idêntico que `_ULTIMAS_RESPOSTAS` reconhece. Se a Vima mandar
+# `LIMITE_BREAKER` respostas ou mais pro MESMO telefone em menos de `TTL_BREAKER_JANELA_SEGUNDOS`,
+# para de mandar por `TTL_BREAKER_COOLDOWN_SEGUNDOS` e avisa o dono por e-mail (nunca por
+# WhatsApp — é justamente o canal sob suspeita de loop). Ver `_bloqueado_pelo_breaker`.
+TTL_BREAKER_JANELA_SEGUNDOS = 2 * 60
+LIMITE_BREAKER = 3
+TTL_BREAKER_COOLDOWN_SEGUNDOS = 30 * 60
+
+_ENVIOS_RECENTES: dict[str, list[float]] = {}
+_BREAKER_ACIONADO: dict[str, float] = {}
 
 
 @dataclass(frozen=True)
@@ -95,6 +117,85 @@ def _e_eco_da_propria_resposta(chave: str, texto: str) -> bool:
 
 def _marcar_resposta_enviada(chave: str, texto: str) -> None:
     _ULTIMAS_RESPOSTAS[chave] = (texto, time.monotonic() + TTL_DEDUP_SEGUNDOS)
+
+
+def registrar_envio_externo(*, tenant_id: str, phone: str, texto: str) -> None:
+    """Pra código FORA deste módulo que manda uma mensagem pro mesmo número que a self-chat
+    escuta — hoje, `notifications.service.process_pending` logo após um `whatsapp.send_text` bem
+    sucedido. Sem isso, o eco dessa mensagem bate na condição de roteamento de self-chat e vira
+    "pergunta nova" pra Vima (ver docstring de `_ULTIMAS_RESPOSTAS`)."""
+    _marcar_resposta_enviada(_chave(tenant_id, phone), texto)
+
+
+def _janela_de_envios(chave: str) -> list[float]:
+    agora = time.monotonic()
+    vivos = [t for t in _ENVIOS_RECENTES.get(chave, []) if t > agora - TTL_BREAKER_JANELA_SEGUNDOS]
+    _ENVIOS_RECENTES[chave] = vivos
+    return vivos
+
+
+def _breaker_em_cooldown(chave: str) -> bool:
+    expira = _BREAKER_ACIONADO.get(chave)
+    return expira is not None and expira > time.monotonic()
+
+
+def _contar_envio_para_breaker(chave: str) -> None:
+    _janela_de_envios(chave).append(time.monotonic())
+
+
+def _bloqueado_pelo_breaker(db: Session, chave: str, *, tenant_id: str, phone: str) -> bool:
+    """True quando NADA deve ser mandado agora: já em cooldown, ou esta seria a mensagem que
+    estoura `LIMITE_BREAKER` na janela — nesse caso o breaker é acionado NESTA chamada, ANTES de
+    mandar (não depois): a tentativa que estouraria o limite nunca chega a sair."""
+    if _breaker_em_cooldown(chave):
+        return True
+    if len(_janela_de_envios(chave)) >= LIMITE_BREAKER:
+        _acionar_breaker(db, chave, tenant_id=tenant_id, phone=phone)
+        return True
+    return False
+
+
+def _acionar_breaker(db: Session, chave: str, *, tenant_id: str, phone: str) -> None:
+    _BREAKER_ACIONADO[chave] = time.monotonic() + TTL_BREAKER_COOLDOWN_SEGUNDOS
+    logger.critical(
+        "[vima] CIRCUIT BREAKER acionado na self-chat — %d+ respostas em %ds pro mesmo número; "
+        "bloqueada por %dmin. tenant=%s phone=%s",
+        LIMITE_BREAKER, TTL_BREAKER_JANELA_SEGUNDOS, TTL_BREAKER_COOLDOWN_SEGUNDOS // 60,
+        tenant_id, phone,
+    )
+    _alertar_por_email(db, tenant_id=tenant_id, phone=phone)
+
+
+def _alertar_por_email(db: Session, *, tenant_id: str, phone: str) -> None:
+    """SEMPRE por e-mail, NUNCA por WhatsApp — é justamente o canal sob suspeita de loop; e-mail
+    é estruturalmente incapaz de realimentar esse mecanismo."""
+    owner = db.scalar(select(User).where(User.tenant_id == tenant_id, User.role == "owner"))
+    if owner is None or not owner.email:
+        logger.error(
+            "[vima] circuit breaker acionado mas sem e-mail de owner pra avisar: tenant=%s",
+            tenant_id,
+        )
+        return
+    email.send_email(
+        to=owner.email,
+        subject="[e1p] Vima bloqueada — possível loop de auto-resposta no WhatsApp",
+        body=(
+            f"A Vima tentou mandar {LIMITE_BREAKER} respostas seguidas ou mais pro número "
+            f"{phone} em menos de {TTL_BREAKER_JANELA_SEGUNDOS // 60} minutos e foi bloqueada "
+            f"automaticamente por {TTL_BREAKER_COOLDOWN_SEGUNDOS // 60} minutos, como proteção "
+            "contra loop de auto-resposta (eco do WhatsApp). Isso pode indicar um bug — vale "
+            "checar os logs do período (\"CIRCUIT BREAKER\", logger e1p.vima)."
+        ),
+    )
+
+
+def _enviar_e_registrar(*, chave: str, phone: str, texto: str, profile) -> None:
+    """Ponto único por onde toda resposta da Vima na self-chat sai de verdade — registra pra
+    guarda de eco e pro circuit breaker ANTES de mandar, nunca depois: um envio que falhasse
+    silenciosamente em registrar não contaria pro limite, e a barreira dependeria de sorte."""
+    _marcar_resposta_enviada(chave, texto)
+    _contar_envio_para_breaker(chave)
+    whatsapp.send_text(to=phone, text=texto, profile=profile)
 
 
 def _usuario_do_telefone(db: Session, tenant_id: str, phone: str) -> User | None:
@@ -165,8 +266,14 @@ def responder_audio(
     )
     if transcrito is None:
         _marcar_processada(wa_message_id)
+        chave = _chave(tenant_id, phone)
+        if _bloqueado_pelo_breaker(db, chave, tenant_id=tenant_id, phone=phone):
+            logger.warning(
+                "[vima] self-chat (áudio) bloqueada pelo circuit breaker: tenant=%s", tenant_id,
+            )
+            return None
         desculpa = "Não consegui entender o áudio — tenta de novo em instantes."
-        whatsapp.send_text(to=phone, text=desculpa, profile=profile)
+        _enviar_e_registrar(chave=chave, phone=phone, texto=desculpa, profile=profile)
         # `pergunta` fica com um rótulo, não a transcrição — não há transcrição nenhuma pra
         # gravar (é justamente isso que falhou). Ainda assim vira uma linha na conversa: sem
         # ela, a desculpa apareceria sozinha, sem contexto do que a originou.
@@ -209,6 +316,16 @@ def _responder(
         )
         return None
 
+    if _bloqueado_pelo_breaker(db, chave, tenant_id=tenant_id, phone=phone):
+        # Barreira de última linha (ver `_ULTIMAS_RESPOSTAS` e o bloco do circuit breaker no
+        # topo do módulo): independente de reconhecer eco ou não, a Vima já mandou respostas
+        # demais pro mesmo número em pouco tempo — para de mandar.
+        logger.warning(
+            "[vima] self-chat bloqueada pelo circuit breaker: tenant=%s wa_message_id=%s",
+            tenant_id, wa_message_id,
+        )
+        return None
+
     user = _usuario_do_telefone(db, tenant_id, phone)
     if user is None:
         # Defensivo: o chamador já confirmou que o telefone é de um usuário ativo
@@ -225,14 +342,13 @@ def _responder(
         logger.exception("[vima] falha ao responder pergunta via WhatsApp self-chat")
         db.rollback()
         desculpa = "Não consegui responder agora — tenta de novo em instantes."
-        whatsapp.send_text(to=phone, text=desculpa, profile=profile)
+        _enviar_e_registrar(chave=chave, phone=phone, texto=desculpa, profile=profile)
         return Resultado(pergunta=texto, resposta=desculpa)
 
     _guardar_turno(chave, "usuario", texto)
     _guardar_turno(chave, "vima", resposta.texto)
     resposta_final = f"{eco}{resposta.texto}"
-    _marcar_resposta_enviada(chave, resposta_final)
-    whatsapp.send_text(to=phone, text=resposta_final, profile=profile)
+    _enviar_e_registrar(chave=chave, phone=phone, texto=resposta_final, profile=profile)
     logger.info(
         "[vima] self-chat respondida: tenant=%s wa_message_id=%s", tenant_id, wa_message_id,
     )
