@@ -172,6 +172,40 @@ def _cancelar_compromisso(
     return {"compromisso": _evento_json(evento)}
 
 
+def _remarcar_compromisso(
+    db: Session, user: CurrentUser, entrada: dict[str, Any]
+) -> dict[str, Any]:
+    if not entrada.get("confirmado"):
+        return {
+            "erro": (
+                "peça a confirmação explícita do dono antes de chamar esta ferramenta de novo "
+                "com confirmado=true"
+            )
+        }
+
+    evento_atual = agenda_service.get_event(db, entrada["event_id"])
+    duracao_original = evento_atual.ends_at - evento_atual.starts_at
+
+    tz = tenant_timezone(db)
+    dia = date.fromisoformat(entrada["nova_data"])
+    novo_inicio = _combinar_utc(dia, time.fromisoformat(entrada["nova_hora_inicio"]), tz)
+    if entrada.get("nova_hora_fim"):
+        novo_fim = _combinar_utc(dia, time.fromisoformat(entrada["nova_hora_fim"]), tz)
+    else:
+        novo_fim = novo_inicio + duracao_original
+    if novo_fim <= novo_inicio:
+        raise ValueError("nova_hora_fim deve ser depois de nova_hora_inicio")
+
+    evento, conflitos = agenda_service.reschedule_event(
+        db, event_id=entrada["event_id"], tenant_id=user.tenant_id, actor=user.user_id,
+        starts_at=novo_inicio, ends_at=novo_fim, by_ai=True,
+    )
+    return {
+        "compromisso": _evento_json(evento),
+        "conflitos": [_evento_json(c) for c in conflitos],
+    }
+
+
 def _consultar_cliente(
     db: Session, _user: CurrentUser, entrada: dict[str, Any],
 ) -> dict[str, Any]:
@@ -486,6 +520,47 @@ FERRAMENTAS: list[Ferramenta] = [
             },
         },
         executar=_cancelar_compromisso,
+    ),
+    Ferramenta(
+        nome="remarcar_compromisso",
+        modulo="agenda",
+        definicao={
+            "name": "remarcar_compromisso",
+            "description": (
+                "Muda a data/hora de um compromisso existente. Use consultar_agenda primeiro "
+                "para achar o event_id certo. SÓ chame com confirmado=true depois que o dono "
+                "confirmar explicitamente o novo horário numa mensagem anterior."
+            ),
+            "input_schema": {
+                "type": "object",
+                "properties": {
+                    "event_id": {
+                        "type": "string",
+                        "description": "Id do compromisso, obtido via consultar_agenda.",
+                    },
+                    "nova_data": {"type": "string", "description": "Nova data, AAAA-MM-DD."},
+                    "nova_hora_inicio": {
+                        "type": "string", "description": "Nova hora de início, HH:MM.",
+                    },
+                    "nova_hora_fim": {
+                        "type": "string",
+                        "description": (
+                            "Nova hora de término, HH:MM. Se omitida, preserva a duração "
+                            "original."
+                        ),
+                    },
+                    "confirmado": {
+                        "type": "boolean",
+                        "description": (
+                            "true SOMENTE depois que o dono confirmou explicitamente numa "
+                            "mensagem anterior."
+                        ),
+                    },
+                },
+                "required": ["event_id", "nova_data", "nova_hora_inicio", "confirmado"],
+            },
+        },
+        executar=_remarcar_compromisso,
     ),
     Ferramenta(
         nome="consultar_cliente",

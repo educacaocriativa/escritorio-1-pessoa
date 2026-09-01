@@ -34,14 +34,14 @@ def _usuario(role: str = "owner", modulos: list[str] | None = None) -> CurrentUs
 # ── Catálogo e permissão ────────────────────────────────────────────────────────────────────
 
 
-def test_owner_ve_as_treze_ferramentas():
+def test_owner_ve_as_catorze_ferramentas():
     nomes = {f.nome for f in tools.ferramentas_disponiveis(_usuario("owner"))}
     assert nomes == {
         "consultar_recebiveis", "consultar_pagaveis", "consultar_projecao_caixa",
-        "consultar_agenda", "criar_compromisso", "cancelar_compromisso", "consultar_cliente",
-        "consultar_clientes_recentes", "consultar_documentos_juridicos",
-        "consultar_campanhas_marketing", "consultar_estoque_baixo", "consultar_item_estoque",
-        "consultar_clientes_atencao",
+        "consultar_agenda", "criar_compromisso", "cancelar_compromisso",
+        "remarcar_compromisso", "consultar_cliente", "consultar_clientes_recentes",
+        "consultar_documentos_juridicos", "consultar_campanhas_marketing",
+        "consultar_estoque_baixo", "consultar_item_estoque", "consultar_clientes_atencao",
     }
 
 
@@ -68,6 +68,13 @@ def test_sub_usuario_so_de_crm_ve_as_duas_ferramentas_de_cliente():
 def test_sub_usuario_so_de_comercial_so_ve_a_ferramenta_de_atencao():
     nomes = {f.nome for f in tools.ferramentas_disponiveis(_usuario("sub_user", ["comercial"]))}
     assert nomes == {"consultar_clientes_atencao"}
+
+
+def test_sub_usuario_so_de_agenda_ve_a_leitura_e_as_tres_ferramentas_de_escrita():
+    nomes = {f.nome for f in tools.ferramentas_disponiveis(_usuario("sub_user", ["agenda"]))}
+    assert nomes == {
+        "consultar_agenda", "criar_compromisso", "cancelar_compromisso", "remarcar_compromisso",
+    }
 
 
 def test_toda_ferramenta_declara_um_input_schema_valido():
@@ -518,6 +525,100 @@ def test_cancelar_compromisso_ja_cancelado_devolve_erro(db: Session):
     db.commit()
     resultado = json.loads(tools.executar(
         db, _usuario(), "cancelar_compromisso", {"event_id": evento.id, "confirmado": True},
+    ))
+    assert "erro" in resultado
+
+
+# ── remarcar_compromisso ───────────────────────────────────────────────────────────────────
+
+
+def test_remarcar_compromisso_sem_confirmado_nao_escreve(db: Session):
+    from app.modules.agenda.models import KIND_REUNIAO, AgendaEvent
+
+    evento = AgendaEvent(
+        tenant_id=TENANT, title="Reunião", kind=KIND_REUNIAO,
+        starts_at=datetime(2026, 9, 2, 10, 0, tzinfo=UTC),
+        ends_at=datetime(2026, 9, 2, 11, 0, tzinfo=UTC),
+    )
+    db.add(evento)
+    db.commit()
+    resultado = json.loads(tools.executar(
+        db, _usuario(), "remarcar_compromisso",
+        {"event_id": evento.id, "nova_data": "2026-09-03", "nova_hora_inicio": "15:00"},
+    ))
+    assert "erro" in resultado
+    db.refresh(evento)
+    assert evento.starts_at == datetime(2026, 9, 2, 10, 0)
+
+
+def test_remarcar_compromisso_confirmado_preserva_duracao_original(db: Session):
+    from app.modules.agenda.models import KIND_REUNIAO, AgendaEvent
+
+    evento = AgendaEvent(
+        tenant_id=TENANT, title="Reunião", kind=KIND_REUNIAO,
+        starts_at=datetime(2026, 9, 2, 10, 0, tzinfo=UTC),
+        ends_at=datetime(2026, 9, 2, 11, 30, tzinfo=UTC),  # 1h30 de duração
+    )
+    db.add(evento)
+    db.commit()
+    resultado = json.loads(tools.executar(
+        db, _usuario(), "remarcar_compromisso",
+        {"event_id": evento.id, "nova_data": "2026-09-03", "nova_hora_inicio": "15:00",
+         "confirmado": True},
+    ))
+    assert resultado["compromisso"]["inicio"] == "2026-09-03T18:00:00+00:00"
+    assert resultado["compromisso"]["fim"] == "2026-09-03T19:30:00+00:00"
+
+
+def test_remarcar_compromisso_respeita_nova_hora_fim_explicita(db: Session):
+    from app.modules.agenda.models import KIND_REUNIAO, AgendaEvent
+
+    evento = AgendaEvent(
+        tenant_id=TENANT, title="Reunião", kind=KIND_REUNIAO,
+        starts_at=datetime(2026, 9, 2, 10, 0, tzinfo=UTC),
+        ends_at=datetime(2026, 9, 2, 11, 0, tzinfo=UTC),
+    )
+    db.add(evento)
+    db.commit()
+    resultado = json.loads(tools.executar(
+        db, _usuario(), "remarcar_compromisso",
+        {"event_id": evento.id, "nova_data": "2026-09-03", "nova_hora_inicio": "15:00",
+         "nova_hora_fim": "16:00", "confirmado": True},
+    ))
+    assert resultado["compromisso"]["fim"] == "2026-09-03T19:00:00+00:00"
+
+
+def test_remarcar_compromisso_devolve_conflito_sem_bloquear(db: Session):
+    from app.modules.agenda.models import KIND_REUNIAO, AgendaEvent
+
+    alvo = AgendaEvent(
+        tenant_id=TENANT, title="Alvo", kind=KIND_REUNIAO,
+        starts_at=datetime(2026, 9, 2, 10, 0, tzinfo=UTC),
+        ends_at=datetime(2026, 9, 2, 11, 0, tzinfo=UTC),
+    )
+    # nova_hora_inicio "15:00" é hora LOCAL (America/Sao_Paulo, UTC-3) → vira 18:00 UTC. O
+    # concorrente precisa sobrepor a JANELA CONVERTIDA, não o número "15:00" lido cru.
+    outro = AgendaEvent(
+        tenant_id=TENANT, title="Outro compromisso", kind=KIND_REUNIAO,
+        starts_at=datetime(2026, 9, 3, 18, 30, tzinfo=UTC),
+        ends_at=datetime(2026, 9, 3, 19, 30, tzinfo=UTC),
+    )
+    db.add_all([alvo, outro])
+    db.commit()
+    resultado = json.loads(tools.executar(
+        db, _usuario(), "remarcar_compromisso",
+        {"event_id": alvo.id, "nova_data": "2026-09-03", "nova_hora_inicio": "15:00",
+         "confirmado": True},
+    ))
+    assert len(resultado["conflitos"]) == 1
+    assert resultado["conflitos"][0]["titulo"] == "Outro compromisso"
+
+
+def test_remarcar_compromisso_id_inexistente_devolve_erro(db: Session):
+    resultado = json.loads(tools.executar(
+        db, _usuario(), "remarcar_compromisso",
+        {"event_id": "não-existe", "nova_data": "2026-09-03", "nova_hora_inicio": "15:00",
+         "confirmado": True},
     ))
     assert "erro" in resultado
 
