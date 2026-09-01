@@ -166,6 +166,181 @@ def test_responder_guarda_o_turno_para_a_proxima_pergunta(db: Session, monkeypat
     ]
 
 
+def test_responder_devolve_pergunta_e_resposta_quando_respondeu(db: Session, monkeypatch):
+    """O retorno de `responder` é o que `whatsapp_inbox.service` usa pra decidir se grava a
+    troca em `whatsapp_messages` — precisa trazer o texto exato que foi perguntado e o texto
+    exato que foi mandado de volta pelo WhatsApp (ver `test_whatsapp_inbox_self_chat.py`)."""
+    from app.modules.vima.pergunta import Resposta
+
+    user = User(
+        tenant_id=TENANT, email="dono14@example.com", name="Dono", password_hash="x",
+        phone="5511999990010",
+    )
+    db.add(user)
+    db.commit()
+
+    monkeypatch.setattr(
+        vc.pergunta_service, "responder",
+        lambda db, *, user, pergunta, historico: Resposta(texto="R$ 500,00", por_ia=True),
+    )
+    monkeypatch.setattr(vc.whatsapp, "send_text", lambda **_kw: "sent")
+
+    resultado = vc.responder(
+        db, tenant_id=TENANT, phone="5511999990010", wa_message_id="wamid.devolve",
+        texto="quanto tenho a receber?", profile=None,
+    )
+
+    assert resultado == vc.Resultado(pergunta="quanto tenho a receber?", resposta="R$ 500,00")
+
+
+def test_responder_devolve_none_na_reentrega(db: Session, monkeypatch):
+    from app.modules.vima.pergunta import Resposta
+
+    user = User(
+        tenant_id=TENANT, email="dono15@example.com", name="Dono", password_hash="x",
+        phone="5511999990011",
+    )
+    db.add(user)
+    db.commit()
+
+    monkeypatch.setattr(
+        vc.pergunta_service, "responder",
+        lambda db, *, user, pergunta, historico: Resposta(texto="ok", por_ia=True),
+    )
+    monkeypatch.setattr(vc.whatsapp, "send_text", lambda **_kw: "sent")
+
+    primeiro = vc.responder(
+        db, tenant_id=TENANT, phone="5511999990011", wa_message_id="wamid.reentrega",
+        texto="oi", profile=None,
+    )
+    segundo = vc.responder(
+        db, tenant_id=TENANT, phone="5511999990011", wa_message_id="wamid.reentrega",
+        texto="oi", profile=None,
+    )
+
+    assert primeiro is not None
+    assert segundo is None  # reentrega do MESMO wa_message_id — nada novo a gravar
+
+
+def test_responder_devolve_none_no_eco_da_propria_resposta(db: Session, monkeypatch):
+    from app.modules.vima.pergunta import Resposta
+
+    user = User(
+        tenant_id=TENANT, email="dono16@example.com", name="Dono", password_hash="x",
+        phone="5511999990012",
+    )
+    db.add(user)
+    db.commit()
+
+    monkeypatch.setattr(
+        vc.pergunta_service, "responder",
+        lambda db, *, user, pergunta, historico: Resposta(texto="Combinado!", por_ia=True),
+    )
+    monkeypatch.setattr(vc.whatsapp, "send_text", lambda **_kw: "sent")
+
+    vc.responder(
+        db, tenant_id=TENANT, phone="5511999990012", wa_message_id="wamid.pergunta.eco",
+        texto="e essa semana?", profile=None,
+    )
+    eco = vc.responder(
+        db, tenant_id=TENANT, phone="5511999990012", wa_message_id="wamid.eco.eco",
+        texto="Combinado!", profile=None,
+    )
+
+    assert eco is None  # não é pergunta nova — não pode virar uma segunda linha na conversa
+
+
+def test_responder_devolve_none_sem_usuario_correspondente(db: Session, monkeypatch):
+    monkeypatch.setattr(
+        vc.pergunta_service, "responder", lambda *a, **kw: None,
+    )
+    resultado = vc.responder(
+        db, tenant_id=TENANT, phone="5511900009998", wa_message_id="wamid.semuser2",
+        texto="oi", profile=None,
+    )
+    assert resultado is None
+
+
+def test_responder_devolve_pergunta_e_desculpa_quando_a_ia_falha(db: Session, monkeypatch):
+    """A desculpa TAMBÉM precisa ser gravável: é o que explica, na própria conversa do WhatsApp,
+    por que a Vima não respondeu de verdade — sem isso a falha fica visível só nos logs."""
+    user = User(
+        tenant_id=TENANT, email="dono17@example.com", name="Dono", password_hash="x",
+        phone="5511999990013",
+    )
+    db.add(user)
+    db.commit()
+
+    def _explode(db, *, user, pergunta, historico):
+        raise RuntimeError("Claude indisponível")
+
+    monkeypatch.setattr(vc.pergunta_service, "responder", _explode)
+    monkeypatch.setattr(vc.whatsapp, "send_text", lambda **_kw: "sent")
+
+    resultado = vc.responder(
+        db, tenant_id=TENANT, phone="5511999990013", wa_message_id="wamid.falha2",
+        texto="oi", profile=None,
+    )
+
+    assert resultado is not None
+    assert resultado.pergunta == "oi"
+    assert "não consegui" in resultado.resposta.lower()
+
+
+def test_responder_loga_info_quando_respondeu(db: Session, monkeypatch, caplog):
+    from app.modules.vima.pergunta import Resposta
+
+    user = User(
+        tenant_id=TENANT, email="dono18@example.com", name="Dono", password_hash="x",
+        phone="5511999990014",
+    )
+    db.add(user)
+    db.commit()
+
+    monkeypatch.setattr(
+        vc.pergunta_service, "responder",
+        lambda db, *, user, pergunta, historico: Resposta(texto="ok", por_ia=True),
+    )
+    monkeypatch.setattr(vc.whatsapp, "send_text", lambda **_kw: "sent")
+
+    with caplog.at_level("INFO", logger="e1p.vima"):
+        vc.responder(
+            db, tenant_id=TENANT, phone="5511999990014", wa_message_id="wamid.log1",
+            texto="oi", profile=None,
+        )
+
+    assert any("wamid.log1" in r.message for r in caplog.records)
+
+
+def test_responder_loga_info_quando_ignora_eco(db: Session, monkeypatch, caplog):
+    from app.modules.vima.pergunta import Resposta
+
+    user = User(
+        tenant_id=TENANT, email="dono19@example.com", name="Dono", password_hash="x",
+        phone="5511999990015",
+    )
+    db.add(user)
+    db.commit()
+
+    monkeypatch.setattr(
+        vc.pergunta_service, "responder",
+        lambda db, *, user, pergunta, historico: Resposta(texto="Combinado!", por_ia=True),
+    )
+    monkeypatch.setattr(vc.whatsapp, "send_text", lambda **_kw: "sent")
+
+    vc.responder(
+        db, tenant_id=TENANT, phone="5511999990015", wa_message_id="wamid.log.pergunta",
+        texto="e essa semana?", profile=None,
+    )
+    with caplog.at_level("INFO", logger="e1p.vima"):
+        vc.responder(
+            db, tenant_id=TENANT, phone="5511999990015", wa_message_id="wamid.log.eco",
+            texto="Combinado!", profile=None,
+        )
+
+    assert any("eco" in r.message.lower() for r in caplog.records)
+
+
 def test_responder_ignora_reentrega_do_mesmo_wa_message_id(db: Session, monkeypatch):
     from app.modules.vima.pergunta import Resposta
 
@@ -532,6 +707,57 @@ def test_responder_audio_falha_apos_transcricao_preserva_ledger_da_groq_e_manda_
     assert linha.user_id == user.id
     assert linha.audio_seconds == 2.5
     assert linha.tenant_id == TENANT
+
+
+def test_responder_audio_devolve_pergunta_transcrita_e_resposta_com_eco(
+    db: Session, monkeypatch,
+):
+    from app.core.transcription import TranscriptionResult
+    from app.modules.vima.pergunta import Resposta
+
+    user = User(
+        tenant_id=TENANT, email="dono20@example.com", name="Dono", password_hash="x",
+        phone="5511999990016",
+    )
+    db.add(user)
+    db.commit()
+
+    monkeypatch.setattr(
+        vc.transcription, "transcribe",
+        lambda db, *, tenant_id, audio_bytes, mime_type, user_id=None: TranscriptionResult(
+            text="quanto tenho a receber?", audio_seconds=2.1,
+        ),
+    )
+    monkeypatch.setattr(
+        vc.pergunta_service, "responder",
+        lambda db, *, user, pergunta, historico: Resposta(texto="R$ 500,00", por_ia=True),
+    )
+    monkeypatch.setattr(vc.whatsapp, "send_text", lambda **_kw: "sent")
+
+    resultado = vc.responder_audio(
+        db, tenant_id=TENANT, phone="5511999990016", wa_message_id="wamid.audiodevolve",
+        audio_bytes=b"audio-bytes", audio_mime_type="audio/ogg", profile=None,
+    )
+
+    assert resultado == vc.Resultado(
+        pergunta="quanto tenho a receber?",
+        resposta='🎤 "quanto tenho a receber?" — R$ 500,00',
+    )
+
+
+def test_responder_audio_devolve_resultado_quando_nao_entende_o_audio(
+    db: Session, monkeypatch,
+):
+    monkeypatch.setattr(vc.transcription, "transcribe", lambda *a, **kw: None)
+    monkeypatch.setattr(vc.whatsapp, "send_text", lambda **_kw: "sent")
+
+    resultado = vc.responder_audio(
+        db, tenant_id=TENANT, phone="5511999990017", wa_message_id="wamid.audiosemtexto",
+        audio_bytes=b"ruido", audio_mime_type="audio/ogg", profile=None,
+    )
+
+    assert resultado is not None
+    assert "não consegui" in resultado.resposta.lower()
 
 
 def test_responder_audio_ignora_reentrega_do_mesmo_wa_message_id(db: Session, monkeypatch):
