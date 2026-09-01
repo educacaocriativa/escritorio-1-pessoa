@@ -65,6 +65,11 @@ _TIPOS_CRIAVEIS_POR_CHAT = {
     KIND_ATENDIMENTO, KIND_REUNIAO, KIND_AUDIENCIA, KIND_BLOQUEIO, KIND_LEMBRETE,
 }
 _DURACAO_PADRAO = timedelta(hours=1)
+# Mensagem idêntica nas três ferramentas de escrita — extraída para não triplicar o texto.
+_ERRO_CONFIRMACAO = (
+    "peça a confirmação explícita do dono antes de chamar esta ferramenta de novo "
+    "com confirmado=true"
+)
 
 
 def _evento_json(e: AgendaEvent) -> dict[str, Any]:
@@ -106,16 +111,16 @@ def _consultar_agenda(
 def _criar_compromisso(
     db: Session, user: CurrentUser, entrada: dict[str, Any],
 ) -> dict[str, Any]:
+    # Confirmação ANTES do tipo (mesma ordem de cancelar/remarcar): uma chamada não confirmada
+    # com tipo inválido deve pedir confirmação, não reprovar o tipo — nudge o modelo para o
+    # reparo certo (peça confirmação de novo) em vez de um erro que ele pode tentar "consertar"
+    # trocando o tipo por conta própria.
+    if not entrada.get("confirmado"):
+        return {"erro": _ERRO_CONFIRMACAO}
+
     tipo = entrada["tipo"]
     if tipo not in _TIPOS_CRIAVEIS_POR_CHAT:
         raise ValueError(f"tipo inválido para criar por chat: {tipo}")
-    if not entrada.get("confirmado"):
-        return {
-            "erro": (
-                "peça a confirmação explícita do dono antes de chamar esta ferramenta de novo "
-                "com confirmado=true"
-            )
-        }
 
     tz = tenant_timezone(db)
     dia = date.fromisoformat(entrada["data"])
@@ -159,12 +164,15 @@ def _cancelar_compromisso(
     db: Session, user: CurrentUser, entrada: dict[str, Any]
 ) -> dict[str, Any]:
     if not entrada.get("confirmado"):
-        return {
-            "erro": (
-                "peça a confirmação explícita do dono antes de chamar esta ferramenta de novo "
-                "com confirmado=true"
-            )
-        }
+        return {"erro": _ERRO_CONFIRMACAO}
+    # Mesma restrição de tipo de `criar_compromisso` (Regra de Ouro nº 3 / achado da revisão
+    # final): sem isto, `consultar_agenda` devolve eventos de QUALQUER tipo e a Vima podia
+    # cancelar um prazo jurídico ou uma cobrança por chat — pior que criar, já que cancelar é
+    # terminal (STATUS_CANCELLED não sai de TERMINAL_STATUSES). Busca o evento ANTES de cancelar
+    # para checar o tipo — uma query a mais, aceitável pela correção que ela compra.
+    evento = agenda_service.get_event(db, entrada["event_id"])
+    if evento.kind not in _TIPOS_CRIAVEIS_POR_CHAT:
+        raise ValueError(f"tipo não editável por chat: {evento.kind}")
     evento = agenda_service.cancel_event(
         db, event_id=entrada["event_id"], tenant_id=user.tenant_id, actor=user.user_id,
         by_ai=True,
@@ -176,14 +184,13 @@ def _remarcar_compromisso(
     db: Session, user: CurrentUser, entrada: dict[str, Any]
 ) -> dict[str, Any]:
     if not entrada.get("confirmado"):
-        return {
-            "erro": (
-                "peça a confirmação explícita do dono antes de chamar esta ferramenta de novo "
-                "com confirmado=true"
-            )
-        }
+        return {"erro": _ERRO_CONFIRMACAO}
 
     evento_atual = agenda_service.get_event(db, entrada["event_id"])
+    # Mesma restrição de tipo de `cancelar_compromisso`/`criar_compromisso` — reusa o evento já
+    # buscado para calcular `duracao_original`, sem query extra.
+    if evento_atual.kind not in _TIPOS_CRIAVEIS_POR_CHAT:
+        raise ValueError(f"tipo não editável por chat: {evento_atual.kind}")
     duracao_original = evento_atual.ends_at - evento_atual.starts_at
 
     tz = tenant_timezone(db)
@@ -471,7 +478,10 @@ FERRAMENTAS: list[Ferramenta] = [
                     "hora_inicio": {"type": "string", "description": "Hora de início, HH:MM."},
                     "hora_fim": {
                         "type": "string",
-                        "description": "Hora de término, HH:MM. Se omitida, dura 1h.",
+                        "description": (
+                            "Hora de término, HH:MM. Se omitida, dura 1h. (mesmo dia de data — "
+                            "não representa compromissos que atravessam a meia-noite)"
+                        ),
                     },
                     "cliente": {
                         "type": "string",
@@ -546,7 +556,8 @@ FERRAMENTAS: list[Ferramenta] = [
                         "type": "string",
                         "description": (
                             "Nova hora de término, HH:MM. Se omitida, preserva a duração "
-                            "original."
+                            "original. (mesmo dia de nova_data — não representa compromissos "
+                            "que atravessam a meia-noite)"
                         ),
                     },
                     "confirmado": {
@@ -744,7 +755,13 @@ def executar(db: Session, user: CurrentUser, nome: str, entrada: dict[str, Any])
     try:
         resultado = ferramenta.executar(db, user, entrada)
     except (agenda_service.AgendaError, ValueError) as exc:
+        # Defesa em profundidade: nenhum caminho hoje deixa a sessão suja neste ponto (todo
+        # `raise` acontece antes de qualquer mutação), mas a sessão sobrevive a até 6 turnos de
+        # tool-use (`ai.complete_with_tools`'s `max_tool_turns`) — um autoflush futuro não deve
+        # arriscar commitar estado parcial de uma escrita que falhou no meio.
+        db.rollback()
         return json.dumps({"erro": str(exc)})
     except Exception:  # noqa: BLE001 — tool_result sempre existe; a Claude decide o que dizer.
+        db.rollback()
         return json.dumps({"erro": "não foi possível consultar isso agora"})
     return json.dumps(resultado, default=str, ensure_ascii=False)

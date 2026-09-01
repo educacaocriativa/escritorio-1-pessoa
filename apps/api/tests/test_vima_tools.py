@@ -4,8 +4,10 @@ contrato "nunca deixa exceção subir crua" (o loop de tool-use precisa de um to
 import json
 from datetime import UTC, date, datetime, timedelta
 
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from app.core.audit import AuditEntry
 from app.core.tenancy import CurrentUser
 from app.modules.crm.models import Client, PipelineStage
 from app.modules.juridico.models import LegalDocument
@@ -29,6 +31,18 @@ def _usuario(role: str = "owner", modulos: list[str] | None = None) -> CurrentUs
         user_id="u1", tenant_id=TENANT, role=role,
         allowed_modules=modulos or [], is_platform_admin=False,
     )
+
+
+def _latest_audit_is_ai(db: Session, action: str) -> bool:
+    # Réplica exata do helper de `test_agenda.py::_latest_audit_is_ai` — mesma query, mesmo
+    # contrato, para não inventar um segundo jeito de checar o mesmo rastro.
+    entry = db.scalars(
+        select(AuditEntry)
+        .where(AuditEntry.action == action)
+        .order_by(AuditEntry.created_at.desc())
+    ).first()
+    assert entry is not None, f"nenhum AuditEntry para {action}"
+    return entry.is_ai
 
 
 # ── Catálogo e permissão ────────────────────────────────────────────────────────────────────
@@ -399,6 +413,8 @@ def test_criar_compromisso_sem_confirmado_nao_escreve(db: Session):
 
 
 def test_criar_compromisso_confirmado_cria_com_duracao_padrao_de_1h(db: Session):
+    from app.modules.agenda.models import AgendaEvent
+
     resultado = json.loads(tools.executar(
         db, _usuario(), "criar_compromisso",
         {"titulo": "Falar com o Carlos", "tipo": "reuniao", "data": "2026-09-02",
@@ -408,6 +424,11 @@ def test_criar_compromisso_confirmado_cria_com_duracao_padrao_de_1h(db: Session)
     assert resultado["compromisso"]["inicio"] == "2026-09-02T13:30:00+00:00"
     assert resultado["compromisso"]["fim"] == "2026-09-02T14:30:00+00:00"
     assert resultado["conflitos"] == []
+    # Regra de Ouro nº 3: escrita originada pela Vima carimba is_ai/created_by_ai — o propósito
+    # inteiro desta fatia (achado #1 da revisão final: zero teste cobria isto antes).
+    assert _latest_audit_is_ai(db, "agenda.event.create") is True
+    evento = db.get(AgendaEvent, resultado["compromisso"]["id"])
+    assert evento.created_by_ai is True
 
 
 def test_criar_compromisso_respeita_hora_fim_explicita(db: Session):
@@ -426,7 +447,10 @@ def test_criar_compromisso_tipo_nao_criavel_devolve_erro(db: Session):
         {"titulo": "X", "tipo": "prazo", "data": "2026-09-02", "hora_inicio": "10:00",
          "confirmado": True},
     ))
-    assert "erro" in resultado
+    # Prova que a mensagem REAL (ValueError específico, não o "não foi possível" genérico) chega
+    # até quem chamou — achado #8 da revisão final: até aqui, só "erro" in resultado era checado,
+    # o que continuaria passando mesmo se o `except (AgendaError, ValueError)` fosse apagado.
+    assert "tipo inválido para criar por chat" in resultado["erro"]
 
 
 def test_criar_compromisso_devolve_conflito_sem_bloquear(db: Session):
@@ -504,13 +528,15 @@ def test_cancelar_compromisso_confirmado_cancela(db: Session):
         db, _usuario(), "cancelar_compromisso", {"event_id": evento.id, "confirmado": True},
     ))
     assert resultado["compromisso"]["status"] == "cancelled"
+    assert _latest_audit_is_ai(db, "agenda.event.cancel") is True
 
 
 def test_cancelar_compromisso_id_inexistente_devolve_erro(db: Session):
     resultado = json.loads(tools.executar(
         db, _usuario(), "cancelar_compromisso", {"event_id": "não-existe", "confirmado": True},
     ))
-    assert "erro" in resultado
+    # Mensagem REAL do AgendaError (`get_event`), não o genérico — mesmo achado #8.
+    assert "não encontrado" in resultado["erro"]
 
 
 def test_cancelar_compromisso_ja_cancelado_devolve_erro(db: Session):
@@ -527,6 +553,28 @@ def test_cancelar_compromisso_ja_cancelado_devolve_erro(db: Session):
         db, _usuario(), "cancelar_compromisso", {"event_id": evento.id, "confirmado": True},
     ))
     assert "erro" in resultado
+
+
+def test_cancelar_compromisso_tipo_nao_editavel_devolve_erro(db: Session):
+    # Achado #3 da revisão final: `cancelar_compromisso`/`remarcar_compromisso` recebem um
+    # `event_id` livre de `consultar_agenda`, que devolve eventos de QUALQUER tipo — sem esta
+    # checagem, a Vima podia cancelar um prazo jurídico ou uma cobrança por chat. Mesma lista
+    # `_TIPOS_CRIAVEIS_POR_CHAT` de `criar_compromisso`.
+    from app.modules.agenda.models import KIND_PRAZO, STATUS_SCHEDULED, AgendaEvent
+
+    evento = AgendaEvent(
+        tenant_id=TENANT, title="Prazo processual", kind=KIND_PRAZO,
+        starts_at=datetime(2026, 9, 2, 10, 0, tzinfo=UTC),
+        ends_at=datetime(2026, 9, 2, 11, 0, tzinfo=UTC),
+    )
+    db.add(evento)
+    db.commit()
+    resultado = json.loads(tools.executar(
+        db, _usuario(), "cancelar_compromisso", {"event_id": evento.id, "confirmado": True},
+    ))
+    assert "erro" in resultado
+    db.refresh(evento)
+    assert evento.status == STATUS_SCHEDULED
 
 
 # ── remarcar_compromisso ───────────────────────────────────────────────────────────────────
@@ -568,6 +616,7 @@ def test_remarcar_compromisso_confirmado_preserva_duracao_original(db: Session):
     ))
     assert resultado["compromisso"]["inicio"] == "2026-09-03T18:00:00+00:00"
     assert resultado["compromisso"]["fim"] == "2026-09-03T19:30:00+00:00"
+    assert _latest_audit_is_ai(db, "agenda.event.reschedule") is True
 
 
 def test_remarcar_compromisso_respeita_nova_hora_fim_explicita(db: Session):
@@ -620,7 +669,55 @@ def test_remarcar_compromisso_id_inexistente_devolve_erro(db: Session):
         {"event_id": "não-existe", "nova_data": "2026-09-03", "nova_hora_inicio": "15:00",
          "confirmado": True},
     ))
+    # Mesma checagem de conteúdo do achado #8.
+    assert "não encontrado" in resultado["erro"]
+
+
+def test_remarcar_compromisso_tipo_nao_editavel_devolve_erro(db: Session):
+    # Mesma checagem de tipo do achado #3, agora para remarcar — usa cobranca_receber para
+    # variar em relação ao prazo já coberto em cancelar_compromisso.
+    from app.modules.agenda.models import KIND_COBRANCA_RECEBER, AgendaEvent
+
+    evento = AgendaEvent(
+        tenant_id=TENANT, title="Cobrança", kind=KIND_COBRANCA_RECEBER,
+        starts_at=datetime(2026, 9, 2, 10, 0, tzinfo=UTC),
+        ends_at=datetime(2026, 9, 2, 11, 0, tzinfo=UTC),
+    )
+    db.add(evento)
+    db.commit()
+    resultado = json.loads(tools.executar(
+        db, _usuario(), "remarcar_compromisso",
+        {"event_id": evento.id, "nova_data": "2026-09-03", "nova_hora_inicio": "15:00",
+         "confirmado": True},
+    ))
     assert "erro" in resultado
+    db.refresh(evento)
+    assert evento.starts_at == datetime(2026, 9, 2, 10, 0)
+    assert evento.ends_at == datetime(2026, 9, 2, 11, 0)
+
+
+def test_remarcar_compromisso_evento_terminal_devolve_erro(db: Session):
+    # Achado #7 da revisão final: `cancelar_compromisso` tem
+    # `test_cancelar_compromisso_ja_cancelado_devolve_erro`; `remarcar_compromisso` não tinha
+    # equivalente — `reschedule_event` também rejeita TERMINAL_STATUSES (cancelado ou feito).
+    from app.modules.agenda.models import KIND_REUNIAO, STATUS_CANCELLED, AgendaEvent
+
+    evento = AgendaEvent(
+        tenant_id=TENANT, title="Reunião", kind=KIND_REUNIAO, status=STATUS_CANCELLED,
+        starts_at=datetime(2026, 9, 2, 10, 0, tzinfo=UTC),
+        ends_at=datetime(2026, 9, 2, 11, 0, tzinfo=UTC),
+    )
+    db.add(evento)
+    db.commit()
+    resultado = json.loads(tools.executar(
+        db, _usuario(), "remarcar_compromisso",
+        {"event_id": evento.id, "nova_data": "2026-09-03", "nova_hora_inicio": "15:00",
+         "confirmado": True},
+    ))
+    assert "erro" in resultado
+    db.refresh(evento)
+    assert evento.starts_at == datetime(2026, 9, 2, 10, 0)
+    assert evento.ends_at == datetime(2026, 9, 2, 11, 0)
 
 
 # ── Falha nunca sobe crua ───────────────────────────────────────────────────────────────────

@@ -76,6 +76,36 @@ def test_historico_entra_no_texto_mandado_a_claude(db: Session, monkeypatch):
     assert "e essa semana?" in capturado["user_message"]
 
 
+def test_entrada_de_ferramenta_e_desmascarada_antes_de_executar(db: Session, monkeypatch):
+    # Achado #2 da revisão final: `_executar` mandava a entrada da ferramenta (o `tool_use.input`
+    # que a Claude devolve) direto para `tools.executar` SEM desmascarar — um placeholder como
+    # `[EMAIL_1]` num título/local de `criar_compromisso` seria persistido para sempre em
+    # `agenda_events`. Só o texto INICIAL ("busca o cliente joao@example.com") é mascarado, e o
+    # único padrão que bate ali é EMAIL, então o mapa terá exatamente {"[EMAIL_1]":
+    # "joao@example.com"} — usamos esse placeholder direto na "entrada de ferramenta" simulada,
+    # em vez de reconstruir o mapa à parte.
+    monkeypatch.setattr("app.config.settings.anthropic_api_key", "sk-fake")
+    capturado = {}
+
+    def _fake_tools_executar(_db, _user, _nome, entrada):
+        capturado["entrada"] = entrada
+        return "{}"
+
+    monkeypatch.setattr(pergunta.tools, "executar", _fake_tools_executar)
+
+    def _fake_loop(*, executar_ferramenta, **_kw):
+        executar_ferramenta("consultar_cliente", {"nome": "[EMAIL_1]"})
+        return type("R", (), {"text": "ok"})()
+
+    monkeypatch.setattr(pergunta.ai, "complete_with_tools", _fake_loop)
+
+    pergunta.responder(
+        db, user=_usuario(), pergunta="busca o cliente joao@example.com", historico=[]
+    )
+
+    assert capturado["entrada"]["nome"] == "joao@example.com"
+
+
 def test_system_prompt_exige_confirmacao_antes_de_escrever():
     assert "confirmado=true" in pergunta._SYSTEM
     assert "criar_compromisso" in pergunta._SYSTEM

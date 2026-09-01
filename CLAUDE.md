@@ -3149,7 +3149,7 @@ sempre, só nunca tinha sido chamado com `True`.
   decisão já tomada de "sem persistência de conversa entre sessões".
 - [x] **`Ferramenta.executar` ganhou `CurrentUser`** — as 11 ferramentas de leitura pré-existentes não
   precisavam de identidade (a sessão já vem RLS-escopada); escrever precisa de `tenant_id`
-  (carimbar a linha nova) e `actor` (auditoria). As 9 antigas ignoram o parâmetro
+  (carimbar a linha nova) e `actor` (auditoria). As 11 antigas ignoram o parâmetro
   (`_user`), refactor sem mudança de comportamento, provado pela suíte existente continuando
   verde.
 - [x] **`consultar_agenda` passou a devolver `id`** — sem isso a Vima não tinha como referenciar

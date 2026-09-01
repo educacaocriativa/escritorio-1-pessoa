@@ -57,7 +57,15 @@ def responder(db: Session, *, user: CurrentUser, pergunta: str, historico: list[
     seguro, mapa = anonymizer.mask(_com_historico(pergunta, historico))
 
     def _executar(nome: str, entrada: dict) -> str:
-        return tools.executar(db, user, nome, entrada)
+        # A entrada da ferramenta chega da Claude ainda MASCARADA (o texto que ela viu é
+        # `seguro`) — sem desmascarar aqui, um placeholder como `[FONE_1]` num título/local de
+        # `criar_compromisso` seria PERSISTIDO PERMANENTEMENTE em `agenda_events`, ao contrário
+        # da resposta final (que já é desmascarada abaixo). Mesmo `mapa` usado para a resposta.
+        entrada_real = {
+            k: anonymizer.unmask(v, mapa) if isinstance(v, str) else v
+            for k, v in entrada.items()
+        }
+        return tools.executar(db, user, nome, entrada_real)
 
     resultado = ai.complete_with_tools(
         db=db, tenant_id=user.tenant_id, task="vima.pergunta", system=_SYSTEM,
