@@ -3126,6 +3126,49 @@ ENTRADA: a resposta continua sempre em texto.
 - Qualquer persistência de áudio ou transcrição além do cache curto de texto que
   `whatsapp_conversa.py` já mantinha para a fatia de texto.
 
+## Vima: ações de agenda (2026-09-01)
+
+> Spec: `docs/superpowers/specs/2026-09-01-vima-acoes-de-agenda-design.md` ·
+> Plano: `docs/superpowers/plans/2026-09-01-vima-acoes-de-agenda.md`
+
+Terceira fatia do caminho até o Jarbes, e a primeira em que a Vima ESCREVE. Fecha a dívida
+"Ações da Vima — hoje ela só LÊ" registrada nas duas fatias anteriores, e a Regra de Ouro nº 3
+(propagar `is_ai` nas escritas de agenda) — `agenda/service.py` já aceitava `by_ai` desde
+sempre, só nunca tinha sido chamado com `True`.
+
+- [x] **Três ferramentas novas em `vima/tools.py`** — `criar_compromisso`, `cancelar_compromisso`,
+  `remarcar_compromisso`, wrappers finos sobre `agenda_service.create_event/cancel_event/
+  reschedule_event`. Nenhuma regra de negócio nova: conflito de horário, espelho no Google, RLS
+  — tudo já existia no serviço.
+- [x] **Confirmação obrigatória por campo, não por mecanismo persistido.** Cada ferramenta de
+  escrita exige `confirmado: bool`; ausente/`false` devolve erro sem tocar o banco. O
+  prompt-sistema (`vima/pergunta.py`) instrui a Vima a resumir e pedir confirmação em texto
+  antes de chamar com `confirmado=true` — mesma disciplina (prompt + teste, não trava de
+  código) que já sustenta "a IA só narra, nunca origina número" no resto da Vima. Um token de
+  confirmação persistido entre chamadas HTTP foi considerado e rejeitado: contrariaria a
+  decisão já tomada de "sem persistência de conversa entre sessões".
+- [x] **`Ferramenta.executar` ganhou `CurrentUser`** — as 11 ferramentas de leitura pré-existentes não
+  precisavam de identidade (a sessão já vem RLS-escopada); escrever precisa de `tenant_id`
+  (carimbar a linha nova) e `actor` (auditoria). As 11 antigas ignoram o parâmetro
+  (`_user`), refactor sem mudança de comportamento, provado pela suíte existente continuando
+  verde.
+- [x] **`consultar_agenda` passou a devolver `id`** — sem isso a Vima não tinha como referenciar
+  de volta um evento achado por consulta numa chamada de `cancelar_compromisso`/
+  `remarcar_compromisso`. Extraído `_evento_json`, compartilhado entre as quatro ferramentas de
+  agenda.
+- [x] **Erro de domínio chega com a mensagem real** — `tools.executar` ganhou um `except`
+  específico para `AgendaError`/`ValueError` antes do genérico, para a Vima saber narrar "evento
+  não encontrado" em vez de um "não consegui" apagado.
+- [x] **Prova de RLS** (`test_vima_tools_rls.py`) — dois tenants, `cancelar_compromisso` por id:
+  tenant B não alcança o evento de A, sob Postgres real.
+
+**Fora de escopo, declarado:**
+- Editar campos livres (título/local/descrição) via Vima — só criar, cancelar, remarcar.
+- Ferramentas de escrita para outros módulos (Financeiro, CRM, Jurídico, Marketing, Estoque).
+- Mecanismo de confirmação mais forte que prompt + campo obrigatório, caso o risco de
+  auto-confirmação (a Claude chamar a ferramenta de escrita na mesma rodada em que propôs, sem
+  o dono ver) se prove real em uso — hoje é decisão de custo/benefício, não lacuna desconhecida.
+
 ## Vima: o Registro de Fatos e o briefing (PRs #85 e #90, 2026-08-06/07)
 
 > Spec: `docs/superpowers/specs/2026-08-06-vima-registro-de-fatos-e-briefing-design.md` ·

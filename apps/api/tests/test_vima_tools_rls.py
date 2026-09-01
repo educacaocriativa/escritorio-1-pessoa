@@ -134,3 +134,61 @@ def test_consultar_cliente_isola_por_tenant() -> None:
         # vazia dos dois lados escondendo uma RLS aberta demais.
         assert resultado_a["clientes"][0]["nome"] == "Maria Fernandes"
         assert resultado_b["clientes"][0]["nome"] == "Maria Fernandes"
+
+
+def _criar_evento(app_url: str, *, tenant_id: str, titulo: str) -> str:
+    from datetime import UTC, datetime
+
+    from app.modules.agenda.models import KIND_REUNIAO, AgendaEvent
+
+    with _tenant_session(app_url, tenant_id) as session:
+        evento = AgendaEvent(
+            tenant_id=tenant_id, title=titulo, kind=KIND_REUNIAO,
+            starts_at=datetime(2026, 9, 10, 14, 0, tzinfo=UTC),
+            ends_at=datetime(2026, 9, 10, 15, 0, tzinfo=UTC),
+        )
+        session.add(evento)
+        session.commit()
+        return evento.id
+
+
+def _cancelar_compromisso(app_url: str, *, tenant_id: str, event_id: str) -> dict:
+    import json
+
+    from app.core.tenancy import CurrentUser
+    from app.modules.vima import tools
+
+    usuario = CurrentUser(user_id="u1", tenant_id=tenant_id, role="owner", allowed_modules=[])
+    with _tenant_session(app_url, tenant_id) as session:
+        resultado = tools.executar(
+            session, usuario, "cancelar_compromisso",
+            {"event_id": event_id, "confirmado": True},
+        )
+        return json.loads(resultado)
+
+
+def test_cancelar_compromisso_nao_alcanca_evento_de_outro_tenant() -> None:
+    with PostgresContainer(
+        "postgres:16-alpine", username=_ROOT_USER, password=_ROOT_PASS, dbname=_DB_NAME,
+        driver="psycopg",
+    ) as pg:
+        host = pg.get_container_host_ip()
+        port = pg.get_exposed_port(5432)
+        super_url = f"postgresql+psycopg://{_ROOT_USER}:{_ROOT_PASS}@{host}:{port}/{_DB_NAME}"
+        app_url = f"postgresql+psycopg://e1p_app:{_APP_PASS}@{host}:{port}/{_DB_NAME}"
+
+        _bootstrap_rls_role(super_url)
+        _run_migrations_as_app(app_url)
+
+        tenant_a = str(uuid4())
+        tenant_b = str(uuid4())
+        evento_id = _criar_evento(app_url, tenant_id=tenant_a, titulo="Reunião do tenant A")
+
+        # Tenant B tenta cancelar o evento de A pelo MESMO id — se a RLS falhar, ele consegue.
+        resultado_b = _cancelar_compromisso(app_url, tenant_id=tenant_b, event_id=evento_id)
+        assert "erro" in resultado_b, "RLS falhou: tenant B conseguiu alcançar o evento de A"
+
+        # Controle positivo: o próprio dono (tenant A) cancela sem problema — não é RLS fechada
+        # demais escondendo os dois lados.
+        resultado_a = _cancelar_compromisso(app_url, tenant_id=tenant_a, event_id=evento_id)
+        assert resultado_a["compromisso"]["status"] == "cancelled"
