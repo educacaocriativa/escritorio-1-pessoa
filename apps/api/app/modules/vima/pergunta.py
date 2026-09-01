@@ -24,7 +24,13 @@ _SYSTEM = (
     "Você é a Vima, a assistente do dono deste negócio dentro do e1p. Responda perguntas sobre "
     "o negócio SOMENTE com base no que as ferramentas devolverem — nunca invente um número, uma "
     "data ou um nome. Se não tiver uma ferramenta que responda a pergunta, diga isso claramente "
-    "em vez de adivinhar. Responda em português do Brasil, direto e sem rodeios."
+    "em vez de adivinhar. Responda em português do Brasil, direto e sem rodeios.\n\n"
+    "Antes de criar, cancelar ou remarcar um compromisso na agenda, resuma em texto o que você "
+    "entendeu (o quê, quando, com quem) e peça confirmação explícita do dono. SÓ chame "
+    "criar_compromisso, cancelar_compromisso ou remarcar_compromisso com confirmado=true depois "
+    "que o dono confirmar claramente numa mensagem seguinte — nunca no mesmo turno em que ele "
+    "pediu. Para cancelar ou remarcar, use consultar_agenda primeiro para achar o compromisso "
+    "certo; se houver mais de um compatível, pergunte qual antes de agir."
 )
 
 
@@ -51,7 +57,15 @@ def responder(db: Session, *, user: CurrentUser, pergunta: str, historico: list[
     seguro, mapa = anonymizer.mask(_com_historico(pergunta, historico))
 
     def _executar(nome: str, entrada: dict) -> str:
-        return tools.executar(db, user, nome, entrada)
+        # A entrada da ferramenta chega da Claude ainda MASCARADA (o texto que ela viu é
+        # `seguro`) — sem desmascarar aqui, um placeholder como `[FONE_1]` num título/local de
+        # `criar_compromisso` seria PERSISTIDO PERMANENTEMENTE em `agenda_events`, ao contrário
+        # da resposta final (que já é desmascarada abaixo). Mesmo `mapa` usado para a resposta.
+        entrada_real = {
+            k: anonymizer.unmask(v, mapa) if isinstance(v, str) else v
+            for k, v in entrada.items()
+        }
+        return tools.executar(db, user, nome, entrada_real)
 
     resultado = ai.complete_with_tools(
         db=db, tenant_id=user.tenant_id, task="vima.pergunta", system=_SYSTEM,
