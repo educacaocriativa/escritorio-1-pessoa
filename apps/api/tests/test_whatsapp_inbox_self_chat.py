@@ -73,6 +73,7 @@ def test_self_chat_grava_pergunta_e_resposta_quando_a_vima_respondeu(db, monkeyp
     )
     db.add(user)
     db.commit()
+    _conectado(monkeypatch, "5511988889001")
 
     monkeypatch.setattr(
         vc, "responder",
@@ -118,6 +119,7 @@ def test_self_chat_nao_grava_nada_quando_responder_devolve_none(db, monkeypatch)
     )
     db.add(user)
     db.commit()
+    _conectado(monkeypatch, "5511988889002")
 
     monkeypatch.setattr(vc, "responder", lambda *a, **kw: None)
 
@@ -140,6 +142,7 @@ def test_audio_na_self_chat_grava_pergunta_com_kind_audio(db, monkeypatch):
     )
     db.add(user)
     db.commit()
+    _conectado(monkeypatch, "5511988889003")
 
     monkeypatch.setattr(
         vc, "responder_audio",
