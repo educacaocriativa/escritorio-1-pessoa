@@ -11,14 +11,23 @@ from __future__ import annotations
 import json
 from collections.abc import Callable
 from dataclasses import asdict, dataclass
-from datetime import UTC, date, datetime, timedelta
+from datetime import UTC, date, datetime, time, timedelta
 from typing import Any
 
 from sqlalchemy.orm import Session
 
 from app.core.tenancy import CurrentUser
-from app.core.tz import day_window_utc
+from app.core.tz import day_window_utc, tenant_zone
 from app.modules.agenda import service as agenda_service
+from app.modules.agenda.models import (
+    KIND_ATENDIMENTO,
+    KIND_AUDIENCIA,
+    KIND_BLOQUEIO,
+    KIND_LEMBRETE,
+    KIND_REUNIAO,
+    AgendaEvent,
+)
+from app.modules.agenda.schemas import EventCreate
 from app.modules.crm import service as crm_service
 from app.modules.crm import timeline as crm_timeline
 from app.modules.financial_intelligence import projection as projection_service
@@ -44,6 +53,39 @@ def _consultar_projecao_caixa(db: Session, _user: CurrentUser, _entrada: dict[st
     return asdict(projection_service.cash_projection(db))
 
 
+# Tipos que fazem sentido nascer de uma conversa — exclui prazo/cobranca_*/google, derivados
+# de outro módulo ou de sync externo.
+_TIPOS_CRIAVEIS_POR_CHAT = {
+    KIND_ATENDIMENTO, KIND_REUNIAO, KIND_AUDIENCIA, KIND_BLOQUEIO, KIND_LEMBRETE,
+}
+_DURACAO_PADRAO = timedelta(hours=1)
+
+
+def _evento_json(e: AgendaEvent) -> dict[str, Any]:
+    """Serialização compartilhada entre `consultar_agenda` e as ferramentas de escrita — o `id`
+    é o que permite à Claude referenciar de volta, numa chamada seguinte, um evento achado por
+    consulta (`cancelar_compromisso`/`remarcar_compromisso` operam por `event_id`)."""
+    # SQLite devolve sem fuso; a comparação é sempre em UTC (mesma convenção de vima/service.py).
+    starts_at = e.starts_at if e.starts_at.tzinfo is not None else e.starts_at.replace(tzinfo=UTC)
+    ends_at = e.ends_at if e.ends_at.tzinfo is not None else e.ends_at.replace(tzinfo=UTC)
+    return {
+        "id": e.id,
+        "titulo": e.title,
+        "inicio": starts_at.isoformat(),
+        "fim": ends_at.isoformat(),
+        "dia_inteiro": e.all_day,
+        "status": e.status,
+        "tipo": e.kind,
+    }
+
+
+def _combinar_utc(dia: date, hora: time, tz_name: str) -> datetime:
+    """Combina uma data-calendário e uma hora de parede NO FUSO do tenant, convertidas para
+    UTC — mesma disciplina de `day_window_utc`, mas para um instante específico em vez da
+    meia-noite do dia."""
+    return datetime.combine(dia, hora, tzinfo=tenant_zone(tz_name)).astimezone(UTC)
+
+
 def _consultar_agenda(db: Session, _user: CurrentUser, entrada: dict[str, Any]) -> dict[str, Any]:
     tz = tenant_timezone(db)
     inicio = date.fromisoformat(entrada["data_inicio"])
@@ -53,19 +95,55 @@ def _consultar_agenda(db: Session, _user: CurrentUser, entrada: dict[str, Any]) 
     eventos = agenda_service.list_events(
         db, start=janela_inicio, end=janela_fim, exclude_cancelled=True, limit=50,
     )
-    return {
-        "eventos": [
-            {
-                "titulo": e.title,
-                "inicio": e.starts_at.isoformat(),
-                "fim": e.ends_at.isoformat(),
-                "dia_inteiro": e.all_day,
-                "status": e.status,
-                "tipo": e.kind,
-            }
-            for e in eventos
-        ]
+    return {"eventos": [_evento_json(e) for e in eventos]}
+
+
+def _criar_compromisso(db: Session, user: CurrentUser, entrada: dict[str, Any]) -> dict[str, Any]:
+    tipo = entrada["tipo"]
+    if tipo not in _TIPOS_CRIAVEIS_POR_CHAT:
+        raise ValueError(f"tipo inválido para criar por chat: {tipo}")
+    if not entrada.get("confirmado"):
+        return {
+            "erro": (
+                "peça a confirmação explícita do dono antes de chamar esta ferramenta de novo "
+                "com confirmado=true"
+            )
+        }
+
+    tz = tenant_timezone(db)
+    dia = date.fromisoformat(entrada["data"])
+    starts_at = _combinar_utc(dia, time.fromisoformat(entrada["hora_inicio"]), tz)
+    if entrada.get("hora_fim"):
+        ends_at = _combinar_utc(dia, time.fromisoformat(entrada["hora_fim"]), tz)
+    else:
+        ends_at = starts_at + _DURACAO_PADRAO
+    if ends_at <= starts_at:
+        raise ValueError("hora_fim deve ser depois de hora_inicio")
+
+    client_id = None
+    nome_cliente = entrada.get("cliente")
+    cliente_nao_encontrado = False
+    if nome_cliente:
+        clientes = crm_service.list_clients(db, search=nome_cliente, limit=1)
+        if clientes:
+            client_id = clientes[0].id
+        else:
+            cliente_nao_encontrado = True
+
+    evento, conflitos = agenda_service.create_event(
+        db, tenant_id=user.tenant_id, actor=user.user_id, by_ai=True,
+        data=EventCreate(
+            title=entrada["titulo"], kind=tipo, starts_at=starts_at, ends_at=ends_at,
+            location=entrada.get("local") or "", source="vima", client_id=client_id,
+        ),
+    )
+    resultado: dict[str, Any] = {
+        "compromisso": _evento_json(evento),
+        "conflitos": [_evento_json(c) for c in conflitos],
     }
+    if cliente_nao_encontrado:
+        resultado["aviso"] = f"cliente '{nome_cliente}' não encontrado no cadastro; criado sem vínculo"
+    return resultado
 
 
 def _consultar_cliente(db: Session, _user: CurrentUser, entrada: dict[str, Any]) -> dict[str, Any]:
@@ -295,6 +373,49 @@ FERRAMENTAS: list[Ferramenta] = [
             },
         },
         executar=_consultar_agenda,
+    ),
+    Ferramenta(
+        nome="criar_compromisso",
+        modulo="agenda",
+        definicao={
+            "name": "criar_compromisso",
+            "description": (
+                "Cria um novo compromisso na agenda. SÓ chame com confirmado=true depois que o "
+                "dono confirmar explicitamente os detalhes numa mensagem anterior — antes "
+                "disso, resuma o que você entendeu e peça a confirmação em texto."
+            ),
+            "input_schema": {
+                "type": "object",
+                "properties": {
+                    "titulo": {"type": "string", "description": "Título do compromisso."},
+                    "tipo": {
+                        "type": "string",
+                        "enum": ["atendimento", "reuniao", "audiencia", "bloqueio", "lembrete"],
+                        "description": "Tipo do compromisso.",
+                    },
+                    "data": {"type": "string", "description": "Data no formato AAAA-MM-DD."},
+                    "hora_inicio": {"type": "string", "description": "Hora de início, HH:MM."},
+                    "hora_fim": {
+                        "type": "string",
+                        "description": "Hora de término, HH:MM. Se omitida, dura 1h.",
+                    },
+                    "cliente": {
+                        "type": "string",
+                        "description": "Nome ou parte do nome do cliente, se houver um vinculado.",
+                    },
+                    "local": {"type": "string", "description": "Local do compromisso, se houver."},
+                    "confirmado": {
+                        "type": "boolean",
+                        "description": (
+                            "true SOMENTE depois que o dono confirmou explicitamente numa "
+                            "mensagem anterior."
+                        ),
+                    },
+                },
+                "required": ["titulo", "tipo", "data", "hora_inicio", "confirmado"],
+            },
+        },
+        executar=_criar_compromisso,
     ),
     Ferramenta(
         nome="consultar_cliente",

@@ -34,13 +34,14 @@ def _usuario(role: str = "owner", modulos: list[str] | None = None) -> CurrentUs
 # ── Catálogo e permissão ────────────────────────────────────────────────────────────────────
 
 
-def test_owner_ve_as_onze_ferramentas():
+def test_owner_ve_as_doze_ferramentas():
     nomes = {f.nome for f in tools.ferramentas_disponiveis(_usuario("owner"))}
     assert nomes == {
         "consultar_recebiveis", "consultar_pagaveis", "consultar_projecao_caixa",
         "consultar_agenda", "consultar_cliente", "consultar_clientes_recentes",
         "consultar_documentos_juridicos", "consultar_campanhas_marketing",
         "consultar_estoque_baixo", "consultar_item_estoque", "consultar_clientes_atencao",
+        "criar_compromisso",
     }
 
 
@@ -373,6 +374,92 @@ def test_consultar_clientes_atencao_sem_nada_pendente_devolve_lista_vazia(db: Se
         tools.executar(db, _usuario(), "consultar_clientes_atencao", {})
     )
     assert resultado["clientes_em_atencao"] == []
+
+
+# ── criar_compromisso ──────────────────────────────────────────────────────────────────────
+
+
+def test_criar_compromisso_sem_confirmado_nao_escreve(db: Session):
+    from app.modules.agenda.models import AgendaEvent
+
+    resultado = json.loads(tools.executar(
+        db, _usuario(), "criar_compromisso",
+        {"titulo": "Falar com o Carlos", "tipo": "reuniao", "data": "2026-09-02",
+         "hora_inicio": "10:30"},
+    ))
+    assert "erro" in resultado
+    assert db.query(AgendaEvent).count() == 0
+
+
+def test_criar_compromisso_confirmado_cria_com_duracao_padrao_de_1h(db: Session):
+    resultado = json.loads(tools.executar(
+        db, _usuario(), "criar_compromisso",
+        {"titulo": "Falar com o Carlos", "tipo": "reuniao", "data": "2026-09-02",
+         "hora_inicio": "10:30", "confirmado": True},
+    ))
+    assert resultado["compromisso"]["titulo"] == "Falar com o Carlos"
+    assert resultado["compromisso"]["inicio"] == "2026-09-02T13:30:00+00:00"
+    assert resultado["compromisso"]["fim"] == "2026-09-02T14:30:00+00:00"
+    assert resultado["conflitos"] == []
+
+
+def test_criar_compromisso_respeita_hora_fim_explicita(db: Session):
+    resultado = json.loads(tools.executar(
+        db, _usuario(), "criar_compromisso",
+        {"titulo": "Audiência", "tipo": "audiencia", "data": "2026-09-02",
+         "hora_inicio": "09:00", "hora_fim": "11:00", "confirmado": True},
+    ))
+    assert resultado["compromisso"]["inicio"] == "2026-09-02T12:00:00+00:00"
+    assert resultado["compromisso"]["fim"] == "2026-09-02T14:00:00+00:00"
+
+
+def test_criar_compromisso_tipo_nao_criavel_devolve_erro(db: Session):
+    resultado = json.loads(tools.executar(
+        db, _usuario(), "criar_compromisso",
+        {"titulo": "X", "tipo": "prazo", "data": "2026-09-02", "hora_inicio": "10:00",
+         "confirmado": True},
+    ))
+    assert "erro" in resultado
+
+
+def test_criar_compromisso_devolve_conflito_sem_bloquear(db: Session):
+    from app.modules.agenda.models import KIND_REUNIAO, AgendaEvent
+
+    db.add(AgendaEvent(
+        tenant_id=TENANT, title="Já marcado", kind=KIND_REUNIAO,
+        starts_at=datetime(2026, 9, 2, 13, 0, tzinfo=UTC),
+        ends_at=datetime(2026, 9, 2, 14, 0, tzinfo=UTC),
+    ))
+    db.commit()
+    resultado = json.loads(tools.executar(
+        db, _usuario(), "criar_compromisso",
+        {"titulo": "Novo", "tipo": "reuniao", "data": "2026-09-02", "hora_inicio": "10:30",
+         "confirmado": True},
+    ))
+    assert resultado["compromisso"]["titulo"] == "Novo"
+    assert len(resultado["conflitos"]) == 1
+    assert resultado["conflitos"][0]["titulo"] == "Já marcado"
+
+
+def test_criar_compromisso_vincula_cliente_encontrado_por_nome(db: Session):
+    db.add(Client(tenant_id=TENANT, name="Carlos Souza", phone="11999990000", source="manual"))
+    db.commit()
+    resultado = json.loads(tools.executar(
+        db, _usuario(), "criar_compromisso",
+        {"titulo": "Reunião", "tipo": "reuniao", "data": "2026-09-02", "hora_inicio": "10:00",
+         "cliente": "Carlos", "confirmado": True},
+    ))
+    assert "aviso" not in resultado
+
+
+def test_criar_compromisso_cliente_nao_encontrado_avisa_mas_ainda_cria(db: Session):
+    resultado = json.loads(tools.executar(
+        db, _usuario(), "criar_compromisso",
+        {"titulo": "Reunião", "tipo": "reuniao", "data": "2026-09-02", "hora_inicio": "10:00",
+         "cliente": "Ninguém", "confirmado": True},
+    ))
+    assert resultado["compromisso"]["titulo"] == "Reunião"
+    assert "não encontrado" in resultado["aviso"]
 
 
 # ── Falha nunca sobe crua ───────────────────────────────────────────────────────────────────
