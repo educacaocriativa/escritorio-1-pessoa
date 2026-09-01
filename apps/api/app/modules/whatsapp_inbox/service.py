@@ -403,16 +403,39 @@ def ingest_webhook_payload(
                 and _e_o_dono(db, tenant_id, msg.from_phone)
             ):
                 if msg.kind == KIND_TEXT:
-                    vima_whatsapp.responder(
+                    resultado_vima = vima_whatsapp.responder(
                         db, tenant_id=tenant_id, phone=msg.from_phone,
                         wa_message_id=msg.wa_message_id, texto=msg.text_body, profile=profile,
                     )
                 else:
-                    vima_whatsapp.responder_audio(
+                    resultado_vima = vima_whatsapp.responder_audio(
                         db, tenant_id=tenant_id, phone=msg.from_phone,
                         wa_message_id=msg.wa_message_id, audio_bytes=msg.media_bytes or b"",
                         audio_mime_type=msg.media_mime_type or "", profile=profile,
                     )
+                # `None` = reentrega, eco da própria resposta, ou telefone sem usuário — nada
+                # de novo aconteceu, nada a gravar. Um `Resultado` é uma troca de verdade: sem
+                # gravá-la a self-chat inteira fica invisível pra tela de Conversas (achado ao
+                # investigar o loop de #280 — a conversa existia de verdade no WhatsApp do dono,
+                # mas não deixava NENHUM rastro no banco).
+                if resultado_vima is not None and msg.chat_jid:
+                    chat_vima = _get_or_create_chat(
+                        db, tenant_id=tenant_id, chat_jid=msg.chat_jid, kind=msg.chat_kind,
+                        client=None, profile=profile,
+                    )
+                    db.add(WhatsappMessage(
+                        tenant_id=tenant_id, client_id=None, direction=DIRECTION_OUT,
+                        kind=msg.kind, text_body=resultado_vima.pergunta,
+                        media_status=MEDIA_STATUS_NONE, wa_message_id=msg.wa_message_id,
+                        status="sent", chat_id=chat_vima.id,
+                        sender_phone=msg.sender_phone, sender_name=msg.sender_name,
+                    ))
+                    db.add(WhatsappMessage(
+                        tenant_id=tenant_id, client_id=None, direction=DIRECTION_OUT,
+                        kind=KIND_TEXT, text_body=resultado_vima.resposta,
+                        media_status=MEDIA_STATUS_NONE, wa_message_id=None, status="sent",
+                        chat_id=chat_vima.id,
+                    ))
                 db.commit()
                 continue
 
