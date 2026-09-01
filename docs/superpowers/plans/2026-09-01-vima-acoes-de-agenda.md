@@ -16,7 +16,7 @@
 - Toda chamada de escrita passa `by_ai=True` e `actor=user.user_id` para os serviços de agenda (Regra de Ouro nº 3 do CLAUDE.md).
 - Nenhuma query filtra tenant manualmente — a sessão já vem RLS-escopada (Regra de Ouro nº 1); só o `tenant_id` explícito é passado ao CRIAR uma linha nova, exatamente como `agenda_service.create_event` já exige.
 - `criar_compromisso` só aceita `tipo` em `{atendimento, reuniao, audiencia, bloqueio, lembrete}` — os demais `ALL_KINDS` (`prazo`, `cobranca_receber`, `cobranca_pagar`, `google`) são derivados de outro módulo, nunca criados por chat.
-- Duração padrão de 1h quando a hora de término é omitida, em `criar_compromisso` e `remarcar_compromisso`.
+- Duração padrão de 1h quando a hora de término é omitida em `criar_compromisso`. Em `remarcar_compromisso`, a hora de término omitida preserva a DURAÇÃO ORIGINAL do evento (não reinicia para 1h) — decisão de produto: mover um compromisso não deveria mudar seu tamanho. Ver Task 3.
 - Gate de visibilidade das 3 ferramentas novas é `pode_ver(user, "agenda")` — mesmo critério das ferramentas de leitura, nenhuma dimensão de permissão nova.
 - Erros de domínio (`AgendaError`) e de formato (`ValueError`) chegam ao `tool_result` com a mensagem real, não a genérica — a Claude precisa saber SE foi "evento não encontrado" vs. "não consegui de jeito nenhum" para narrar direito (Artigo IV, No Invention: nunca dizer que deu certo quando não deu).
 
