@@ -686,15 +686,20 @@ function NewBillModal({
   const [recurrenceCount, setRecurrenceCount] = useState(inicial?.recurrenceCount ?? "12");
   const [paymentCode, setPaymentCode] = useState(inicial?.paymentCode ?? "");
   const [contractId, setContractId] = useState(inicial?.contractId ?? "");
+  const [documento, setDocumento] = useState("");
+  const [observacoes, setObservacoes] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
+  // Fase 2: a conta já foi criada (tem `id` real) e o modal continua aberto só para o anexo, que
+  // precisa de um dono que já existe (ver Attachments.tsx). `null` = ainda na fase 1 (formulário).
+  const [criada, setCriada] = useState<Payable | null>(null);
 
   async function save() {
     setError(null);
     setSaving(true);
     try {
       const amount_cents = parseCentsBRL(value);
-      await api.post("/payables/bills", {
+      const { data } = await api.post<Payable>("/payables/bills", {
         description,
         chart_account_id: chartAccountId || null,
         cost_center_id: costCenterId || null,
@@ -705,17 +710,12 @@ function NewBillModal({
         recurrence_count: recurrence === "none" ? 1 : Math.max(1, Math.min(60, parseInt(recurrenceCount, 10) || 1)),
         payment_code: paymentCode,
         contract_id: contractId || null,
+        documento,
+        observacoes,
       });
+      // A lista já reflete a conta criada; o modal continua aberto na fase 2 (anexo opcional).
       onCreated();
-      setDescription("");
-      setChartAccountId("");
-      setCostCenterId("");
-      setSupplier("");
-      setValue("");
-      setDueDate("");
-      setPaymentCode("");
-      setContractId("");
-      onClose();
+      setCriada(data);
     } catch (err) {
       setError(apiErrorMessage(err));
     } finally {
@@ -723,8 +723,53 @@ function NewBillModal({
     }
   }
 
+  function fechar() {
+    setDescription("");
+    setChartAccountId("");
+    setCostCenterId("");
+    setSupplier("");
+    setValue("");
+    setDueDate("");
+    setPaymentCode("");
+    setContractId("");
+    setDocumento("");
+    setObservacoes("");
+    setCriada(null);
+    onClose();
+  }
+
+  if (criada) {
+    return (
+      <Modal title="Nova conta a pagar" open={open} onClose={fechar}>
+        <div className="space-y-4">
+          <p className="text-sm text-neutral-500">
+            Conta criada: {criada.description || criada.supplier || "Conta"}.
+          </p>
+          <div>
+            <p className="mb-2 text-xs font-medium text-neutral-600">Anexar arquivos (PDF, JPEG ou PNG)</p>
+            <Attachments
+              ownerType="payable"
+              ownerId={criada.id}
+              slots={[
+                { key: "boleto", label: "Boleto" },
+                { key: "contrato", label: "Contrato" },
+                { key: "comprovante", label: "Comprovante" },
+              ]}
+            />
+          </div>
+          <button
+            onClick={fechar}
+            className="w-full rounded-pill bg-accent-400 py-2.5 font-semibold text-white transition hover:bg-accent-500"
+          >
+            Concluir
+          </button>
+        </div>
+      </Modal>
+    );
+  }
+
   return (
-    <Modal title="Nova conta a pagar" open={open} onClose={onClose}>
+    <Modal title="Nova conta a pagar" open={open} onClose={fechar}>
       <div className="space-y-3">
         <Field label="Descrição" value={description} onChange={setDescription} placeholder="Aluguel" />
         <Field label="Fornecedor" value={supplier} onChange={setSupplier} placeholder="Imobiliária" />
@@ -745,6 +790,7 @@ function NewBillModal({
           <Field label="Valor (R$)" value={value} onChange={setValue} placeholder="2500,00" />
           <Field label="Vencimento" type="date" value={dueDate} onChange={setDueDate} />
         </div>
+        <Field label="Documento (opcional)" value={documento} onChange={setDocumento} placeholder="NF 1234" />
         <div className="flex gap-2">
           <label className="flex-1">
             <span className="mb-1 block text-xs font-medium text-neutral-600">Recorrência</span>
@@ -764,9 +810,13 @@ function NewBillModal({
           </p>
         )}
         <ContractSelect value={contractId} onChange={setContractId} />
+        <label className="block">
+          <span className="mb-1 block text-xs font-medium text-neutral-600">Observações (opcional)</span>
+          <textarea value={observacoes} onChange={(e) => setObservacoes(e.target.value)} rows={2} placeholder="Anotações sobre esta conta" className="w-full rounded-lg border border-neutral-200 px-3 py-2 text-sm outline-none focus:border-primary-400" />
+        </label>
         <div className="rounded-lg bg-neutral-50 p-3">
           <p className="mb-2 text-xs font-medium text-neutral-600">Pix copia-e-cola / linha do boleto (opcional)</p>
-          <textarea value={paymentCode} onChange={(e) => setPaymentCode(e.target.value)} rows={2} placeholder="Cole o código aqui (os arquivos do boleto/contrato você anexa depois, em Boleto/Pix)" className="w-full rounded-lg border border-neutral-200 px-3 py-2 text-sm outline-none focus:border-primary-400" />
+          <textarea value={paymentCode} onChange={(e) => setPaymentCode(e.target.value)} rows={2} placeholder="Cole o código aqui (os arquivos do boleto/contrato você anexa depois de salvar)" className="w-full rounded-lg border border-neutral-200 px-3 py-2 text-sm outline-none focus:border-primary-400" />
         </div>
         {error && <p className="rounded-lg bg-red-50 p-2 text-sm text-danger">{error}</p>}
         <button

@@ -155,6 +155,47 @@ describe("PagarPage — Nova conta a pagar (Story 7.5, Task 1)", () => {
     expect(screen.getByText("Nova conta a pagar")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Adicionar conta" })).toBeEnabled();
   });
+
+  it("envia documento e observações no POST", async () => {
+    const user = userEvent.setup();
+    vi.mocked(api.post).mockResolvedValue({ data: { id: "b-novo" } } as never);
+    renderPage();
+
+    await user.click(await screen.findByRole("button", { name: "Nova conta" }));
+    await user.type(screen.getByLabelText("Valor (R$)"), "250,00");
+    fireEvent.change(screen.getByLabelText("Vencimento"), { target: { value: "2026-08-01" } });
+    await user.type(screen.getByLabelText("Documento (opcional)"), "NF-4471");
+    await user.type(screen.getByLabelText("Observações (opcional)"), "Combinado com o síndico");
+    await user.click(screen.getByRole("button", { name: "Adicionar conta" }));
+
+    await waitFor(() => expect(vi.mocked(api.post)).toHaveBeenCalled());
+    expect(vi.mocked(api.post)).toHaveBeenCalledWith(
+      "/payables/bills",
+      expect.objectContaining({ documento: "NF-4471", observacoes: "Combinado com o síndico" }),
+    );
+  });
+
+  // A conta a pagar precisa de um `id` real ANTES de aceitar anexo (Attachments.tsx exige
+  // owner_id existente) — por isso o modal não fecha ao salvar: ele troca para a fase de anexo.
+  it("depois de criar, o modal troca para a fase de anexo (sem fechar) e 'Concluir' fecha", async () => {
+    const user = userEvent.setup();
+    vi.mocked(api.post).mockResolvedValue({ data: { id: "b-novo", description: "Aluguel" } } as never);
+    renderPage();
+
+    await user.click(await screen.findByRole("button", { name: "Nova conta" }));
+    await user.type(screen.getByLabelText("Valor (R$)"), "250,00");
+    fireEvent.change(screen.getByLabelText("Vencimento"), { target: { value: "2026-08-01" } });
+    await user.click(screen.getByRole("button", { name: "Adicionar conta" }));
+
+    // O título do modal continua o mesmo; o CONTEÚDO virou a fase de anexo.
+    expect(await screen.findByText(/Conta criada: Aluguel/)).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Boleto" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Contrato" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Comprovante" })).toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: "Concluir" }));
+    expect(screen.queryByText("Nova conta a pagar")).not.toBeInTheDocument();
+  });
 });
 
 // Task 11 — a correção do problema original: sem slot próprio, o comprovante era arquivado em

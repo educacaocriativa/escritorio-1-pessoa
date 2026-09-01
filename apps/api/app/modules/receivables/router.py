@@ -55,6 +55,8 @@ def _out(charge: Charge, db: Session, hoje: date_type) -> ChargeOut:
         recurrence=charge.recurrence,
         recurrence_group=charge.recurrence_group,
         payment_code=charge.payment_code,
+        documento=charge.documento,
+        observacoes=charge.observacoes,
         transaction_id=charge.transaction_id,
         created_at=charge.created_at,
         gateway_provider=charge.gateway_provider,

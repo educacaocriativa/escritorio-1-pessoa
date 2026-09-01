@@ -1,5 +1,6 @@
 import type { Transaction, WalletSummary } from "@e1p/shared-types";
 import { useCallback, useEffect, useMemo, useState } from "react";
+import Attachments from "../../components/Attachments";
 import Modal, { Field } from "../../components/Modal";
 import { api, apiErrorMessage } from "../../lib/api";
 import { usePrimaryAction } from "../../store/pageActions";
@@ -277,28 +278,32 @@ function NewSaleModal({
   const [description, setDescription] = useState("");
   const [chartAccountId, setChartAccountId] = useState("");
   const [costCenterId, setCostCenterId] = useState("");
+  const [documento, setDocumento] = useState("");
+  const [observacoes, setObservacoes] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
+  // Fase 2: a venda já foi registrada (tem `id` real) e o modal continua aberto só para o anexo,
+  // que precisa de um dono que já existe (ver Attachments.tsx). `null` = ainda na fase 1.
+  const [criada, setCriada] = useState<Transaction | null>(null);
 
   async function save() {
     setError(null);
     setSaving(true);
     try {
       const gross_cents = parseCentsBRL(value);
-      await api.post("/wallet/transactions", {
+      const { data } = await api.post<Transaction>("/wallet/transactions", {
         kind,
         method,
         gross_cents,
         description,
         chart_account_id: chartAccountId || null,
         cost_center_id: costCenterId || null,
+        documento,
+        observacoes,
       });
+      // A lista já reflete a venda registrada; o modal continua aberto na fase 2 (anexo opcional).
       onCreated();
-      setValue("");
-      setDescription("");
-      setChartAccountId("");
-      setCostCenterId("");
-      onClose();
+      setCriada(data);
     } catch (err) {
       setError(apiErrorMessage(err));
     } finally {
@@ -306,8 +311,46 @@ function NewSaleModal({
     }
   }
 
+  function fechar() {
+    setValue("");
+    setDescription("");
+    setChartAccountId("");
+    setCostCenterId("");
+    setDocumento("");
+    setObservacoes("");
+    setCriada(null);
+    onClose();
+  }
+
+  if (criada) {
+    return (
+      <Modal title="Registrar venda" open={open} onClose={fechar}>
+        <div className="space-y-4">
+          <p className="text-sm text-neutral-500">Venda registrada: {criada.description || "Venda"}.</p>
+          <div>
+            <p className="mb-2 text-xs font-medium text-neutral-600">Anexar arquivos (PDF, JPEG ou PNG)</p>
+            <Attachments
+              ownerType="transaction"
+              ownerId={criada.id}
+              slots={[
+                { key: "contrato", label: "Contrato" },
+                { key: "comprovante", label: "Comprovante" },
+              ]}
+            />
+          </div>
+          <button
+            onClick={fechar}
+            className="w-full rounded-pill bg-accent-400 py-2.5 font-semibold text-white transition hover:bg-accent-500"
+          >
+            Concluir
+          </button>
+        </div>
+      </Modal>
+    );
+  }
+
   return (
-    <Modal title="Registrar venda" open={open} onClose={onClose}>
+    <Modal title="Registrar venda" open={open} onClose={fechar}>
       <div className="space-y-3">
         <label className="block">
           <span className="mb-1 block text-xs font-medium text-neutral-600">Tipo (define o split)</span>
@@ -339,6 +382,7 @@ function NewSaleModal({
         </label>
         <Field label="Valor (R$)" value={value} onChange={setValue} placeholder="150,00" />
         <Field label="Descrição" value={description} onChange={setDescription} placeholder="Consulta" />
+        <Field label="Documento (opcional)" value={documento} onChange={setDocumento} placeholder="NF 1234" />
         <div className="flex gap-2">
           <div className="flex-1">
             <ChartAccountSelect
@@ -352,6 +396,10 @@ function NewSaleModal({
             <CostCenterSelect value={costCenterId} onChange={setCostCenterId} />
           </div>
         </div>
+        <label className="block">
+          <span className="mb-1 block text-xs font-medium text-neutral-600">Observações (opcional)</span>
+          <textarea value={observacoes} onChange={(e) => setObservacoes(e.target.value)} rows={2} placeholder="Anotações sobre esta venda" className="w-full rounded-lg border border-neutral-200 px-3 py-2 text-sm outline-none focus:border-primary-400" />
+        </label>
         {error && <p className="rounded-lg bg-red-50 p-2 text-sm text-danger">{error}</p>}
         <button
           onClick={save}

@@ -74,6 +74,11 @@ class Charge(Base, TenantMixin, TimestampMixin):
     cost_center_id: Mapped[str | None] = mapped_column(String(36), index=True, nullable=True)
     # Stub do gateway: Pix copia-e-cola / linha do boleto / link de pagamento.
     payment_code: Mapped[str] = mapped_column(Text, default="", nullable=False)
+    # Número/identificador do documento (nota fiscal, recibo...) — texto livre. Observações: nota
+    # livre do dono sobre a cobrança. Mesma disciplina de description: valem para TODAS as
+    # ocorrências de uma recorrência.
+    documento: Mapped[str] = mapped_column(String(64), default="", nullable=False)
+    observacoes: Mapped[str] = mapped_column(Text, default="", nullable=False)
     transaction_id: Mapped[str | None] = mapped_column(String(36), nullable=True)  # tx da carteira
     # evento de vencimento na agenda
     agenda_event_id: Mapped[str | None] = mapped_column(String(36), nullable=True)

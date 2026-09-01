@@ -114,6 +114,8 @@ def build_transaction(
     competence_date: date | None = None,
     chart_account_id: str | None = None,
     cost_center_id: str | None = None,
+    documento: str = "",
+    observacoes: str = "",
 ) -> Transaction:
     """Cria a transação + ganho da plataforma na sessão SEM commitar.
 
@@ -147,6 +149,8 @@ def build_transaction(
         competence_date=competence_date or hoje_do_tenant(db),
         chart_account_id=chart_account_id,
         cost_center_id=cost_center_id,
+        documento=documento,
+        observacoes=observacoes,
     )
     db.add(tx)
     # Registro GLOBAL do ganho da plataforma (sem RLS) — alimenta o painel do Master.
@@ -167,6 +171,7 @@ def create_transaction(
         gross_cents=data.gross_cents, description=data.description, client_id=data.client_id,
         external_ref=data.external_ref, competence_date=data.competence_date,
         chart_account_id=data.chart_account_id, cost_center_id=data.cost_center_id,
+        documento=data.documento, observacoes=data.observacoes,
     )
     db.commit()
     db.refresh(tx)

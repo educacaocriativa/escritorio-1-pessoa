@@ -29,6 +29,8 @@ class ChargeCreate(BaseModel):
     cost_center_id: str | None = None
     recurrence: str = "none"  # none/weekly/monthly/yearly
     recurrence_count: int = Field(default=1, ge=1, le=60)
+    documento: str = Field(default="", max_length=64)  # nº do documento (nota fiscal, recibo...)
+    observacoes: str = ""  # nota livre do dono sobre a cobrança
 
     @field_validator("recurrence")
     @classmethod
@@ -76,6 +78,8 @@ class ChargeOut(BaseModel):
     recurrence: str
     recurrence_group: str | None
     payment_code: str
+    documento: str
+    observacoes: str
     transaction_id: str | None
     created_at: datetime
     # Gateway real (Asaas) — somente-leitura; None quando a cobrança foi gerada pelo stub.
@@ -143,6 +147,8 @@ class ChargeUpdate(BaseModel):
     # Story 5.5: (re)vincular a um centro de custo. None = "não altera"; "" desvincula ("Não
     # atribuído"). Mesmo padrão de contract_id.
     cost_center_id: str | None = None
+    documento: str | None = Field(default=None, max_length=64)
+    observacoes: str | None = None
 
 
 class WebhookPayment(BaseModel):

@@ -370,6 +370,8 @@ export interface Transaction {
   chart_account_id: UUID | null;
   // Story 5.10: vínculo opcional ao centro de custo (2ª dimensão); null = "Não atribuído".
   cost_center_id: UUID | null;
+  documento: string;
+  observacoes: string;
   created_at: string;
 }
 
@@ -436,6 +438,8 @@ export interface Charge {
   // Regime de CAIXA (`paid_at`) × regime de COMPETÊNCIA (`competence_date`) — nunca se invertem.
   competence_date: string | null;
   paid_at: string | null;
+  documento: string;
+  observacoes: string;
   created_at: string;
 }
 
@@ -480,6 +484,8 @@ export interface Payable {
   recurrence_group: string | null;
   payment_code: string;
   attachment_url: string;
+  documento: string;
+  observacoes: string;
   created_at: string;
 }
 

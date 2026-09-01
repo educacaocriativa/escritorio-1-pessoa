@@ -97,6 +97,12 @@ class Payable(Base, TenantMixin, TimestampMixin):
     payment_code: Mapped[str] = mapped_column(Text, default="", nullable=False)
     # Anexo do boleto recebido (URL do PDF/imagem).
     attachment_url: Mapped[str] = mapped_column(String(1024), default="", nullable=False)
+    # Número/identificador do documento (nota fiscal, recibo...) — texto livre, sem validação de
+    # formato. Observações: nota livre do dono sobre a conta. Ambos aplicam-se a TODAS as
+    # ocorrências de uma recorrência (mesma disciplina de `description`/`supplier`), ao contrário
+    # de `payment_code`/`attachment_url`, que são por ocorrência.
+    documento: Mapped[str] = mapped_column(String(64), default="", nullable=False)
+    observacoes: Mapped[str] = mapped_column(Text, default="", nullable=False)
 
     agenda_event_id: Mapped[str | None] = mapped_column(String(36), nullable=True)
     external_ref: Mapped[str | None] = mapped_column(String(64), nullable=True)
