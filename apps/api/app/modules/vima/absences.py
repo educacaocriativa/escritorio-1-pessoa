@@ -23,6 +23,7 @@ from sqlalchemy.orm import Session
 
 from app.core.facts import COM_FORMULARIO_RECEBIDO, Fact
 from app.core.tenancy import CurrentUser
+from app.core.tz import local_date
 from app.modules.agenda.models import (
     KIND_PRAZO,
     STATUS_CANCELLED,
@@ -40,6 +41,7 @@ from app.modules.payables.models import STATUS_OPEN as PAYABLE_ABERTA
 from app.modules.payables.models import Payable
 from app.modules.receivables.models import STATUS_OPEN as COBRANCA_ABERTA
 from app.modules.receivables.models import Charge
+from app.modules.settings.service import tenant_timezone
 from app.modules.vima.permissions import pode_ver
 from app.modules.whatsapp_inbox.models import (
     DIRECTION_IN,
@@ -122,6 +124,7 @@ def coletar(
     """
     lim: dict[str, int | None] = {**LIMIARES_PADRAO, **(limiares or {})}
     instante = agora or datetime.combine(hoje, time.max, tzinfo=UTC)
+    tz_name = tenant_timezone(db)
     fora: list[Ausencia] = []
 
     if pode_ver(user, "agenda"):
@@ -131,9 +134,9 @@ def coletar(
         # Não recebe `lim`: esta regra é **sem limiar**, de propósito — ver a docstring dela.
         fora.extend(_saldo_do_mes_nao_declarado(db, hoje))
     if pode_ver(user, "comercial"):
-        fora.extend(_silencio_nosso(db, hoje, lim, instante))
-        fora.extend(_contato_sumido(db, hoje, lim))
-        fora.extend(_cards_parados(db, hoje, lim))
+        fora.extend(_silencio_nosso(db, hoje, lim, instante, tz_name))
+        fora.extend(_contato_sumido(db, hoje, lim, tz_name))
+        fora.extend(_cards_parados(db, hoje, lim, tz_name))
         # `None` significa REGRA NÃO EXECUTADA, não "limiar infinito" — mesma forma do filtro
         # de permissão, que não roda a regra em vez de calcular e esconder. Só topo seco pode
         # ser desligado, porque é a única que dispara sobre o VAZIO: sem cards não há card
@@ -164,10 +167,11 @@ def clientes_em_atencao(
     que filtra o que a Claude sequer vê (`vima/tools.py`).
     """
     lim = {**LIMIARES_PADRAO, **(limiares or {})}
+    tz_name = tenant_timezone(db)
     return [
-        *_silencio_nosso(db, hoje, lim, agora),
-        *_contato_sumido(db, hoje, lim),
-        *_cards_parados(db, hoje, lim),
+        *_silencio_nosso(db, hoje, lim, agora, tz_name),
+        *_contato_sumido(db, hoje, lim, tz_name),
+        *_cards_parados(db, hoje, lim, tz_name),
     ]
 
 
@@ -417,9 +421,14 @@ def _nome_da_conversa(chat: WhatsappChat) -> str:
 
 
 def _silencio_nosso(
-    db: Session, hoje: date, lim: dict[str, int], agora: datetime
+    db: Session, hoje: date, lim: dict[str, int], agora: datetime, tz_name: str | None
 ) -> list[Ausencia]:
-    """A última palavra foi do contato, e faz tempo. É a ausência de uma resposta NOSSA."""
+    """A última palavra foi do contato, e faz tempo. É a ausência de uma resposta NOSSA.
+
+    `local_date` (não `.date()` cru) converte `created_at` pro fuso do tenant antes de comparar
+    com `hoje` — que já é local (`hoje_do_tenant`). Sem isso, entre meia-noite UTC e meia-noite
+    local (3h de janela, todo dia, `America/Sao_Paulo`) a conta de dias sai errada por 1: achado
+    ao vivo no CI, madrugada de 2026-09-01."""
     corte = agora - timedelta(hours=lim["sem_resposta_nossa_horas"])
     fora: list[Ausencia] = []
     for chat, msg in _ultimas_mensagens(db):
@@ -427,7 +436,7 @@ def _silencio_nosso(
             continue
         if _naive(msg.created_at) >= _naive(corte):
             continue
-        dias = (hoje - msg.created_at.date()).days
+        dias = (hoje - local_date(msg.created_at, tz_name)).days
         fora.append(
             Ausencia(
                 module="comercial", kind="comercial.contato.esperando_resposta",
@@ -439,11 +448,14 @@ def _silencio_nosso(
     return fora
 
 
-def _contato_sumido(db: Session, hoje: date, lim: dict[str, int]) -> list[Ausencia]:
-    """Conversa que simplesmente parou — de qualquer lado."""
+def _contato_sumido(
+    db: Session, hoje: date, lim: dict[str, int], tz_name: str | None
+) -> list[Ausencia]:
+    """Conversa que simplesmente parou — de qualquer lado. `local_date` pelo mesmo motivo de
+    `_silencio_nosso`, acima."""
     fora: list[Ausencia] = []
     for chat, msg in _ultimas_mensagens(db):
-        dias = (hoje - msg.created_at.date()).days
+        dias = (hoje - local_date(msg.created_at, tz_name)).days
         if dias < lim["contato_sumido_dias"]:
             continue
         fora.append(
@@ -457,8 +469,11 @@ def _contato_sumido(db: Session, hoje: date, lim: dict[str, int]) -> list[Ausenc
     return fora
 
 
-def _cards_parados(db: Session, hoje: date, lim: dict[str, int]) -> list[Ausencia]:
-    """Card parado na mesma etapa. Etapa terminal (ganho/perdido) não conta: acabou."""
+def _cards_parados(
+    db: Session, hoje: date, lim: dict[str, int], tz_name: str | None
+) -> list[Ausencia]:
+    """Card parado na mesma etapa. Etapa terminal (ganho/perdido) não conta: acabou. `local_date`
+    pelo mesmo motivo de `_silencio_nosso`, acima."""
     limite = hoje - timedelta(days=lim["card_parado_dias"])
     cards = db.execute(
         select(Client, PipelineStage)
@@ -473,7 +488,7 @@ def _cards_parados(db: Session, hoje: date, lim: dict[str, int]) -> list[Ausenci
 
     fora: list[Ausencia] = []
     for card, etapa in cards:
-        entrou = card.stage_entered_at.date()
+        entrou = local_date(card.stage_entered_at, tz_name)
         if entrou > limite:
             continue
         dias = (hoje - entrou).days
