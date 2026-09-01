@@ -65,6 +65,11 @@ class Transaction(Base, TenantMixin, TimestampMixin):
     chart_account_id: Mapped[str | None] = mapped_column(String(36), nullable=True)
     cost_center_id: Mapped[str | None] = mapped_column(String(36), nullable=True)
 
+    # Número/identificador do documento (nota fiscal, recibo...) — texto livre. Observações: nota
+    # livre do dono sobre a venda.
+    documento: Mapped[str] = mapped_column(String(64), default="", nullable=False)
+    observacoes: Mapped[str] = mapped_column(Text, default="", nullable=False)
+
     # Onda 3 — a qual saque esta venda pertence. NULL = ainda não sacada, **ou** sacada antes da
     # migration 0077 (não há backfill, e não pode haver: aqueles saques nunca foram registrados,
     # então não existe linha a que pertencer — a mesma manobra da 2b-ii).

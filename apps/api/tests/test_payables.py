@@ -95,6 +95,35 @@ def test_create_bill_with_payment_code(client: TestClient, headers):
     assert b["attachment_url"] == "https://x.com/boleto.pdf"
 
 
+def test_create_bill_with_documento_e_observacoes(client: TestClient, headers):
+    b = client.post(
+        "/payables/bills",
+        json=_bill(documento="NF-4471", observacoes="Combinado com o síndico"),
+        headers=headers,
+    ).json()
+    assert b["documento"] == "NF-4471"
+    assert b["observacoes"] == "Combinado com o síndico"
+
+
+def test_create_bill_sem_documento_e_observacoes_usa_vazio(client: TestClient, headers):
+    b = client.post("/payables/bills", json=_bill(), headers=headers).json()
+    assert b["documento"] == ""
+    assert b["observacoes"] == ""
+
+
+def test_edit_bill_documento_e_observacoes(client: TestClient, headers):
+    b = client.post("/payables/bills", json=_bill(), headers=headers).json()
+    resp = client.patch(
+        f"/payables/bills/{b['id']}",
+        json={"documento": "NF-9002", "observacoes": "Reajuste anual"},
+        headers=headers,
+    )
+    assert resp.status_code == 200
+    out = resp.json()
+    assert out["documento"] == "NF-9002"
+    assert out["observacoes"] == "Reajuste anual"
+
+
 def test_recurring_generates_occurrences(client: TestClient, headers):
     client.post(
         "/payables/bills",

@@ -55,6 +55,31 @@ def test_create_pix_is_available(client: TestClient, headers):
     assert tx["status"] == "available"
 
 
+def test_create_transaction_with_documento_e_observacoes(client: TestClient, headers):
+    resp = client.post(
+        "/wallet/transactions",
+        json={
+            "kind": "service", "method": "pix", "gross_cents": 10000, "description": "Consulta",
+            "documento": "NF-77", "observacoes": "Pago via pix na hora",
+        },
+        headers=headers,
+    )
+    tx = resp.json()
+    assert tx["documento"] == "NF-77"
+    assert tx["observacoes"] == "Pago via pix na hora"
+
+
+def test_create_transaction_sem_documento_e_observacoes_usa_vazio(client: TestClient, headers):
+    resp = client.post(
+        "/wallet/transactions",
+        json={"kind": "service", "method": "pix", "gross_cents": 10000, "description": "Consulta"},
+        headers=headers,
+    )
+    tx = resp.json()
+    assert tx["documento"] == ""
+    assert tx["observacoes"] == ""
+
+
 def test_create_card_is_pending(client: TestClient, headers):
     tx = client.post(
         "/wallet/transactions",

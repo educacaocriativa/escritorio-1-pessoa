@@ -114,6 +114,45 @@ describe("CobrancasPage — Nova cobrança (Story 7.5, Task 2)", () => {
     expect(screen.getByRole("heading", { name: "Nova cobrança" })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Gerar cobrança" })).toBeEnabled();
   });
+
+  it("envia documento e observações no POST", async () => {
+    const user = userEvent.setup();
+    vi.mocked(api.post).mockResolvedValue({ data: { id: "c-novo" } } as never);
+    renderPage();
+
+    await user.click(await screen.findByRole("button", { name: "Nova cobrança" }));
+    await user.type(screen.getByLabelText("Valor (R$)"), "150,00");
+    fireEvent.change(screen.getByLabelText("Vencimento"), { target: { value: "2026-09-10" } });
+    await user.type(screen.getByLabelText("Documento (opcional)"), "NF-118");
+    await user.type(screen.getByLabelText("Observações (opcional)"), "Cliente pediu nota");
+    await user.click(screen.getByRole("button", { name: "Gerar cobrança" }));
+
+    await waitFor(() => expect(vi.mocked(api.post)).toHaveBeenCalled());
+    expect(vi.mocked(api.post)).toHaveBeenCalledWith(
+      "/receivables/charges",
+      expect.objectContaining({ documento: "NF-118", observacoes: "Cliente pediu nota" }),
+    );
+  });
+
+  // A cobrança precisa de um `id` real ANTES de aceitar anexo (Attachments.tsx exige owner_id
+  // existente) — por isso o modal não fecha ao salvar: ele troca para a fase de anexo.
+  it("depois de criar, o modal troca para a fase de anexo (sem fechar) e 'Concluir' fecha", async () => {
+    const user = userEvent.setup();
+    vi.mocked(api.post).mockResolvedValue({ data: { id: "c-novo", description: "Mensalidade" } } as never);
+    renderPage();
+
+    await user.click(await screen.findByRole("button", { name: "Nova cobrança" }));
+    await user.type(screen.getByLabelText("Valor (R$)"), "150,00");
+    fireEvent.change(screen.getByLabelText("Vencimento"), { target: { value: "2026-09-10" } });
+    await user.click(screen.getByRole("button", { name: "Gerar cobrança" }));
+
+    expect(await screen.findByText(/Cobrança criada: Mensalidade/)).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Contrato" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Boleto" })).toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: "Concluir" }));
+    expect(screen.queryByRole("heading", { name: "Nova cobrança" })).not.toBeInTheDocument();
+  });
 });
 
 // ══════════════════════════════════════════════════════════════════════════════════════════════

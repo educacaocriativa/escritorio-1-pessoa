@@ -240,6 +240,8 @@ def build_charge(db: Session, *, tenant_id: str, actor: str, data: ChargeCreate)
         chart_account_id=data.chart_account_id,
         contract_id=data.contract_id,
         cost_center_id=data.cost_center_id,
+        documento=data.documento,
+        observacoes=data.observacoes,
         status=STATUS_OPEN,
     )
     db.add(charge)
@@ -435,6 +437,10 @@ def update_charge(db: Session, *, charge_id: str, tenant_id: str, actor: str, da
             raise ReceivableError("Centro de custo não encontrado", 404)
         else:
             charge.cost_center_id = data.cost_center_id
+    if data.documento is not None:
+        charge.documento = data.documento
+    if data.observacoes is not None:
+        charge.observacoes = data.observacoes
 
     ev = db.get(AgendaEvent, charge.agenda_event_id) if charge.agenda_event_id else None
     if ev is not None:
