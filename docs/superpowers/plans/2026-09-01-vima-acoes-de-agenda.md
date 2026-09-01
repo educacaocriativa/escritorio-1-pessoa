@@ -47,7 +47,7 @@ Nenhum arquivo novo, nenhuma migration — tudo reaproveita `agenda/service.py`,
 - Consumes: `agenda_service.create_event(db, *, tenant_id, actor, by_ai, data: EventCreate) -> tuple[AgendaEvent, list[AgendaEvent]]`; `agenda_service.AgendaError`; `EventCreate` (`app.modules.agenda.schemas`); `crm_service.list_clients(db, search, limit) -> list[Client]`; `tenant_zone(tz_name) -> ZoneInfo` (`app.core.tz`, já existe, ainda não importado em `tools.py`); `tenant_timezone(db) -> str` (já importado).
 - Produces: `_evento_json(e: AgendaEvent) -> dict[str, Any]` — serialização compartilhada, usada por `_consultar_agenda` e pelas 3 ferramentas de escrita (Tasks 2/3 dependem dela). `Ferramenta.executar` passa a ser `Callable[[Session, CurrentUser, dict[str, Any]], dict[str, Any]]` — Tasks 2/3 seguem essa assinatura.
 
-Hoje `Ferramenta.executar` só recebe `(db, entrada)` porque as 9 ferramentas de leitura não precisam de identidade — a sessão já vem RLS-escopada. Escrever exige `tenant_id` (para carimbar a linha nova) e `actor` (para o rastro de auditoria), então esta task alarga a assinatura para TODAS as ferramentas — as de leitura passam a receber `user` e ignorá-lo (mesma convenção de parâmetro não usado que o arquivo já tem: `_entrada` quando o dado não é lido).
+Hoje `Ferramenta.executar` só recebe `(db, entrada)` porque as 11 ferramentas de leitura pré-existentes não precisam de identidade — a sessão já vem RLS-escopada. Escrever exige `tenant_id` (para carimbar a linha nova) e `actor` (para o rastro de auditoria), então esta task alarga a assinatura para TODAS as ferramentas — as de leitura passam a receber `user` e ignorá-lo (mesma convenção de parâmetro não usado que o arquivo já tem: `_entrada` quando o dado não é lido).
 
 - [ ] **Step 1: Rodar a suíte atual para ter uma baseline verde**
 
@@ -618,31 +618,37 @@ E na lista `FERRAMENTAS`, logo depois da entrada de `criar_compromisso`:
 
 - [ ] **Step 4: Atualizar a contagem do catálogo**
 
-`FERRAMENTAS` agora tem 11 entradas — o teste de contagem da Task 1 (`test_owner_ve_as_dez_ferramentas`) quebraria sem este ajuste. Troque:
+**Correção de planejamento (achada na revisão da Task 1):** o codebase real, na hora em que a Task 1 rodou, já tinha 11 ferramentas de leitura, não 9 — `consultar_clientes_recentes` (`modulo="crm"`) e `consultar_clientes_atencao` (`modulo="comercial"`) já existiam e não estavam no brief original. A Task 1 já foi corrigida para refletir isso (catálogo fechou em 12 = 11 + `criar_compromisso`, teste renomeado para `test_owner_ve_as_doze_ferramentas`). Esta task soma mais uma: 13.
+
+`FERRAMENTAS` agora tem 13 entradas — o teste de contagem que a Task 1 deixou (`test_owner_ve_as_doze_ferramentas`) quebraria sem este ajuste. Troque:
 
 ```python
-def test_owner_ve_as_dez_ferramentas():
+def test_owner_ve_as_doze_ferramentas():
     nomes = {f.nome for f in tools.ferramentas_disponiveis(_usuario("owner"))}
     assert nomes == {
         "consultar_recebiveis", "consultar_pagaveis", "consultar_projecao_caixa",
-        "consultar_agenda", "consultar_cliente", "consultar_documentos_juridicos",
+        "consultar_agenda", "criar_compromisso", "consultar_cliente",
+        "consultar_clientes_recentes", "consultar_documentos_juridicos",
         "consultar_campanhas_marketing", "consultar_estoque_baixo", "consultar_item_estoque",
-        "criar_compromisso",
+        "consultar_clientes_atencao",
     }
 ```
 
 por:
 
 ```python
-def test_owner_ve_as_onze_ferramentas():
+def test_owner_ve_as_treze_ferramentas():
     nomes = {f.nome for f in tools.ferramentas_disponiveis(_usuario("owner"))}
     assert nomes == {
         "consultar_recebiveis", "consultar_pagaveis", "consultar_projecao_caixa",
-        "consultar_agenda", "consultar_cliente", "consultar_documentos_juridicos",
+        "consultar_agenda", "criar_compromisso", "cancelar_compromisso", "consultar_cliente",
+        "consultar_clientes_recentes", "consultar_documentos_juridicos",
         "consultar_campanhas_marketing", "consultar_estoque_baixo", "consultar_item_estoque",
-        "criar_compromisso", "cancelar_compromisso",
+        "consultar_clientes_atencao",
     }
 ```
+
+(Antes de escrever este teste, confirme o nome exato do teste deixado pela Task 1 e a lista completa de nomes em `apps/api/app/modules/vima/tools.py` — `grep -n 'nome="' apps/api/app/modules/vima/tools.py` — porque o codebase pode ter mudado mais desde que este plano foi escrito. Use o que está no arquivo, não a lista acima, se divergirem.)
 
 - [ ] **Step 5: Rodar os testes e confirmar verde**
 
@@ -856,16 +862,19 @@ E na lista `FERRAMENTAS`, logo depois da entrada de `cancelar_compromisso`:
 
 - [ ] **Step 4: Atualizar a contagem do catálogo e adicionar o teste de permissão por módulo `agenda`**
 
-Troque (de novo) `test_owner_ve_as_onze_ferramentas` por:
+**Correção de planejamento (a mesma da Task 2):** o catálogo real tem 2 ferramentas de leitura a mais do que este plano previu (`consultar_clientes_recentes`, `consultar_clientes_atencao` — ver a nota na Task 2). Confirme o nome do teste e a lista completa que a Task 2 deixou (`grep -n 'nome="' apps/api/app/modules/vima/tools.py` e o nome da última função `test_owner_ve_as_*` em `test_vima_tools.py`) antes de trocar — use o que está no arquivo se divergir do que está aqui.
+
+Troque (de novo) `test_owner_ve_as_treze_ferramentas` por:
 
 ```python
-def test_owner_ve_as_doze_ferramentas():
+def test_owner_ve_as_catorze_ferramentas():
     nomes = {f.nome for f in tools.ferramentas_disponiveis(_usuario("owner"))}
     assert nomes == {
         "consultar_recebiveis", "consultar_pagaveis", "consultar_projecao_caixa",
-        "consultar_agenda", "consultar_cliente", "consultar_documentos_juridicos",
-        "consultar_campanhas_marketing", "consultar_estoque_baixo", "consultar_item_estoque",
-        "criar_compromisso", "cancelar_compromisso", "remarcar_compromisso",
+        "consultar_agenda", "criar_compromisso", "cancelar_compromisso",
+        "remarcar_compromisso", "consultar_cliente", "consultar_clientes_recentes",
+        "consultar_documentos_juridicos", "consultar_campanhas_marketing",
+        "consultar_estoque_baixo", "consultar_item_estoque", "consultar_clientes_atencao",
     }
 ```
 
@@ -882,7 +891,7 @@ def test_sub_usuario_so_de_agenda_ve_a_leitura_e_as_tres_ferramentas_de_escrita(
 - [ ] **Step 5: Rodar a suíte inteira do arquivo e confirmar verde**
 
 Run: `cd apps/api && python -m pytest tests/test_vima_tools.py -v`
-Expected: PASS em todos — catálogo com 12 ferramentas, 17 testes novos desde o início do plano.
+Expected: PASS em todos — catálogo com 14 ferramentas (11 pré-existentes + as 3 novas desta fatia), 17 testes novos desde o início do plano.
 
 - [ ] **Step 6: Rodar a suíte completa da API para checar que nada mais quebrou**
 
@@ -1093,7 +1102,7 @@ sempre, só nunca tinha sido chamado com `True`.
   código) que já sustenta "a IA só narra, nunca origina número" no resto da Vima. Um token de
   confirmação persistido entre chamadas HTTP foi considerado e rejeitado: contrariaria a
   decisão já tomada de "sem persistência de conversa entre sessões".
-- [x] **`Ferramenta.executar` ganhou `CurrentUser`** — as 9 ferramentas de leitura não
+- [x] **`Ferramenta.executar` ganhou `CurrentUser`** — as 11 ferramentas de leitura pré-existentes não
   precisavam de identidade (a sessão já vem RLS-escopada); escrever precisa de `tenant_id`
   (carimbar a linha nova) e `actor` (auditoria). As 9 antigas ignoram o parâmetro
   (`_user`), refactor sem mudança de comportamento, provado pela suíte existente continuando
