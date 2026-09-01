@@ -250,6 +250,46 @@ def test_process_pending_skips_notification_before_next_attempt_at(db, monkeypat
     assert n.status == "pending"
 
 
+def test_process_pending_registra_envio_de_texto_contra_eco_da_self_chat(db, monkeypatch):
+    """Achado ao vivo (tenant Dóro Eventos, 2026-09-01): `on_client_moved` manda pro MESMO
+    número que a self-chat da Vima escuta. Sem isso, o eco da notificação vira "pergunta nova"
+    pra Vima e pode entrar em loop — ver `vima/whatsapp_conversa.py::registrar_envio_externo`."""
+    from app.modules.vima import whatsapp_conversa as vc
+
+    texto = '📌 O cliente Fulano foi movido para a etapa "Contrato Fechado".'
+    _pending(db, recipient="5511999990099", message=texto)
+    monkeypatch.setattr(
+        whatsapp, "send_text",
+        lambda *, to, text, profile=None, token=None, phone_id=None: "sent",
+    )
+    service.process_pending(db, tenant_id=TENANT)
+
+    chave = vc._chave(TENANT, "5511999990099")
+    assert vc._e_eco_da_propria_resposta(chave, texto) is True
+
+
+def test_process_pending_nao_registra_envio_de_template_contra_eco(db, monkeypatch):
+    """Só `send_text` (texto livre) é comparável literalmente contra o que a self-chat recebe de
+    volta — um template não tem o texto final disponível aqui da mesma forma, e a self-chat
+    nunca manda template nenhum, então não há eco desse tipo pra prevenir."""
+    from app.modules.vima import whatsapp_conversa as vc
+
+    service.enqueue(
+        db, tenant_id=TENANT, channel="whatsapp", recipient="5511999990098",
+        message="preview", whatsapp_template_name="tmpl_x", whatsapp_template_language="pt_BR",
+        whatsapp_template_variables=[],
+    )
+    db.commit()
+    monkeypatch.setattr(
+        whatsapp, "send_template",
+        lambda **_kw: "sent",
+    )
+    service.process_pending(db, tenant_id=TENANT)
+
+    chave = vc._chave(TENANT, "5511999990098")
+    assert vc._e_eco_da_propria_resposta(chave, "preview") is False
+
+
 def test_backoff_never_schedules_past_expiry(db, monkeypatch):
     n = _pending(db, message="boom")
     n.expires_at = datetime.now(UTC) + timedelta(minutes=5)  # validade curta
