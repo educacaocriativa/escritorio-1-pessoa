@@ -15,6 +15,10 @@ TENANT_ID = "22222222-2222-2222-2222-222222222222"
 
 @pytest.fixture(autouse=True)
 def _evolution_configured(monkeypatch: pytest.MonkeyPatch) -> None:
+    # `_CONNECTED_PHONE_CACHE` é module-level (dict global) — sem limpar, o cache de um teste
+    # vazaria pro próximo e a ordem de execução passaria a importar (mesmo motivo de `setup_
+    # function` limpar `_VISTAS`/`_HISTORICO` em `test_vima_whatsapp_conversa.py`).
+    session_service._CONNECTED_PHONE_CACHE.clear()
     monkeypatch.setattr(settings, "evolution_api_key", "global-key")
     monkeypatch.setattr(settings, "evolution_api_url", "http://evolution:8080")
     monkeypatch.setattr(settings, "internal_api_base_url", "http://api:8000")
@@ -424,3 +428,124 @@ def test_nao_ressuscita_sessao_que_o_dono_desconectou(
 
 def test_nao_promove_tenant_sem_instancia(db) -> None:
     assert session_service.promote_pending_connections(db, tenant_id=TENANT_ID) == 0
+
+
+# ── connected_phone() — o telefone REALMENTE conectado, não o `owner` cadastrado no e1p ─────
+#
+# Achado ao vivo em produção (2026-08-31): `User.role == "owner"` (quem administra o SaaS) e
+# "quem escaneou o QR code e é dono do WhatsApp conectado" são frequentemente PESSOAS
+# DIFERENTES — um tenant real tinha o WhatsApp conectado no celular de um `sub_user`
+# (funcionário), não do `owner`. `ownerJid`, que a própria Evolution devolve em
+# `/instance/fetchInstances`, é o único jeito confiável de saber quem é.
+
+
+def test_connected_phone_le_o_ownerJid_da_evolution(db, monkeypatch: pytest.MonkeyPatch) -> None:
+    db.add(PublicWhatsappInstance(
+        instance_name="e1p-" + TENANT_ID, tenant_id=TENANT_ID, webhook_secret="s",
+        last_status=session_service.STATUS_CONNECTED,
+    ))
+    db.commit()
+
+    def _fake_get(url: str, **kwargs: object) -> object:
+        class _Resp:
+            status_code = 200
+
+            def raise_for_status(self) -> None:
+                return None
+
+            def json(self) -> list:
+                return [{
+                    "name": "e1p-" + TENANT_ID, "connectionStatus": "open",
+                    "ownerJid": "554399212788@s.whatsapp.net",
+                }]
+
+        return _Resp()
+
+    monkeypatch.setattr(httpx, "get", _fake_get)
+    assert session_service.connected_phone(TENANT_ID) == "554399212788"
+
+
+def test_connected_phone_sobrevive_a_desconexao(db, monkeypatch: pytest.MonkeyPatch) -> None:
+    # Confirmado ao vivo: a Evolution mantém o `ownerJid` no fetchInstances mesmo com
+    # connectionStatus "close" (ex.: logo após o dono desconectar pelo celular) — o mapeamento
+    # "quem é o dono desta instância" não devia depender de estar conectado neste instante.
+    def _fake_get(url: str, **kwargs: object) -> object:
+        class _Resp:
+            status_code = 200
+
+            def raise_for_status(self) -> None:
+                return None
+
+            def json(self) -> list:
+                return [{
+                    "name": "e1p-" + TENANT_ID, "connectionStatus": "close",
+                    "ownerJid": "554399212788@s.whatsapp.net",
+                }]
+
+        return _Resp()
+
+    monkeypatch.setattr(httpx, "get", _fake_get)
+    assert session_service.connected_phone(TENANT_ID) == "554399212788"
+
+
+def test_connected_phone_none_quando_instancia_nao_aparece(
+    db, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    def _fake_get(url: str, **kwargs: object) -> object:
+        class _Resp:
+            status_code = 200
+
+            def raise_for_status(self) -> None:
+                return None
+
+            def json(self) -> list:
+                return []
+
+        return _Resp()
+
+    monkeypatch.setattr(httpx, "get", _fake_get)
+    assert session_service.connected_phone(TENANT_ID) is None
+
+
+def test_connected_phone_none_quando_evolution_falha(
+    db, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    def _fake_get(url: str, **kwargs: object) -> object:
+        raise httpx.ConnectError("sem rede")
+
+    monkeypatch.setattr(httpx, "get", _fake_get)
+    assert session_service.connected_phone(TENANT_ID) is None
+
+
+def test_connected_phone_cacheia_entre_chamadas(db, monkeypatch: pytest.MonkeyPatch) -> None:
+    session_service._CONNECTED_PHONE_CACHE.clear()
+    agora = [5000.0]
+    monkeypatch.setattr(session_service.time, "monotonic", lambda: agora[0])
+    chamadas = {"n": 0}
+
+    def _fake_get(url: str, **kwargs: object) -> object:
+        chamadas["n"] += 1
+
+        class _Resp:
+            status_code = 200
+
+            def raise_for_status(self) -> None:
+                return None
+
+            def json(self) -> list:
+                return [{
+                    "name": "e1p-" + TENANT_ID, "connectionStatus": "open",
+                    "ownerJid": "554399212788@s.whatsapp.net",
+                }]
+
+        return _Resp()
+
+    monkeypatch.setattr(httpx, "get", _fake_get)
+
+    assert session_service.connected_phone(TENANT_ID) == "554399212788"
+    assert session_service.connected_phone(TENANT_ID) == "554399212788"
+    assert chamadas["n"] == 1  # a segunda chamada veio do cache
+
+    agora[0] += session_service._CONNECTED_PHONE_TTL_SECONDS + 1
+    assert session_service.connected_phone(TENANT_ID) == "554399212788"
+    assert chamadas["n"] == 2  # TTL expirou — refez a chamada
