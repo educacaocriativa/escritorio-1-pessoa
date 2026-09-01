@@ -74,3 +74,11 @@ def test_historico_entra_no_texto_mandado_a_claude(db: Session, monkeypatch):
     assert "quanto tenho a receber?" in capturado["user_message"]
     assert "R$ 1.000,00" in capturado["user_message"]
     assert "e essa semana?" in capturado["user_message"]
+
+
+def test_system_prompt_exige_confirmacao_antes_de_escrever():
+    assert "confirmado=true" in pergunta._SYSTEM
+    assert "criar_compromisso" in pergunta._SYSTEM
+    assert "cancelar_compromisso" in pergunta._SYSTEM
+    assert "remarcar_compromisso" in pergunta._SYSTEM
+    assert "consultar_agenda" in pergunta._SYSTEM
