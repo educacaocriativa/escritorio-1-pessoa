@@ -48,6 +48,35 @@ def _charge(**over):
     return {**base, **over}
 
 
+def test_create_charge_with_documento_e_observacoes(client: TestClient, headers):
+    c = client.post(
+        "/receivables/charges",
+        json=_charge(documento="NF-118", observacoes="Cliente pediu nota até dia 5"),
+        headers=headers,
+    ).json()
+    assert c["documento"] == "NF-118"
+    assert c["observacoes"] == "Cliente pediu nota até dia 5"
+
+
+def test_create_charge_sem_documento_e_observacoes_usa_vazio(client: TestClient, headers):
+    c = client.post("/receivables/charges", json=_charge(), headers=headers).json()
+    assert c["documento"] == ""
+    assert c["observacoes"] == ""
+
+
+def test_edit_charge_documento_e_observacoes(client: TestClient, headers):
+    c = client.post("/receivables/charges", json=_charge(), headers=headers).json()
+    resp = client.patch(
+        f"/receivables/charges/{c['id']}",
+        json={"documento": "NF-220", "observacoes": "Segunda via"},
+        headers=headers,
+    )
+    assert resp.status_code == 200
+    out = resp.json()
+    assert out["documento"] == "NF-220"
+    assert out["observacoes"] == "Segunda via"
+
+
 def test_boleto_charge_generates_pdf_attachment(client: TestClient, headers):
     c = client.post("/receivables/charges", json=_charge(method="boleto"), headers=headers).json()
     atts = client.get(

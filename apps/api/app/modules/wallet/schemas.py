@@ -22,6 +22,8 @@ class TransactionCreate(BaseModel):
     competence_date: date | None = None
     chart_account_id: str | None = None
     cost_center_id: str | None = None
+    documento: str = Field(default="", max_length=64)  # nº do documento (nota fiscal, recibo...)
+    observacoes: str = ""  # nota livre do dono sobre a venda
 
     @field_validator("kind")
     @classmethod
@@ -53,6 +55,8 @@ class TransactionOut(BaseModel):
     competence_date: date | None
     chart_account_id: str | None
     cost_center_id: str | None
+    documento: str
+    observacoes: str
     created_at: datetime
 
     model_config = {"from_attributes": True}

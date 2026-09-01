@@ -28,6 +28,8 @@ class PayableCreate(BaseModel):
     recurrence_count: int = Field(default=1, ge=1, le=60)  # quantas vezes repete
     payment_code: str = ""  # linha digitável do boleto OU Pix copia-e-cola
     attachment_url: str = Field(default="", max_length=1024)  # URL do boleto anexado
+    documento: str = Field(default="", max_length=64)  # nº do documento (nota fiscal, recibo...)
+    observacoes: str = ""  # nota livre do dono sobre a conta
 
     @field_validator("recurrence")
     @classmethod
@@ -55,6 +57,8 @@ class PayableUpdate(BaseModel):
     recurrence: str | None = None
     payment_code: str | None = None
     attachment_url: str | None = Field(default=None, max_length=1024)
+    documento: str | None = Field(default=None, max_length=64)
+    observacoes: str | None = None
 
     @field_validator("recurrence")
     @classmethod
@@ -145,6 +149,8 @@ class PayableOut(BaseModel):
     recurrence_group: str | None
     payment_code: str
     attachment_url: str
+    documento: str
+    observacoes: str
     # Story 8.12 AC12 — o vínculo com o razão bancário. `bank_account_id` é a decisão AUTORITATIVA
     # do usuário ("de qual conta saiu?"); `bank_transaction_id` é **cache de leitura** do movimento
     # gerado. Divergiram? Quem manda é o `origin_id` do movimento (`payables/models.py`).

@@ -155,6 +155,8 @@ def payable_out(p: Payable, today: date) -> PayableOut:
         recurrence_group=p.recurrence_group,
         payment_code=p.payment_code,
         attachment_url=p.attachment_url,
+        documento=p.documento,
+        observacoes=p.observacoes,
         # Story 8.12 AC12 — o vínculo com o razão bancário fica VISÍVEL. Sem ele a UI da 8.13 não
         # tem como mostrar "saiu do Itaú PJ" nem como pré-selecionar a conta na correção.
         # ⚠️ Nenhuma superfície de `/admin/*` recebe estes campos (epic §2.1): não existe agregado
@@ -212,6 +214,10 @@ def build_payable(db: Session, *, tenant_id: str, actor: str, data: PayableCreat
             # boleto/anexo informados na criação só na 1ª ocorrência (as demais anexa-se depois)
             payment_code=data.payment_code if i == 0 else "",
             attachment_url=data.attachment_url if i == 0 else "",
+            # documento/observações descrevem a despesa em si (mesma disciplina de
+            # description/supplier acima): valem para TODAS as ocorrências, não só a primeira.
+            documento=data.documento,
+            observacoes=data.observacoes,
             status=STATUS_OPEN,
         )
         db.add(payable)
@@ -263,6 +269,10 @@ def update_payable(db: Session, *, payable_id: str, tenant_id: str, actor: str, 
         p.payment_code = data.payment_code
     if data.attachment_url is not None:
         p.attachment_url = data.attachment_url
+    if data.documento is not None:
+        p.documento = data.documento
+    if data.observacoes is not None:
+        p.observacoes = data.observacoes
     # Story 5.2: reclassificação (competência/conta do plano de contas) — metadado contábil, não
     # toca no caminho de dinheiro; ajustável a qualquer momento.
     if data.competence_date is not None:

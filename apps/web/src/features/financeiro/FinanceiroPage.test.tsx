@@ -81,6 +81,45 @@ describe("FinanceiroPage — separador de milhar (#224)", () => {
   });
 });
 
+describe("FinanceiroPage — Registrar venda: documento/observações e anexo", () => {
+  it("envia documento e observações no POST", async () => {
+    const user = userEvent.setup();
+    vi.mocked(api.post).mockResolvedValue({ data: { id: "tx-novo" } } as never);
+    renderPage();
+
+    await user.click(await screen.findByRole("button", { name: "Registrar venda" }));
+    await user.type(screen.getByLabelText("Valor (R$)"), "150,00");
+    await user.type(screen.getByLabelText("Documento (opcional)"), "NF-77");
+    await user.type(screen.getByLabelText("Observações (opcional)"), "Pago na hora");
+    await user.click(screen.getByRole("button", { name: "Registrar" }));
+
+    await waitFor(() => expect(vi.mocked(api.post)).toHaveBeenCalled());
+    expect(vi.mocked(api.post)).toHaveBeenCalledWith(
+      "/wallet/transactions",
+      expect.objectContaining({ documento: "NF-77", observacoes: "Pago na hora" }),
+    );
+  });
+
+  // A venda precisa de um `id` real ANTES de aceitar anexo (Attachments.tsx exige owner_id
+  // existente) — por isso o modal não fecha ao salvar: ele troca para a fase de anexo.
+  it("depois de registrar, o modal troca para a fase de anexo (sem fechar) e 'Concluir' fecha", async () => {
+    const user = userEvent.setup();
+    vi.mocked(api.post).mockResolvedValue({ data: { id: "tx-novo", description: "Consulta" } } as never);
+    renderPage();
+
+    await user.click(await screen.findByRole("button", { name: "Registrar venda" }));
+    await user.type(screen.getByLabelText("Valor (R$)"), "150,00");
+    await user.click(screen.getByRole("button", { name: "Registrar" }));
+
+    expect(await screen.findByText(/Venda registrada: Consulta/)).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Contrato" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Comprovante" })).toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: "Concluir" }));
+    expect(screen.queryByRole("heading", { name: "Registrar venda" })).not.toBeInTheDocument();
+  });
+});
+
 // ── `GET /wallet/summary` fora de forma (issue #247) ────────────────────────────────────
 //
 // `setSummary(s.data)` recebia o payload CRU. `summary.available_cents`/etc. são lidos direto nos
