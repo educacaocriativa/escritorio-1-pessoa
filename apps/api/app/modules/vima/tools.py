@@ -41,15 +41,21 @@ from app.modules.vima import absences
 from app.modules.vima.permissions import pode_ver
 
 
-def _consultar_recebiveis(db: Session, _user: CurrentUser, _entrada: dict[str, Any]) -> dict[str, Any]:
+def _consultar_recebiveis(
+    db: Session, _user: CurrentUser, _entrada: dict[str, Any],
+) -> dict[str, Any]:
     return receivables_service.summary(db)
 
 
-def _consultar_pagaveis(db: Session, _user: CurrentUser, _entrada: dict[str, Any]) -> dict[str, Any]:
+def _consultar_pagaveis(
+    db: Session, _user: CurrentUser, _entrada: dict[str, Any],
+) -> dict[str, Any]:
     return payables_service.summary(db)
 
 
-def _consultar_projecao_caixa(db: Session, _user: CurrentUser, _entrada: dict[str, Any]) -> dict[str, Any]:
+def _consultar_projecao_caixa(
+    db: Session, _user: CurrentUser, _entrada: dict[str, Any],
+) -> dict[str, Any]:
     return asdict(projection_service.cash_projection(db))
 
 
@@ -65,14 +71,11 @@ def _evento_json(e: AgendaEvent) -> dict[str, Any]:
     """Serialização compartilhada entre `consultar_agenda` e as ferramentas de escrita — o `id`
     é o que permite à Claude referenciar de volta, numa chamada seguinte, um evento achado por
     consulta (`cancelar_compromisso`/`remarcar_compromisso` operam por `event_id`)."""
-    # SQLite devolve sem fuso; a comparação é sempre em UTC (mesma convenção de vima/service.py).
-    starts_at = e.starts_at if e.starts_at.tzinfo is not None else e.starts_at.replace(tzinfo=UTC)
-    ends_at = e.ends_at if e.ends_at.tzinfo is not None else e.ends_at.replace(tzinfo=UTC)
     return {
         "id": e.id,
         "titulo": e.title,
-        "inicio": starts_at.isoformat(),
-        "fim": ends_at.isoformat(),
+        "inicio": _aware(e.starts_at).isoformat(),
+        "fim": _aware(e.ends_at).isoformat(),
         "dia_inteiro": e.all_day,
         "status": e.status,
         "tipo": e.kind,
@@ -86,7 +89,9 @@ def _combinar_utc(dia: date, hora: time, tz_name: str) -> datetime:
     return datetime.combine(dia, hora, tzinfo=tenant_zone(tz_name)).astimezone(UTC)
 
 
-def _consultar_agenda(db: Session, _user: CurrentUser, entrada: dict[str, Any]) -> dict[str, Any]:
+def _consultar_agenda(
+    db: Session, _user: CurrentUser, entrada: dict[str, Any],
+) -> dict[str, Any]:
     tz = tenant_timezone(db)
     inicio = date.fromisoformat(entrada["data_inicio"])
     fim = date.fromisoformat(entrada.get("data_fim") or entrada["data_inicio"])
@@ -98,7 +103,9 @@ def _consultar_agenda(db: Session, _user: CurrentUser, entrada: dict[str, Any]) 
     return {"eventos": [_evento_json(e) for e in eventos]}
 
 
-def _criar_compromisso(db: Session, user: CurrentUser, entrada: dict[str, Any]) -> dict[str, Any]:
+def _criar_compromisso(
+    db: Session, user: CurrentUser, entrada: dict[str, Any],
+) -> dict[str, Any]:
     tipo = entrada["tipo"]
     if tipo not in _TIPOS_CRIAVEIS_POR_CHAT:
         raise ValueError(f"tipo inválido para criar por chat: {tipo}")
@@ -142,11 +149,15 @@ def _criar_compromisso(db: Session, user: CurrentUser, entrada: dict[str, Any]) 
         "conflitos": [_evento_json(c) for c in conflitos],
     }
     if cliente_nao_encontrado:
-        resultado["aviso"] = f"cliente '{nome_cliente}' não encontrado no cadastro; criado sem vínculo"
+        resultado["aviso"] = (
+            f"cliente '{nome_cliente}' não encontrado no cadastro; criado sem vínculo"
+        )
     return resultado
 
 
-def _consultar_cliente(db: Session, _user: CurrentUser, entrada: dict[str, Any]) -> dict[str, Any]:
+def _consultar_cliente(
+    db: Session, _user: CurrentUser, entrada: dict[str, Any],
+) -> dict[str, Any]:
     nome = entrada["nome"]
     clientes = crm_service.list_clients(db, search=nome, limit=5)
     resultado = []
@@ -172,7 +183,9 @@ def _aware(dt: datetime) -> datetime:
     return dt if dt.tzinfo is not None else dt.replace(tzinfo=UTC)
 
 
-def _consultar_clientes_recentes(db: Session, _user: CurrentUser, entrada: dict[str, Any]) -> dict[str, Any]:
+def _consultar_clientes_recentes(
+    db: Session, _user: CurrentUser, entrada: dict[str, Any],
+) -> dict[str, Any]:
     limite = int(entrada.get("limite") or 5)
     clientes = crm_service.list_recent_clients(db, limit=200)
     dias = entrada.get("dias")
@@ -194,7 +207,9 @@ def _consultar_clientes_recentes(db: Session, _user: CurrentUser, entrada: dict[
     }
 
 
-def _consultar_documentos_juridicos(db: Session, _user: CurrentUser, entrada: dict[str, Any]) -> dict[str, Any]:
+def _consultar_documentos_juridicos(
+    db: Session, _user: CurrentUser, entrada: dict[str, Any],
+) -> dict[str, Any]:
     client_id = None
     if entrada.get("cliente"):
         clientes = crm_service.list_clients(db, search=entrada["cliente"], limit=1)
@@ -221,7 +236,9 @@ def _consultar_documentos_juridicos(db: Session, _user: CurrentUser, entrada: di
     }
 
 
-def _consultar_campanhas_marketing(db: Session, _user: CurrentUser, entrada: dict[str, Any]) -> dict[str, Any]:
+def _consultar_campanhas_marketing(
+    db: Session, _user: CurrentUser, entrada: dict[str, Any],
+) -> dict[str, Any]:
     campanhas = marketing_service.list_carousels(db)
     dias = entrada.get("dias")
     if dias:
@@ -240,7 +257,9 @@ def _consultar_campanhas_marketing(db: Session, _user: CurrentUser, entrada: dic
     }
 
 
-def _consultar_estoque_baixo(db: Session, _user: CurrentUser, _entrada: dict[str, Any]) -> dict[str, Any]:
+def _consultar_estoque_baixo(
+    db: Session, _user: CurrentUser, _entrada: dict[str, Any],
+) -> dict[str, Any]:
     itens = stock_service.low_stock(db)
     return {
         "itens": [
@@ -255,7 +274,9 @@ def _consultar_estoque_baixo(db: Session, _user: CurrentUser, _entrada: dict[str
     }
 
 
-def _consultar_item_estoque(db: Session, _user: CurrentUser, entrada: dict[str, Any]) -> dict[str, Any]:
+def _consultar_item_estoque(
+    db: Session, _user: CurrentUser, entrada: dict[str, Any],
+) -> dict[str, Any]:
     nome = entrada["nome"].strip().lower()
     itens = [
         i for i in stock_service.list_items(db, only_active=True) if nome in i.name.lower()
@@ -274,7 +295,9 @@ def _consultar_item_estoque(db: Session, _user: CurrentUser, entrada: dict[str, 
     }
 
 
-def _consultar_clientes_atencao(db: Session, _user: CurrentUser, _entrada: dict[str, Any]) -> dict[str, Any]:
+def _consultar_clientes_atencao(
+    db: Session, _user: CurrentUser, _entrada: dict[str, Any],
+) -> dict[str, Any]:
     agora = datetime.now(UTC)
     hoje = hoje_do_tenant(db, now=agora)
     ausencias = absences.clientes_em_atencao(db, hoje=hoje, agora=agora)
