@@ -1,5 +1,10 @@
 """A self-chat da Vima roteia para `vima/whatsapp_conversa`, não para o inbox normal — e as
-outras três formas de `from_me`/`da_equipe` continuam se comportando como antes (regressão)."""
+outras três formas de `from_me`/`da_equipe` continuam se comportando como antes (regressão).
+
+O gatilho de self-chat compara `from_phone` contra `whatsapp_session.connected_phone` — o
+telefone REALMENTE conectado via Evolution (lido do `ownerJid`), não contra `User.role` nem
+contra "qualquer usuário ativo do tenant". `_conectado` abaixo simula essa resposta sem bater
+na rede de verdade; cada teste escolhe qual telefone está "conectado" para o cenário dele."""
 from sqlalchemy import select
 
 from app.core.whatsapp.inbound import InboundMessage
@@ -22,6 +27,12 @@ def _self_chat_msg(**over) -> InboundMessage:
     return InboundMessage(**base)
 
 
+def _conectado(monkeypatch, phone: str | None) -> None:
+    monkeypatch.setattr(
+        inbox_service.whatsapp_session_service, "connected_phone", lambda tenant_id: phone,
+    )
+
+
 def test_self_chat_roteia_para_vima_sem_gravar_no_crm(db, monkeypatch):
     user = User(
         tenant_id=TENANT_ID, email="dono@example.com", name="Dono", password_hash="x",
@@ -29,6 +40,7 @@ def test_self_chat_roteia_para_vima_sem_gravar_no_crm(db, monkeypatch):
     )
     db.add(user)
     db.commit()
+    _conectado(monkeypatch, "5511988889999")
 
     chamada = {}
 
@@ -57,6 +69,7 @@ def test_audio_na_self_chat_roteia_para_responder_audio(db, monkeypatch):
     )
     db.add(user)
     db.commit()
+    _conectado(monkeypatch, "5511988880001")
 
     chamada = {}
 
@@ -97,6 +110,7 @@ def test_imagem_na_self_chat_continua_no_caminho_normal_sem_erro(db, monkeypatch
     )
     db.add(user)
     db.commit()
+    _conectado(monkeypatch, "5511988880009")
 
     chamado = {"n": 0}
     monkeypatch.setattr(vc, "responder", lambda *a, **kw: chamado.update(n=chamado["n"] + 1))
@@ -119,7 +133,8 @@ def test_imagem_na_self_chat_continua_no_caminho_normal_sem_erro(db, monkeypatch
 
 
 def test_dono_respondendo_cliente_pelo_proprio_celular_nao_e_self_chat(db, monkeypatch):
-    # from_me=True, mas a CONTRAPARTE é um cliente, não um usuário do tenant — não é self-chat.
+    # from_me=True, mas a CONTRAPARTE é um cliente, não o número conectado — não é self-chat.
+    _conectado(monkeypatch, "5511988889999")
     chamado = {"n": 0}
     monkeypatch.setattr(vc, "responder", lambda *a, **kw: chamado.update(n=chamado["n"] + 1))
 
@@ -145,14 +160,32 @@ def test_dono_respondendo_cliente_pelo_proprio_celular_nao_e_self_chat(db, monke
     assert row.direction == "out"  # comportamento pré-existente, inalterado
 
 
-def test_conversa_com_sub_user_cadastrado_nao_e_self_chat(db, monkeypatch):
-    """`from_me=True` e a contraparte é telefone de um usuário ATIVO do tenant — mas um
-    `sub_user` (ex.: funcionário cadastrado pra receber o briefing), não o `owner`. Isso não é
-    self-chat de verdade (o dono conversando consigo mesmo): é o dono conversando NORMALMENTE
-    com um colega de equipe pelo mesmo WhatsApp. Achado ao vivo em produção 2026-08-31: bater
-    com QUALQUER telefone de equipe (não só o do próprio dono) fazia a Vima sequestrar essa
+def test_cliente_comum_nao_aciona_a_vima(db, monkeypatch):
+    _conectado(monkeypatch, "5511988889999")
+    chamado = {"n": 0}
+    monkeypatch.setattr(vc, "responder", lambda *a, **kw: chamado.update(n=chamado["n"] + 1))
+
+    inbox_service.ingest_webhook_payload(
+        db, tenant_id=TENANT_ID,
+        messages=[_self_chat_msg(
+            wa_message_id="cliente.1", from_phone="5511966665555", from_me=False,
+            text_body="oi, quero saber do produto", chat_jid="5511966665555@s.whatsapp.net",
+        )],
+    )
+
+    assert chamado["n"] == 0
+    client = db.scalar(select(Client).where(Client.phone == "5511966665555"))
+    assert client is not None  # vira lead normalmente, como sempre
+
+
+def test_conversa_com_sub_user_cadastrado_mas_nao_conectado_nao_e_self_chat(db, monkeypatch):
+    """`from_me=True` e a contraparte é telefone de um `sub_user` ATIVO do tenant — mas o
+    número REALMENTE conectado via Evolution (`connected_phone`) é outro (o do `owner`, neste
+    cenário). Isso não é self-chat: é o dono conversando NORMALMENTE com um colega de equipe
+    pelo mesmo WhatsApp. Achado ao vivo em produção 2026-08-31: bater com QUALQUER telefone de
+    equipe cadastrado (em vez do telefone REALMENTE conectado) fazia a Vima sequestrar essa
     conversa e responder no lugar da pessoa."""
-    User_owner = User(
+    owner = User(
         tenant_id=TENANT_ID, email="dono3@example.com", name="Dono", password_hash="x",
         phone="5511988880099", role="owner",
     )
@@ -160,8 +193,9 @@ def test_conversa_com_sub_user_cadastrado_nao_e_self_chat(db, monkeypatch):
         tenant_id=TENANT_ID, email="colega@example.com", name="Colega", password_hash="x",
         phone="5511977778888", role="sub_user",
     )
-    db.add_all([User_owner, sub_user])
+    db.add_all([owner, sub_user])
     db.commit()
+    _conectado(monkeypatch, "5511988880099")  # o número conectado é o do OWNER, não o do colega
 
     chamado = {"n": 0}
     monkeypatch.setattr(vc, "responder", lambda *a, **kw: chamado.update(n=chamado["n"] + 1))
@@ -180,18 +214,33 @@ def test_conversa_com_sub_user_cadastrado_nao_e_self_chat(db, monkeypatch):
     assert row.direction == "out"
 
 
-def test_cliente_comum_nao_aciona_a_vima(db, monkeypatch):
-    chamado = {"n": 0}
-    monkeypatch.setattr(vc, "responder", lambda *a, **kw: chamado.update(n=chamado["n"] + 1))
+def test_self_chat_funciona_para_sub_user_cujo_telefone_e_o_conectado(db, monkeypatch):
+    """O espelho do teste acima: quando o número REALMENTE conectado é o de um `sub_user`
+    (cenário real de produção: o WhatsApp do tenant está no celular de um funcionário, não do
+    `owner` cadastrado), a self-chat DELE funciona normalmente — `role` não entra na decisão,
+    só o telefone conectado."""
+    sub_user = User(
+        tenant_id=TENANT_ID, email="funcionario@example.com", name="Funcionário",
+        password_hash="x", phone="5511977778888", role="sub_user",
+    )
+    db.add(sub_user)
+    db.commit()
+    _conectado(monkeypatch, "5511977778888")  # o WhatsApp conectado é o do sub_user
+
+    chamada = {}
+    monkeypatch.setattr(
+        vc, "responder",
+        lambda db, *, tenant_id, phone, wa_message_id, texto, profile: chamada.update(
+            phone=phone, texto=texto,
+        ),
+    )
 
     inbox_service.ingest_webhook_payload(
         db, tenant_id=TENANT_ID,
         messages=[_self_chat_msg(
-            wa_message_id="cliente.1", from_phone="5511966665555", from_me=False,
-            text_body="oi, quero saber do produto", chat_jid="5511966665555@s.whatsapp.net",
+            wa_message_id="funcionario.1", from_phone="5511977778888",
+            text_body="quanto tenho a receber?", chat_jid="5511977778888@s.whatsapp.net",
         )],
     )
 
-    assert chamado["n"] == 0
-    client = db.scalar(select(Client).where(Client.phone == "5511966665555"))
-    assert client is not None  # vira lead normalmente, como sempre
+    assert chamada == {"phone": "5511977778888", "texto": "quanto tenho a receber?"}

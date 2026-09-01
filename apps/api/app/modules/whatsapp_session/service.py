@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import logging
 import secrets
+import time
 
 import httpx
 from sqlalchemy import select
@@ -24,6 +25,15 @@ from app.modules.whatsapp_session.models import (
 )
 
 logger = logging.getLogger("e1p.whatsapp")
+
+# `connected_phone()` roda no caminho do webhook (por MENSAGEM, ver
+# `whatsapp_inbox/service.py::ingest_webhook_payload`) — cachear evita uma chamada de rede à
+# Evolution por mensagem recebida. O número conectado raramente muda, então 1h é folgado sem
+# custar caro: no pior caso, alguém reconecta com um número novo e a self-chat da Vima fica até
+# 1h reconhecendo o número antigo — bem melhor que pagar rede a cada mensagem. Mesmo espírito do
+# `_TITLE_RETRY` de `whatsapp_inbox/service.py::_resolve_group_title`.
+_CONNECTED_PHONE_CACHE: dict[str, tuple[str | None, float]] = {}
+_CONNECTED_PHONE_TTL_SECONDS = 60 * 60
 
 
 class WhatsappSessionError(Exception):
@@ -180,6 +190,59 @@ def _fetch_evolution_status(instance: str) -> str | None:
         if item.get("name") == instance:
             return item.get("connectionStatus")
     return None
+
+
+def _fetch_owner_phone(instance: str) -> str | None:
+    """O telefone (só dígitos) da conta WhatsApp que está REALMENTE conectada nesta instância —
+    lido do `ownerJid` que a própria Evolution devolve, não de nenhum campo do nosso banco (não
+    existe nenhum: `PublicWhatsappInstance` guarda só o segredo do webhook e o status).
+
+    Confirmado ao vivo contra a Evolution v2.3.7 em produção (2026-08-31): o campo sobrevive à
+    desconexão (`connectionStatus: "close"` ainda traz o `ownerJid` de quem conectou por
+    último) — então não checamos status aqui, só extraímos o telefone se ele vier."""
+    try:
+        resp = httpx.get(
+            f"{settings.evolution_api_url}/instance/fetchInstances",
+            headers=_headers(), params={"instanceName": instance}, timeout=10,
+        )
+        resp.raise_for_status()
+    except httpx.HTTPError:
+        return None
+    data = resp.json()
+    items = data if isinstance(data, list) else []
+    for item in items:
+        if item.get("name") != instance:
+            continue
+        owner_jid = item.get("ownerJid")
+        if not isinstance(owner_jid, str) or not owner_jid.endswith("@s.whatsapp.net"):
+            return None
+        phone = owner_jid.split("@", 1)[0].split(":", 1)[0]  # `:device` em JID multi-dispositivo
+        return phone or None
+    return None
+
+
+def connected_phone(tenant_id: str) -> str | None:
+    """O telefone DE VERDADE conectado via Evolution para este tenant — não confundir com
+    `User.role == "owner"` no e1p, que é só o nível de permissão dentro do SaaS.
+
+    As duas coisas costumam ser a mesma pessoa, mas não são a mesma informação: achado ao vivo
+    em produção em 2026-08-31, um tenant real tinha o WhatsApp conectado no celular de um
+    `sub_user` (funcionário), não do `owner` cadastrado. Quem consegue mandar "mensagem para
+    você mesmo" de verdade é sempre quem segurou o celular durante o QR code — e isso só a
+    própria Evolution sabe dizer (via `ownerJid`), nunca a tabela `users`.
+
+    Cacheado (ver `_CONNECTED_PHONE_TTL_SECONDS`) porque é chamado por MENSAGEM recebida, no
+    caminho do webhook (`whatsapp_inbox/service.py::ingest_webhook_payload`, na checagem de
+    self-chat da Vima) — sem cache, cada mensagem pagaria uma chamada de rede à Evolution."""
+    instance = _instance_name(tenant_id)
+    cached = _CONNECTED_PHONE_CACHE.get(instance)
+    if cached is not None:
+        phone, expira = cached
+        if expira > time.monotonic():
+            return phone
+    phone = _fetch_owner_phone(instance)
+    _CONNECTED_PHONE_CACHE[instance] = (phone, time.monotonic() + _CONNECTED_PHONE_TTL_SECONDS)
+    return phone
 
 
 def get_status(db: Session, *, tenant_id: str) -> str:
