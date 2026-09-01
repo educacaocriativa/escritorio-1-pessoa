@@ -1,10 +1,11 @@
 import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { navSections } from "../../app/navigation";
 import { api } from "../../lib/api";
 import { PageActionsProvider, usePageActions } from "../../store/pageActions";
 import { assentar } from "../../test/assentar";
-import PlatformUsers from "./PlatformUsers";
+import PlatformUsers, { MODULES } from "./PlatformUsers";
 
 // Story 7.18 — Task 4. Rede sempre mockada (IV2): nenhum teste bate em /admin real.
 vi.mock("../../lib/api", () => ({
@@ -207,6 +208,80 @@ describe("PlatformUsers/OfficeCard — suspender/excluir usuário: tratamento de
   });
 });
 
+// ── Editar permissões de um funcionário já cadastrado ─────────────────────────────────────────
+//
+// Até aqui `allowed_modules` só era definido na criação (`AddStaffModal`) — não havia nenhum jeito
+// de VER ou AJUSTAR depois pela UI. O Master tinha de inspecionar a resposta de `GET /admin/users`
+// no DevTools para descobrir por que um item da sidebar sumiu para um funcionário.
+describe("PlatformUsers/OfficeCard — editar permissões de um funcionário (EditPermissionsModal)", () => {
+  async function openCard(user: ReturnType<typeof userEvent.setup>) {
+    renderPage();
+    await user.click(await screen.findByText("Escritório Alpha Ltda"));
+    expect(await screen.findByText("Funcionário Alpha")).toBeInTheDocument();
+  }
+
+  it("só o funcionário (staff) recebe o botão de editar — o dono sempre vê tudo, editar não teria efeito", async () => {
+    const user = userEvent.setup({ delay: null });
+    await openCard(user);
+
+    expect(screen.getAllByTitle("Editar permissões")).toHaveLength(1);
+  });
+
+  it("abre pré-preenchido com os módulos ATUAIS do usuário, e salvar envia só o que está marcado", async () => {
+    const user = userEvent.setup({ delay: null }); // ver nota de perf no 1o teste deste arquivo
+    vi.mocked(api.patch).mockResolvedValue({ data: {} } as never);
+    await openCard(user);
+
+    await user.click(screen.getByTitle("Editar permissões"));
+    expect(await screen.findByRole("heading", { name: "Permissões de Funcionário Alpha" })).toBeInTheDocument();
+
+    // staffUser.allowed_modules = ["crm"]: o pill de CRM já nasce marcado (fundo roxo).
+    expect(screen.getByRole("button", { name: "CRM" })).toHaveClass("bg-primary-500");
+    expect(screen.getByRole("button", { name: "Configurações" })).not.toHaveClass("bg-primary-500");
+
+    // Marca Configurações (o módulo que faltava para o Leonardo) e desmarca CRM.
+    await user.click(screen.getByRole("button", { name: "Configurações" }));
+    await user.click(screen.getByRole("button", { name: "CRM" }));
+    await user.click(screen.getByRole("button", { name: "Salvar permissões" }));
+
+    await waitFor(() =>
+      expect(vi.mocked(api.patch)).toHaveBeenCalledWith("/admin/users/user-staff", {
+        allowed_modules: ["settings"],
+      }),
+    );
+  });
+
+  it("desmarcar tudo salva lista VAZIA — é o valor que `hasModule` lê como acesso total, não ausência de mudança", async () => {
+    const user = userEvent.setup({ delay: null }); // ver nota de perf no 1o teste deste arquivo
+    vi.mocked(api.patch).mockResolvedValue({ data: {} } as never);
+    await openCard(user);
+
+    await user.click(screen.getByTitle("Editar permissões"));
+    await screen.findByRole("heading", { name: "Permissões de Funcionário Alpha" });
+    await user.click(screen.getByRole("button", { name: "CRM" })); // único módulo marcado (fixture)
+    await user.click(screen.getByRole("button", { name: "Salvar permissões" }));
+
+    await waitFor(() =>
+      expect(vi.mocked(api.patch)).toHaveBeenCalledWith("/admin/users/user-staff", { allowed_modules: [] }),
+    );
+  });
+
+  it("caminho infeliz: api.patch rejeita → erro no modal, e o modal NÃO fecha sozinho", async () => {
+    const user = userEvent.setup({ delay: null }); // ver nota de perf no 1o teste deste arquivo
+    vi.mocked(api.patch).mockRejectedValueOnce({
+      response: { data: { detail: "Falha ao salvar as permissões." } },
+    });
+    await openCard(user);
+
+    await user.click(screen.getByTitle("Editar permissões"));
+    await screen.findByRole("heading", { name: "Permissões de Funcionário Alpha" });
+    await user.click(screen.getByRole("button", { name: "Salvar permissões" }));
+
+    expect(await screen.findByText("Falha ao salvar as permissões.")).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "Permissões de Funcionário Alpha" })).toBeInTheDocument();
+  });
+});
+
 // ── A tela de confirmação não pode mentir sobre o envio (fix de 2026-08-05) ──────────────────
 //
 // Bug real de produção: o Master cadastrou um funcionário por WhatsApp e a tela disse
@@ -322,5 +397,43 @@ describe("PlatformUsers — lista de contas fora de forma não derruba a aba (#2
 
     expect(screen.getByText("Escritório Alpha Ltda")).toBeInTheDocument();
     expect(screen.queryByText("Nenhuma conta ainda.")).not.toBeInTheDocument();
+  });
+});
+
+// ── Gate: todo módulo de negócio da sidebar precisa poder ser CONCEDIDO pelo admin ────────────
+//
+// `MODULES` (o seletor de `AddStaffModal`/`EditPermissionsModal`) é uma cópia manual do conjunto
+// de `item.module` de `app/navigation.ts` — foi divergirem que deixou o Master sem como conceder
+// `settings` a um funcionário (o item já existia na sidebar desde a RBAC de 2026-08-25; a caixa
+// para marcá-lo nunca existiu neste seletor). Sem um gate mecânico, a próxima rota nova com
+// `module` ganha o mesmo destino: aparece na sidebar de quem tem o módulo, e não há como o Master
+// concedê-la a mais ninguém — o defeito é silencioso, porque a tela de admin continua "funcionando".
+describe("PlatformUsers — o seletor de módulos do admin cobre toda a sidebar (issue Leonardo/settings)", () => {
+  it("todo `module` usado em algum item de navigation.ts está no seletor de permissões", () => {
+    const modulosDaSidebar = new Set(
+      navSections
+        .flatMap((secao) => secao.items)
+        .map((item) => item.module)
+        .filter((m): m is string => Boolean(m)),
+    );
+    const modulosDoSeletor = new Set(MODULES.map((m) => m.key));
+
+    const faltando = [...modulosDaSidebar].filter((m) => !modulosDoSeletor.has(m));
+
+    expect(faltando).toEqual([]);
+  });
+
+  it("contra-teste: o gate REALMENTE falha quando um módulo da sidebar não está no seletor", () => {
+    const modulosDaSidebar = new Set(
+      navSections
+        .flatMap((secao) => secao.items)
+        .map((item) => item.module)
+        .filter((m): m is string => Boolean(m)),
+    );
+    const seletorSemSettings = new Set(MODULES.filter((m) => m.key !== "settings").map((m) => m.key));
+
+    const faltando = [...modulosDaSidebar].filter((m) => !seletorSemSettings.has(m));
+
+    expect(faltando).toEqual(["settings"]);
   });
 });
