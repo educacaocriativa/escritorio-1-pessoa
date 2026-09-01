@@ -34,14 +34,14 @@ def _usuario(role: str = "owner", modulos: list[str] | None = None) -> CurrentUs
 # ── Catálogo e permissão ────────────────────────────────────────────────────────────────────
 
 
-def test_owner_ve_as_doze_ferramentas():
+def test_owner_ve_as_treze_ferramentas():
     nomes = {f.nome for f in tools.ferramentas_disponiveis(_usuario("owner"))}
     assert nomes == {
         "consultar_recebiveis", "consultar_pagaveis", "consultar_projecao_caixa",
-        "consultar_agenda", "consultar_cliente", "consultar_clientes_recentes",
-        "consultar_documentos_juridicos", "consultar_campanhas_marketing",
-        "consultar_estoque_baixo", "consultar_item_estoque", "consultar_clientes_atencao",
-        "criar_compromisso",
+        "consultar_agenda", "criar_compromisso", "cancelar_compromisso", "consultar_cliente",
+        "consultar_clientes_recentes", "consultar_documentos_juridicos",
+        "consultar_campanhas_marketing", "consultar_estoque_baixo", "consultar_item_estoque",
+        "consultar_clientes_atencao",
     }
 
 
@@ -460,6 +460,66 @@ def test_criar_compromisso_cliente_nao_encontrado_avisa_mas_ainda_cria(db: Sessi
     ))
     assert resultado["compromisso"]["titulo"] == "Reunião"
     assert "não encontrado" in resultado["aviso"]
+
+
+# ── cancelar_compromisso ───────────────────────────────────────────────────────────────────
+
+
+def test_cancelar_compromisso_sem_confirmado_nao_escreve(db: Session):
+    from app.modules.agenda.models import KIND_REUNIAO, STATUS_SCHEDULED, AgendaEvent
+
+    evento = AgendaEvent(
+        tenant_id=TENANT, title="Reunião", kind=KIND_REUNIAO,
+        starts_at=datetime(2026, 9, 2, 10, 0, tzinfo=UTC),
+        ends_at=datetime(2026, 9, 2, 11, 0, tzinfo=UTC),
+    )
+    db.add(evento)
+    db.commit()
+    resultado = json.loads(tools.executar(
+        db, _usuario(), "cancelar_compromisso", {"event_id": evento.id},
+    ))
+    assert "erro" in resultado
+    db.refresh(evento)
+    assert evento.status == STATUS_SCHEDULED
+
+
+def test_cancelar_compromisso_confirmado_cancela(db: Session):
+    from app.modules.agenda.models import KIND_REUNIAO, AgendaEvent
+
+    evento = AgendaEvent(
+        tenant_id=TENANT, title="Reunião", kind=KIND_REUNIAO,
+        starts_at=datetime(2026, 9, 2, 10, 0, tzinfo=UTC),
+        ends_at=datetime(2026, 9, 2, 11, 0, tzinfo=UTC),
+    )
+    db.add(evento)
+    db.commit()
+    resultado = json.loads(tools.executar(
+        db, _usuario(), "cancelar_compromisso", {"event_id": evento.id, "confirmado": True},
+    ))
+    assert resultado["compromisso"]["status"] == "cancelled"
+
+
+def test_cancelar_compromisso_id_inexistente_devolve_erro(db: Session):
+    resultado = json.loads(tools.executar(
+        db, _usuario(), "cancelar_compromisso", {"event_id": "não-existe", "confirmado": True},
+    ))
+    assert "erro" in resultado
+
+
+def test_cancelar_compromisso_ja_cancelado_devolve_erro(db: Session):
+    from app.modules.agenda.models import KIND_REUNIAO, STATUS_CANCELLED, AgendaEvent
+
+    evento = AgendaEvent(
+        tenant_id=TENANT, title="Reunião", kind=KIND_REUNIAO, status=STATUS_CANCELLED,
+        starts_at=datetime(2026, 9, 2, 10, 0, tzinfo=UTC),
+        ends_at=datetime(2026, 9, 2, 11, 0, tzinfo=UTC),
+    )
+    db.add(evento)
+    db.commit()
+    resultado = json.loads(tools.executar(
+        db, _usuario(), "cancelar_compromisso", {"event_id": evento.id, "confirmado": True},
+    ))
+    assert "erro" in resultado
 
 
 # ── Falha nunca sobe crua ───────────────────────────────────────────────────────────────────

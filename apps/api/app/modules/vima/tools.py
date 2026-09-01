@@ -155,6 +155,23 @@ def _criar_compromisso(
     return resultado
 
 
+def _cancelar_compromisso(
+    db: Session, user: CurrentUser, entrada: dict[str, Any]
+) -> dict[str, Any]:
+    if not entrada.get("confirmado"):
+        return {
+            "erro": (
+                "peça a confirmação explícita do dono antes de chamar esta ferramenta de novo "
+                "com confirmado=true"
+            )
+        }
+    evento = agenda_service.cancel_event(
+        db, event_id=entrada["event_id"], tenant_id=user.tenant_id, actor=user.user_id,
+        by_ai=True,
+    )
+    return {"compromisso": _evento_json(evento)}
+
+
 def _consultar_cliente(
     db: Session, _user: CurrentUser, entrada: dict[str, Any],
 ) -> dict[str, Any]:
@@ -439,6 +456,36 @@ FERRAMENTAS: list[Ferramenta] = [
             },
         },
         executar=_criar_compromisso,
+    ),
+    Ferramenta(
+        nome="cancelar_compromisso",
+        modulo="agenda",
+        definicao={
+            "name": "cancelar_compromisso",
+            "description": (
+                "Cancela um compromisso existente. Use consultar_agenda primeiro para achar o "
+                "event_id certo. SÓ chame com confirmado=true depois que o dono confirmar "
+                "explicitamente qual compromisso cancelar numa mensagem anterior."
+            ),
+            "input_schema": {
+                "type": "object",
+                "properties": {
+                    "event_id": {
+                        "type": "string",
+                        "description": "Id do compromisso, obtido via consultar_agenda.",
+                    },
+                    "confirmado": {
+                        "type": "boolean",
+                        "description": (
+                            "true SOMENTE depois que o dono confirmou explicitamente numa "
+                            "mensagem anterior."
+                        ),
+                    },
+                },
+                "required": ["event_id", "confirmado"],
+            },
+        },
+        executar=_cancelar_compromisso,
     ),
     Ferramenta(
         nome="consultar_cliente",
