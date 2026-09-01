@@ -62,6 +62,115 @@ def test_self_chat_roteia_para_vima_sem_gravar_no_crm(db, monkeypatch):
     assert db.scalar(select(Client)) is None
 
 
+def test_self_chat_grava_pergunta_e_resposta_quando_a_vima_respondeu(db, monkeypatch):
+    """`responder` devolveu um `Resultado` (perguntou e respondeu de verdade, não foi eco nem
+    reentrega) — a troca precisa aparecer na tela de Conversas, senão o dono não tem como saber
+    o que a Vima andou dizendo pelo self-chat (achado ao investigar o loop de #280: a self-chat
+    inteira era invisível pro banco)."""
+    user = User(
+        tenant_id=TENANT_ID, email="dono4@example.com", name="Dono", password_hash="x",
+        phone="5511988889001",
+    )
+    db.add(user)
+    db.commit()
+
+    monkeypatch.setattr(
+        vc, "responder",
+        lambda *a, **kw: vc.Resultado(
+            pergunta="quanto tenho a receber?", resposta="Você tem R$ 500,00 a receber.",
+        ),
+    )
+
+    inbox_service.ingest_webhook_payload(
+        db, tenant_id=TENANT_ID,
+        messages=[_self_chat_msg(
+            wa_message_id="self.grava", from_phone="5511988889001",
+            text_body="quanto tenho a receber?", chat_jid="5511988889001@s.whatsapp.net",
+        )],
+    )
+
+    chat = db.scalar(
+        select(WhatsappChat).where(WhatsappChat.chat_jid == "5511988889001@s.whatsapp.net")
+    )
+    assert chat is not None
+    assert chat.client_id is None  # self-chat continua sem virar contato do CRM
+
+    mensagens = db.scalars(
+        select(WhatsappMessage).where(WhatsappMessage.chat_id == chat.id)
+        .order_by(WhatsappMessage.created_at)
+    ).all()
+    assert [(m.direction, m.text_body) for m in mensagens] == [
+        ("out", "quanto tenho a receber?"),
+        ("out", "Você tem R$ 500,00 a receber."),
+    ]
+    assert mensagens[0].wa_message_id == "self.grava"
+    assert mensagens[0].client_id is None
+    assert mensagens[1].client_id is None
+    assert db.scalar(select(Client)) is None  # ainda não vira lead
+
+
+def test_self_chat_nao_grava_nada_quando_responder_devolve_none(db, monkeypatch):
+    # Eco da própria resposta, reentrega, ou telefone sem usuário — `responder` devolve `None` e
+    # não há nada de novo a gravar (regressão: não pode duplicar nem criar ruído na conversa).
+    user = User(
+        tenant_id=TENANT_ID, email="dono5@example.com", name="Dono", password_hash="x",
+        phone="5511988889002",
+    )
+    db.add(user)
+    db.commit()
+
+    monkeypatch.setattr(vc, "responder", lambda *a, **kw: None)
+
+    inbox_service.ingest_webhook_payload(
+        db, tenant_id=TENANT_ID,
+        messages=[_self_chat_msg(
+            wa_message_id="self.nada", from_phone="5511988889002",
+            chat_jid="5511988889002@s.whatsapp.net",
+        )],
+    )
+
+    assert db.scalar(select(WhatsappMessage)) is None
+    assert db.scalar(select(WhatsappChat)) is None
+
+
+def test_audio_na_self_chat_grava_pergunta_com_kind_audio(db, monkeypatch):
+    user = User(
+        tenant_id=TENANT_ID, email="dono6@example.com", name="Dono", password_hash="x",
+        phone="5511988889003",
+    )
+    db.add(user)
+    db.commit()
+
+    monkeypatch.setattr(
+        vc, "responder_audio",
+        lambda *a, **kw: vc.Resultado(
+            pergunta="quanto tenho a receber?",
+            resposta='🎤 "quanto tenho a receber?" — R$ 500,00',
+        ),
+    )
+
+    inbox_service.ingest_webhook_payload(
+        db, tenant_id=TENANT_ID,
+        messages=[_self_chat_msg(
+            wa_message_id="self.audio.grava", kind="audio", text_body="",
+            from_phone="5511988889003", chat_jid="5511988889003@s.whatsapp.net",
+            media_bytes=b"\x00\x01audio-bytes", media_mime_type="audio/ogg",
+        )],
+    )
+
+    chat = db.scalar(
+        select(WhatsappChat).where(WhatsappChat.chat_jid == "5511988889003@s.whatsapp.net")
+    )
+    assert chat is not None
+    mensagens = db.scalars(
+        select(WhatsappMessage).where(WhatsappMessage.chat_id == chat.id)
+        .order_by(WhatsappMessage.created_at)
+    ).all()
+    assert [m.kind for m in mensagens] == ["audio", "text"]
+    assert mensagens[0].text_body == "quanto tenho a receber?"
+    assert mensagens[1].text_body == '🎤 "quanto tenho a receber?" — R$ 500,00'
+
+
 def test_audio_na_self_chat_roteia_para_responder_audio(db, monkeypatch):
     user = User(
         tenant_id=TENANT_ID, email="dono2@example.com", name="Dono", password_hash="x",

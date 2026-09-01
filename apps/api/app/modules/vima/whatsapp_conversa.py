@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import logging
 import time
+from dataclasses import dataclass
 
 from sqlalchemy.orm import Session
 
@@ -38,6 +39,19 @@ _VISTAS: dict[str, float] = {}
 # mesma condição de roteamento e vira "pergunta nova": a Vima responde à própria resposta, que
 # ecoa de novo, indefinidamente (achado ao vivo em produção, 2026-08-31).
 _ULTIMAS_RESPOSTAS: dict[str, tuple[str, float]] = {}
+
+
+@dataclass(frozen=True)
+class Resultado:
+    """O que de fato foi perguntado e respondido — `whatsapp_inbox.service.ingest_webhook_payload`
+    usa isto pra gravar a troca em `whatsapp_messages` (a self-chat não passa pelo caminho normal
+    de gravação, ver comentário lá). `None` em vez deste tipo significa "nada de novo aconteceu":
+    reentrega do mesmo `wa_message_id`, eco da própria resposta da Vima, ou telefone sem usuário
+    correspondente — nenhum desses é uma pergunta de verdade, e gravar criaria ruído ou duplicata
+    na conversa."""
+
+    pergunta: str
+    resposta: str
 
 
 def _chave(tenant_id: str, phone: str) -> str:
@@ -103,10 +117,10 @@ def _usuario_do_telefone(db: Session, tenant_id: str, phone: str) -> User | None
 
 def responder(
     db: Session, *, tenant_id: str, phone: str, wa_message_id: str, texto: str, profile,
-) -> None:
+) -> Resultado | None:
     """O dono perguntou algo em TEXTO na self-chat — responde pelo MESMO canal. Ver `_responder`
     para o mecanismo compartilhado com `responder_audio`."""
-    _responder(
+    return _responder(
         db, tenant_id=tenant_id, phone=phone, wa_message_id=wa_message_id, texto=texto,
         profile=profile,
     )
@@ -115,7 +129,7 @@ def responder(
 def responder_audio(
     db: Session, *, tenant_id: str, phone: str, wa_message_id: str, audio_bytes: bytes,
     audio_mime_type: str, profile,
-) -> None:
+) -> Resultado | None:
     """O dono mandou uma NOTA DE VOZ na self-chat — transcreve (Groq) e segue o MESMO caminho de
     `responder`: a transcrição vira o `texto` que alimenta `pergunta.responder`, e a resposta
     final ECOA o que foi entendido (`🎤 "..."`), porque o dono nunca vê a transcrição em lugar
@@ -142,33 +156,34 @@ def responder_audio(
     acontece, não um risco novo.
     """
     if _ja_processada(wa_message_id):
-        return  # reentrega do webhook — já respondida (ou já falhou e já pedimos desculpa)
+        return None  # reentrega do webhook — já respondida (ou já falhou e já pedimos desculpa)
 
     user = _usuario_do_telefone(db, tenant_id, phone)
-    resultado = transcription.transcribe(
+    transcrito = transcription.transcribe(
         db, tenant_id=tenant_id, audio_bytes=audio_bytes, mime_type=audio_mime_type,
         user_id=user.id if user else None,
     )
-    if resultado is None:
+    if transcrito is None:
         _marcar_processada(wa_message_id)
-        whatsapp.send_text(
-            to=phone, text="Não consegui entender o áudio — tenta de novo em instantes.",
-            profile=profile,
-        )
-        return
+        desculpa = "Não consegui entender o áudio — tenta de novo em instantes."
+        whatsapp.send_text(to=phone, text=desculpa, profile=profile)
+        # `pergunta` fica com um rótulo, não a transcrição — não há transcrição nenhuma pra
+        # gravar (é justamente isso que falhou). Ainda assim vira uma linha na conversa: sem
+        # ela, a desculpa apareceria sozinha, sem contexto do que a originou.
+        return Resultado(pergunta="[áudio não reconhecido]", resposta=desculpa)
 
     db.commit()  # isola a cobrança da Groq (já ocorrida) de uma falha posterior em _responder
 
-    _responder(
-        db, tenant_id=tenant_id, phone=phone, wa_message_id=wa_message_id, texto=resultado.text,
-        profile=profile, eco=f'🎤 "{resultado.text}" — ',
+    return _responder(
+        db, tenant_id=tenant_id, phone=phone, wa_message_id=wa_message_id, texto=transcrito.text,
+        profile=profile, eco=f'🎤 "{transcrito.text}" — ',
     )
 
 
 def _responder(
     db: Session, *, tenant_id: str, phone: str, wa_message_id: str, texto: str, profile,
     eco: str = "",
-) -> None:
+) -> Resultado | None:
     """O mecanismo compartilhado por `responder` (texto) e `responder_audio` (voz, já
     transcrita): resolve o usuário, chama `pergunta.responder`, grava o turno no cache e manda a
     resposta pelo mesmo canal — com `eco` prefixado quando a pergunta veio de áudio.
@@ -181,14 +196,18 @@ def _responder(
     contrato), então essa tentativa é sempre segura.
     """
     if _ja_processada(wa_message_id):
-        return  # reentrega do webhook — já respondida
+        return None  # reentrega do webhook — já respondida
     _marcar_processada(wa_message_id)
 
     chave = _chave(tenant_id, phone)
     if _e_eco_da_propria_resposta(chave, texto):
         # O eco (ver `_ULTIMAS_RESPOSTAS`) da resposta que A PRÓPRIA VIMA acabou de mandar —
         # não é pergunta nova, e respondê-lo criaria um loop infinito de auto-resposta.
-        return
+        logger.info(
+            "[vima] eco da própria resposta ignorado: tenant=%s wa_message_id=%s",
+            tenant_id, wa_message_id,
+        )
+        return None
 
     user = _usuario_do_telefone(db, tenant_id, phone)
     if user is None:
@@ -196,23 +215,25 @@ def _responder(
         # (`_e_telefone_da_equipe`), mas não há garantia atômica entre a checagem e aqui —
         # melhor desistir em silêncio do que estourar.
         logger.warning("[vima] self-chat sem usuário correspondente: tenant=%s", tenant_id)
-        return
+        return None
 
     try:
-        resultado = pergunta_service.responder(
+        resposta = pergunta_service.responder(
             db, user=scheduler.como_ator(user), pergunta=texto, historico=_historico(chave),
         )
     except Exception:  # noqa: BLE001 — falha nunca fica muda (ver docstring)
         logger.exception("[vima] falha ao responder pergunta via WhatsApp self-chat")
         db.rollback()
-        whatsapp.send_text(
-            to=phone, text="Não consegui responder agora — tenta de novo em instantes.",
-            profile=profile,
-        )
-        return
+        desculpa = "Não consegui responder agora — tenta de novo em instantes."
+        whatsapp.send_text(to=phone, text=desculpa, profile=profile)
+        return Resultado(pergunta=texto, resposta=desculpa)
 
     _guardar_turno(chave, "usuario", texto)
-    _guardar_turno(chave, "vima", resultado.texto)
-    resposta_final = f"{eco}{resultado.texto}"
+    _guardar_turno(chave, "vima", resposta.texto)
+    resposta_final = f"{eco}{resposta.texto}"
     _marcar_resposta_enviada(chave, resposta_final)
     whatsapp.send_text(to=phone, text=resposta_final, profile=profile)
+    logger.info(
+        "[vima] self-chat respondida: tenant=%s wa_message_id=%s", tenant_id, wa_message_id,
+    )
+    return Resultado(pergunta=texto, resposta=resposta_final)
