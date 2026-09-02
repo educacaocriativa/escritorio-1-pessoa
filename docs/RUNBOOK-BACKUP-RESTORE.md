@@ -13,9 +13,9 @@
 
 | Item | Detalhe |
 |------|---------|
-| Stack em produção rodando | `docker-compose.traefik.yml` (VPS real `e1p.doroeventos.com.br`) ou `docker-compose.prod.yml` (Caddy próprio). O serviço `postgres` precisa estar de pé. |
+| Stack em produção rodando | `docker-compose.prod.yml` **+ o `docker-compose.override.yml` não versionado da EC2** (AWS, `e1p.criativaeduca.com.br`) — os DOIS `-f`, ver `docs/AWS-DEPLOYMENT.md`. O serviço `postgres` precisa estar de pé. O caminho `docker-compose.traefik.yml` era da VPS Hostinger, **descomissionada em 2026-08-30**. |
 | `rclone` instalado no HOST | Fora do container (é ferramenta de host). `curl https://rclone.org/install.sh \| sudo bash`. |
-| Remote rclone `e1p-offsite` configurado | Provedor S3-compatível (AWS S3, Backblaze B2, Wasabi). Credenciais NUNCA no repo. |
+| Remote rclone `e1p-offsite` configurado | Provedor S3-compatível (AWS S3, Backblaze B2, Wasabi). Credenciais NUNCA no repo. ⚠️ **Não existe na EC2 de produção hoje** — quem tinha era a VPS Hostinger, descomissionada em 2026-08-30. O backup atual é **só local** (`/opt/e1p-backups`, diário 03:15): se a instância morrer, morrem app, banco e backup juntos. |
 | `infra/.env.prod` preenchido | `BACKUP_S3_BUCKET`, `BACKUP_RETENTION_DAYS_LOCAL`, `BACKUP_RETENTION_DAYS_REMOTE`. |
 | Papel `e1p_app` no alvo do restore | Só existe se o Postgres foi inicializado com volume novo (ver §5.1). Crítico p/ o RLS valer (Regra de Ouro nº 1). |
 

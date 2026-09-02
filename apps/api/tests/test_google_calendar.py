@@ -243,3 +243,93 @@ def test_create_meet_event_noop_without_credential(client: TestClient, headers, 
         guests: list = []
 
     assert service.create_meet_event(db, tenant_id="t" * 12, event=_Ev()) is None
+
+
+# ── Diagnóstico do callback ──────────────────────────────────────────────────
+# Todo caminho de falha devolve o MESMO `?google=error` ao usuário. Sem log, o suporte não
+# distingue "cancelou o consentimento" de `redirect_uri_mismatch` — estes testes travam isso.
+def test_callback_denied_logs_reason(client: TestClient, configured, caplog):
+    """Cancelar na tela do Google (`error=access_denied`) deixa rastro identificável."""
+    with caplog.at_level("WARNING", logger="e1p.google_calendar"):
+        resp = client.get(
+            "/integrations/google/callback",
+            params={"error": "access_denied", "state": "qualquer"},
+            follow_redirects=False,
+        )
+    assert resp.status_code == 307
+    assert resp.headers["location"].endswith("/config?google=error")
+    assert "[google:callback:denied]" in caplog.text
+    assert "access_denied" in caplog.text
+
+
+def test_callback_invalid_state_logs_reason(client: TestClient, configured, caplog):
+    with caplog.at_level("WARNING", logger="e1p.google_calendar"):
+        client.get(
+            "/integrations/google/callback",
+            params={"code": "abc", "state": "not-a-valid-state"},
+            follow_redirects=False,
+        )
+    assert "[google:callback:state_invalido]" in caplog.text
+
+
+def test_callback_exchange_failure_logs_traceback(
+    client: TestClient, headers, configured, monkeypatch, caplog
+):
+    """Falha na troca do code (ex.: redirect_uri_mismatch) precisa ir para o log com traceback."""
+    url = client.get("/integrations/google/connect", headers=headers).json()["url"]
+    state = parse_qs(urlparse(url).query)["state"][0]
+
+    def _boom(*_a, **_k):
+        raise httpx.HTTPStatusError("400 redirect_uri_mismatch", request=None, response=None)
+
+    monkeypatch.setattr(service, "exchange_code", _boom)
+
+    with caplog.at_level("ERROR", logger="e1p.google_calendar"):
+        resp = client.get(
+            "/integrations/google/callback",
+            params={"code": "abc", "state": state},
+            follow_redirects=False,
+        )
+    assert resp.status_code == 307
+    assert resp.headers["location"].endswith("/config?google=error")
+    assert "[google:callback:failed]" in caplog.text
+    assert "redirect_uri_mismatch" in caplog.text  # traceback preservado
+
+
+def test_refresh_token_revogado_loga_reconexao(client: TestClient, headers, configured, db,
+                                               monkeypatch, caplog):
+    """`invalid_grant` na renovação é terminal: precisa sair no log como 'reconectar', não como
+    um traceback genérico de create_meet — é o que diferencia 'token morto' de 'Google fora do ar'.
+    """
+    from datetime import UTC, datetime, timedelta
+
+    from app.modules.google_calendar.models import GoogleCredential
+
+    cred = GoogleCredential(
+        tenant_id="t" * 12,
+        google_account_email="x@example.com",
+        access_token="velho",
+        refresh_token="refresh-morto",
+        token_expiry=datetime.now(UTC) - timedelta(hours=1),  # já expirado → força a renovação
+    )
+    db.add(cred)
+    db.commit()
+
+    class _Resp400:
+        """Fiel ao que o Google devolve: 400 + invalid_grant, e um raise_for_status que
+        levanta de verdade — senão o teste passaria por AttributeError em vez de pelo log."""
+
+        status_code = 400
+        text = '{"error": "invalid_grant", "error_description": "expired or revoked"}'
+
+        def raise_for_status(self):
+            raise httpx.HTTPStatusError("400 invalid_grant", request=None, response=None)
+
+    monkeypatch.setattr(httpx, "post", lambda *a, **k: _Resp400())
+
+    with caplog.at_level("WARNING", logger="e1p.google_calendar"):
+        token = service._ensure_fresh_token(db, cred)
+
+    assert token is None  # nenhum call site tenta usar um token morto
+    assert "[google:token:revogado]" in caplog.text
+    assert "precisa reconectar" in caplog.text
