@@ -16,7 +16,10 @@
 >
 > Confere com o planejado apenas o host: `t4g` **Graviton/ARM**, com o Compose de `docker-compose.prod.yml`.
 > Domínio: **https://e1p.criativaeduca.com.br**. A VPS Hostinger (`e1p.doroeventos.com.br`) passou a
-> ser **dev/teste** na mesma data.
+> ser dev/teste em 2026-08-20 e foi **descomissionada por completo em 2026-08-30** (containers,
+> volumes, `/opt/e1p`, backups, cron, remote `rclone` e DNS — ver `docs/HOSTINGER-DEPLOY.md`).
+> **Esta EC2 é hoje o único ambiente que existe: não há dev nem staging.** Toda validação que
+> exigir um host roda contra a produção — trate qualquer teste aqui com esse peso.
 >
 > **Consequências operacionais que valem hoje**, e não quando a Fase A existir:
 > - **Backup é só local** (`/opt/e1p-backups`, diário às 03:15). Não há `rclone`/offsite na AWS —

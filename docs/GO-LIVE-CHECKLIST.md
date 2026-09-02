@@ -51,11 +51,12 @@
   API habilitada, OAuth consent screen em modo "Testing" com `flaviokato76@gmail.com` como test
   user (suficiente para uso próprio; sair de "Testing" exige verificação do Google só se/quando
   precisar liberar para outras contas).
-- [x] Gerar OAuth Client ID/Secret, configurar redirect URI — client Web criado, redirect URI
-  `http://localhost:8000/integrations/google/callback` (dev). **Pendente:** cadastrar a URI de
-  produção (`https://<domínio-real>/integrations/google/callback`) quando o item 10 existir —
-  OAuth clients aceitam múltiplas redirect URIs simultâneas, então isso é aditivo, não substitui a
-  de dev.
+- [x] Gerar OAuth Client ID/Secret, configurar redirect URI — client Web `e1p` criado. **Resolvido
+  em 2026-09-02:** as DUAS URIs estão cadastradas — `http://localhost:8000/integrations/google/callback`
+  (dev) e `https://e1p.criativaeduca.com.br/api/integrations/google/callback` (produção AWS),
+  esta última conferida byte-a-byte contra o `GOOGLE_OAUTH_REDIRECT_URI` do `.env.prod` da EC2.
+  Note o prefixo **`/api`** na de produção: o Caddy publica a API sob esse path, e omiti-lo
+  produz `redirect_uri_mismatch`.
 - [x] Preencher `GOOGLE_CLIENT_ID`/`GOOGLE_CLIENT_SECRET`/`GOOGLE_OAUTH_REDIRECT_URI` — feito no
   `.env` local (raiz, gitignorado), repassado a `api`/`worker` via `env_file`.
 - [x] Testar fluxo OAuth ponta-a-ponta (autorizar, criar evento com Meet real) — validado em
@@ -97,6 +98,25 @@
   segue). Validado 2026-07-12 por testes (`tests/test_google_calendar_hardening.py`): patch/delete
   são chamados no evento certo com os novos horários quando há `google_event_id`; NÃO são chamados
   quando não há; e um erro HTTP mockado do Google não impede o reschedule/cancel local de persistir.
+
+### Estado verificado em 2026-09-02
+| Item | Estado |
+|---|---|
+| Escopos na tela de consentimento | `calendar.events` + `userinfo.email` registrados **e** concedidos (conferido pelo `scope=` devolvido no callback real). Bate com `DEFAULT_SCOPE` de `modules/google_calendar/models.py`. |
+| Redirect URIs | dev + produção AWS cadastradas; a de produção casa com o `.env.prod` da EC2. |
+| Tipo de usuário | **Externo** |
+| Status de publicação | **Testando** — 3 usuários de teste de 100. |
+
+⚠️ **O modo "Testando" expira o refresh token em 7 dias.** Enquanto o app não for publicado, a
+sincronização de agenda de cada pessoa morre sozinha uma vez por semana e exige reconectar — o
+sintoma parece bug do produto e não é. Publicar (Público-alvo → "Publicar app") remove esse
+limite e **não** exige passar pela verificação do Google enquanto ficar abaixo de ~100 usuários;
+o custo é a tela "o Google não verificou este app", uma vez por pessoa.
+
+**Bloqueio para publicar:** a aba Branding exige **link de Política de Privacidade** e o campo
+está vazio (Termos de Serviço é opcional). Não existe página de privacidade no frontend hoje
+(`apps/web/src/app/App.tsx` não tem rota) — precisa ser criada e publicada sob
+`e1p.criativaeduca.com.br` antes de mudar o status.
 
 ## 6. Backup automatizado + offsite (Story 3.3)
 - [x] Instalar/configurar `rclone` com remote S3-compatível — validado em 2026-07-12 **localmente**
