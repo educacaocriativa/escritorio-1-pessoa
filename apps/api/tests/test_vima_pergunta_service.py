@@ -4,6 +4,7 @@ from sqlalchemy.orm import Session
 
 from app.core.audit import AuditEntry
 from app.core.tenancy import CurrentUser
+from app.modules.crm.models import Client
 from app.modules.vima import pergunta
 
 TENANT = "t1"
@@ -76,6 +77,26 @@ def test_historico_entra_no_texto_mandado_a_claude(db: Session, monkeypatch):
     assert "e essa semana?" in capturado["user_message"]
 
 
+def test_nome_conhecido_digitado_na_pergunta_nao_chega_a_claude(db: Session, monkeypatch):
+    db.add(Client(tenant_id=TENANT, name="João da Silva", source="manual"))
+    db.commit()
+    monkeypatch.setattr("app.config.settings.anthropic_api_key", "sk-fake")
+    capturado = {}
+
+    def _fake_loop(*, user_message, **_kw):
+        capturado["user_message"] = user_message
+        return type("R", (), {"text": "Vou analisar [PESSOA_1]."})()
+
+    monkeypatch.setattr(pergunta.ai, "complete_with_tools", _fake_loop)
+    resultado = pergunta.responder(
+        db, user=_usuario(), pergunta="analise o cliente João da Silva", historico=[]
+    )
+
+    assert "João" not in capturado["user_message"]
+    assert "Silva" not in capturado["user_message"]
+    assert resultado.texto == "Vou analisar João da Silva."
+
+
 def test_entrada_de_ferramenta_e_desmascarada_antes_de_executar(db: Session, monkeypatch):
     # Achado #2 da revisão final: `_executar` mandava a entrada da ferramenta (o `tool_use.input`
     # que a Claude devolve) direto para `tools.executar` SEM desmascarar — um placeholder como
@@ -104,6 +125,63 @@ def test_entrada_de_ferramenta_e_desmascarada_antes_de_executar(db: Session, mon
     )
 
     assert capturado["entrada"]["nome"] == "joao@example.com"
+
+
+def test_resultado_de_ferramenta_chega_mascarado_e_resposta_volta_real(
+    db: Session, monkeypatch
+):
+    monkeypatch.setattr("app.config.settings.anthropic_api_key", "sk-fake")
+    visto_pela_claude = {}
+
+    def _fake_tools_executar(_db, _user, _nome, _entrada):
+        return (
+            '{"clientes":[{"id":"cliente-123","nome":"João da Silva",'
+            '"telefone":"11999998888","ultima_interacao":'
+            '{"titulo":"Cobrança de João da Silva","quando":"2026-09-01"}}]}'
+        )
+
+    monkeypatch.setattr(pergunta.tools, "executar", _fake_tools_executar)
+
+    def _fake_loop(*, executar_ferramenta, **_kw):
+        protegido = executar_ferramenta("consultar_cliente", {"nome": "João"})
+        visto_pela_claude["resultado"] = protegido
+        # A Claude cita os marcadores; somente a resposta ao usuário deve recuperar os valores.
+        return type("R", (), {"text": "Priorize [NOME_1]: [TITULO_1]."})()
+
+    monkeypatch.setattr(pergunta.ai, "complete_with_tools", _fake_loop)
+    resultado = pergunta.responder(
+        db, user=_usuario(), pergunta="quem precisa de atenção?", historico=[]
+    )
+
+    payload = visto_pela_claude["resultado"]
+    assert "João da Silva" not in payload
+    assert "11999998888" not in payload
+    assert "cliente-123" not in payload
+    assert "Cobrança de João da Silva" not in payload
+    assert resultado.texto == "Priorize João da Silva: Cobrança de João da Silva."
+
+
+def test_marcador_de_resultado_e_resolvido_em_chamada_seguinte(db: Session, monkeypatch):
+    monkeypatch.setattr("app.config.settings.anthropic_api_key", "sk-fake")
+    entradas_reais = []
+
+    def _fake_tools_executar(_db, _user, nome, entrada):
+        entradas_reais.append((nome, entrada))
+        return '{"clientes":[{"nome":"Maria Souza"}]}'
+
+    monkeypatch.setattr(pergunta.tools, "executar", _fake_tools_executar)
+
+    def _fake_loop(*, executar_ferramenta, **_kw):
+        protegido = executar_ferramenta("consultar_clientes_recentes", {})
+        assert "Maria Souza" not in protegido
+        executar_ferramenta("consultar_cliente", {"nome": "[NOME_1]"})
+        return type("R", (), {"text": "Encontrei [NOME_1]."})()
+
+    monkeypatch.setattr(pergunta.ai, "complete_with_tools", _fake_loop)
+    resultado = pergunta.responder(db, user=_usuario(), pergunta="último cliente", historico=[])
+
+    assert entradas_reais[1] == ("consultar_cliente", {"nome": "Maria Souza"})
+    assert resultado.texto == "Encontrei Maria Souza."
 
 
 def test_system_prompt_exige_confirmacao_antes_de_escrever():
