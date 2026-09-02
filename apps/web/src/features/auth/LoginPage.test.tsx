@@ -2,6 +2,7 @@ import type { AuthToken, Tenant, User } from "@e1p/shared-types";
 import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { AxiosError } from "axios";
+import { MemoryRouter } from "react-router-dom";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 // Testes de componente da UI de `auth` — LoginPage/LoginForm (Story 7.4, AC1/AC3).
@@ -28,6 +29,19 @@ vi.mock("../../lib/api", async (importActual) => {
 });
 
 import LoginPage from "./LoginPage";
+
+/**
+ * A tela passou a exibir, fora do cartão, os links para `/privacidade` e `/termos` — e `<Link>`
+ * exige contexto de rota. Envolver aqui mantém os testes exercitando o COMPONENTE REAL, em vez
+ * de trocar os links por `<a>` só para não precisar de um Router no teste.
+ */
+function renderLoginPage() {
+  return render(
+    <MemoryRouter>
+      <LoginPage />
+    </MemoryRouter>,
+  );
+}
 
 const tenant: Tenant = {
   id: "t-1",
@@ -66,7 +80,7 @@ describe("LoginPage / LoginForm (Story 7.4 — portão de entrada)", () => {
   it("caminho feliz: login válido chama POST /auth/login e propaga token/usuário/tenant", async () => {
     postMock.mockResolvedValueOnce({ data: authToken });
 
-    render(<LoginPage />);
+    renderLoginPage();
 
     await userEvent.type(screen.getByLabelText("E-mail"), "joao@e1p.com");
     await userEvent.type(screen.getByLabelText("Senha"), "senha-super-secreta");
@@ -91,7 +105,7 @@ describe("LoginPage / LoginForm (Story 7.4 — portão de entrada)", () => {
     };
     postMock.mockRejectedValueOnce(err);
 
-    render(<LoginPage />);
+    renderLoginPage();
 
     await userEvent.type(screen.getByLabelText("E-mail"), "joao@e1p.com");
     await userEvent.type(screen.getByLabelText("Senha"), "senha-errada");
@@ -106,7 +120,7 @@ describe("LoginPage / LoginForm (Story 7.4 — portão de entrada)", () => {
   });
 
   it("caminho infeliz: campos vazios não chamam a API (validação nativa de `required`)", async () => {
-    render(<LoginPage />);
+    renderLoginPage();
 
     // Submete sem preencher nada — os inputs são `required`, então o jsdom bloqueia o submit.
     await userEvent.click(screen.getByRole("button", { name: /^entrar$/i }));
@@ -128,7 +142,7 @@ describe("ForgotForm — dev_reset_token só é exibido se tiver FORMA de token"
   });
 
   async function pedirRedefinicao() {
-    render(<LoginPage />);
+    renderLoginPage();
     await userEvent.click(screen.getByRole("button", { name: /esqueci minha senha/i }));
     await userEvent.type(screen.getByLabelText(/e-mail/i), "joao@e1p.com");
     await userEvent.click(screen.getByRole("button", { name: /enviar/i }));

@@ -32,6 +32,8 @@ import FunnelBuilderPage from "../features/funis/FunnelBuilderPage";
 import JuridicoDocumentPage from "../features/juridico/JuridicoDocumentPage";
 import JuridicoPage from "../features/juridico/JuridicoPage";
 import JuridicoWizardPage from "../features/juridico/JuridicoWizardPage";
+import PrivacidadePage from "../features/legal/PrivacidadePage";
+import TermosPage from "../features/legal/TermosPage";
 import CarrosselBuilderPage from "../features/marketing/CarrosselBuilderPage";
 import MarketingPage from "../features/marketing/MarketingPage";
 import CompartilharPage from "../features/pagar/CompartilharPage";
@@ -63,6 +65,11 @@ export default function App() {
         <Route path="/orcamento/:slug" element={<PublicProposalPage />} />
         <Route path="/contrato/:slug" element={<PublicContractPage />} />
         <Route path="/p/:slug" element={<PublicPage />} />
+        {/* Documentos legais: PÚBLICOS de propósito. A tela de consentimento OAuth do Google
+            exige que o link da Política de Privacidade abra sem login, e uma pessoa que ainda
+            não é assinante precisa poder ler os Termos antes de virar uma. */}
+        <Route path="/privacidade" element={<PrivacidadePage />} />
+        <Route path="/termos" element={<TermosPage />} />
         <Route element={<ProtectedLayout />}>
           {/*
             A raiz autenticada não é mais o Cockpit direto: `EntradaDoDia` decide a porta do dia

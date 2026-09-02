@@ -2,7 +2,7 @@
 contrato "nunca deixa exceção subir crua" (o loop de tool-use precisa de um tool_result sempre).
 """
 import json
-from datetime import UTC, date, datetime, timedelta
+from datetime import UTC, datetime, timedelta
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -13,6 +13,7 @@ from app.modules.crm.models import Client, PipelineStage
 from app.modules.juridico.models import LegalDocument
 from app.modules.marketing.models import Carousel
 from app.modules.receivables.models import METHOD_PIX, STATUS_OPEN, Charge
+from app.modules.settings.service import hoje_do_tenant
 from app.modules.stock.models import StockItem
 from app.modules.vima import tools
 from app.modules.wallet.models import KIND_SERVICE
@@ -110,9 +111,18 @@ def test_executar_recusa_ferramenta_fora_da_lista_permitida(db: Session):
 
 
 def test_consultar_recebiveis_delega_para_o_resumo_real(db: Session):
+    """O vencimento é RELATIVO a hoje de propósito, e uma data fixa aqui é bug.
+
+    `summary` separa `open_cents` de `overdue_cents` comparando `due_date` com
+    `hoje_do_tenant(db)`. A versão anterior deste teste fixava `date(2026, 9, 1)` — que era
+    futuro quando foi escrito e virou passado em 2026-09-02, jogando os 50 mil centavos em
+    `overdue_cents` e derrubando o CI de TODOS os PRs do dia, sem nenhum diff culpado.
+    Mesma classe de bomba-relógio do #84/#101: ancore em `hoje_do_tenant`, nunca no calendário.
+    """
     db.add(Charge(
         tenant_id=TENANT, description="Consultoria", kind=KIND_SERVICE, method=METHOD_PIX,
-        amount_cents=50_000, due_date=date(2026, 9, 1), status=STATUS_OPEN,
+        amount_cents=50_000, due_date=hoje_do_tenant(db) + timedelta(days=30),
+        status=STATUS_OPEN,
     ))
     db.commit()
     resultado = json.loads(tools.executar(db, _usuario(), "consultar_recebiveis", {}))
