@@ -294,3 +294,42 @@ def test_callback_exchange_failure_logs_traceback(
     assert resp.headers["location"].endswith("/config?google=error")
     assert "[google:callback:failed]" in caplog.text
     assert "redirect_uri_mismatch" in caplog.text  # traceback preservado
+
+
+def test_refresh_token_revogado_loga_reconexao(client: TestClient, headers, configured, db,
+                                               monkeypatch, caplog):
+    """`invalid_grant` na renovação é terminal: precisa sair no log como 'reconectar', não como
+    um traceback genérico de create_meet — é o que diferencia 'token morto' de 'Google fora do ar'.
+    """
+    from datetime import UTC, datetime, timedelta
+
+    from app.modules.google_calendar.models import GoogleCredential
+
+    cred = GoogleCredential(
+        tenant_id="t" * 12,
+        google_account_email="x@example.com",
+        access_token="velho",
+        refresh_token="refresh-morto",
+        token_expiry=datetime.now(UTC) - timedelta(hours=1),  # já expirado → força a renovação
+    )
+    db.add(cred)
+    db.commit()
+
+    class _Resp400:
+        """Fiel ao que o Google devolve: 400 + invalid_grant, e um raise_for_status que
+        levanta de verdade — senão o teste passaria por AttributeError em vez de pelo log."""
+
+        status_code = 400
+        text = '{"error": "invalid_grant", "error_description": "expired or revoked"}'
+
+        def raise_for_status(self):
+            raise httpx.HTTPStatusError("400 invalid_grant", request=None, response=None)
+
+    monkeypatch.setattr(httpx, "post", lambda *a, **k: _Resp400())
+
+    with caplog.at_level("WARNING", logger="e1p.google_calendar"):
+        token = service._ensure_fresh_token(db, cred)
+
+    assert token is None  # nenhum call site tenta usar um token morto
+    assert "[google:token:revogado]" in caplog.text
+    assert "precisa reconectar" in caplog.text

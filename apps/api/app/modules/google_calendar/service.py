@@ -194,6 +194,17 @@ def _ensure_fresh_token(db: Session, cred: GoogleCredential) -> str | None:
         },
         timeout=_HTTP_TIMEOUT,
     )
+    if resp.status_code == 400 and "invalid_grant" in resp.text:
+        # Refresh token revogado ou expirado. É TERMINAL: repetir não adianta, só reconectar.
+        # Acontece a cada 7 dias enquanto o app OAuth estiver em modo "Testing" no Google.
+        # ATENÇÃO: a credencial CONTINUA no banco, então `/integrations/google/status` segue
+        # dizendo "conectado como ..." enquanto nenhum Meet é criado — a tela mente. Este log
+        # é hoje o único sinal da falha; ver o TODO em docs/GO-LIVE-CHECKLIST.md §5.
+        logger.warning(
+            "[google:token:revogado] tenant=%s — refresh_token morto, precisa reconectar",
+            cred.tenant_id,
+        )
+        return None
     resp.raise_for_status()
     token_data = resp.json()
     cred.access_token = token_data.get("access_token", "")
