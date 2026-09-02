@@ -180,8 +180,8 @@ def complete_with_tools(
 
     Esta camada continua sem conhecer dados reais (item 1 do docstring do módulo) — quem sabe o
     que uma ferramenta faz é `executar_ferramenta`, fornecida pelo chamador. `user_message` deve
-    chegar já anonimizado; o resultado de CADA ferramenta NÃO passa por anonimização aqui — é
-    responsabilidade do chamador, se precisar (ver `vima/pergunta.py`).
+    chegar já anonimizado; o resultado de CADA ferramenta também deve ser protegido pelo chamador
+    antes de ser devolvido por ``executar_ferramenta`` (ver `vima/pergunta.py`).
 
     Cada rodada de `messages.create` grava sua PRÓPRIA linha no ledger `ai_usage`: é uma chamada
     de API por rodada, e cada uma custa dinheiro no instante em que acontece — resumir só no fim

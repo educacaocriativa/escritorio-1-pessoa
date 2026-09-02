@@ -1,23 +1,23 @@
 """Orquestra o loop de pergunta-e-resposta da Vima (`POST /vima/pergunta`).
 
 Sem persistência: o histórico da conversa vive só no que o front reenvia a cada pergunta (ver
-spec `docs/superpowers/specs/2026-08-28-vima-pergunte-design.md`). A pergunta do dono e os
-resultados das ferramentas chegam à Claude SEM anonimização de nome — extensão explícita do
-risco aceito pelo fundador em 2026-07-11 para o Diagnóstico Financeiro (CLAUDE.md §6.1). PII
-ESTRUTURAL (CPF/CNPJ/e-mail/telefone) continua mascarada, como em qualquer outra chamada de IA
-(Regra de Ouro nº 2) — só o texto INICIAL passa pelo anonimizador; os resultados de ferramenta
-não são mascarados (decisão da spec).
+spec `docs/superpowers/specs/2026-08-28-vima-pergunte-design.md`). Um contexto reversível mascara
+a pergunta e CADA resultado de ferramenta antes da Claude; argumentos e resposta final são
+resolvidos somente dentro da nossa infraestrutura (Regra de Ouro nº 2).
 """
 from __future__ import annotations
 
 from dataclasses import dataclass
 
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.config import settings
 from app.core import ai, audit
-from app.core.anonymizer import anonymizer
+from app.core.anonymizer import AnonymizationContext
 from app.core.tenancy import CurrentUser
+from app.modules.auth.models import Tenant, User
+from app.modules.crm import service as crm_service
 from app.modules.vima import tools
 
 _SYSTEM = (
@@ -32,6 +32,8 @@ _SYSTEM = (
     "pediu. Para cancelar ou remarcar, use consultar_agenda primeiro para achar o compromisso "
     "certo; se houver mais de um compatível, pergunte qual antes de agir."
 )
+
+_NAME_CONNECTORS = {"da", "das", "de", "do", "dos", "e"}
 
 
 @dataclass
@@ -54,30 +56,64 @@ def responder(db: Session, *, user: CurrentUser, pergunta: str, historico: list[
         )
 
     definicoes = [f.definicao for f in tools.ferramentas_disponiveis(user)]
-    seguro, mapa = anonymizer.mask(_com_historico(pergunta, historico))
+    privacy = AnonymizationContext()
+    texto_inicial = _com_historico(pergunta, historico)
+    texto_inicial = privacy.mask_literals(
+        texto_inicial, _nomes_conhecidos(db, user), label="PESSOA"
+    )
+    seguro = privacy.mask(texto_inicial)
 
     def _executar(nome: str, entrada: dict) -> str:
         # A entrada da ferramenta chega da Claude ainda MASCARADA (o texto que ela viu é
         # `seguro`) — sem desmascarar aqui, um placeholder como `[FONE_1]` num título/local de
         # `criar_compromisso` seria PERSISTIDO PERMANENTEMENTE em `agenda_events`, ao contrário
         # da resposta final (que já é desmascarada abaixo). Mesmo `mapa` usado para a resposta.
-        entrada_real = {
-            k: anonymizer.unmask(v, mapa) if isinstance(v, str) else v
-            for k, v in entrada.items()
-        }
-        return tools.executar(db, user, nome, entrada_real)
+        entrada_real = privacy.unmask(entrada)
+        resultado_real = tools.executar(db, user, nome, entrada_real)
+        return privacy.mask_tool_result(resultado_real)
 
     resultado = ai.complete_with_tools(
         db=db, tenant_id=user.tenant_id, task="vima.pergunta", system=_SYSTEM,
         user_message=seguro, tools=definicoes, executar_ferramenta=_executar,
         user_id=user.user_id,
     )
-    texto = anonymizer.unmask(resultado.text, mapa)
+    texto = privacy.unmask(resultado.text)
     audit.record(
         db, tenant_id=user.tenant_id, actor="ai", action="vima.pergunta.respondida",
         target="", is_ai=True,
     )
     return Resposta(texto=texto, por_ia=True)
+
+
+def _nomes_conhecidos(db: Session, user: CurrentUser) -> list[str]:
+    """Vocabulário determinístico para tirar nomes da pergunta antes da primeira chamada.
+
+    NER não oferece garantia suficiente para privacidade. Os nomes já conhecidos pelo produto
+    vêm das tabelas locais e a RLS limita os clientes ao tenant da sessão.
+    """
+    nomes: list[str] = []
+    tenant = db.get(Tenant, user.tenant_id)
+    if tenant is not None:
+        nomes.append(tenant.legal_name)
+    nomes.extend(db.scalars(select(User.name).where(User.tenant_id == user.tenant_id)).all())
+
+    offset = 0
+    while True:
+        pagina = crm_service.list_clients(db, limit=500, offset=offset)
+        nomes.extend(cliente.name for cliente in pagina)
+        if len(pagina) < 500:
+            break
+        offset += len(pagina)
+
+    # Também protege menções pelo primeiro/último nome ("fale com João"), sem mascarar
+    # conectores portugueses que aparecem naturalmente em qualquer pergunta.
+    componentes = {
+        parte
+        for nome in nomes
+        for parte in nome.split()
+        if len(parte) >= 3 and parte.casefold() not in _NAME_CONNECTORS
+    }
+    return nomes + list(componentes)
 
 
 def _com_historico(pergunta: str, historico: list[Turno]) -> str:
