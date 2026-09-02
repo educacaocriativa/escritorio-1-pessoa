@@ -113,10 +113,14 @@ sintoma parece bug do produto e não é. Publicar (Público-alvo → "Publicar a
 limite e **não** exige passar pela verificação do Google enquanto ficar abaixo de ~100 usuários;
 o custo é a tela "o Google não verificou este app", uma vez por pessoa.
 
-**Bloqueio para publicar:** a aba Branding exige **link de Política de Privacidade** e o campo
-está vazio (Termos de Serviço é opcional). Não existe página de privacidade no frontend hoje
-(`apps/web/src/app/App.tsx` não tem rota) — precisa ser criada e publicada sob
-`e1p.criativaeduca.com.br` antes de mudar o status.
+**Para publicar:** a aba Branding exige **link de Política de Privacidade** (Termos de Serviço é
+opcional). As páginas passaram a existir no PR #293 — rotas públicas `/privacidade` e `/termos`,
+fora do `ProtectedLayout`, em `apps/web/src/features/legal/`. Restam dois passos, nesta ordem:
+
+1. **Deployar**, senão as URLs não respondem. O Google valida que o link é alcançável, e a
+   produção costuma ficar atrás de `main` — meça o gap antes de assumir que já está no ar.
+2. Colar `https://e1p.criativaeduca.com.br/privacidade` (e, se quiser, `/termos`) na aba
+   Branding e então **Público-alvo → Publicar app**.
 
 ## 6. Backup automatizado + offsite (Story 3.3)
 - [x] Instalar/configurar `rclone` com remote S3-compatível — validado em 2026-07-12 **localmente**
