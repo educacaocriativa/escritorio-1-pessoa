@@ -1,5 +1,6 @@
 import type { AuthToken } from "@e1p/shared-types";
 import { useState } from "react";
+import { Link } from "react-router-dom";
 import { api, apiErrorMessage } from "../../lib/api";
 import { useAuth } from "../../store/auth";
 
@@ -10,7 +11,7 @@ export default function LoginPage() {
   const [mode, setMode] = useState<Mode>("login");
 
   return (
-    <div className="flex min-h-screen items-center justify-center bg-primary-500 p-4">
+    <div className="flex min-h-screen flex-col items-center justify-center gap-4 bg-primary-500 p-4">
       {/* `campos-tocaveis`: esta tela tem CÓPIA PRÓPRIA do `Field` (abaixo, l. ~203) e não passa
           pelo `components/Modal.tsx` — o conserto de lá não chega até aqui. Medido: e-mail e senha
           a 38px na PRIMEIRA tela do produto. Ver `styles/index.css`. */}
@@ -28,6 +29,18 @@ export default function LoginPage() {
         )}
         {mode === "reset" && <ResetForm onDone={() => setMode("login")} />}
       </div>
+      {/* Fora do cartão, e não dentro do `LoginForm`: os documentos legais precisam estar
+          alcançáveis nos três modos da tela (entrar, recuperar, redefinir) e por quem ainda não
+          é assinante. E o link que a tela de consentimento OAuth do Google exige que exista. */}
+      <nav className="text-center text-xs text-white/80">
+        <Link to="/privacidade" className="hover:underline">
+          Política de Privacidade
+        </Link>
+        <span aria-hidden="true"> · </span>
+        <Link to="/termos" className="hover:underline">
+          Termos de Serviço
+        </Link>
+      </nav>
     </div>
   );
 }
