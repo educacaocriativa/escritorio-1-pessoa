@@ -243,3 +243,54 @@ def test_create_meet_event_noop_without_credential(client: TestClient, headers, 
         guests: list = []
 
     assert service.create_meet_event(db, tenant_id="t" * 12, event=_Ev()) is None
+
+
+# ── Diagnóstico do callback ──────────────────────────────────────────────────
+# Todo caminho de falha devolve o MESMO `?google=error` ao usuário. Sem log, o suporte não
+# distingue "cancelou o consentimento" de `redirect_uri_mismatch` — estes testes travam isso.
+def test_callback_denied_logs_reason(client: TestClient, configured, caplog):
+    """Cancelar na tela do Google (`error=access_denied`) deixa rastro identificável."""
+    with caplog.at_level("WARNING", logger="e1p.google_calendar"):
+        resp = client.get(
+            "/integrations/google/callback",
+            params={"error": "access_denied", "state": "qualquer"},
+            follow_redirects=False,
+        )
+    assert resp.status_code == 307
+    assert resp.headers["location"].endswith("/config?google=error")
+    assert "[google:callback:denied]" in caplog.text
+    assert "access_denied" in caplog.text
+
+
+def test_callback_invalid_state_logs_reason(client: TestClient, configured, caplog):
+    with caplog.at_level("WARNING", logger="e1p.google_calendar"):
+        client.get(
+            "/integrations/google/callback",
+            params={"code": "abc", "state": "not-a-valid-state"},
+            follow_redirects=False,
+        )
+    assert "[google:callback:state_invalido]" in caplog.text
+
+
+def test_callback_exchange_failure_logs_traceback(
+    client: TestClient, headers, configured, monkeypatch, caplog
+):
+    """Falha na troca do code (ex.: redirect_uri_mismatch) precisa ir para o log com traceback."""
+    url = client.get("/integrations/google/connect", headers=headers).json()["url"]
+    state = parse_qs(urlparse(url).query)["state"][0]
+
+    def _boom(*_a, **_k):
+        raise httpx.HTTPStatusError("400 redirect_uri_mismatch", request=None, response=None)
+
+    monkeypatch.setattr(service, "exchange_code", _boom)
+
+    with caplog.at_level("ERROR", logger="e1p.google_calendar"):
+        resp = client.get(
+            "/integrations/google/callback",
+            params={"code": "abc", "state": state},
+            follow_redirects=False,
+        )
+    assert resp.status_code == 307
+    assert resp.headers["location"].endswith("/config?google=error")
+    assert "[google:callback:failed]" in caplog.text
+    assert "redirect_uri_mismatch" in caplog.text  # traceback preservado

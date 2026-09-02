@@ -7,6 +7,8 @@ pages/router.py. O tenant vem do `state` assinado (anti-CSRF), não de um token 
 """
 from __future__ import annotations
 
+import logging
+
 from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import RedirectResponse
 from sqlalchemy.orm import Session
@@ -20,6 +22,8 @@ from app.modules.google_calendar.schemas import GoogleConnectOut, GoogleStatusOu
 
 router = APIRouter(prefix="/integrations/google", tags=["google-calendar"])
 public_router = APIRouter(prefix="/integrations/google", tags=["google-calendar-public"])
+
+logger = logging.getLogger("e1p.google_calendar")
 
 _guard = require_module("agenda")
 
@@ -58,20 +62,39 @@ def disconnect(
 def callback(
     code: str | None = Query(default=None),
     state: str | None = Query(default=None),
+    error: str | None = Query(default=None),
     session_factory=Depends(get_tenant_session_factory),
 ) -> RedirectResponse:
     """O Google redireciona para cá após o consent. Valida o `state`, troca o `code` por tokens
-    e persiste a credencial no tenant. Sempre redireciona de volta ao frontend."""
+    e persiste a credencial no tenant. Sempre redireciona de volta ao frontend.
+
+    Todo caminho de falha cai no MESMO `?google=error` para o usuário — então cada um precisa
+    deixar rastro no log, senão "recusou o consentimento", `redirect_uri_mismatch` e state
+    expirado ficam indistinguíveis no suporte."""
     dest_ok = f"{settings.frontend_url}/config?google=connected"
     dest_err = f"{settings.frontend_url}/config?google=error"
+    if error:
+        # O Google devolve `error=access_denied` quando a pessoa cancela na tela de consentimento.
+        # Rota PÚBLICA: `error` é entrada arbitrária, então vai truncado e sem quebra de linha
+        # (senão dá para forjar linhas no log).
+        logger.warning("[google:callback:denied] error=%s", " ".join(error[:60].split()))
+        return RedirectResponse(dest_err, status_code=307)
     if not code or not state:
+        logger.warning(
+            "[google:callback:incompleto] code=%s state=%s", bool(code), bool(state)
+        )
         return RedirectResponse(dest_err, status_code=307)
     tenant_id = verify_oauth_state(state)
     if not tenant_id:
+        # State assinado inválido/expirado: CSRF ou aba parada tempo demais na tela do Google.
+        logger.warning("[google:callback:state_invalido]")
         return RedirectResponse(dest_err, status_code=307)
     try:
         with session_factory(tenant_id) as tdb:
             service.handle_callback(tdb, tenant_id=tenant_id, code=code)
     except Exception:  # noqa: BLE001 — qualquer falha vira redirect de erro, nunca 500
+        # O usuário só vê `?google=error` genérico: sem este log, `redirect_uri_mismatch`,
+        # client_secret errado e token expirado ficam indistinguíveis no suporte.
+        logger.exception("[google:callback:failed] tenant=%s", tenant_id)
         return RedirectResponse(dest_err, status_code=307)
     return RedirectResponse(dest_ok, status_code=307)
