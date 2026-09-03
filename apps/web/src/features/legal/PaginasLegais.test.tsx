@@ -103,3 +103,48 @@ describe("Política de Privacidade — cláusula de Uso Limitado do Google", () 
     );
   });
 });
+
+// ── Afirmações que a auditoria de 03/09/2026 derrubou ─────────────────────────────────────
+//
+// As três frases abaixo estiveram publicadas e eram falsas. Nenhuma delas quebrava nada
+// visível: o site continuava de pé, os testes verdes, e só uma conferência contra a produção
+// mostrava a diferença. É exatamente a classe de erro que precisa de consumidor mecânico —
+// uma frase forte e falsa num documento legal é pior que uma frase fraca e verdadeira.
+//
+//  1. "cópia fora do servidor de produção" (§8) e "30 dias na cópia externa" (§9): a EC2 não
+//     tem rclone instalado nem BACKUP_S3_BUCKET preenchido. O offsite nunca existiu na AWS;
+//     o texto vinha do `.env.prod.example`, que descreve a Hostinger, descomissionada.
+//  2. "você pode exportar seus dados a qualquer momento" (Termos §8, e a mesma promessa no
+//     §12): não há endpoint de exportação — só `juridico/export.py::to_docx`, que exporta UM
+//     documento. A frase enfraquecia o direito de portabilidade do §10 da Política.
+//  3. Asaas e a WhatsApp Business Platform listados como prestadores em operação:
+//     `PAYMENT_GATEWAY_PROVIDER` e `WHATSAPP_TOKEN` estão vazios em produção.
+//
+// Se alguma voltar, o texto precisa de código atrás dela — não do contrário.
+describe("Os documentos não voltam a prometer o que o sistema não faz", () => {
+  it("não anuncia backup fora do servidor de produção", () => {
+    abrir("/privacidade");
+    const texto = textoDaPagina();
+    expect(texto).not.toContain("cópia fora do servidor");
+    expect(texto).not.toContain("cópia externa");
+    // E diz o que de fato acontece, incluindo o limite.
+    expect(texto).toContain("no próprio servidor de produção");
+  });
+
+  it("não promete exportação de dados que não existe", () => {
+    abrir("/termos");
+    const texto = textoDaPagina();
+    expect(texto).not.toContain("exportar seus dados a qualquer momento");
+    expect(texto).not.toContain("para exportar seus dados");
+  });
+
+  it("separa o prestador que opera hoje do que só entra se o assinante ativar", () => {
+    abrir("/privacidade");
+    const texto = textoDaPagina();
+    expect(texto).toContain("Ainda não em uso");
+    // Asaas e a plataforma oficial da Meta continuam citadas — mas do lado desligado.
+    const desligados = texto.slice(texto.indexOf("Ainda não em uso"));
+    expect(desligados).toContain("Asaas");
+    expect(desligados).toContain("WhatsApp Business Platform");
+  });
+});

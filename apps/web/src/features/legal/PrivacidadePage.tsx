@@ -146,6 +146,14 @@ export default function PrivacidadePage() {
           identificadores.
         </p>
         <p>
+          Na <strong>Vima</strong> — a assistente que consulta os seus dados para responder às suas
+          perguntas — a proteção vai além disso. Também são substituídos por marcadores os nomes já
+          conhecidos pelo sistema (a sua empresa, os seus usuários e os seus clientes) e o resultado
+          de cada consulta ao banco de dados feita para montar a resposta. A IA raciocina sobre os
+          marcadores; os valores reais só reaparecem no texto que você lê, já dentro da nossa
+          infraestrutura.
+        </p>
+        <p>
           O conteúdo enviado à Anthropic não é usado para treinar os modelos dela. As respostas de
           IA são geradas automaticamente e podem conter erros: elas não substituem orientação
           jurídica, contábil ou financeira profissional. Ver a cláusula correspondente nos Termos de
@@ -201,7 +209,7 @@ export default function PrivacidadePage() {
 
       <Secao id="compartilhamento" titulo="7. Com quem os dados são compartilhados">
         <p>
-          Compartilhamos dados apenas com os prestadores necessários para o serviço funcionar, cada
+          Esta é a lista dos prestadores que <strong>hoje</strong> tratam dados a nosso pedido, cada
           um limitado ao que a sua função exige:
         </p>
         <Tabela
@@ -223,14 +231,9 @@ export default function PrivacidadePage() {
               "Estados Unidos",
             ],
             [
-              "Meta (WhatsApp Business Platform)",
-              "Envio e recebimento de mensagens, quando você usa a integração oficial.",
+              "Meta (WhatsApp)",
+              "Trânsito das mensagens enviadas e recebidas pelo número que você conectar.",
               "Estados Unidos",
-            ],
-            [
-              "Asaas",
-              "Emissão de boletos e Pix das suas cobranças, quando o gateway está habilitado.",
-              "Brasil",
             ],
             [
               "Provedor de e-mail transacional",
@@ -239,6 +242,22 @@ export default function PrivacidadePage() {
             ],
           ]}
         />
+        <p>
+          <strong>Sobre a conexão de WhatsApp.</strong> A ligação com o WhatsApp é feita hoje por um
+          componente que roda na nossa própria infraestrutura, usando o mesmo protocolo do WhatsApp
+          Web — não pela plataforma oficial de negócios da Meta. As suas mensagens continuam
+          trafegando pelos servidores do WhatsApp, como em qualquer conversa do aplicativo, mas o
+          intermediário entre o {CONTROLADOR.produto} e o WhatsApp somos nós, e não um serviço
+          contratado de terceiro.
+        </p>
+        <p>
+          <strong>Ainda não em uso.</strong> O sistema tem integrações prontas que só passam a
+          tratar dados se você as ativar, e nenhuma delas está ativa hoje: a plataforma oficial de
+          negócios da Meta (WhatsApp Business Platform), o gateway de pagamentos{" "}
+          <strong>Asaas</strong> para boletos e Pix, e o armazenamento de arquivos em serviço externo
+          — enquanto ele não é ativado, os anexos ficam no mesmo banco de dados do resto das suas
+          informações. Se você ativar alguma, ela passa a valer como prestador desta lista.
+        </p>
         <p>
           As transferências internacionais acima ocorrem com base em cláusulas contratuais e nas
           demais garantias exigidas pelos arts. 33 e seguintes da LGPD. Também podemos divulgar
@@ -258,7 +277,13 @@ export default function PrivacidadePage() {
           </li>
           <li>Sessões inativas são encerradas automaticamente após 30 minutos.</li>
           <li>Acessos e ações sensíveis ficam registrados em trilha de auditoria.</li>
-          <li>Backups automáticos são mantidos, com cópia fora do servidor de produção.</li>
+          <li>
+            O banco de dados é copiado automaticamente todos os dias. Essas cópias ficam{" "}
+            <strong>no próprio servidor de produção</strong>: hoje não há réplica em outro provedor,
+            de modo que um incidente que destrua o servidor destrói também as cópias. Estamos
+            dizendo isso porque preferimos que você saiba do limite a supor uma proteção que não
+            existe.
+          </li>
         </Lista>
         <p>
           Nenhum sistema é imune a incidentes. Se ocorrer um incidente de segurança com risco
@@ -279,8 +304,8 @@ export default function PrivacidadePage() {
             acessos exigido pelo art. 15 do Marco Civil da Internet, mantido por 6 meses.
           </li>
           <li>
-            <strong>Backups</strong> têm ciclo próprio: até 7 dias no servidor e até 30 dias na
-            cópia externa. Um dado excluído desaparece das cópias ao fim desse ciclo.
+            <strong>Backups</strong> têm ciclo próprio: a cópia diária do banco fica até 7 dias no
+            servidor e é apagada depois. Um dado excluído desaparece das cópias ao fim desse ciclo.
           </li>
         </Lista>
       </Secao>

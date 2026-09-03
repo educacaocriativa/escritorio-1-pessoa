@@ -144,9 +144,9 @@ export default function TermosPage() {
             houver indisponibilidade prevista, e manutenções emergenciais sem aviso prévio.
           </li>
           <li>
-            Mantemos backups automáticos com cópia externa, conforme a seção 9 da Política de
-            Privacidade. Backup é medida de continuidade do serviço, não substituto de exportação
-            própria: você pode exportar seus dados a qualquer momento e é prudente fazê-lo.
+            Mantemos backups automáticos diários no servidor de produção, conforme as seções 8 e 9
+            da Política de Privacidade — sem cópia em outro provedor. Backup é medida de
+            continuidade do serviço e não é garantia de recuperação em qualquer cenário.
           </li>
           <li>
             Podemos alterar, adicionar ou descontinuar funcionalidades. Se uma mudança reduzir de
@@ -209,8 +209,9 @@ export default function TermosPage() {
           quando o aviso for possível.
         </p>
         <p>
-          Após o encerramento, você tem <strong>30 dias</strong> para exportar seus dados. Passado
-          esse prazo, eles são excluídos conforme a seção 9 da Política de Privacidade.
+          Após o encerramento, os seus dados permanecem por <strong>30 dias</strong> antes de serem
+          excluídos, conforme a seção 9 da Política de Privacidade. Dentro desse prazo você pode
+          pedir uma cópia deles pelo canal e nas condições da seção 10 da Política.
         </p>
       </Secao>
 
