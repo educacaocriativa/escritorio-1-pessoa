@@ -16,4 +16,4 @@ export const CONTROLADOR = {
  * Data da última revisão dos documentos legais. Atualize AO MUDAR o texto de qualquer um dos
  * dois — a data é o que permite a uma pessoa saber se leu a versão vigente.
  */
-export const VIGENCIA = "2 de setembro de 2026";
+export const VIGENCIA = "3 de setembro de 2026";
