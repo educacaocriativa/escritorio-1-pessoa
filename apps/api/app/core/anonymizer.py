@@ -26,6 +26,16 @@ _PATTERNS: list[tuple[str, str]] = [
 ]
 
 
+# Instrução de sistema que faz o `unmask` funcionar. Sem ela o modelo reescreve `[CPF_1]` como
+# "o CPF informado" e o valor real não tem mais onde voltar — o dado não vaza, mas a resposta
+# chega mutilada ao dono e ninguém entende por quê. Vive aqui, ao lado dos marcadores que
+# descreve, para não virar cinco redações diferentes espalhadas pelos chamadores.
+INSTRUCAO_PRESERVAR_MARCADORES = (
+    " Os trechos entre colchetes (ex.: [CPF_1], [EMAIL_1], [FONE_1]) são dados ocultados por "
+    "privacidade: repita-os EXATAMENTE como aparecem, sem traduzir, descrever ou inventar outros."
+)
+
+
 class Anonymizer:
     """Mascara/desmascara PII. Stateless entre chamadas: o mapping é retornado, não guardado."""
 

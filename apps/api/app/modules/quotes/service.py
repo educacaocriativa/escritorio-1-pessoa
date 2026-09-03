@@ -10,6 +10,7 @@ from sqlalchemy.orm import Session
 
 from app.config import settings
 from app.core import ai, audit, facts
+from app.core.anonymizer import INSTRUCAO_PRESERVAR_MARCADORES, anonymizer
 from app.core.facts import (
     COM_ORCAMENTO_ACEITO,
     COM_ORCAMENTO_ENVIADO,
@@ -338,20 +339,29 @@ def generate_scope(db: Session, *, tenant_id: str, brief: str) -> str:
 
     `db`/`tenant_id` existem só para a contabilidade de IA (`core/ai_usage`) — esta função
     não lê nem escreve nada de negócio.
+
+    O `brief` é texto livre do dono e costuma trazer o contato de quem pediu o orçamento. Nomes
+    NÃO são mascarados aqui de propósito: o briefing existe para ser reescrito, e trocar o nome
+    do cliente por um marcador destruiria a função. O que sai são os identificadores estruturais
+    (CPF/CNPJ, e-mail, telefone, cartão), que não acrescentam nada à redação.
     """
     if not settings.anthropic_api_key:
         return brief.strip()
     system = (
         "Você é um redator comercial brasileiro. A partir do briefing, escreva UMA descrição "
         "de escopo profissional e enxuta (1-2 frases) para um orçamento. Responda só com o texto."
+        + INSTRUCAO_PRESERVAR_MARCADORES
     )
+    # Regra de Ouro nº 2: mascara ANTES de sair; desmascara a resposta localmente.
+    seguro, mapa = anonymizer.mask(brief)
     try:
-        return ai.complete(
+        texto = ai.complete(
             db=db, tenant_id=tenant_id, task="quotes.escopo",
-            system=system, user_message=brief, max_tokens=300,
-        ).text.strip()
+            system=system, user_message=seguro, max_tokens=300,
+        ).text
     except Exception:
         return brief.strip()
+    return anonymizer.unmask(texto, mapa).strip()
 
 
 # ── Link público (cliente abre sem login; lê da tabela GLOBAL) ──────────────
