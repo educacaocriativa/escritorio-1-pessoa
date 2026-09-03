@@ -14,6 +14,7 @@ from sqlalchemy.orm import Session
 
 from app.config import settings
 from app.core import ai, audit
+from app.core.anonymizer import INSTRUCAO_PRESERVAR_MARCADORES, anonymizer
 from app.modules.marketing.models import Carousel
 from app.modules.marketing.schemas import CarouselCreate, CarouselUpdate
 
@@ -110,16 +111,24 @@ def generate_content(db: Session, *, tenant_id: str, topic: str, n: int, tone: s
 
     `db`/`tenant_id` existem só para a contabilidade de IA (`core/ai_usage`) — esta função
     não lê nem escreve nada de negócio.
+
+    Regra de Ouro nº 2: o `topic` é texto livre, e "carrossel sobre o caso do cliente
+    fulano@email.com" é um tema plausível. Mascaramos os identificadores estruturais do texto
+    JÁ MONTADO — mascarar o `topic` isolado deixaria escapar o que o `tone` trouxesse — e
+    desfazemos a máscara ANTES de `_parse`, porque as truncagens de lá (`[:200]`, `[:600]`)
+    cortariam um marcador ao meio e o valor real não teria mais onde voltar.
     """
     if not settings.anthropic_api_key:
         return _fallback(topic, n)
     user = f"Tema: {topic}\nNúmero de slides: {n}\nTom: {tone}"
+    seguro, mapa = anonymizer.mask(user)
     try:
         text = ai.complete(
             db=db, tenant_id=tenant_id, task="marketing.carrossel",
-            system=_EDITORIAL_SYSTEM, user_message=user, max_tokens=2000,
+            system=_EDITORIAL_SYSTEM + INSTRUCAO_PRESERVAR_MARCADORES,
+            user_message=seguro, max_tokens=2000,
         ).text
-        return _parse(text, topic, n)
+        return _parse(anonymizer.unmask(text, mapa), topic, n)
     except Exception:
         return _fallback(topic, n)
 
