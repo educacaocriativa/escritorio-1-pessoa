@@ -19,6 +19,7 @@ from app.core.tenancy import CurrentUser
 from app.modules.auth.models import Tenant, User
 from app.modules.crm import service as crm_service
 from app.modules.vima import tools
+from app.modules.vima.palavras_comuns import componentes_mascaraveis
 
 _SYSTEM = (
     "Você é a Vima, a assistente do dono deste negócio dentro do e1p. Responda perguntas sobre "
@@ -32,8 +33,6 @@ _SYSTEM = (
     "pediu. Para cancelar ou remarcar, use consultar_agenda primeiro para achar o compromisso "
     "certo; se houver mais de um compatível, pergunte qual antes de agir."
 )
-
-_NAME_CONNECTORS = {"da", "das", "de", "do", "dos", "e"}
 
 
 @dataclass
@@ -105,15 +104,11 @@ def _nomes_conhecidos(db: Session, user: CurrentUser) -> list[str]:
             break
         offset += len(pagina)
 
-    # Também protege menções pelo primeiro/último nome ("fale com João"), sem mascarar
-    # conectores portugueses que aparecem naturalmente em qualquer pergunta.
-    componentes = {
-        parte
-        for nome in nomes
-        for parte in nome.split()
-        if len(parte) >= 3 and parte.casefold() not in _NAME_CONNECTORS
-    }
-    return nomes + list(componentes)
+    # Também protege menções pelo primeiro/último nome ("fale com João"). O componente isolado
+    # só vira marcador quando não é palavra de todo dia — ver `palavras_comuns.py` para a
+    # medição que motivou o filtro. Os nomes COMPLETOS vão sempre, sem exceção: é deles que
+    # vem a garantia, e `mask_literals` os aplica antes dos componentes.
+    return nomes + list(componentes_mascaraveis(nomes))
 
 
 def _com_historico(pergunta: str, historico: list[Turno]) -> str:

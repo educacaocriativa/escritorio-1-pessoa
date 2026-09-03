@@ -13,6 +13,7 @@ from sqlalchemy.orm import Session
 
 from app.config import settings
 from app.core import ai, audit, facts, payment_gateway
+from app.core.anonymizer import INSTRUCAO_PRESERVAR_MARCADORES, anonymizer
 from app.core.facts import (
     FIN_COBRANCA_PROTESTADA,
     FIN_PAGAMENTO_RECEBIDO,
@@ -1220,7 +1221,10 @@ def _compose_dunning(
 ) -> str:
     """Mensagem de cobrança amigável. Usa a IA (Claude) se houver chave; senão, template.
 
-    PII: enviamos o placeholder [NOME] ao Claude e reinserimos o nome real localmente.
+    PII: o nome vira `[NOME]` na montagem e volta no fim. A **descrição** não tinha esse
+    tratamento e é campo livre — "consulta de fulano, CPF 123.456.789-00" é uma descrição de
+    cobrança inteiramente plausível, e ela ia crua. Por isso o texto montado passa pelo
+    `anonymizer` antes de sair: `[NOME]` é convenção deste chamador, o `mask` é a garantia.
     """
     valor = _money(amount_cents)
     venc = due.strftime("%d/%m/%Y")
@@ -1235,14 +1239,16 @@ def _compose_dunning(
         "Escreva UMA mensagem curta de WhatsApp (2-3 frases) cobrando um pagamento em atraso, "
         "em tom cordial e respeitoso, em português do Brasil. Nunca ameace. Use o placeholder "
         "[NOME] onde aparecer o nome do cliente. Responda só com a mensagem."
+        + INSTRUCAO_PRESERVAR_MARCADORES
     )
     user = f"Valor: {valor}\nVencimento: {venc}\nDescrição: {desc}\nNome do cliente: [NOME]"
+    seguro, mapa = anonymizer.mask(user)
     try:
         result = ai.complete(
             db=db, tenant_id=tenant_id, task="receivables.cobranca",
-            system=system, user_message=user, max_tokens=300,
+            system=system, user_message=seguro, max_tokens=300,
         )
-        return result.text.strip().replace("[NOME]", name)
+        return anonymizer.unmask(result.text, mapa).strip().replace("[NOME]", name)
     except Exception:
         return (
             f"Olá {name}, tudo bem? Notamos que {desc} no valor de {valor} venceu em {venc}. "
@@ -1271,14 +1277,16 @@ def _compose_dunning_phrase(
         "aparece em outras partes da mensagem) explicando o motivo da cobrança em tom cordial e "
         "respeitoso, em português do Brasil. Nunca ameace. Use o placeholder [NOME] se precisar "
         "se referir ao cliente. Responda só com a frase."
+        + INSTRUCAO_PRESERVAR_MARCADORES
     )
     user = f"Valor: {valor}\nVencimento: {venc}\nDescrição: {desc}\nNome do cliente: [NOME]"
+    seguro, mapa = anonymizer.mask(user)
     try:
         result = ai.complete(
             db=db, tenant_id=tenant_id, task="receivables.cobranca",
-            system=system, user_message=user, max_tokens=100,
+            system=system, user_message=seguro, max_tokens=100,
         )
-        return result.text.strip().replace("[NOME]", name)
+        return anonymizer.unmask(result.text, mapa).strip().replace("[NOME]", name)
     except Exception:
         return "Notamos que sua cobrança está em aberto."
 

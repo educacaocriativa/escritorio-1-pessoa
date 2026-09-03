@@ -9,6 +9,7 @@ from sqlalchemy.orm import Session
 
 from app.config import settings
 from app.core import ai, audit
+from app.core.anonymizer import INSTRUCAO_PRESERVAR_MARCADORES, anonymizer
 from app.modules.funnels.models import Funnel
 from app.modules.funnels.schemas import FunnelCreate, FunnelUpdate
 from app.modules.settings.service import hoje_do_tenant
@@ -263,20 +264,27 @@ def ai_compose(db: Session, *, tenant_id: str, kind: str, prompt: str) -> dict:
 
     `db`/`tenant_id` existem só para a contabilidade de IA (`core/ai_usage`) — esta função
     não lê nem escreve nada de negócio.
+
+    Regra de Ouro nº 2: o `prompt` é texto livre do dono e pode trazer o contato de quem vai
+    receber a mensagem. Mascaramos os identificadores estruturais (CPF/CNPJ, e-mail, telefone,
+    cartão) antes de sair e reinserimos no texto final, já aqui dentro. Nomes ficam de fora do
+    mascaramento por decisão: o prompt existe para ser reescrito, e um marcador no lugar do nome
+    produziria uma mensagem de funil inútil.
     """
-    system = _COMPOSE_SYSTEM.get(kind, _COMPOSE_SYSTEM["generic"])
+    system = _COMPOSE_SYSTEM.get(kind, _COMPOSE_SYSTEM["generic"]) + INSTRUCAO_PRESERVAR_MARCADORES
     if not settings.anthropic_api_key:
         return _compose_fallback(kind, prompt)
+    seguro, mapa = anonymizer.mask(prompt)
     try:
         text = ai.complete(
             db=db, tenant_id=tenant_id, task="funnels.compose",
-            system=system, user_message=prompt, max_tokens=800,
+            system=system, user_message=seguro, max_tokens=800,
         ).text
         cleaned = re.sub(r"^```(?:json)?|```$", "", text.strip(), flags=re.MULTILINE).strip()
         data = json.loads(cleaned)
         return {
-            "subject": str(data.get("subject", ""))[:200],
-            "body": str(data.get("body", ""))[:4000],
+            "subject": anonymizer.unmask(str(data.get("subject", "")), mapa)[:200],
+            "body": anonymizer.unmask(str(data.get("body", "")), mapa)[:4000],
         }
     except Exception:
         return _compose_fallback(kind, prompt)
