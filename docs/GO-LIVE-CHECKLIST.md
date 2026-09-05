@@ -50,7 +50,10 @@
 - [x] Criar projeto no Google Cloud Console + ativar Calendar API — projeto do fundador, Calendar
   API habilitada, OAuth consent screen em modo "Testing" com `flaviokato76@gmail.com` como test
   user (suficiente para uso próprio; sair de "Testing" exige verificação do Google só se/quando
-  precisar liberar para outras contas).
+  precisar liberar para outras contas). **Errata 2026-09-05:** o app **saiu de "Testing"** — o
+  status de publicação é **Em produção**, tipo **Externo**, branding **verificado**, conferido no
+  Console com o dono do projeto. O parêntese acima descreve o estado até 2026-09-04; publicar não
+  exigiu a verificação do Google. Ver "Estado verificado em 2026-09-05" abaixo.
 - [x] Gerar OAuth Client ID/Secret, configurar redirect URI — client Web `e1p` criado. **Resolvido
   em 2026-09-02:** as DUAS URIs estão cadastradas — `http://localhost:8000/integrations/google/callback`
   (dev) e `https://e1p.criativaeduca.com.br/api/integrations/google/callback` (produção AWS),
@@ -105,27 +108,49 @@
 | Escopos na tela de consentimento | `calendar.events` + `userinfo.email` registrados **e** concedidos (conferido pelo `scope=` devolvido no callback real). Bate com `DEFAULT_SCOPE` de `modules/google_calendar/models.py`. |
 | Redirect URIs | dev + produção AWS cadastradas; a de produção casa com o `.env.prod` da EC2. |
 | Tipo de usuário | **Externo** |
-| Status de publicação | **Testando** — 3 usuários de teste de 100. |
+| Status de publicação | **Testando** — 3 usuários de teste de 100. **(Errata 2026-09-05: virou "Em produção" — ver abaixo.)** |
 
-⚠️ **O modo "Testando" expira o refresh token em 7 dias.** Enquanto o app não for publicado, a
-sincronização de agenda de cada pessoa morre sozinha uma vez por semana e exige reconectar — o
-sintoma parece bug do produto e não é. Publicar (Público-alvo → "Publicar app") remove esse
-limite e **não** exige passar pela verificação do Google enquanto ficar abaixo de ~100 usuários;
-o custo é a tela "o Google não verificou este app", uma vez por pessoa.
+### Estado verificado em 2026-09-05 — o app foi publicado
 
-**Para publicar:** a aba Branding exige **link de Política de Privacidade** (Termos de Serviço é
-opcional). As páginas passaram a existir no PR #293 — rotas públicas `/privacidade` e `/termos`,
-fora do `ProtectedLayout`, em `apps/web/src/features/legal/`. Restam dois passos, nesta ordem:
+| Item | Estado |
+|---|---|
+| Tipo de usuário | **Externo** (inalterado) |
+| Status de publicação | **Em produção** — o modo "Testando" acabou. |
+| Branding | **Verificado** |
+| *Data access status* | **Em análise** — é OUTRA coisa, ver o aviso abaixo. |
 
-1. **Deployar**, senão as URLs não respondem. O Google valida que o link é alcançável, e a
-   produção costuma ficar atrás de `main` — meça o gap antes de assumir que já está no ar.
-2. Colar `https://e1p.criativaeduca.com.br/privacidade` (e, se quiser, `/termos`) na aba
-   Branding e então **Público-alvo → Publicar app**.
+⚠️ **O limite de 7 dias acabou — o que segue é registro do que valia até 2026-09-04.** Enquanto o
+app esteve em "Testando", o Google expirava o refresh token em 7 dias: a sincronização de agenda
+de cada pessoa morria sozinha uma vez por semana e exigia reconectar, e o sintoma parecia bug do
+produto sem ser.
+
+**Resolvido em 2026-09-05:** o app foi publicado (Público-alvo → "Publicar app") e o refresh token
+deixou de ter prazo — ele passa a valer até ser revogado. **Consequência para quem investiga uma
+sincronização parada:** um `400 invalid_grant` hoje **não** é o ciclo semanal de antes. Significa
+revogação de verdade — a pessoa removeu o acesso do e1p na conta Google, trocou a senha, ou passou
+~6 meses sem usar a integração. É evento raro e digno de investigação, não "é o de sempre".
+
+Publicar **não** exigiu passar pela verificação do Google (o app fica abaixo de ~100 usuários); o
+custo é a tela "o Google não verificou este app", uma vez por pessoa. **Não confunda dois campos
+do Console:** o **status de publicação** é "Em produção" (concluído, é o campo que governava o
+prazo do refresh token) enquanto o ***Data access status*** segue "em análise" — esse outro campo
+é a revisão dos escopos solicitados, corre em separado e não reabre o limite de 7 dias.
+
+**Como foi publicado (concluído em 2026-09-05):** a aba Branding exige **link de Política de
+Privacidade** (Termos de Serviço é opcional). As páginas passaram a existir no PR #293 — rotas
+públicas `/privacidade` e `/termos`, fora do `ProtectedLayout`, em `apps/web/src/features/legal/`.
+Os dois passos que restavam foram executados, nesta ordem:
+
+1. **Deploy** das páginas — sem ele as URLs não respondem, e o Google valida que o link é
+   alcançável. (A produção costuma ficar atrás de `main`; foi preciso medir o gap.)
+2. `https://e1p.criativaeduca.com.br/privacidade` colada na aba Branding e então **Público-alvo →
+   Publicar app**.
 
 ### Autocura da conexão morta (issue #294, corrigido)
 
-Quando o refresh token morre (o caso semanal acima, ou uma revogação na conta Google), o e1p
-**descarta sozinho** a credencial do tenant: `_ensure_fresh_token` detecta o `400 invalid_grant`,
+Quando o refresh token morre (hoje só por revogação na conta Google; até 2026-09-04 também pelo
+ciclo semanal do modo "Testando", extinto com a publicação), o e1p **descarta sozinho** a
+credencial do tenant: `_ensure_fresh_token` detecta o `400 invalid_grant`,
 loga `[google:token:revogado]` e apaga a linha `GoogleCredential` numa sessão curta e
 independente — sem tocar a transação de quem chamou (criar/remarcar/cancelar evento, ou o sweep
 do worker). Consequências operacionais:
