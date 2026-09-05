@@ -308,7 +308,7 @@ def test_meet_generated_when_google_connected(client: TestClient, headers, monke
 
     monkeypatch.setattr(
         gcal, "create_meet_event",
-        lambda *a, **k: ("https://meet.google.com/abc-defg-hij", "gcal-evt-1"),
+        lambda *a, **k: ("https://meet.google.com/abc-defg-hij", "gcal-evt-1", "dono@gmail.com"),
     )
     resp = client.post("/agenda/events", json=_event(kind="reuniao"), headers=headers)
     assert resp.status_code == 201
@@ -324,7 +324,7 @@ def test_manual_meeting_url_preserved_google_not_called(client: TestClient, head
 
     def _spy(*a, **k):
         calls["n"] += 1
-        return ("https://meet.google.com/should-not-win", "x")
+        return ("https://meet.google.com/should-not-win", "x", "dono@gmail.com")
 
     monkeypatch.setattr(gcal, "create_meet_event", _spy)
     resp = client.post(

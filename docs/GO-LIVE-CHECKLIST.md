@@ -140,6 +140,19 @@ do worker). Consequências operacionais:
 - O descarte é best-effort: se a sessão curta falhar, sai `[google:token:descarte_falhou]` no log
   e a operação de negócio continua — a integração Google nunca derruba a Agenda (IV1/IV2).
 
+**Reconexão com outra conta (issue #302, corrigido).** Os `google_event_id` guardados nos eventos
+sobreviviam ao descarte acima. Ficar sem credencial nunca fez mal — os três consumidores do id
+(`patch_meet_event`, `delete_meet_event` e o `pull_changes` do worker) já param cedo sem
+credencial —, mas reconectar com uma conta **diferente** deixava esses ids endereçando o
+calendário de outra pessoa. Desde a migration 0086 cada evento guarda de qual conta veio
+(`agenda_events.google_account_email`) e o `upsert_credential` invalida, na reconexão, só o que
+veio de outra conta: zera `google_event_id`, `meeting_url` e a própria procedência, e loga
+`[google:reconexao:conta_trocada]` com quantos eventos foram afetados. Reconectar com a **mesma**
+conta — o caso comum — não perde nada. Eventos com link digitado à mão (Zoom)
+não são tocados, e os anteriores à 0086 (procedência desconhecida) ficam intactos até o primeiro
+sync bem-sucedido, que carimba a conta neles. Ao investigar "sumiu o link do Meet dos meus
+eventos", é esse log que diz se foi troca de conta.
+
 ## 6. Backup automatizado + offsite (Story 3.3)
 - [x] Instalar/configurar `rclone` com remote S3-compatível — validado em 2026-07-12 **localmente**
   (MinIO em Docker no lugar do S3 real — sem custo/conta externa) com o binário real do rclone.

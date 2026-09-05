@@ -116,10 +116,15 @@ def create_event(
 
         result = gcal.create_meet_event(db, tenant_id=tenant_id, event=event)
         if result is not None:
-            meeting_url, google_event_id = result
+            meeting_url, google_event_id, google_account_email = result
             if meeting_url:
                 event.meeting_url = meeting_url
             event.google_event_id = google_event_id
+            # De QUAL conta Google é este id (migration 0086). Vem junto do retorno, e não de um
+            # `get_credential` novo, porque é a credencial que REALMENTE escreveu o evento lá.
+            # Sem este carimbo, reconectar com outra conta deixaria o id apontando para um
+            # calendário alheio — ver `google_calendar/service.py::upsert_credential`.
+            event.google_account_email = google_account_email
     db.add(event)
     audit.record(
         db, tenant_id=tenant_id, actor=actor, action="agenda.event.create",
