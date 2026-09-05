@@ -6,8 +6,9 @@ import { CONTROLADOR } from "./controlador";
  *
  * Existe por três exigências concretas, não por formalidade:
  *  1. LGPD (Lei 13.709/2018) art. 9º — informação clara sobre o tratamento.
- *  2. Google OAuth — a aba Branding da tela de consentimento exige a URL desta página para
- *     publicar o app; sem publicar, o refresh token morre a cada 7 dias.
+ *  2. Google OAuth — a aba Branding da tela de consentimento exige a URL desta página, e foi com
+ *     ela que o app foi publicado ("Em produção" desde 2026-09-05). Tirar esta rota do ar, ou
+ *     deixá-la de pé sem deploy, derruba o link que sustenta a publicação.
  *  3. Google API Services User Data Policy — a seção "Uso Limitado" abaixo é literal e
  *     obrigatória para qualquer app que leia escopos de usuário do Google.
  *

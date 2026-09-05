@@ -326,8 +326,12 @@ def _ensure_fresh_token(db: Session, cred: GoogleCredential) -> str | None:
     )
     if resp.status_code == 400 and "invalid_grant" in resp.text:
         # Refresh token revogado ou expirado. É TERMINAL: repetir não adianta, só reconectar.
-        # Acontece a cada 7 dias enquanto o app OAuth estiver em modo "Testing" no Google (ver
-        # docs/GO-LIVE-CHECKLIST.md §5, "Autocura da conexão morta").
+        # NÃO é rotina. O app OAuth está publicado ("Em produção" desde 2026-09-05), então o
+        # antigo ciclo de 7 dias do modo "Testing" ACABOU — não use mais essa explicação para
+        # encerrar uma investigação. Cair aqui hoje significa revogação de verdade: o dono
+        # removeu o acesso do e1p na conta Google, trocou a senha, ou passou ~6 meses sem usar a
+        # integração. É raro e merece ser investigado (ver docs/GO-LIVE-CHECKLIST.md §5,
+        # "Autocura da conexão morta").
         logger.warning(
             "[google:token:revogado] tenant=%s — refresh_token morto, precisa reconectar",
             cred.tenant_id,
