@@ -104,8 +104,13 @@ def _parse_google_datetime(node: dict, *, all_day: bool) -> datetime | None:
     return datetime.fromisoformat(raw)
 
 
-def _apply_item(db: Session, *, tenant_id: str, item: dict) -> bool:
-    """Aplica UM item da resposta do Google na Agenda local. Retorna True se algo mudou."""
+def _apply_item(db: Session, *, tenant_id: str, item: dict, account_email: str | None) -> bool:
+    """Aplica UM item da resposta do Google na Agenda local. Retorna True se algo mudou.
+
+    `account_email` é a conta Google de onde ESTE item veio (a credencial usada em
+    `pull_changes`). Carimbá-la junto do `google_event_id` é o que permite invalidar o vínculo
+    depois, se o dono reconectar com outra conta — ver `service.py::upsert_credential`.
+    """
     google_event_id = item.get("id")
     if not google_event_id:
         return False
@@ -149,6 +154,7 @@ def _apply_item(db: Session, *, tenant_id: str, item: dict) -> bool:
             meeting_url=meeting_url,
             guests=guests,
             google_event_id=google_event_id,
+            google_account_email=account_email,
         )
     else:
         existing.title = title
@@ -159,6 +165,11 @@ def _apply_item(db: Session, *, tenant_id: str, item: dict) -> bool:
         existing.location = location
         existing.meeting_url = meeting_url
         existing.guests = guests
+        # Carimbo TAMBÉM no ramo de update, e não só no INSERT: é ele que AUTOCURA as linhas
+        # legadas (`google_account_email IS NULL`, gravadas antes da migration 0086, que de
+        # propósito não fez backfill). No primeiro sync bem-sucedido a procedência deixa de ser
+        # desconhecida e a linha passa a ser protegida/invalidável como qualquer outra.
+        existing.google_account_email = account_email
     db.add(existing)
     return True
 
@@ -182,9 +193,12 @@ def pull_changes(db: Session, *, tenant_id: str) -> int:
             cred.sync_token = None
             items, next_sync_token = _fetch_all_pages(access_token, _list_params(None))
 
+        # `or None`: `google_account_email` fica "" quando o `userinfo` falhou no callback —
+        # string vazia não é um e-mail, é procedência desconhecida (mesma semântica do NULL).
+        account_email = cred.google_account_email or None
         touched = 0
         for item in items:
-            if _apply_item(db, tenant_id=tenant_id, item=item):
+            if _apply_item(db, tenant_id=tenant_id, item=item, account_email=account_email):
                 touched += 1
 
         if next_sync_token:

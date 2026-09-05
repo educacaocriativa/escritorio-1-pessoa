@@ -16,13 +16,14 @@ from datetime import UTC, datetime, timedelta
 from urllib.parse import urlencode
 
 import httpx
-from sqlalchemy import select
+from sqlalchemy import select, update
 from sqlalchemy.orm import Session
 
 from app.config import settings
 from app.core import audit
 from app.core.security import sign_oauth_state
 from app.db.session import tenant_session
+from app.modules.agenda.models import AgendaEvent
 from app.modules.google_calendar.models import DEFAULT_SCOPE, GoogleCredential
 
 logger = logging.getLogger("e1p.google_calendar")
@@ -113,6 +114,66 @@ def get_credential(db: Session) -> GoogleCredential | None:
     return db.scalars(select(GoogleCredential)).first()
 
 
+def _invalidar_vinculos_de_outra_conta(db: Session, *, novo_email: str) -> int:
+    """Zera os vínculos com o Google dos eventos que vieram de OUTRA conta. Retorna quantos.
+
+    POR QUE NA RECONEXÃO, e não ao desconectar: enquanto o tenant está sem credencial, os três
+    consumidores de `google_event_id` (`patch_meet_event`, `delete_meet_event` e o
+    `pull_changes` do worker) já retornam cedo em `get_credential(db) is None` — nenhum id velho
+    chega ao Google. A janela de dano abre só quando uma credencial volta. Limpar no
+    `disconnect` seria cedo demais: ainda não se sabe qual conta vai voltar, e destruiria o
+    vínculo no caso DOMINANTE, que é reconectar com a MESMA conta.
+
+    Roda na sessão do chamador de propósito (ao contrário de `_descartar_credencial_revogada`,
+    que precisa de sessão própria): `upsert_credential` É a dona da transação e commita logo em
+    seguida — a limpeza e a nova credencial entram juntas ou não entram.
+
+    Cada cláusula do WHERE é deliberada:
+
+    - `google_event_id IS NOT NULL` — PROTEGE O `meeting_url` DIGITADO À MÃO. Quem colou um link
+      de Zoom nunca teve `google_event_id` (`agenda/service.py::create_event` só chama o Google
+      quando `not data.meeting_url`). Sem esta cláusula, apagaríamos links que o usuário digitou.
+
+    - `google_account_email IS NOT NULL` — LINHA LEGADA FICA INTACTA. `NULL` é procedência
+      desconhecida (gravada antes da migration 0086, que não fez backfill). Apagar às cegas
+      reintroduziria a duplicação de eventos no próximo sync para os dados que já existem. Elas
+      se autocuram no ramo de update de `sync.py::_apply_item`.
+      ⚠️ Esta cláusula é REDUNDANTE **hoje**, e isso foi MEDIDO (prova por mutação da #302:
+      removê-la sozinha não muda nenhum comportamento observável): pela lógica de três valores
+      do SQL, `NULL != 'alguem@gmail.com'` já avalia a NULL, não a TRUE, e a linha legada
+      escapa do `WHERE` sozinha. Ela fica porque a proteção não pode depender de um efeito
+      colateral de NULL que ninguém lê: trocar o `!=` por qualquer coisa NULL-tolerante
+      (`IS DISTINCT FROM`, `coalesce(..., '') !=`) apagaria TODA a base legada em silêncio — e
+      a mutação que faz exatamente isso mata o teste da linha legada.
+
+    - `!= novo_email` — RECONECTAR COM A MESMA CONTA É NO-OP. É a razão de existir de todo este
+      desenho: o caso comum (token expirou, dono reconecta a mesma conta) não pode perder nada.
+
+    `novo_email` vazio ("" quando o `userinfo` falhou no callback) também é no-op: sem saber
+    QUEM está conectando não dá para afirmar que a conta mudou, e na dúvida não se destrói.
+
+    TRADE-OFF ASSUMIDO: `meeting_url` vai junto. Um link de Meet da conta antiga PODE continuar
+    funcionando, e apagá-lo é irreversível. É o que a issue #302 pede explicitamente — um link
+    que abre o Meet de outra pessoa é pior que um card sem link.
+
+    UPDATE em MASSA (uma query), não laço Python: a RLS já isola a sessão no tenant (Regra de
+    Ouro nº 1) e o `WHERE` não precisa — nem pode — repetir o filtro de tenant.
+    """
+    if not novo_email:
+        return 0
+    resultado = db.execute(
+        update(AgendaEvent)
+        .where(
+            AgendaEvent.google_event_id.is_not(None),
+            AgendaEvent.google_account_email.is_not(None),
+            AgendaEvent.google_account_email != novo_email,
+        )
+        .values(google_event_id=None, meeting_url=None, google_account_email=None)
+        .execution_options(synchronize_session=False)
+    )
+    return resultado.rowcount or 0
+
+
 def upsert_credential(db: Session, *, tenant_id: str, email: str, token_data: dict) -> None:
     """Cria/atualiza a credencial do tenant (uma por tenant). Preserva o refresh_token antigo
     se o Google não devolver um novo (ele só vem na 1ª autorização com prompt=consent)."""
@@ -127,6 +188,14 @@ def upsert_credential(db: Session, *, tenant_id: str, email: str, token_data: di
         cred.refresh_token = new_refresh
     cred.token_expiry = _expiry_from(token_data)
     cred.scope = token_data.get("scope", DEFAULT_SCOPE)
+    # ANTES do commit abaixo (mesma transação): se a conta que está conectando não é a que
+    # gerou os `google_event_id` guardados, esses ids apontam para o calendário de OUTRA pessoa.
+    invalidados = _invalidar_vinculos_de_outra_conta(db, novo_email=email)
+    if invalidados:
+        logger.warning(
+            "[google:reconexao:conta_trocada] tenant=%s eventos_invalidados=%d",
+            tenant_id, invalidados,
+        )
     audit.record(
         db, tenant_id=tenant_id, actor="google:oauth", action="google.credential.connect",
         target=cred.id,
@@ -261,10 +330,10 @@ def _ensure_fresh_token(db: Session, cred: GoogleCredential) -> str | None:
 
 def create_meet_event(
     db: Session, *, tenant_id: str, event
-) -> tuple[str | None, str | None] | None:
+) -> tuple[str | None, str | None, str | None] | None:
     """Cria o evento espelho no Google Calendar (com link de Meet) para um AgendaEvent.
 
-    Retorna (hangout_link, google_event_id) em caso de sucesso, ou None se:
+    Retorna (hangout_link, google_event_id, google_account_email) em caso de sucesso, ou None se:
     - o tenant não tem Google conectado (no-op — preserva AC3/IV1); ou
     - a chamada ao Google falhou (rede/token/quota) — a exceção é capturada e logada, NUNCA
       propagada, para não derrubar a criação do evento da Agenda (IV1/IV2).
@@ -298,7 +367,12 @@ def create_meet_event(
         )
         resp.raise_for_status()
         data = resp.json()
-        return data.get("hangoutLink"), data.get("id")
+        # A conta vem da MESMA `cred` que acabou de autenticar a chamada — é a verdade sobre
+        # quem escreveu o evento lá, e não uma releitura posterior de `get_credential` (que
+        # poderia já ser outra conta se o dono reconectasse no meio). `or None` porque
+        # `google_account_email` fica "" quando o `userinfo` falhou no callback: string vazia
+        # não é um e-mail, é procedência desconhecida — mesma semântica do NULL da coluna.
+        return data.get("hangoutLink"), data.get("id"), cred.google_account_email or None
     except Exception:
         # Falha de integração externa não derruba a Agenda (IV1). Não logamos o token.
         logger.exception("[google:create_meet:failed] tenant=%s", tenant_id)
