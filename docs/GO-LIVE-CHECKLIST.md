@@ -148,7 +148,7 @@ calendário de outra pessoa. Desde a migration 0086 cada evento guarda de qual c
 (`agenda_events.google_account_email`) e o `upsert_credential` invalida, na reconexão, só o que
 veio de outra conta: zera `google_event_id`, `meeting_url` e a própria procedência, e loga
 `[google:reconexao:conta_trocada]` com quantos eventos foram afetados. Reconectar com a **mesma**
-conta — o caso comum, o token de 7 dias — não perde nada. Eventos com link digitado à mão (Zoom)
+conta — o caso comum — não perde nada. Eventos com link digitado à mão (Zoom)
 não são tocados, e os anteriores à 0086 (procedência desconhecida) ficam intactos até o primeiro
 sync bem-sucedido, que carimba a conta neles. Ao investigar "sumiu o link do Meet dos meus
 eventos", é esse log que diz se foi troca de conta.
