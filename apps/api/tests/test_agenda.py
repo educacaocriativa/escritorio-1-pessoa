@@ -303,7 +303,16 @@ def test_meet_not_generated_without_google(client: TestClient, headers):
     assert ev["google_event_id"] is None
 
 
-def test_meet_generated_when_google_connected(client: TestClient, headers, monkeypatch):
+def test_meet_generated_when_google_connected(
+    client: TestClient, headers, monkeypatch, db: Session
+):
+    """Caminho feliz: com id de verdade, os TRÊS campos do espelho são carimbados juntos.
+
+    O `google_account_email` é lido do banco porque não está em `EventOut` (é metadado de
+    procedência, não dado de tela) — e sem esta asserção nada distinguiria a guarda da #306
+    de uma guarda que engole o carimbo de conta.
+    """
+    from app.modules.agenda.models import AgendaEvent
     from app.modules.google_calendar import service as gcal
 
     monkeypatch.setattr(
@@ -315,6 +324,67 @@ def test_meet_generated_when_google_connected(client: TestClient, headers, monke
     ev = resp.json()["event"]
     assert ev["meeting_url"] == "https://meet.google.com/abc-defg-hij"
     assert ev["google_event_id"] == "gcal-evt-1"
+    assert db.get(AgendaEvent, ev["id"]).google_account_email == "dono@gmail.com"
+
+
+def test_google_200_sem_id_nao_grava_meio_espelho(
+    client: TestClient, headers, monkeypatch, db: Session, caplog
+):
+    """200 do Google com `hangoutLink` e SEM `id`: nenhum dos três campos é carimbado (#306).
+
+    O estado que esta guarda impede é "link de Meet sem espelho rastreável": `patch_meet_event`
+    e `delete_meet_event` sairiam em `if not event.google_event_id`, o pull de `sync.py`
+    duplicaria o evento, e o link escaparia para sempre da invalidação por troca de conta
+    (`_invalidar_vinculos_de_outra_conta` filtra por `google_event_id IS NOT NULL`).
+
+    O link vai junto de propósito: neste ramo não existe link digitado pelo usuário (ele só
+    roda quando `not data.meeting_url`), então descartar não destrói trabalho de ninguém.
+    """
+    import logging
+
+    from app.modules.agenda.models import AgendaEvent
+    from app.modules.google_calendar import service as gcal
+
+    monkeypatch.setattr(
+        gcal, "create_meet_event",
+        lambda *a, **k: ("https://meet.google.com/orf-anho-xyz", None, "dono@gmail.com"),
+    )
+    with caplog.at_level(logging.WARNING, logger="app.modules.agenda.service"):
+        resp = client.post("/agenda/events", json=_event(kind="reuniao"), headers=headers)
+
+    assert resp.status_code == 201, resp.text  # a criação local NUNCA cai por causa do Google
+    ev = resp.json()["event"]
+    assert ev["meeting_url"] is None, "link de Meet sem id é órfão: não pode ser gravado"
+    assert ev["google_event_id"] is None
+    linha = db.get(AgendaEvent, ev["id"])
+    assert linha.google_account_email is None, (
+        "carimbar a conta sem id deixa a linha fora do WHERE da invalidação do #305"
+    )
+    assert "[google:create_meet:sem_id]" in caplog.text
+
+
+def test_google_200_com_id_vazio_e_recusado_como_ausente(
+    client: TestClient, headers, monkeypatch, db: Session
+):
+    """`id == ""` é recusado igual a `None` — a guarda é falsy, não `is not None`.
+
+    String vazia não endereça evento nenhum no Google E é `NOT NULL` para o índice único
+    parcial `ix_agenda_events_tenant_google_event_id` (migration 0081): dois eventos assim
+    estourariam unicidade. Mesma escolha de `sync.py::_apply_item` (`if not google_event_id`).
+    """
+    from app.modules.agenda.models import AgendaEvent
+    from app.modules.google_calendar import service as gcal
+
+    monkeypatch.setattr(
+        gcal, "create_meet_event",
+        lambda *a, **k: ("https://meet.google.com/vaz-io-xyz", "", "dono@gmail.com"),
+    )
+    resp = client.post("/agenda/events", json=_event(kind="reuniao"), headers=headers)
+    assert resp.status_code == 201, resp.text
+    ev = resp.json()["event"]
+    assert ev["meeting_url"] is None
+    assert not ev["google_event_id"]
+    assert db.get(AgendaEvent, ev["id"]).google_account_email is None
 
 
 def test_manual_meeting_url_preserved_google_not_called(client: TestClient, headers, monkeypatch):
