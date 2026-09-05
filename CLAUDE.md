@@ -3668,11 +3668,69 @@ derrubava**: o script morria antes de fazer qualquer coisa, em toda execução, 
   rodar compose à mão continua exposto. ⚠️ **Mas a issue #151 está FECHADA** (PRs #170 e #193, em
   produção desde 21/08): o `infra/Caddyfile` não tem mais o bloco wildcard incondicional, então
   esquecer o override deixou de derrubar o site. O override segue valendo pelo `Caddyfile.single`.
-- **Dívida:** o `deploy.sh` **nunca completou uma execução de verdade** — o `--dry-run` da AWS
-  parava na guarda, e o primeiro caminho feliz ainda não aconteceu. Os passos 3 em diante (gate de
-  CI, backup, `up -d`, prova do bundle) seguem exercitados só por leitura.
+- ~~**Dívida:** o `deploy.sh` **nunca completou uma execução de verdade**.~~ **Rodou em produção
+  pela primeira vez em 04/09/2026** (deploy do #300, na AWS): gate de CI, backup, `up -d --build`,
+  health e alembic passaram todos. Ele **abortou na última asserção**, e o abort era falso — ver
+  logo abaixo. Os passos 3 em diante deixaram de ser exercitados só por leitura.
 - **Dívida:** o `CLOUDFLARE_API_TOKEN` segue vazio na AWS. Correto hoje (sem wildcard, sem DNS-01);
   vira problema no dia em que subdomínio por tenant entrar em uso.
+
+#### O guard do bundle abortou um deploy que estava CORRETO (2026-09-04)
+
+O primeiro caminho feliz do script terminou em `ABORTADO: o diff mexe no front mas o bundle
+servido continua '/assets/index-BEyo_MpB.js'`. **A produção estava perfeita.** O commit que subiu
+era o `c2fd483` (#300), de **um arquivo só**: `apps/web/public/google43f12893cae1f247.html`.
+
+- **O Vite copia `public/` VERBATIM para a raiz do `dist/`** — é assim que `sw.js` e
+  `manifest.webmanifest` chegam lá. Um arquivo em `public/` **não pode**, por construção, mudar o
+  hash do `index-*.js`. A classificação `FRONT` olhava só o CAMINHO (`apps/web`, `packages`), e a
+  asserção que ela liga (*"o bundle DEVE mudar"*) pedia o impossível.
+- **A evidência que fechou o diagnóstico, e a ordem importa:** o `Last-Modified` do `index.html`
+  servido era de 4 minutos antes (o container **foi** reconstruído); não há CDN na frente
+  (`Via: 1.1 Caddy`, `Server: nginx`, sem `cf-cache-status`); e `GET /google43f12893cae1f247.html`
+  devolvia o conteúdo certo. ⚠️ **`curl -I` MENTE nessa URL** — o `try_files $uri $uri/ /index.html`
+  do `apps/web/nginx.conf` responde **200 com o index.html** para arquivo inexistente. Só o
+  CONTEÚDO prova.
+- [x] **`FORA_DO_BUNDLE`** (`infra/scripts/deploy.sh`) — pathspecs de exclusão no `git diff` da
+  classificação: `apps/web/public`, `apps/web/e2e` e `apps/web/**/*.test.*`. Nenhum dos três vira
+  JS de bundle; os 96 `*.test.tsx` do vitest e os `*.spec.ts` do Playwright não são importados pela
+  entrada. **Não apaga nada** — só deixa o script de PREVER mudança de hash onde ela é impossível.
+- [x] **`imagem_do_web_esta_atual`** — a exclusão acima, sozinha, abriria um ponto cego pior que o
+  falso alarme: com `FRONT=0` o script cai em *"bundle inalterado, como esperado"* e **nada** mais
+  verificaria que o web foi reconstruído. A checagem nova roda SEMPRE e não depende de conteúdo
+  mudar: compara a imagem que o container em pé roda com a imagem `<projeto>-web` recém-construída.
+  - ⚠️ **A pergunta certa é "o container está na imagem mais nova?", nunca "a imagem mudou?".**
+    Imagem do Docker é content-addressed: build que não muda o `dist/` produz a MESMA imagem e o
+    compose nem recria o container — *"mudou?"* acusaria um deploy correto.
+  - **Inconclusivo NÃO é reprovação.** Se o nome da imagem ou o container não resolverem neste
+    host, o script **avisa e segue**. Inventar um jeito novo de bloquear produção por suposição de
+    nomenclatura já custou ~40 min fora do ar aqui (issue #151).
+- **O gate é `tests/test_deploy_guarda_build_velho.py`** (9 testes), irmão do de checkout limpo e
+  no mesmo molde: **EXTRAI as linhas reais do `deploy.sh` e as EXECUTA**, nunca uma cópia escrita
+  no teste. Dois controles positivos (`apps/web/src/**` e `packages/**` TÊM de marcar `FRONT=1`) —
+  sem eles, uma classificação que devolvesse 0 para tudo passaria nos três casos de exclusão.
+  Provado por mutação: devolver a linha antiga mata 3 testes; tirar a guarda de vazio mata o 4º.
+- ⚠️ **Duas armadilhas do harness custaram a maior parte do tempo, e as duas falham para o MESMO
+  lado — o script "roda", sai 0, e o stdout parece plausível:**
+  1. **`bash -c` não serve nesta máquina.** O `bash` que o `subprocess` acha é o do WSL, e o
+     interop Windows→WSL **expande os `$` do argumento** antes de o bash parsear: as atribuições
+     rodam e toda referência a variável chega VAZIA. Com `set -x`, a linha virava
+     `git diff --name-only .. -- apps/web packages ''`.
+  2. **`text=True` não serve.** No Windows ele traduz `\n` em `\r\n` ao escrever no pipe, e o CR
+     entra no script: `set -uo pipefail\r` vira *"invalid option name"*, `HEAD~1\r..HEAD\r` vira
+     *"bad revision"*.
+  `_bash()` entrega o script por **stdin em BYTES** (`bash -s`), e o chamador **confere o stderr**:
+  sem isso um `fatal:` do git faz o `grep -q` não achar nada, `FRONT` fica 0, e os três testes de
+  *"NÃO marca front"* passam VERDES sem a guarda ter sido exercitada. No Linux do CI as duas
+  escolhas são indiferentes — é a família do §5.2 (o teste que não tem como falhar), agora na
+  camada do processo.
+- **O gate de infra do `ci.yml` foi de `>= 34` para `>= 43` executados**, com a decomposição
+  atualizada na mensagem de erro. A guarda anti-vacuidade só vale enquanto o número acompanha os
+  arquivos da lista.
+- **Dívida:** a checagem de imagem deriva o nome `<projeto>-web` do label
+  `com.docker.compose.project` do `infra-api-1`. Se um host futuro nomear a imagem de outro jeito,
+  a checagem fica **inconclusiva** (avisa, não reprova) — deliberado, mas significa que ela pode
+  estar calada num host sem ninguém notar. Só o primeiro deploy real dirá.
 
 ## 6.0 Correções importantes
 - **[CORRIGIDO 2026-08-05] O sistema inteiro passou a viver no fuso do tenant (era UTC).** O sintoma que o fundador viu foi a linha do tempo do Funil exibindo `Aguardando até 2026-08-05T11:11:32.812731+00:00` — formato de máquina e 3h adiantado. A investigação achou **três** defeitos com a mesma raiz: existia infra de fuso (`core/tz.py` + `tenant.timezone`, migration 0044) mas só 3 módulos a consumiam.
