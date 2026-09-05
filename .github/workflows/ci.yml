@@ -85,10 +85,10 @@ jobs:
         run: |
           set -uo pipefail
           cd apps/api
-          python -m pytest -q tests/test_caddyfile_blocos_opcionais.py tests/test_deploy_guarda_checkout_limpo.py tests/test_guarda_timeouts_mutacao.py tests/test_guarda_stryker_disable_deslocado.py --junitxml=infra-gates.xml
+          python -m pytest -q tests/test_caddyfile_blocos_opcionais.py tests/test_deploy_guarda_checkout_limpo.py tests/test_deploy_guarda_build_velho.py tests/test_guarda_timeouts_mutacao.py tests/test_guarda_stryker_disable_deslocado.py --junitxml=infra-gates.xml
           rc=$?
           if [ "$rc" -ne 0 ] && [ "$rc" -ne 5 ]; then exit "$rc"; fi
-          python -c 'import sys,xml.etree.ElementTree as ET; r=ET.parse("infra-gates.xml").getroot(); s=r if r.tag=="testsuite" else r.find("testsuite"); t=int(s.get("tests",0)); k=int(s.get("skipped",0)); ex=t-k; print(f"infra-gates: coletados={t} executados={ex} skipped={k}"); ok=ex>=34; ok or print("::error::Um gate de infra/ foi PULADO ou sumiu (esperado >= 34 executados: 7 do Caddyfile + 4 da guarda do deploy.sh + 13 da guarda de timeouts da mutacao + 10 da guarda de diretiva Stryker deslocada). Eles dependem de infra/, scripts/, bash, git e node alcancaveis; pulado, nao protege nada -- o do Caddyfile e a issue #151, o do deploy.sh e a guarda que abortava 100% dos deploys na AWS, o de timeouts e a issue #213, o da diretiva deslocada e a issue #229."); sys.exit(0 if ok else 1)'
+          python -c 'import sys,xml.etree.ElementTree as ET; r=ET.parse("infra-gates.xml").getroot(); s=r if r.tag=="testsuite" else r.find("testsuite"); t=int(s.get("tests",0)); k=int(s.get("skipped",0)); ex=t-k; print(f"infra-gates: coletados={t} executados={ex} skipped={k}"); ok=ex>=43; ok or print("::error::Um gate de infra/ foi PULADO ou sumiu (esperado >= 43 executados: 7 do Caddyfile + 4 da guarda de checkout limpo do deploy.sh + 9 da guarda de build velho do deploy.sh + 13 da guarda de timeouts da mutacao + 10 da guarda de diretiva Stryker deslocada). Eles dependem de infra/, scripts/, bash, git e node alcancaveis; pulado, nao protege nada -- o do Caddyfile e a issue #151, o de checkout limpo e a guarda que abortava 100% dos deploys na AWS, o de build velho e o abort falso do deploy do #300, o de timeouts e a issue #213, o da diretiva deslocada e a issue #229."); sys.exit(0 if ok else 1)'
 
       # AMPLIADO (Story 7.1): filtra por PROPRIEDADE (o marker rls_e2e), NÃO por um arquivo nomeado.
       # Assim os 9 arquivos test_*_rls.py de hoje — e um 10º futuro — entram automaticamente, sem

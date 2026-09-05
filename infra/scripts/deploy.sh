@@ -48,6 +48,10 @@ LABEL_CHAVE='{{index .Config.Labels "com.docker.compose.project.config_files"}}'
 LABELS="$(docker inspect infra-api-1 --format "$LABEL_CHAVE" 2>/dev/null || true)"
 [[ -n "$LABELS" ]] || morre "nao achei o container infra-api-1. A stack esta de pe neste host?"
 
+# O project name do compose, lido do MESMO container (nao cravado): e ele que da nome tanto a
+# imagem construida (`<projeto>-web`) quanto ao label pelo qual achamos o container do web.
+PROJETO="$(docker inspect infra-api-1 --format '{{index .Config.Labels "com.docker.compose.project"}}' 2>/dev/null || true)"
+
 tem_traefik=0
 tem_prod=0
 [[ "$LABELS" == *docker-compose.traefik.yml* ]] && tem_traefik=1
@@ -103,6 +107,14 @@ bundle_servido() {
   curl -sS --max-time 20 "https://$DOMINIO/" 2>/dev/null \
     | grep -oE '/assets/index-[A-Za-z0-9_-]+[.]js' | head -1 || true
 }
+# Imagens do Docker sao content-addressed: se o build nao mudou o `dist/`, a imagem continua sendo
+# a MESMA e o compose nem recria o container -- entao "a imagem mudou?" seria a pergunta errada,
+# ela acusaria um deploy correto. A pergunta certa e "o container em pe esta na imagem mais nova?",
+# e essa nao depende de conteudo nenhum mudar: vale para uma mudanca em `public/` (que muda a
+# imagem sem tocar no bundle), para e2e (que nao muda nem uma nem outra) e para codigo real.
+imagem_do_web_esta_atual() { # $1 = imagem do container em pe, $2 = imagem recem-construida
+  [[ -n "$1" && -n "$2" && "$1" == "$2" ]]
+}
 
 # --- 2. O checkout esta limpo? ------------------------------------------------
 # --untracked-files=no NAO e frouxidao: e o que torna a guarda APLICAVEL neste parque. A AWS
@@ -140,7 +152,14 @@ echo "  ($(git rev-list --count "$SHA_ANTES..$SHA_ALVO") commits)"
 MIGRATION=0
 FRONT=0
 git diff --name-only "$SHA_ANTES..$SHA_ALVO" -- apps/api/migrations/versions | grep -q . && MIGRATION=1
-git diff --name-only "$SHA_ANTES..$SHA_ALVO" -- apps/web packages | grep -q . && FRONT=1
+# Caminhos que moram sob apps/web mas NUNCA viram JS do bundle. Sem esta exclusao a asserção do
+# passo 7 pede o impossivel: o Vite copia `public/` VERBATIM para a raiz do `dist/` (e assim que
+# `sw.js` e `manifest.webmanifest` chegam la), e nem os `*.spec.ts` do Playwright nem os
+# `*.test.tsx` do vitest sao importados pela entrada. Foi exatamente assim que o deploy do #300 --
+# um unico arquivo em `public/`, a verificacao de propriedade do dominio no Google -- ABORTOU
+# depois de ter subido inteiro e correto, com a producao ja saudavel (medido em 04/09/2026).
+FORA_DO_BUNDLE=(':(exclude)apps/web/public' ':(exclude)apps/web/e2e' ':(exclude,glob)apps/web/**/*.test.*')
+git diff --name-only "$SHA_ANTES..$SHA_ALVO" -- apps/web packages "${FORA_DO_BUNDLE[@]}" | grep -q . && FRONT=1
 if (( MIGRATION )); then aviso "traz migration - backup obrigatorio"; else ok "sem migration"; fi
 if (( FRONT )); then ok "mexe no front - o bundle DEVE mudar"; else ok "nao mexe no front - o bundle deve permanecer igual"; fi
 
@@ -253,6 +272,26 @@ if [[ "$ALEMBIC_DEPOIS" == "$HEAD_REPO" ]]; then
   ok "alembic: $ALEMBIC_ANTES -> $ALEMBIC_DEPOIS (head do repo)"
 else
   morre "alembic ficou em '$ALEMBIC_DEPOIS' mas o repo pede '$HEAD_REPO' - a migration nao aplicou."
+fi
+
+# O web esta rodando a imagem que o `up -d --build` acabou de construir? Esta checagem nao
+# depende de o conteudo mudar, entao ela cobre o buraco que a exclusao do `FORA_DO_BUNDLE` abriria
+# sozinha: um deploy que so mexe em `public/` cai no ramo "bundle inalterado, como esperado" e
+# passaria SEM NINGUEM ter verificado que o web foi reconstruido.
+#
+# Inconclusivo NAO e reprovacao. Se o nome da imagem ou o container nao resolverem neste host, o
+# script avisa e segue: a alternativa seria inventar um jeito novo de bloquear producao por uma
+# suposicao de nomenclatura -- e derrubar deploy por engano ja custou ~40 min de fora do ar aqui
+# uma vez (issue #151).
+CID_WEB="$(docker ps -q --filter "label=com.docker.compose.project=$PROJETO" --filter "label=com.docker.compose.service=web" 2>/dev/null | head -1)"
+IMG_EM_PE="$(docker inspect "$CID_WEB" --format '{{.Image}}' 2>/dev/null || true)"
+IMG_CONSTRUIDA="$(docker image inspect "${PROJETO}-web" --format '{{.Id}}' 2>/dev/null || true)"
+if [[ -z "$IMG_EM_PE" || -z "$IMG_CONSTRUIDA" ]]; then
+  aviso "nao consegui comparar a imagem do web (em pe: ${IMG_EM_PE:-?} | construida: ${IMG_CONSTRUIDA:-?}) - checagem inconclusiva, nao e reprovacao"
+elif imagem_do_web_esta_atual "$IMG_EM_PE" "$IMG_CONSTRUIDA"; then
+  ok "web na imagem recem-construida (${IMG_EM_PE:7:12})"
+else
+  morre "o container do web roda a imagem ${IMG_EM_PE:7:12} mas a construida agora e ${IMG_CONSTRUIDA:7:12} - o container nao foi recriado e esta servindo build velho."
 fi
 
 BUNDLE_DEPOIS="$(bundle_servido)"
