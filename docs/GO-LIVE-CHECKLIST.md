@@ -122,6 +122,24 @@ fora do `ProtectedLayout`, em `apps/web/src/features/legal/`. Restam dois passos
 2. Colar `https://e1p.criativaeduca.com.br/privacidade` (e, se quiser, `/termos`) na aba
    Branding e então **Público-alvo → Publicar app**.
 
+### Autocura da conexão morta (issue #294, corrigido)
+
+Quando o refresh token morre (o caso semanal acima, ou uma revogação na conta Google), o e1p
+**descarta sozinho** a credencial do tenant: `_ensure_fresh_token` detecta o `400 invalid_grant`,
+loga `[google:token:revogado]` e apaga a linha `GoogleCredential` numa sessão curta e
+independente — sem tocar a transação de quem chamou (criar/remarcar/cancelar evento, ou o sweep
+do worker). Consequências operacionais:
+
+- `/integrations/google/status` volta a `connected: false` sozinho e a UI oferece "Conectar
+  Google". **Antes disso a tela mentia**: dizia "conectado como ..." indefinidamente enquanto
+  nenhum Meet era criado.
+- O descarte fica no audit do tenant como `google.credential.revoked` (ator `google:token`) —
+  deliberadamente distinto de `google.credential.disconnect`, que é o dono clicando em
+  Desconectar. Ao investigar "sumiu minha conexão", é esta ação que diz qual dos dois foi.
+- Reconectar segue o caminho normal (OAuth → `upsert_credential` recria a linha).
+- O descarte é best-effort: se a sessão curta falhar, sai `[google:token:descarte_falhou]` no log
+  e a operação de negócio continua — a integração Google nunca derruba a Agenda (IV1/IV2).
+
 ## 6. Backup automatizado + offsite (Story 3.3)
 - [x] Instalar/configurar `rclone` com remote S3-compatível — validado em 2026-07-12 **localmente**
   (MinIO em Docker no lugar do S3 real — sem custo/conta externa) com o binário real do rclone.
