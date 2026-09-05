@@ -22,6 +22,7 @@ from sqlalchemy.orm import Session
 from app.config import settings
 from app.core import audit
 from app.core.security import sign_oauth_state
+from app.db.session import tenant_session
 from app.modules.google_calendar.models import DEFAULT_SCOPE, GoogleCredential
 
 logger = logging.getLogger("e1p.google_calendar")
@@ -173,6 +174,48 @@ def disconnect(db: Session, *, tenant_id: str, actor: str) -> bool:
     return True
 
 
+def _descartar_credencial_revogada(cred: GoogleCredential) -> None:
+    """Apaga a credencial morta numa sessão CURTA e INDEPENDENTE — nunca na sessão do chamador.
+
+    POR QUÊ a sessão própria: `_ensure_fresh_token` é chamado de dentro de quatro fluxos
+    (`create_meet_event`, `patch_meet_event`, `delete_meet_event` e o `pull_changes` do worker) e
+    em NENHUM deles ele é dono da transação — há um AgendaEvent recém-alterado e ainda sem commit
+    na sessão. Um `db.commit()` aqui persistiria TUDO o que estivesse pendente, no meio de uma
+    operação que ainda podia falhar. Esta sessão curta commita só o DELETE + a auditoria e fecha
+    (mesmo padrão de `funnels/automation.py` e `notifications/service.py::on_client_moved`).
+
+    POR QUÊ apagar: `/integrations/google/status` deduz "conectado" da existência da linha. Com o
+    refresh_token morto a linha sobrevivia e a tela mentia ("conectado como ...") enquanto nenhum
+    Meet era criado. Sem a linha, o status volta a `connected: false` sozinho e reconectar segue
+    funcionando pelo caminho normal (`upsert_credential` recria a linha) — sem coluna nova, sem
+    migration, sem mexer no router.
+
+    BEST-EFFORT (princípio de robustez do módulo, IV1/IV2): se a sessão curta falhar (banco fora,
+    RLS, o que for), loga e segue. Nenhuma exceção nova sai de `_ensure_fresh_token` — a Agenda
+    nunca cai por causa da integração Google.
+    """
+    # Lidos ANTES de abrir a outra sessão: `cred` pertence à sessão do chamador e não pode ser
+    # usado dentro dela (nem depois do delete, que o expiraria lá).
+    tenant_id = cred.tenant_id
+    cred_id = cred.id
+    try:
+        with tenant_session(tenant_id) as descarte:
+            morta = descarte.get(GoogleCredential, cred_id)
+            if morta is None:
+                return  # o usuário (ou outro fluxo) já desconectou — nada a fazer
+            descarte.delete(morta)
+            # Ação PRÓPRIA, deliberadamente distinta de `google.credential.disconnect`: quem
+            # apagou foi o sistema ao ver o token morto, não o usuário pedindo para desconectar.
+            # Confundir as duas no audit apagaria a diferença entre "revogado pelo Google" e
+            # "o dono clicou em Desconectar".
+            audit.record(
+                descarte, tenant_id=tenant_id, actor="google:token",
+                action="google.credential.revoked", target=cred_id,
+            )
+    except Exception:
+        logger.exception("[google:token:descarte_falhou] tenant=%s", tenant_id)
+
+
 # ── Geração de Meet ao criar evento ──────────────────────────────────────────
 def _ensure_fresh_token(db: Session, cred: GoogleCredential) -> str | None:
     """Retorna um access_token válido, renovando via refresh_token se já expirou. None se não
@@ -196,14 +239,17 @@ def _ensure_fresh_token(db: Session, cred: GoogleCredential) -> str | None:
     )
     if resp.status_code == 400 and "invalid_grant" in resp.text:
         # Refresh token revogado ou expirado. É TERMINAL: repetir não adianta, só reconectar.
-        # Acontece a cada 7 dias enquanto o app OAuth estiver em modo "Testing" no Google.
-        # ATENÇÃO: a credencial CONTINUA no banco, então `/integrations/google/status` segue
-        # dizendo "conectado como ..." enquanto nenhum Meet é criado — a tela mente. Este log
-        # é hoje o único sinal da falha; ver o TODO em docs/GO-LIVE-CHECKLIST.md §5.
+        # Acontece a cada 7 dias enquanto o app OAuth estiver em modo "Testing" no Google (ver
+        # docs/GO-LIVE-CHECKLIST.md §5, "Autocura da conexão morta").
         logger.warning(
             "[google:token:revogado] tenant=%s — refresh_token morto, precisa reconectar",
             cred.tenant_id,
         )
+        # A credencial morta é descartada aqui (em sessão própria, ver a função abaixo): sem a
+        # linha, `/integrations/google/status` volta a responder `connected: false` e a UI
+        # oferece "Conectar Google", em vez de exibir "conectado como ..." com a integração
+        # parada. O log acima deixa de ser o único sinal da falha.
+        _descartar_credencial_revogada(cred)
         return None
     resp.raise_for_status()
     token_data = resp.json()
