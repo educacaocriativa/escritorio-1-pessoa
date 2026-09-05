@@ -5,6 +5,7 @@ queries (Regra de Ouro nº 1). O tenant_id só é usado para CARIMBAR novas linh
 """
 from __future__ import annotations
 
+import logging
 from datetime import UTC, datetime
 
 from sqlalchemy import and_, func, select
@@ -23,6 +24,8 @@ from app.modules.agenda.models import (
     AgendaEvent,
 )
 from app.modules.agenda.schemas import EventCreate, EventUpdate
+
+logger = logging.getLogger(__name__)
 
 # Estados terminais: não podem ser cancelados de novo nem remarcados.
 TERMINAL_STATUSES = {STATUS_CANCELLED, STATUS_DONE}
@@ -117,14 +120,52 @@ def create_event(
         result = gcal.create_meet_event(db, tenant_id=tenant_id, event=event)
         if result is not None:
             meeting_url, google_event_id, google_account_email = result
-            if meeting_url:
-                event.meeting_url = meeting_url
-            event.google_event_id = google_event_id
-            # De QUAL conta Google é este id (migration 0086). Vem junto do retorno, e não de um
-            # `get_credential` novo, porque é a credencial que REALMENTE escreveu o evento lá.
-            # Sem este carimbo, reconectar com outra conta deixaria o id apontando para um
-            # calendário alheio — ver `google_calendar/service.py::upsert_credential`.
-            event.google_account_email = google_account_email
+            # O ESPELHO É TUDO-OU-NADA (issue #306). Os três campos abaixo são UMA unidade e
+            # entram juntos ou não entram; `google_event_id` é a chave que dá sentido aos
+            # outros dois. Um 200 do Google sem `id` (a chave é opcional em `data.get("id")`)
+            # existia e era gravado como `None` — meio espelho, o pior dos estados:
+            #
+            # - sem id, `patch_meet_event`/`delete_meet_event` saem em `if not
+            #   event.google_event_id: return False` — remarcar e cancelar param de propagar em
+            #   silêncio, e fica evento fantasma no calendário do dono;
+            # - `sync.py::_apply_item` casa por `google_event_id`; sem ele o pull DUPLICA o
+            #   evento em vez de atualizá-lo;
+            # - e o `meeting_url` carimbado sozinho escapa PARA SEMPRE da invalidação de
+            #   `_invalidar_vinculos_de_outra_conta`, que filtra por `google_event_id IS NOT
+            #   NULL` — na troca de conta Google o card fica com o link do Meet de uma conta
+            #   que não é mais a conectada, e ninguém limpa. A #302 já decidiu que esse link
+            #   é pior que card nenhum.
+            #
+            # Por isso o link também é DESCARTADO junto: aqui não há trabalho do usuário em
+            # risco — este ramo só roda quando `not data.meeting_url` (link manual de Zoom nem
+            # chama o Google). Perde-se um link que ninguém digitou e que o sistema não
+            # conseguiria mais remarcar, cancelar nem invalidar.
+            #
+            # Falsy, e não `is not None`, de propósito: id `""` também não endereça evento
+            # nenhum e ainda ocuparia o índice único parcial `ix_agenda_events_tenant_google_
+            # event_id` (migration 0081, `WHERE google_event_id IS NOT NULL`), fazendo o
+            # SEGUNDO evento nesse estado estourar unicidade. Esta é a mesma guarda que
+            # `google_calendar/sync.py::_apply_item` já aplica no caminho de PULL
+            # (`if not google_event_id: return False`) — os dois pontos de escrita da coluna
+            # discordavam entre si, e a decisão registrada agora é: recusar meio espelho.
+            if google_event_id:
+                if meeting_url:
+                    event.meeting_url = meeting_url
+                event.google_event_id = google_event_id
+                # De QUAL conta Google é este id (migration 0086). Vem junto do retorno, e não
+                # de um `get_credential` novo, porque é a credencial que REALMENTE escreveu o
+                # evento lá. Sem este carimbo, reconectar com outra conta deixaria o id
+                # apontando para um calendário alheio — ver
+                # `google_calendar/service.py::upsert_credential`.
+                event.google_account_email = google_account_email
+            else:
+                # Não derruba a criação (IV1, mesmo princípio do `return None` em falha de rede):
+                # o evento local nasce igual, só sem espelho. O log é o único sinal de que o
+                # Google respondeu 200 com um corpo inservível.
+                logger.warning(
+                    "[google:create_meet:sem_id] tenant=%s hangout_link_recebido=%s",
+                    tenant_id, bool(meeting_url),
+                )
     db.add(event)
     audit.record(
         db, tenant_id=tenant_id, actor=actor, action="agenda.event.create",
