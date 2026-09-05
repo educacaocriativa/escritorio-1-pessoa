@@ -149,10 +149,13 @@ def test_link_de_evento_sem_espelho_no_google_sobrevive_a_troca_de_conta(db: Ses
        apagar trabalho digitado à mão. Note que aqui a cláusula `google_account_email IS NOT
        NULL` também protege: só derrubando as DUAS cláusulas esta linha é destruída.
 
-    b) ESPELHO PARCIAL: procedência conhecida, id ausente. Estado real e alcançável — `create_
-       event` grava `event.google_event_id = data.get("id")`, então um 200 do Google trazendo
-       `hangoutLink` mas sem `id` produz exatamente isto. Aqui a cláusula do id é a ÚNICA
+    b) ESPELHO PARCIAL: procedência conhecida, id ausente. Aqui a cláusula do id é a ÚNICA
        proteção, e é por esta linha que a remoção dela, sozinha, mata este teste.
+       ⚠️ ATUALIZADO (#306): `create_event` deixou de PRODUZIR este estado — um 200 do Google
+       com `hangoutLink` e sem `id` agora não carimba nada (ver `agenda/service.py::create_
+       event` e `test_agenda.py::test_google_200_sem_id_nao_grava_meio_espelho`). A linha
+       continua ALCANÇÁVEL como legado: quem foi gravado antes da guarda segue no banco, e
+       é exatamente quem esta cláusula protege de ser varrido numa troca de conta.
     """
     _conectar(db, CONTA_ANTIGA)
     manual = _evento(
