@@ -80,6 +80,16 @@ class AgendaEvent(Base, TenantMixin, TimestampMixin):
     # máximo documentado pela Google para o campo `id` do evento.
     google_event_id: Mapped[str | None] = mapped_column(String(1024), nullable=True)
 
+    # De QUAL conta Google veio o `google_event_id` acima (migration 0086). Carimbado nos dois
+    # pontos de escrita do id: `agenda/service.py::create_event` (a credencial que criou o
+    # espelho lá) e `google_calendar/sync.py::_apply_item` (a credencial que puxou o evento).
+    #
+    # NULL tem SIGNIFICADO: procedência DESCONHECIDA — ou a linha é legada (gravada antes da
+    # 0086, que não fez backfill de propósito), ou o `userinfo` do Google falhou e nunca
+    # soubemos o e-mail. Em ambos os casos a limpeza de reconexão
+    # (`google_calendar/service.py::_invalidar_vinculos_de_outra_conta`) NÃO toca a linha.
+    google_account_email: Mapped[str | None] = mapped_column(String(255), nullable=True)
+
     # Dinheiro SEMPRE em centavos inteiros (evita erro de float). Opcional (cobranças).
     amount_cents: Mapped[int | None] = mapped_column(Integer, nullable=True)
     # Referência à entidade de origem (id do processo, fatura, contrato...).
