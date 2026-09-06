@@ -65,14 +65,26 @@ const DESLOCAMENTO_PX = 10;
  * A folga que a régua EXIGE entre a distância de saída da lixeira e o deslocamento do gesto — a
  * correção do #190, reforçada pelo #235 e remedida pelo #243.
  *
- * ⚠️ **Este número não é gosto, é o teto que a geometria de hoje permite.** Medido em 26/08/2026,
- * viewport 360×740, contra o HEAD desta branch (já com o #243 aplicado):
+ * ⚠️ **Este número não é gosto, é o teto que a geometria de hoje permite.** Remedido em
+ * 05/09/2026, viewport 360×740, contra o HEAD desta branch (já com o #314 aplicado):
  *
  * | tela | caixa da lixeira | direção do gesto | saída no eixo | folga para os 10px |
  * |---|---|---|---|---|
- * | `/funis` | 14 × 14 | (−1,000 · 0,000) | 7,00 | 3,00 |
+ * | `/funis` | 14 × 14 | (−0,961 · 0,276) | 7,28 | 2,72 |
  * | `/juridico` | 14 × 14 | (−0,997 · 0,080) | 7,02 | 2,98 |
  * | `/marketing` | 14 × 14 | (−0,529 · −0,849) | 8,25 | **1,75** |
+ *
+ * ⚠️ **A linha do `/funis` mudou no #314, e por uma razão de PRODUTO, não de medição.** Até aqui a
+ * lixeira dele era `top-1/2 -translate-y-1/2` — centrada na vertical, `dy = 0`, gesto horizontal
+ * puro, saída 7,00 e folga 3,00. Centrar na vertical amarra a posição da lixeira à ALTURA do card,
+ * e a altura do card depende de quantas linhas o nome do funil ocupa — logo, da métrica da fonte.
+ * Medido no trace do CI (run `33972206955`): quando o `woff2` do Inter chegou, o título passou de 4
+ * linhas para 3, o card encolheu de 152 para 128px e a lixeira PULOU 12px — mais que a meia-altura
+ * dela (7px). O dedo que mirava a lixeira acertou o card e navegou. Com `top-5` (alinhada ao `p-5`
+ * do card) a caixa da lixeira deixa de depender do número de linhas do título; o preço é o vetor
+ * do gesto deixar de ser horizontal puro, e a folga cair de 3,00 para 2,72 — ainda 1,72px acima do
+ * `MARGEM_PX`. Medido nas duas métricas de fonte: com o card de 128px, saída 7,28 (folga 2,72);
+ * com o card de 152px, saída 7,49 (folga 2,51). `/marketing` segue o pior caso das três.
  *
  * ⚠️ **O #235 encontrou o `/funis` com folga ZERO, não "pouca" — e é isso que esta linha
  * conserta.** Antes, a lixeira do `/funis` era `Trash2 size={16}`, 2px maior que as outras duas, e
@@ -147,24 +159,36 @@ const NOME_FUNIL = "Captacao de clientes do segundo semestre para o escritorio e
 const TITULO_DOC = "Contrato de prestacao de servicos";
 const TOPICO_CARROSSEL = "Captacao de clientes do segundo semestre para 2026";
 
-type JanelaComGravador = Window & { __cliques?: string[] };
+type JanelaComGravador = Window & { __cliques?: string[]; __mousedowns?: string[] };
 
 /**
- * Grava, com `capture` no `document`, QUAL elemento o navegador escolheu como alvo de cada `click`.
- * É a leitura direta do mecanismo do #149 — o ancestral comum — e não uma inferência a partir do
- * sintoma.
+ * Grava, com `capture` no `document`, QUAL elemento o navegador escolheu como alvo de cada `click`
+ * — e também de cada `mousedown`. É a leitura direta do mecanismo do #149 — o ancestral comum — e
+ * não uma inferência a partir do sintoma.
+ *
+ * ⚠️ **O `mousedown` entrou no gravador por causa do #314, e ele fecha um buraco de LEITURA.** O
+ * gesto é `mousedown` na lixeira → escorrega → `mouseup` no card, e o navegador emite o `click` no
+ * ancestral comum dos dois. Se o `mousedown` NÃO começar na lixeira, os dois pontas caem no card, o
+ * ancestral comum É o card e ele navega — com os dois controles de instrumento abaixo passando
+ * verdes: houve exatamente 1 `click`, e ele não caiu na lixeira. Sem gravar o `mousedown`, "o card
+ * navegou" não distingue **«o aninhamento voltou»** de **«o gesto nunca começou na lixeira»** — e
+ * foi exatamente a segunda que derrubou o CI do PR #310 (run `33972206955`), gastando uma
+ * investigação inteira porque a mensagem falava de URL, não de origem do gesto.
  */
 async function armarGravadorDeCliques(page: Page): Promise<void> {
   await page.evaluate(() => {
-    const janela = window as Window & { __cliques?: string[] };
+    const janela = window as Window & { __cliques?: string[]; __mousedowns?: string[] };
     janela.__cliques = [];
+    janela.__mousedowns = [];
+    const marcar = (ev: Event): string => {
+      const alvo = ev.target as Element | null;
+      const marca = alvo?.closest("[data-testid]")?.getAttribute("data-testid") ?? "";
+      return `${alvo ? alvo.tagName.toLowerCase() : "?"}[${marca}]`;
+    };
+    document.addEventListener("click", (ev) => void janela.__cliques?.push(marcar(ev)), true);
     document.addEventListener(
-      "click",
-      (ev) => {
-        const alvo = ev.target as Element | null;
-        const marca = alvo?.closest("[data-testid]")?.getAttribute("data-testid") ?? "";
-        janela.__cliques?.push(`${alvo ? alvo.tagName.toLowerCase() : "?"}[${marca}]`);
-      },
+      "mousedown",
+      (ev) => void janela.__mousedowns?.push(marcar(ev)),
       true,
     );
   });
@@ -172,6 +196,52 @@ async function armarGravadorDeCliques(page: Page): Promise<void> {
 
 async function lerCliques(page: Page): Promise<string[]> {
   return page.evaluate(() => (window as JanelaComGravador).__cliques ?? []);
+}
+
+async function lerMousedowns(page: Page): Promise<string[]> {
+  return page.evaluate(() => (window as JanelaComGravador).__mousedowns ?? []);
+}
+
+/**
+ * Espera o layout PARAR DE SE MEXER antes de qualquer medição — a correção do #314.
+ *
+ * ⚠️ **`toBeVisible()` não é layout estabilizado, e a diferença custou o CI de um PR de backend.**
+ * Medido no trace do CI (run `33972206955`, PR #310, zero arquivos em `apps/web/`):
+ *
+ * | instante | o que aconteceu |
+ * |---|---|
+ * | 34ms | `goto("/funis")` — resolve no `load`, com `<div id="root">` ainda VAZIO |
+ * | 698ms | o `woff2` do Inter **começa** a baixar (a fonte só é pedida depois que o React desenha) |
+ * | 706-756ms | os três `toBeVisible()` passam — com a tela pintada na fonte de FALLBACK |
+ * | 760-799ms | as caixas são medidas: lixeira em `(309, 345)`, card de **152px** de altura |
+ * | ~809ms | o `woff2` **chega** e o swap reflowa: título de 4 linhas → 3, card 152 → **128px** |
+ * | 813ms | `mousedown` em `(309, 345)` — 5px ABAIXO da lixeira, que já tinha subido para 326-340 |
+ *
+ * Resultado: `mousedown` e `mouseup` caíram os DOIS no card, o ancestral comum virou o próprio
+ * `<button>` do card (o trace registra `click` em `button[abrir-funil-x1]`, não na `div` irmã) e a
+ * tela navegou. Os dois controles de instrumento abaixo passaram — 1 clique, fora da lixeira — e a
+ * régua morreu 30 linhas adiante, no `toHaveURL`, com a mensagem que NÃO aponta o conserto.
+ *
+ * O `goto` esperar o `load` não protege de nada aqui: a fonte externa (`display=swap`, Google
+ * Fonts) só é PEDIDA depois que o React monta e o texto é disposto, então ela chega sempre depois
+ * do `load`. Daí as duas esperas desta função — `document.fonts.ready` **e** duas leituras
+ * consecutivas de caixa idênticas, porque `fonts.ready` sozinho não cobre reflow de outra origem.
+ */
+async function esperarLayoutEstavel(page: Page, ...alvos: Locator[]): Promise<void> {
+  await page.evaluate(() => document.fonts.ready.then(() => undefined));
+  const ler = async (): Promise<string> =>
+    JSON.stringify(await Promise.all(alvos.map((alvo) => alvo.boundingBox())));
+  let anterior = await ler();
+  for (let tentativa = 0; tentativa < 40; tentativa += 1) {
+    await page.waitForTimeout(50);
+    const atual = await ler();
+    if (atual === anterior) return;
+    anterior = atual;
+  }
+  throw new Error(
+    "as caixas não pararam de se mexer em 2s — esta tela nunca estabiliza o layout, e medir " +
+      "geometria em cima dela é medir ruído",
+  );
 }
 
 /** A caixa que o `boundingBox()` devolve — só os campos que a geometria abaixo usa. */
@@ -225,10 +295,12 @@ function escorregaoDe(
  * vermelho do #177: o `mouseup` caiu na borda, o `click` foi para o próprio `svg` da lixeira e a
  * régua morreu no meio da asserção, sem dizer o que consertar (#190).
  *
- * ⚠️ **Eixo zero devolve `Infinity`, e isso é a resposta CERTA, não um caso de borda.** No
- * `/funis` a lixeira é centrada verticalmente no card (`top-1/2 -translate-y-1/2`), então `dy = 0`
- * e `uy = 0`: andando na horizontal pura **nunca** se cruza a borda de cima nem a de baixo, e
- * `Infinity` no `min` deixa o eixo X decidir.
+ * ⚠️ **Eixo zero devolve `Infinity`, e isso é a resposta CERTA, não um caso de borda.** Uma
+ * lixeira alinhada ao centro vertical do card dá `dy = 0` e `uy = 0`: andando na horizontal pura
+ * **nunca** se cruza a borda de cima nem a de baixo, e `Infinity` no `min` deixa o eixo X decidir.
+ * Era o caso do `/funis` (`top-1/2 -translate-y-1/2`) até o #314 tirar a lixeira do centro — hoje
+ * **nenhuma das três telas** tem `uy = 0`, então este ramo não tem mais exemplo VIVO no arquivo, e
+ * fica pela razão do parágrafo seguinte.
  *
  * ⚠️ **Medido: com o `Math.abs` no denominador, apagar este ramo é um MUTANTE EQUIVALENTE.**
  * `8/Math.abs(+0)` e `8/Math.abs(-0)` dão os dois `Infinity` (`Math.abs(-0)` é `+0`), então a
@@ -380,6 +452,15 @@ for (const tela of TELAS) {
       await expect(page.getByTestId(tela.externo)).toBeVisible();
       await expect(page.getByTestId(tela.interno)).toBeVisible();
 
+      // ⚠️ **E antes de MEDIR, esperar o layout parar (#314).** `toBeVisible()` prova que o
+      // elemento está lá, não que a caixa dele parou de andar — o swap da fonte externa chega
+      // depois e reflowa a lista. Ver o cabeçalho de `esperarLayoutEstavel`.
+      await esperarLayoutEstavel(
+        page,
+        page.getByTestId(tela.interno),
+        page.getByTestId(tela.externo),
+      );
+
       // ⚠️ **A guarda de ALCANCE, e ela não é zelo — é a lição do parágrafo lá de cima.** Com a
       // fixture de 80 chars sem espaço, a lixeira ia parar em **x=760,7** numa tela de 360 e o
       // gesto do #149 batia no `<html>`: o card não navegava, o teste ficava VERDE, e o que ele
@@ -441,6 +522,23 @@ for (const tela of TELAS) {
           message: "o gesto não emitiu click nenhum — a régua não mediu nada",
         })
         .toBe(1);
+
+      // ⚠️ **Controle ZERO: o gesto tem de ter COMEÇADO na lixeira (#314).** É a asserção que
+      // separa as duas causas que produzem o MESMO sintoma ("o card navegou"): «o aninhamento
+      // voltou» e «o `mousedown` nunca acertou a lixeira». Na segunda, as duas pontas do gesto
+      // caem no card, o ancestral comum é o próprio card, e os dois controles abaixo passam
+      // verdes — 1 clique, fora da lixeira. Foi assim que o CI do PR #310 (backend puro) morreu
+      // no `toHaveURL`, 30 linhas adiante, com uma mensagem que fala de URL e não de origem do
+      // gesto. Esta linha morre AQUI, dizendo onde o dedo caiu — o mesmo padrão do `MARGEM_PX`.
+      const [ondeComecou] = await lerMousedowns(page);
+      expect(
+        ondeComecou,
+        `o gesto NÃO começou na lixeira: o \`mousedown\` caiu em ${ondeComecou}. A caixa medida ` +
+          `estava velha — o layout se mexeu entre a medição e o toque (reflow de fonte, imagem ou ` +
+          `dado que chegou depois). NÃO é o aninhamento voltando: com a origem errada, as duas ` +
+          `pontas do gesto caem no card e ele navega de qualquer jeito. Estabilize o layout antes ` +
+          `de medir (\`esperarLayoutEstavel\`), ou tire o reflow da tela`,
+      ).toContain(tela.interno);
 
       // ⚠️ **A segunda metade do controle, e ela foi medida na marra.** Na primeira versão desta
       // régua o deslocamento não SAÍA da lixeira em duas das três telas: o `mouseup` caía dentro
