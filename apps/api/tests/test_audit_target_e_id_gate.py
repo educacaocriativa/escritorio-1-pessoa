@@ -15,9 +15,11 @@ Este gate impede a QUARTA forma de nascer.
 
 **O que ele reprova** em `target=`: f-string, `str(...)` de um valor, concatenação/`%`/`.format`,
 literal já composto (com `":"`), constante que não é texto — e as mesmas coisas escondidas atrás
-de uma variável ou de um **helper do próprio projeto que devolve f-string**. Esta última é a
-forma histórica exata (`eventos.alvo_da_resposta`), e sem ela o gate deixaria passar o defeito
-que motivou a issue só por ele estar uma camada acima.
+de (a) uma variável, mesmo atribuída dentro de um `if`; (b) um **helper do projeto que devolve
+f-string**, que é a forma histórica exata (`eventos.alvo_da_resposta`); (c) uma **cadeia de
+funções que repassam um parâmetro `target`** até a gravação. Sem (b) e (c) o gate deixaria passar
+o defeito só por ele estar uma ou duas camadas acima da chamada — e (c) achou uma quarta forma
+VIVA em produção que a issue não tinha visto (ver `_DIVIDA_CONHECIDA`, no fim do arquivo).
 
 **Controles positivos obrigatórios.** Um scanner AST que deixasse de encontrar as chamadas (glob
 quebrado, import renomeado, pasta movida) passaria **verde por vacuidade**. Por isso este arquivo
@@ -176,16 +178,65 @@ def _apelidos_compostos(
     return apelidos
 
 
+def _parametros(fn: ast.FunctionDef | ast.AsyncFunctionDef) -> set[str]:
+    a = fn.args
+    return {p.arg for p in (*a.posonlyargs, *a.args, *a.kwonlyargs)}
+
+
+def encaminhadoras(fontes: list[str]) -> set[str]:
+    """Funções que REPASSAM um parâmetro `target` até `audit.record` — o ponto cego do gate.
+
+    Um gate que só olha a chamada de `record` não enxerga composição feita DOIS saltos acima.
+    Foi assim que `financial_intelligence/router.py` passou a gravar um intervalo de datas
+    (`f"{start}..{end}"` — um VALOR) sem que nada reclamasse: quem compõe é o router, quem grava
+    é `ai_narrator.narrate_with_source`, e entre os dois há só um parâmetro chamado `target`.
+
+    O índice é por NOME e cobre a cadeia: primeiro quem grava direto, depois quem chama essas.
+    Três passadas cobrem `router → narrate_signals → narrate_with_source → record`; cadeia mais
+    longa que isso para carregar um id é sintoma pior do que este gate mede.
+    """
+    arvores = [ast.parse(f) for f in fontes]
+    achadas: set[str] = set()
+    for _ in range(3):
+        for arv in arvores:
+            for fn in ast.walk(arv):
+                if not isinstance(fn, ast.FunctionDef | ast.AsyncFunctionDef):
+                    continue
+                params = _parametros(fn)
+                for call in ast.walk(fn):
+                    if not isinstance(call, ast.Call):
+                        continue
+                    nome = _nome_da_chamada(call)
+                    grava = nome in _GRAVADORES and any(k.arg == "action" for k in call.keywords)
+                    if not grava and nome not in achadas:
+                        continue
+                    for kw in call.keywords:
+                        if (
+                            kw.arg == "target"
+                            and isinstance(kw.value, ast.Name)
+                            and kw.value.id in params
+                        ):
+                            achadas.add(fn.name)
+    return achadas
+
+
 def _analisar_funcao(
-    fn: ast.FunctionDef | ast.AsyncFunctionDef, arquivo: str, indice: set[str]
+    fn: ast.FunctionDef | ast.AsyncFunctionDef,
+    arquivo: str,
+    indice: set[str],
+    repassadoras: set[str] = frozenset(),
 ) -> list[Ofensa]:
     ofensas: list[Ofensa] = []
     apelidos = _apelidos_compostos(fn, indice)
     for st in ast.walk(fn):
-        if not isinstance(st, ast.Call) or _nome_da_chamada(st) not in _GRAVADORES:
+        if not isinstance(st, ast.Call):
             continue
-        if not any(k.arg == "action" for k in st.keywords):
-            continue  # `facts.record(kind=...)` e afins não são a trilha de auditoria
+        nome = _nome_da_chamada(st)
+        grava = nome in _GRAVADORES and any(k.arg == "action" for k in st.keywords)
+        # `facts.record(kind=...)` e afins não são a trilha de auditoria — daí a exigência de
+        # `action`. Uma repassadora não tem `action` nenhum: ela só carrega o `target` adiante.
+        if not grava and nome not in repassadoras:
+            continue
         for kw in st.keywords:
             if kw.arg != "target":
                 continue
@@ -196,14 +247,18 @@ def _analisar_funcao(
 
 
 def varrer(
-    fonte: str, arquivo: str = "<sintetico>", indice: set[str] | None = None
+    fonte: str,
+    arquivo: str = "<sintetico>",
+    indice: set[str] | None = None,
+    repassadoras: set[str] | None = None,
 ) -> list[Ofensa]:
     """Todas as ofensas ao contrato do `target` num fonte Python."""
     indice = compositoras([fonte]) if indice is None else indice
+    repassadoras = encaminhadoras([fonte]) if repassadoras is None else repassadoras
     ofensas: list[Ofensa] = []
     for no in ast.walk(ast.parse(fonte)):
         if isinstance(no, ast.FunctionDef | ast.AsyncFunctionDef):
-            ofensas.extend(_analisar_funcao(no, arquivo, indice))
+            ofensas.extend(_analisar_funcao(no, arquivo, indice, repassadoras))
     return ofensas
 
 
@@ -331,6 +386,39 @@ def test_o_gate_reprova_a_composicao_escondida_num_HELPER_do_projeto():
     assert varrer(call_site, "dna/service.py", set()) == []
 
 
+def test_o_gate_reprova_a_composicao_DOIS_SALTOS_acima_da_gravacao():
+    """O ponto cego que só a cadeia de repassadoras enxerga.
+
+    Quem compõe é o router; quem grava é o narrador, dois saltos abaixo; entre eles há apenas um
+    parâmetro chamado `target`. Nenhuma inspeção da chamada de `record` vê isso. É a forma real
+    de `financial_intelligence/router.py`, e ela já estava em produção — este gate a NOMEIA (ver
+    `_DIVIDA_CONHECIDA`) em vez de deixá-la invisível atrás de um verde.
+    """
+    fonte = (
+        "\nfrom app.core import audit\n"
+        "\n"
+        "def narrate(signals, *, db, tenant_id, actor, target=''):\n"
+        '    audit.record(db, tenant_id=tenant_id, actor=actor, action="x.narrated",\n'
+        "                 target=target)\n"
+        "\n"
+        "def narrate_with_source(signals, *, db, tenant_id, actor, target=''):\n"
+        "    return narrate(signals, db=db, tenant_id=tenant_id, actor=actor, target=target)\n"
+        "\n"
+        "def diagnostics(db, *, user, start, end):\n"
+        "    narrate_with_source([], db=db, tenant_id=user.tenant_id, actor=user.user_id,\n"
+        '                        target=f"{start.isoformat()}..{end.isoformat()}")\n'
+    )
+    repassadoras = encaminhadoras([fonte])
+    assert {"narrate", "narrate_with_source"} <= repassadoras
+
+    [o] = varrer(fonte, "router.py", set(), repassadoras)
+    assert o.funcao == "diagnostics" and "f-string" in repr(o)
+
+    # O controle do controle: sem a cadeia, o defeito é INVISÍVEL — e é por isso que o gate real
+    # monta `encaminhadoras` com o repo inteiro antes de varrer.
+    assert varrer(fonte, "router.py", set(), set()) == []
+
+
 def test_o_gate_reprova_a_constante_que_nao_e_texto():
     fonte = (
         "\ndef f(db, *, tenant_id, actor):\n"
@@ -405,14 +493,58 @@ def test_a_varredura_realmente_leu_o_repo():
     )
 
 
+#: Dívida CONHECIDA, herdada, fora do escopo da #312 — `arquivo::função`.
+#:
+#: `financial_intelligence/router.py::diagnostics` grava um INTERVALO DE DATAS
+#: (`f"{start.isoformat()}..{end.isoformat()}"`) no `target` da action
+#: `financial_diagnostics.narrated`. É a mesma família de `wallet` (`target=str(total)` — o
+#: VALOR, não um id) e já estava em produção antes desta issue; um diagnóstico não tem entidade,
+#: então o certo é `target=""` com o intervalo no `detail`. Corrigir aqui mudaria a trilha de
+#: OUTRO módulo, com os testes dele, sem relação com o `dna` — vira issue própria.
+#:
+#: A allowlist tem UM membro, e é esse o ponto (mesmo padrão de `_PODE_CHAMAR_AUDIT` em
+#: `test_dna_vocabulario_gate.py`): quem entrar aqui entra COM justificativa escrita, e é isso
+#: que faz a revisão acontecer. O valor de estar na lista, e não invisível, é que a próxima
+#: pessoa lê o defeito em vez de acreditar num verde limpo.
+_DIVIDA_CONHECIDA = {"app/modules/financial_intelligence/router.py::diagnostics"}
+
+
+def test_a_divida_conhecida_continua_sendo_UM_defeito_de_verdade():
+    """Controle da allowlist: se o defeito for consertado, esta linha tem de SAIR da lista.
+
+    Sem isto, a allowlist vira depósito — uma entrada morta que ninguém remove e que passaria a
+    perdoar silenciosamente um call site futuro no mesmo arquivo e função.
+    """
+    fontes = _fontes_do_app()
+    indice = compositoras(list(fontes.values()))
+    repassadoras = encaminhadoras(list(fontes.values()))
+    # A cadeia real tem DOIS saltos: `get_diagnostics` → `narrate_with_source` → `record`.
+    assert "narrate_with_source" in repassadoras
+
+    achadas = {
+        f"{rel}::{o.funcao}"
+        for rel, fonte in fontes.items()
+        for o in varrer(fonte, rel, indice, repassadoras)
+    }
+    assert achadas == _DIVIDA_CONHECIDA, (
+        "a dívida conhecida mudou. Se um defeito foi CONSERTADO, remova-o de "
+        f"`_DIVIDA_CONHECIDA`; se apareceu um novo, ele não entra na lista sem justificativa "
+        f"escrita.\n  esperado: {sorted(_DIVIDA_CONHECIDA)}\n  encontrado: {sorted(achadas)}"
+    )
+
+
 def test_nenhum_target_do_repo_e_composto_ou_valor():
     fontes = _fontes_do_app()
     # O índice de compositoras é montado com o repo INTEIRO antes da varredura: a composição
     # pode morar noutro arquivo (era o caso de `dna/eventos.py` → `dna/service.py`).
     indice = compositoras(list(fontes.values()))
-    ofensas: list[Ofensa] = []
-    for rel, fonte in fontes.items():
-        ofensas.extend(varrer(fonte, rel, indice))
+    repassadoras = encaminhadoras(list(fontes.values()))
+    ofensas = [
+        o
+        for rel, fonte in fontes.items()
+        for o in varrer(fonte, rel, indice, repassadoras)
+        if f"{rel}::{o.funcao}" not in _DIVIDA_CONHECIDA
+    ]
     assert not ofensas, (
         "`audit_entries.target` é o ID da entidade da ação, ou `\"\"` quando não há entidade — "
         "nunca um composto, nunca um valor. Estas chamadas gravam outra coisa, e é assim que o "
