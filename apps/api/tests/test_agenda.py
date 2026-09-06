@@ -1,4 +1,7 @@
 """Testes do módulo Agenda — foco em conflitos de horário (a 'Guardiã da Agenda')."""
+import logging
+
+import httpx
 import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy import select
@@ -385,6 +388,146 @@ def test_google_200_com_id_vazio_e_recusado_como_ausente(
     assert ev["meeting_url"] is None
     assert not ev["google_event_id"]
     assert db.get(AgendaEvent, ev["id"]).google_account_email is None
+
+
+# ── #313: 200 com `id` e SEM `hangoutLink` ───────────────────────────────────
+# Estes três testes atravessam o `create_meet_event` DE VERDADE (mockando `httpx.post`, não a
+# função) porque o aviso mora lá — em `google_calendar/service.py`, junto do `if` que monta o
+# `conferenceData`. Monkeypatchar `gcal.create_meet_event`, como fazem os testes da #306 acima,
+# pularia exatamente o código sob teste.
+class _RespGoogle:
+    """Resposta 200 do Google com o corpo que o teste quiser (inclusive incompleto)."""
+
+    def __init__(self, data: dict):
+        self._data = data
+
+    def raise_for_status(self) -> None:
+        return None
+
+    def json(self) -> dict:
+        return self._data
+
+
+def _google_conectado(db: Session) -> None:
+    """Credencial Google válida para o tenant registrado (não expira → sem refresh no meio)."""
+    from datetime import UTC, datetime, timedelta
+
+    from app.modules.auth.models import Tenant
+    from app.modules.google_calendar.models import GoogleCredential
+
+    db.add(
+        GoogleCredential(
+            tenant_id=db.scalars(select(Tenant)).first().id,
+            google_account_email="owner@gmail.com",
+            access_token="valid-access-token",
+            refresh_token="valid-refresh-token",
+            token_expiry=datetime.now(UTC) + timedelta(hours=1),
+        )
+    )
+    db.commit()
+
+
+def _google_responde(monkeypatch, corpo_resposta: dict) -> dict:
+    """Mocka o POST de `events.insert` e devolve o dict onde o corpo ENVIADO é registrado."""
+    enviado: dict = {}
+
+    def fake_post(url: str, **kw):
+        enviado["json"] = kw.get("json")
+        return _RespGoogle(corpo_resposta)
+
+    monkeypatch.setattr(httpx, "post", fake_post)
+    return enviado
+
+
+def _sem_aviso_de_link(caplog) -> None:
+    """Asserção negativa NÃO-VAZIA.
+
+    Um `not in caplog.text` passa também quando o caplog não está capturando nada — e aí o
+    teste do bloqueio viraria decoração. O canário abaixo emite pelo MESMO logger do aviso e
+    exige vê-lo antes de afirmar a ausência: se o instrumento estiver morto, o teste morre no
+    canário, e não em silêncio.
+    """
+    logging.getLogger("e1p.google_calendar").warning("[teste:canario] instrumento vivo")
+    assert "[teste:canario]" in caplog.text, (
+        "caplog não está capturando 'e1p.google_calendar' — a asserção de ausência seria vazia"
+    )
+    assert "[google:create_meet:sem_link]" not in caplog.text
+
+
+def test_reuniao_com_link_do_meet_nao_emite_aviso(
+    client: TestClient, headers, db: Session, monkeypatch, caplog
+):
+    """Caminho feliz da #313: conferência pedida E link devolvido → nenhum aviso.
+
+    É o contra-teste da condição: se o aviso fosse emitido quando o link VEIO, ele apareceria
+    em toda reunião normal e ninguém mais leria a família `[google:create_meet:*]`.
+    """
+    caplog.set_level(logging.WARNING, logger="e1p.google_calendar")
+    _google_conectado(db)
+    enviado = _google_responde(
+        monkeypatch,
+        {"id": "gcal-com-link", "hangoutLink": "https://meet.google.com/abc-defg-hij"},
+    )
+
+    resp = client.post("/agenda/events", json=_event(kind="reuniao"), headers=headers)
+
+    assert resp.status_code == 201, resp.text
+    ev = resp.json()["event"]
+    assert ev["google_event_id"] == "gcal-com-link"
+    assert ev["meeting_url"] == "https://meet.google.com/abc-defg-hij"
+    assert "conferenceData" in enviado["json"]  # a conferência FOI pedida
+    _sem_aviso_de_link(caplog)
+
+
+def test_reuniao_sem_link_do_meet_grava_espelho_e_avisa(
+    client: TestClient, headers, db: Session, monkeypatch, caplog
+):
+    """#313: pedimos conferência, o Google devolveu 200 com `id` e SEM `hangoutLink`.
+
+    O espelho é gravado assim mesmo (IV1 — diferente da #306, o `id` ainda endereça o evento e
+    remarcar/cancelar/sincronizar seguem funcionando); o que muda é que o silêncio acaba. Este
+    teste é também o CONTROLE POSITIVO do instrumento usado pelos dois testes de ausência: ele
+    prova que `caplog` no logger `e1p.google_calendar` captura de fato.
+    """
+    caplog.set_level(logging.WARNING, logger="e1p.google_calendar")
+    _google_conectado(db)
+    enviado = _google_responde(monkeypatch, {"id": "gcal-sem-link"})
+
+    resp = client.post("/agenda/events", json=_event(kind="reuniao"), headers=headers)
+
+    assert resp.status_code == 201, resp.text
+    ev = resp.json()["event"]
+    assert ev["google_event_id"] == "gcal-sem-link", "o espelho NÃO é recusado por falta de link"
+    assert ev["meeting_url"] is None, "não há link para carimbar — o card nasce sem ele"
+    assert "conferenceData" in enviado["json"]  # a conferência FOI pedida, e não voltou
+    assert "[google:create_meet:sem_link]" in caplog.text
+    assert "kind=reuniao" in caplog.text
+    assert "google_event_id=gcal-sem-link" in caplog.text
+
+
+def test_bloqueio_sem_link_do_meet_nao_emite_aviso(
+    client: TestClient, headers, db: Session, monkeypatch, caplog
+):
+    """#313, o falso positivo que a guarda impede: bloqueio é espelhado mas NÃO pede Meet.
+
+    `PUSHED_KINDS = MEET_KINDS | {bloqueio}`, então o bloqueio chega ao `create_meet_event` —
+    mas o `conferenceData` só é montado para `MEET_KINDS`. Avisar "veio sem hangoutLink" aqui
+    seria gritar em todo bloqueio de agenda, e um log que grita sempre é um log ignorado.
+    """
+    caplog.set_level(logging.WARNING, logger="e1p.google_calendar")
+    _google_conectado(db)
+    enviado = _google_responde(monkeypatch, {"id": "gcal-bloqueio-1"})
+
+    resp = client.post("/agenda/events", json=_event(kind="bloqueio"), headers=headers)
+
+    assert resp.status_code == 201, resp.text
+    ev = resp.json()["event"]
+    assert ev["google_event_id"] == "gcal-bloqueio-1"  # espelho gravado normalmente
+    assert ev["meeting_url"] is None
+    assert "conferenceData" not in enviado["json"], (
+        "bloqueio não pode pedir conferência — se pedir, o aviso passa a ser legítimo"
+    )
+    _sem_aviso_de_link(caplog)
 
 
 def test_manual_meeting_url_preserved_google_not_called(client: TestClient, headers, monkeypatch):
