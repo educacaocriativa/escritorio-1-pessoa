@@ -19,6 +19,30 @@ class AuditEntry(Base, TenantMixin, TimestampMixin):
     is_ai: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     action: Mapped[str] = mapped_column(String(128), nullable=False)
     target: Mapped[str] = mapped_column(String(255), default="", nullable=False)
+    """O **id** da entidade sobre a qual a ação aconteceu — ou `""` quando não há entidade.
+
+    **É contrato, e é fechado (issue #312).** `target` é um id, e só isso. NUNCA um composto
+    (`f"{source}:{key}"`), NUNCA um valor (uma contagem, um total, uma data). O que não é id vai
+    em `detail`, que é livre por definição — ver o docstring logo abaixo. Um id no `target` é o
+    que permite JOIN; qualquer outra coisa transforma o consumidor em parser.
+
+    **Por que isto precisou virar contrato escrito.** O campo não tinha nenhum, e por isso
+    acumulou TRÊS formas conforme a action: id nu (a esmagadora maioria das chamadas do repo),
+    `<source>:<pergunta>` no módulo `dna` e uma contagem crua (`str(exibidas)`) no `open` do
+    núcleo. A conta chegou no consumidor: `scripts/nucleo_activation.py` virou PARSER do campo
+    (`target.split(":", 1)[0]` e `int(target)`), e aquele parse só era seguro porque a query
+    filtrava `action.startswith("dna.")` antes. Não era contrato: era convenção por ação, e a
+    convenção morava no chamador. `wallet/models.py` documenta um abuso irmão, já corrigido
+    (`target=str(total)` — o VALOR, não um id).
+
+    ⚠️ **Docstring não contém nada sozinha** — foi exatamente uma docstring que descreveu o
+    defeito MNT-001 por semanas enquanto os 17 call sites continuavam lá. Quem segura ESTE
+    contrato é `tests/test_audit_target_e_id_gate.py`, que reprova por AST qualquer `target=`
+    que seja f-string, `str(...)` de valor, concatenação ou literal composto — inclusive quando
+    a composição está escondida atrás de uma variável ou de um helper que devolve f-string
+    (a forma que o `dna` usava).
+    """
+
     detail: Mapped[str] = mapped_column(String(255), default="", nullable=False)
     """SNAPSHOT em texto livre do que o `target` sozinho não consegue recuperar depois.
 
@@ -31,21 +55,30 @@ class AuditEntry(Base, TenantMixin, TimestampMixin):
     POR QUE UMA COLUNA, e não compor no `target` (as duas opções que a #307 pesou):
 
     1. O `target` já foi sobrecarregado antes, e machucou. Sem campo de detalhe, o módulo `dna`
-       enfiou três formas diferentes no mesmo campo — id, `f"{source}:{key}"`
-       (`dna/eventos.py::alvo_da_resposta`) e uma contagem crua (`dna/router.py`) — e
+       enfiou três formas diferentes no mesmo campo — id, `f"{source}:{key}"` (por um helper
+       `alvo_da_resposta`) e uma contagem crua (`dna/router.py`) — e
        `scripts/nucleo_activation.py` precisou virar PARSER do campo (`target.split(":", 1)[0]`
-       e `int(e.target)`). Aquele parse só é seguro porque a query filtra
-       `action.startswith("dna.")` antes: o campo não tem contrato, tem convenção por ação.
+       e `int(e.target)`). Aquele parse só era seguro porque a query filtra
+       `action.startswith("dna.")` antes: o campo não tinha contrato, tinha convenção por ação.
        Uma quarta forma (`id:email`) estenderia exatamente esse defeito.
+
+       ERRATA (2026-09-05, issue #312): o `dna` foi migrado para esta coluna e
+       `alvo_da_resposta` deixou de existir — hoje o `save`/`skip` grava `target=<id da
+       DnaAnswer>` e `detail=<source>`, e o `open` grava `target=""` e `detail=<exibidas>`.
+       O parse SOBREVIVE em `nucleo_activation.py`, mas só como leitura do LEGADO já gravado em
+       produção, marcada como tal e coberta por teste. O `target` ganhou o contrato que não
+       tinha (ver o docstring da coluna, acima); esta razão nº 1 continua sendo por que a
+       coluna existe, e não deixou de valer por ter sido paga.
     2. NÃO CABE, e o estouro seria SILENCIOSO no teste e FATAL em produção. `target` é
        `String(255)`; `cred.id` é um UUID de 36 chars e o e-mail vai a 254 (RFC 5321) — o
        composto chega a 291. O Postgres de produção RECUSA (`value too long for type character
        varying(255)`) e derrubaria justo o `disconnect`; o SQLite da suíte IGNORA o limite e
        ficaria verde. Coluna própria dá 255 inteiros ao e-mail.
 
-    `default=""`/`NOT NULL` (não `nullable`) de propósito: os 121 `audit.record()` existentes
-    seguem sem passar nada e gravam `""`. Ausência de detalhe é "não se aplica", não é
-    desconhecido — não há semântica de NULL a preservar aqui (ao contrário da 0086).
+    `default=""`/`NOT NULL` (não `nullable`) de propósito: a esmagadora maioria dos
+    `audit.record()` do repo não tem detalhe nenhum a dar, segue sem passar nada e grava `""`.
+    Ausência de detalhe é "não se aplica", não é desconhecido — não há semântica de NULL a
+    preservar aqui (ao contrário da 0086).
 
     ⚠️ LGPD: isto é dado pessoal e é PARA ficar em claro (a trilha existe para ser lida). Fica
     do lado CERTO da linha por herdar `TenantMixin`: `platform/service.py::_business_table_names`

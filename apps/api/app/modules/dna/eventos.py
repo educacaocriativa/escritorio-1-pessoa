@@ -8,10 +8,18 @@ histórico de quem mudou o quê já é trabalho de `core/audit.py`". Até 2026-0
 `audit` aparecia UMA vez no módulo `dna`, dentro daquela frase, com zero chamadas. Este módulo é
 o que torna a frase verdadeira.
 
-**`source` vai no `target`, NUNCA no `action`.** Quatro actions × três sources (`nucleo｜gancho｜
+**`source` vai no `detail`, NUNCA no `action`.** Quatro actions × três sources (`nucleo｜gancho｜
 config`) seriam doze strings, e é assim que 117 actions distintas viram 200. O repo já tem
 `account_deleted` — sem pontos, fora do padrão `<entidade>.<entidade>.<verbo>` — provando que a
 convenção sozinha não segura o vocabulário.
+
+ERRATA (2026-09-05, issue #312): até esta data a frase acima dizia `target`, e o módulo gravava
+`target=f"{source}:{key}"` por um helper `alvo_da_resposta`. Era a segunda das três formas que o
+`target` acumulou sem contrato, e ela obrigava `scripts/nucleo_activation.py` a virar parser do
+campo. O `target` hoje é só id (`app/core/audit.py`, docstring da coluna) e quem carrega o
+`source` é o `detail`, livre por definição. O `key` NÃO precisa ser guardado: o `target` aponta
+para a `DnaAnswer`, e `question_key` é a chave do upsert — não muda. O que o upsert DESTRÓI é o
+`source`, e é exatamente ele que vai para o rastro.
 
 **Por que a validação é aqui e não uma convenção.** `facts.record` tem guarda mecânica (o `kind`
 tem de começar pelo `module`); `audit.record` não tem nenhuma. Esta função é a guarda equivalente
@@ -44,17 +52,13 @@ class VocabularioError(Exception):
     """Erro de programação, não de usuário: estoura na hora, como `FactError`."""
 
 
-def alvo_da_resposta(source: str, key: str) -> str:
-    """O `target` de uma resposta: `<source>:<pergunta>`.
-
-    É esta string que sobrevive ao upsert e distingue "respondeu no núcleo" de "editou no
-    `/config`" — as duas linhas de audit que o `dna_answers` não consegue guardar.
-    """
-    return f"{source}:{key}"
-
-
-def registrar(db, *, tenant_id: str, actor: str, action: str, target: str = ""):
+def registrar(db, *, tenant_id: str, actor: str, action: str, target: str = "", detail: str = ""):
     """Grava a trilha do DNA, validando o vocabulário AGORA.
+
+    `target` é o **id** da linha (contrato de `audit_entries.target`); `detail` é o `source` da
+    resposta (`nucleo｜gancho｜config`), que é o que o upsert de `dna_answers` destrói e o id não
+    recupera depois. No `open`/`abandon` do núcleo não existe entidade: `target=""`, e o `open`
+    leva o denominador visto no `detail`.
 
     ⚠️ Quem chama é responsável pelo `db.flush()` quando o `target` depende de uma linha recém
     adicionada — o `id` tem default Python-side e só existe depois do INSERT. Sem o flush o
@@ -72,6 +76,8 @@ def registrar(db, *, tenant_id: str, actor: str, action: str, target: str = ""):
         raise VocabularioError(
             f"'{action}' não é uma action do DNA. O vocabulário é fechado e mora em "
             f"`eventos.ACTIONS`: {ACTIONS}. Se o evento é novo, declare-o lá — e note que o "
-            "`source` vai no TARGET, nunca no action."
+            "`source` vai no DETAIL, nunca no action e nunca no target (que é só id)."
         )
-    return audit.record(db, tenant_id=tenant_id, actor=actor, action=action, target=target)
+    return audit.record(
+        db, tenant_id=tenant_id, actor=actor, action=action, target=target, detail=detail
+    )

@@ -31,25 +31,37 @@ def headers(client: TestClient) -> dict[str, str]:
     return {"Authorization": f"Bearer {token}"}
 
 
-def _alvos(db: Session, action: str) -> list[str]:
+def _alvos(db: Session, action: str) -> list[tuple[str, str]]:
+    """Os `(target, detail)` da trilha daquela action — o contrato da #312, nos dois campos."""
     return [
-        e.target for e in db.scalars(select(AuditEntry).where(AuditEntry.action == action)).all()
+        (e.target, e.detail)
+        for e in db.scalars(select(AuditEntry).where(AuditEntry.action == action)).all()
     ]
 
 
-def test_responder_grava_trilha_com_o_source_no_target(
+def _id_da_linha(db: Session, key: str) -> str:
+    return db.scalars(select(DnaAnswer).where(DnaAnswer.question_key == key)).one().id
+
+
+def test_responder_grava_trilha_com_o_source_no_detail(
     client: TestClient, headers: dict[str, str], db: Session
 ):
-    """§6.1. A asserção é o VALOR do target, não `!= ""`.
+    """§6.1, na forma da #312: o `target` é o ID da linha e o `source` vai no `detail`.
 
-    `target != ""` passaria com qualquer string — inclusive com a errada. Afirmar o valor exato é
-    o que faz este teste morrer se alguém trocar o `source` de lugar (para o `action`, que é a
-    forma proibida) ou esquecer a chave da pergunta.
+    A asserção é o VALOR dos dois campos, não `!= ""` — `!= ""` passaria com qualquer string,
+    inclusive com a errada. Afirmar o id EXATO é o que prova o contrato de `audit_entries.
+    target` ("um id, e só"), e afirmar o `detail` exato é o que faz este teste morrer se alguém
+    devolver o `source` para o `target` (composto, a forma proibida) ou para o `action`.
+
+    E o id não é decoração: é o que devolve `question_key` por JOIN, sem guardá-la no rastro.
     """
     r = client.put(f"/dna/{TICKET}", json={"valor": "2k_10k", "source": "nucleo"}, headers=headers)
     assert r.status_code == 200
 
-    assert _alvos(db, "dna.answer.save") == [f"nucleo:{TICKET}"]
+    linha_id = _id_da_linha(db, TICKET)
+    assert _alvos(db, "dna.answer.save") == [(linha_id, "nucleo")]
+    # O id é um id de verdade (36 chars de UUID), não um composto disfarçado.
+    assert ":" not in linha_id and len(linha_id) == 36
 
 
 def test_pular_uma_pergunta_grava_trilha(
@@ -58,7 +70,7 @@ def test_pular_uma_pergunta_grava_trilha(
     r = client.post(f"/dna/{TICKET}/pular", json={"source": "gancho"}, headers=headers)
     assert r.status_code == 200
 
-    assert _alvos(db, "dna.answer.skip") == [f"gancho:{TICKET}"]
+    assert _alvos(db, "dna.answer.skip") == [(_id_da_linha(db, TICKET), "gancho")]
     # Não-membro: pular não é salvar.
     assert _alvos(db, "dna.answer.save") == []
 
@@ -81,5 +93,13 @@ def test_editar_no_config_nao_apaga_a_historia_do_nucleo(
     assert linhas[0].value == "10k_50k"
     assert linhas[0].source == "config"
 
-    # E a história das DUAS passagens sobrevive.
-    assert sorted(_alvos(db, "dna.answer.save")) == [f"config:{TICKET}", f"nucleo:{TICKET}"]
+    # E a história das DUAS passagens sobrevive, no `detail` — que é justamente a coluna que o
+    # upsert destruiu acima (`linhas[0].source` já diz só "config").
+    alvos = _alvos(db, "dna.answer.save")
+    assert sorted(d for _, d in alvos) == ["config", "nucleo"]
+
+    # E o `target` das DUAS aponta para a MESMA linha, a que sobreviveu ao upsert. É esta
+    # asserção que prova que o id no `target` não perdeu a pergunta: `question_key` é a chave do
+    # upsert e volta por JOIN, sem precisar viajar composta no rastro.
+    assert {t for t, _ in alvos} == {linhas[0].id}
+    assert db.get(DnaAnswer, linhas[0].id).question_key == TICKET

@@ -1,5 +1,15 @@
 # Vima V2 — medição de ativação do núcleo: plano de implementação
 
+> **ERRATA (2026-09-05, issue #312) — este plano está FECHADO e não foi reescrito.** Ele
+> descreve, corretamente, o que foi executado em 2026-08-11. Uma decisão sua mudou depois: o
+> `source` ia no **`target`** e hoje vai no **`detail`** (coluna criada pela issue #307), porque
+> `audit_entries.target` ganhou contrato — id, ou `""` quando não há entidade. O helper
+> `eventos.alvo_da_resposta` (citado abaixo) não existe mais; `service._gravar` grava
+> `target=<id da DnaAnswer>` + `detail=<source>` e o `open` grava `target=""` +
+> `detail=<exibidas>`. O rastro gravado ANTES desta data continua na forma antiga e continua
+> sendo lido — ver a nota de compatibilidade em `app/scripts/nucleo_activation.py`. A fonte da
+> verdade sobre a forma atual é o docstring da coluna em `app/core/audit.py`.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:executing-plans to implement this
 > plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 

@@ -124,16 +124,23 @@ def _gravar(
     """Upsert por `(tenant, pergunta)` — a unique constraint da migration é o que o garante.
 
     A trilha em `audit_entries` é o que faz o upsert deixar de apagar história: a linha guarda o
-    estado ATUAL, e as passagens ficam no rastro append. É o `target` (`<source>:<pergunta>`) que
-    distingue "respondeu no núcleo" de "editou no `/config`".
+    estado ATUAL, e as passagens ficam no rastro append. É o `detail` (o `source`) que distingue
+    "respondeu no núcleo" de "editou no `/config`" — a ÚNICA coisa que o upsert destrói e que o
+    `target` não recupera. `question_key` não precisa ir junto: ela é a chave do upsert, então
+    `target=linha.id` a devolve por join, para sempre.
 
-    ⚠️ **`db.flush()` ANTES de gravar a trilha, e a razão aqui NÃO é a do MNT-001.** O padrão do
-    repo (`bank.create_account`) existe porque o `target` costuma ser o `id` da linha, que tem
-    default Python-side e ainda é `None` antes do INSERT. Este `target` é `<source>:<pergunta>` e
-    não depende de `id` nenhum — mas o flush continua obrigatório pelo segundo motivo que
-    `bank.create_transaction` documenta: é nele que a unique constraint de `(tenant,
-    question_key)` fala. Sem ele, gravaríamos um rastro afirmando uma resposta que a constraint
-    ainda pode recusar — trilha que mente.
+    ⚠️ ERRATA (2026-09-05, issue #312): até esta data gravávamos
+    `target=eventos.alvo_da_resposta(source, key)`, isto é, `<source>:<pergunta>` — composto num
+    campo cujo contrato é "id, ou nada". Ver `app/core/audit.py`, docstring da coluna `target`.
+
+    ⚠️ **`db.flush()` ANTES de gravar a trilha, e agora pelas DUAS razões.** (1) MNT-001: o
+    `target` é o `id` da linha, que tem default Python-side e ainda é `None` antes do INSERT —
+    sem flush a trilha nasceria com `target=''`, em silêncio (`tests/
+    test_audit_target_flush_gate.py` reprova essa forma por AST). Até a #312 esta razão NÃO
+    valia aqui, porque o `target` era composto e não dependia de id nenhum; passou a valer.
+    (2) A que já valia, e que `bank.create_transaction` documenta: é no flush que a unique
+    constraint de `(tenant, question_key)` fala. Sem ele, gravaríamos um rastro afirmando uma
+    resposta que a constraint ainda pode recusar — trilha que mente.
     """
     linha = db.scalar(select(DnaAnswer).where(DnaAnswer.question_key == key))
     if linha is None:
@@ -149,7 +156,8 @@ def _gravar(
         tenant_id=tenant_id,
         actor=user_id or "",
         action=acao,
-        target=eventos.alvo_da_resposta(source, key),
+        target=linha.id,
+        detail=source,
     )
     db.commit()
     db.refresh(linha)
