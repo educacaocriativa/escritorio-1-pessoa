@@ -940,9 +940,10 @@ def create_account(
     try:
         # ⚠️ `flush` ANTES do `audit.record`: `id` tem default Python-side (`_uuid`), que só é
         # aplicado no INSERT — sem o flush, `acc.id` ainda é None e a entrada de auditoria nasceria
-        # com `target=''`, ou seja, um rastro que não aponta para nada. (O mesmo padrão em
-        # `chart_of_accounts.create_account` grava o target vazio; achado registrado, correção lá
-        # é fora do escopo desta story.)
+        # com `target=''`, ou seja, um rastro que não aponta para nada. (Este comentário apontava
+        # `chart_of_accounts.create_account` como ofensor conhecido e "fora do escopo"; ele e os
+        # outros 16 foram corrigidos na issue #311, e o gate
+        # `tests/test_audit_target_flush_gate.py` impede o 18º.)
         db.flush()
         audit.record(
             db, tenant_id=tenant_id, actor=actor, action="bank.account.create", target=acc.id

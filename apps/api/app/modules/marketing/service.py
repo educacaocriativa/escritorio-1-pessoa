@@ -153,6 +153,10 @@ def create_carousel(db: Session, *, tenant_id: str, actor: str, data: CarouselCr
         font=data.font,
     )
     db.add(car)
+    # `flush` ANTES do `audit.record`: o `id` tem default Python-side (`_uuid`) e só existe
+    # depois do INSERT — sem ele o rastro nasce com `target=''` (MNT-001). Gate:
+    # `tests/test_audit_target_flush_gate.py`.
+    db.flush()
     audit.record(db, tenant_id=tenant_id, actor=actor, action="carousel.create", target=car.id)
     db.commit()
     db.refresh(car)

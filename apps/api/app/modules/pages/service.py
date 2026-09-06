@@ -118,6 +118,10 @@ def create_page(db: Session, *, tenant_id: str, actor: str, data: PageCreate) ->
         logo_url=profile.logo_url,
     )
     db.add(page)
+    # `flush` ANTES do `audit.record`: o `id` tem default Python-side (`_uuid`) e só existe
+    # depois do INSERT — sem ele o rastro nasce com `target=''` (MNT-001). Gate:
+    # `tests/test_audit_target_flush_gate.py`.
+    db.flush()
     audit.record(db, tenant_id=tenant_id, actor=actor, action="page.create", target=page.id)
     db.commit()
     db.refresh(page)
