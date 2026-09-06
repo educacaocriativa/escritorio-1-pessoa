@@ -81,11 +81,24 @@ export default function FunisPage() {
                   </div>
                 </div>
               </button>
+              {/* ⚠️ **`top-5` fixo, NUNCA `top-1/2 -translate-y-1/2` (#314).** Centrar a lixeira na
+                  vertical amarra a posição dela à ALTURA do card — e a altura do card depende de
+                  quantas linhas o nome do funil ocupa, que depende da MÉTRICA DA FONTE. Medido no
+                  trace do CI (run `33972206955`, contra este mesmo código): o `woff2` do Inter só
+                  começa a baixar aos 698ms — depois do `load`, porque a fonte só é pedida quando o
+                  React já desenhou o texto — e chega aos ~809ms, entre a MEDIÇÃO da caixa (760-799ms)
+                  e o `mousedown` (813ms). No swap o título passou de 4 linhas para 3, o card encolheu
+                  de 152 para 128px e a lixeira centrada PULOU 12px para cima: mais que a meia-altura
+                  dela (7px). O dedo que estava mirando a lixeira acertou o card e NAVEGOU — o dano
+                  exato que o #149 e o #160 existem para impedir, acontecendo de verdade numa pintura
+                  lenta. Ancorada no topo (`top-5`, alinhada ao `p-5` do card), a caixa da lixeira
+                  para de depender de quantas linhas o título ocupa. Medido em `e2e/aninhamento-
+                  clicavel-360.spec.ts`. */}
               <button
                 data-testid={`excluir-funil-${f.id}`}
                 aria-label={`Excluir ${f.name}`}
                 onClick={(e) => remove(e, f.id)}
-                className="absolute right-5 top-1/2 -translate-y-1/2 text-neutral-300 hover:text-danger"
+                className="absolute right-5 top-5 text-neutral-300 hover:text-danger"
               >
                 <Trash2 size={14} />
               </button>
