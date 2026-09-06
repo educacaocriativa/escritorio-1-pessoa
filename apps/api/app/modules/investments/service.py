@@ -173,6 +173,10 @@ def create_account(
         bank_account_id=data.bank_account_id,
     )
     db.add(acc)
+    # `flush` ANTES do `audit.record`: o `id` tem default Python-side (`_uuid`) e só existe
+    # depois do INSERT — sem ele o rastro nasce com `target=''` (MNT-001). Gate:
+    # `tests/test_audit_target_flush_gate.py`.
+    db.flush()
     audit.record(db, tenant_id=tenant_id, actor=actor, action="investment.create", target=acc.id)
     db.commit()
     db.refresh(acc)

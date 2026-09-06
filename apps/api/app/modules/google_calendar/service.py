@@ -181,6 +181,14 @@ def upsert_credential(db: Session, *, tenant_id: str, email: str, token_data: di
     if cred is None:
         cred = GoogleCredential(tenant_id=tenant_id)
         db.add(cred)
+        # ⚠️ `flush` AQUI, colado no `add` e não lá embaixo: o `target=cred.id` do `audit.record`
+        # no fim da função só existe depois do INSERT (`id` tem default Python-side `_uuid`), e
+        # sem isto o rastro do `connect` nascia com `target=''` (MNT-001). O caminho de UPDATE
+        # (`cred` já existia) não precisa: aquele id veio do banco. Colar o flush no `add` é o
+        # que torna as duas pernas equivalentes daqui para baixo, em vez de depender de um
+        # autoflush acidental do `_invalidar_vinculos_de_outra_conta` — que nem sempre roda
+        # (ele retorna 0 sem tocar no banco quando `email` vem vazio).
+        db.flush()
     cred.google_account_email = email
     cred.access_token = token_data.get("access_token", "")
     new_refresh = token_data.get("refresh_token")
@@ -374,7 +382,11 @@ def create_meet_event(
             "end": {"dateTime": _iso(event.ends_at)},
             "attendees": [{"email": g} for g in (event.guests or [])],
         }
-        if event.kind in MEET_KINDS:
+        # UMA avaliação só, reusada lá embaixo para conferir a RESPOSTA contra o PEDIDO. Se a
+        # guarda do aviso fosse reescrita à parte, as duas poderiam divergir em silêncio — e
+        # `MEET_KINDS` já é duplicado entre este módulo e `agenda/service.py`.
+        pediu_conferencia = event.kind in MEET_KINDS
+        if pediu_conferencia:
             body["conferenceData"] = {
                 "createRequest": {
                     "requestId": uuid.uuid4().hex,
@@ -394,7 +406,28 @@ def create_meet_event(
         # poderia já ser outra conta se o dono reconectasse no meio). `or None` porque
         # `google_account_email` fica "" quando o `userinfo` falhou no callback: string vazia
         # não é um e-mail, é procedência desconhecida — mesma semântica do NULL da coluna.
-        return data.get("hangoutLink"), data.get("id"), cred.google_account_email or None
+        hangout_link = data.get("hangoutLink")
+        if pediu_conferencia and not hangout_link:
+            # PEDIMOS `conferenceData.createRequest` e o Google devolveu 200 SEM `hangoutLink`:
+            # o evento foi criado, a conferência não. Sem este log o card nasce sem link do Meet
+            # em silêncio absoluto, e a investigação começa e termina em "funcionou para os
+            # outros" (issue #313).
+            #
+            # NÃO recusa o espelho, ao contrário do `[google:create_meet:sem_id]` do chamador: o
+            # `google_event_id` continua endereçando o evento, então remarcar, cancelar e o pull
+            # de `sync.py` seguem funcionando. O dano aqui é de diagnóstico, não de estado —
+            # descartar o espelho por causa do link trocaria um card sem link por um evento
+            # fantasma no calendário do dono.
+            #
+            # Guardado por `pediu_conferencia`, e não só por `not hangout_link`: `PUSHED_KINDS`
+            # inclui `bloqueio`, que é espelhado mas NÃO pede conferência (o `if` lá em cima).
+            # Avisar para bloqueio seria gritar em evento normal — e um log que grita sempre
+            # ensina todo mundo a ignorá-lo, e aí ele não vale nada.
+            logger.warning(
+                "[google:create_meet:sem_link] tenant=%s kind=%s google_event_id=%s",
+                tenant_id, event.kind, data.get("id"),
+            )
+        return hangout_link, data.get("id"), cred.google_account_email or None
     except Exception:
         # Falha de integração externa não derruba a Agenda (IV1). Não logamos o token.
         logger.exception("[google:create_meet:failed] tenant=%s", tenant_id)

@@ -228,8 +228,9 @@ def sync_origin_movement(
     `build_charge`: movimento e lançamento entram na **mesma transação**, e quem chama a fecha.
     Um dos dois sem o outro é exatamente o estado que esta função existe para tornar impossível.
     Faz `db.flush()` antes de `audit.record` porque o `id` tem default **Python-side** — sem o flush
-    a trilha nasceria com `target=''` (o defeito MNT-001, que 17 call sites do projeto têm e que o
-    módulo `bank` **já evita**).
+    a trilha nasceria com `target=''` (o defeito MNT-001). Este parágrafo dizia "17 call sites do
+    projeto têm e o módulo `bank` já evita": os 17 foram fechados na issue #311 e hoje são zero,
+    contados por `tests/test_audit_target_flush_gate.py`.
 
     **Sobre `raw_description`:** numa linha de `SOURCES_EXTERNA` ela é imutável, porque é a prova
     documental do que **o banco** disse. Numa linha de `SOURCES_SISTEMA` quem "disse" foi o próprio

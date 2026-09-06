@@ -43,6 +43,10 @@ def create_product(db: Session, *, tenant_id: str, actor: str, data: ProductCrea
         stock=data.stock,
     )
     db.add(p)
+    # `flush` ANTES do `audit.record`: o `id` tem default Python-side (`_uuid`) e só existe
+    # depois do INSERT — sem ele o rastro nasce com `target=''` (MNT-001). Gate:
+    # `tests/test_audit_target_flush_gate.py`.
+    db.flush()
     audit.record(db, tenant_id=tenant_id, actor=actor, action="product.create", target=p.id)
     db.commit()
     db.refresh(p)
@@ -96,8 +100,13 @@ def create_coupon(db: Session, *, tenant_id: str, actor: str, data: CouponCreate
         expires_at=data.expires_at,
     )
     db.add(c)
-    audit.record(db, tenant_id=tenant_id, actor=actor, action="coupon.create", target=c.id)
     try:
+        # ⚠️ `flush` ANTES do `audit.record`, e DENTRO do `try`: o `id` tem default Python-side
+        # (`_uuid`) aplicado só no INSERT — sem o flush o rastro nasce com `target=''` (MNT-001).
+        # Estar dentro do `try` importa: é o flush, e não mais o commit, que levanta o
+        # `IntegrityError` da constraint única. Mesmo padrão de `bank/service.py::create_account`.
+        db.flush()
+        audit.record(db, tenant_id=tenant_id, actor=actor, action="coupon.create", target=c.id)
         db.commit()
     except IntegrityError as e:
         db.rollback()

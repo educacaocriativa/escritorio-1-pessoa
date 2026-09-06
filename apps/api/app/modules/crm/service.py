@@ -100,8 +100,15 @@ def create_stage(db: Session, *, tenant_id: str, actor: str, data: StageCreate) 
         s.position = index
 
     db.add(stage)
-    audit.record(db, tenant_id=tenant_id, actor=actor, action="crm.stage.create", target=stage.id)
     try:
+        # ⚠️ `flush` ANTES do `audit.record`, e DENTRO do `try`: o `id` tem default Python-side
+        # (`_uuid`) aplicado só no INSERT — sem o flush o rastro nasce com `target=''` (MNT-001).
+        # Estar dentro do `try` importa: é o flush, e não mais o commit, que levanta o
+        # `IntegrityError` da constraint única. Mesmo padrão de `bank/service.py::create_account`.
+        db.flush()
+        audit.record(
+            db, tenant_id=tenant_id, actor=actor, action="crm.stage.create", target=stage.id
+        )
         db.commit()
     except IntegrityError as e:
         db.rollback()
@@ -248,8 +255,9 @@ def create_client(db: Session, *, tenant_id: str, actor: str, data: ClientCreate
     )
     db.add(client)
     # `client.id` só existe depois do flush (o default `_uuid` é aplicado na descarga). Sem
-    # isto, tanto a trilha quanto o evento apontariam para lugar nenhum — é exatamente a
-    # dívida MNT-001 registrada no CLAUDE.md.
+    # isto, tanto a trilha quanto o evento apontariam para lugar nenhum — é exatamente o
+    # defeito MNT-001, fechado na issue #311 e guardado por
+    # `tests/test_audit_target_flush_gate.py`.
     db.flush()
     record_event(
         db, tenant_id=tenant_id, client_id=client.id, kind=CRM_LEAD_CRIADO,
