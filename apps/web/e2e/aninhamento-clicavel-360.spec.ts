@@ -132,6 +132,17 @@ const DESLOCAMENTO_PX = 10;
 const MARGEM_PX = 1;
 
 /**
+ * Quanto a régua do ACOPLAMENTO À ALTURA faz o card crescer para perguntar se a lixeira anda junto.
+ *
+ * ⚠️ **O número não é gosto: ele tem de ser maior que a ALTURA da lixeira, e o teste confere isso.**
+ * Uma lixeira centrada na vertical anda `Δaltura / 2` quando o card cresce `Δaltura`. Para que essa
+ * caminhada passe da meia-altura da lixeira — o limiar que decide se o `mousedown` na caixa velha
+ * ainda cai dentro dela — basta `Δaltura > altura`. O controle de instrumento do teste exige
+ * exatamente isso, então a régua não tem como passar por ter crescido de menos.
+ */
+const CRESCIMENTO_PX = 80;
+
+/**
  * ⚠️ **O pior caso de §5.1 aqui é o pior caso ALCANÇÁVEL, e a diferença foi medida.**
  *
  * O nome sem espaço de 80 chars que a régua de layout usa (`support/rotas.ts`) empurra a lixeira
@@ -357,6 +368,12 @@ interface Tela {
   destino: RegExp;
   /** O caminho do DELETE que a lixeira dispara quando o toque acerta de verdade. */
   apagar: string;
+  /**
+   * Δ MEDIDO, em px, do deslocamento da lixeira quando o card cresce `CRESCIMENTO_PX` — preenchido
+   * SÓ nas telas em que a régua do acoplamento à altura reprova hoje, e que por isso ficam
+   * `test.fixme`. Dívida com número, não `skip` mudo.
+   */
+  acoplamentoConhecidoPx?: number;
 }
 
 const ID = "x1";
@@ -438,6 +455,21 @@ const TELAS: Tela[] = [
     interno: `excluir-carrossel-${ID}`,
     destino: /\/marketing\/x1$/,
     apagar: `/api/marketing/carousels/${ID}`,
+    // ⚠️ **`MarketingPage.tsx:76` tem o MESMO acoplamento, e ele foi medido — não suposto.** A
+    // lixeira é `absolute bottom-0 right-0`, então a posição dela é a borda de BAIXO do card: ela
+    // anda **1:1** com a altura. Medido em 05/09/2026, viewport 360×740, com esta mesma régua:
+    // crescendo o card em `CRESCIMENTO_PX` (80px), o centro da lixeira desce **80,00px** em relação
+    // ao topo do card — offset 222,00 → 302,00, contra 0,00px de desvio no `/funis` e no
+    // `/juridico`, já corrigidos. São 11,4× a meia-altura da lixeira. Com a métrica de fonte no
+    // lugar do padding (família monoespaçada, card de 229 → 245px) o desvio é 16,00px — ainda
+    // 2,3× a meia-altura, então não é artefato da alavanca escolhida.
+    //
+    // NÃO entra nesta PR de propósito: no `/funis` a correção é trocar uma classe de posição, e no
+    // `/marketing` a lixeira mora sobre a arte do carrossel (`CarouselThumb`/`ScaledSlide`, #228 e
+    // #243) — ancorá-la no topo a joga em cima da miniatura, o que é redesenho, não conserto. Um
+    // PR que conserta o `/funis` não pode arrastar isso. Fica `test.fixme` COM o número: o dia em
+    // que alguém consertar, o `fixme` reprova por passar, e a dívida se fecha sozinha.
+    acoplamentoConhecidoPx: 80,
   },
 ];
 
@@ -558,6 +590,84 @@ for (const tela of TELAS) {
       // E nem a do interno: escorregando, o toque não faz NADA — que é o resultado desejado.
       // Antes, ele fazia a coisa ERRADA (navegava), e é essa a troca que a issue #160 compra.
       expect(deletes).toEqual([]);
+    });
+
+    /**
+     * A régua do ACOPLAMENTO À ALTURA (#314) — a guarda que faltava à metade de PRODUTO.
+     *
+     * ⚠️ **Sem ela, voltar `top-1/2 -translate-y-1/2` no `FunisPage.tsx` não reprova NADA.** A
+     * correção de produto do #314 ficaria protegida por um comentário, e comentário não contém:
+     * no #311, medido neste mesmo dia, um defeito nomeado, contado e CERTO em cinco comentários de
+     * código desde julho sobreviveu seis semanas. O teste vizinho (o do escorregão de 10px) não
+     * cobre isto: ele mede a caixa DEPOIS do layout estabilizar, então passa verde com a lixeira
+     * centrada — o defeito só aparece quando a medição e o toque caem nos dois lados do reflow, e
+     * essa é uma janela de ~14ms que nenhum teste acerta de propósito.
+     *
+     * O que esta régua pergunta é a INVARIANTE, não a corrida: *a posição da lixeira depende da
+     * ALTURA do card?* Se depender, qualquer reflow que mude a altura — troca de fonte, título
+     * mais longo, tradução, uma segunda linha de metadado — move a lixeira debaixo do dedo que já
+     * estava mirando nela. Foi assim que o CI caiu (run `33972206955`): o `woff2` do Inter chegou,
+     * o título passou de 4 linhas para 3, o card encolheu de 152 para 128px e a lixeira centrada
+     * pulou 12px, mais que a meia-altura dela.
+     *
+     * ⚠️ **A segunda métrica é `padding-bottom`, e a escolha foi medida.** O ideal seria variar a
+     * MÉTRICA DA FONTE, que é o mecanismo real. Mas o efeito dela depende de quais fontes estão
+     * instaladas na máquina — foi exatamente isso que escondeu o defeito no Windows, onde a Inter
+     * é local e `document.fonts.check("600 16px Inter")` devolve `true` mesmo com a rede
+     * bloqueada. Medido em 05/09/2026 nas três telas, trocando a família do card para monoespaçada:
+     * o card do `/funis` vai de 128 para 152px, o do `/marketing` de 229 para 245 — mas o do
+     * `/juridico` **não muda** (título de uma linha só nas duas métricas), e a régua passaria lá
+     * por não ter medido nada, o modo de falha do #123. `padding-bottom` varia a mesma grandeza —
+     * a altura — com um número idêntico em qualquer máquina e em todas as três telas.
+     */
+    const declararRegua = tela.acoplamentoConhecidoPx === undefined ? test : test.fixme;
+    declararRegua("a posição da lixeira NÃO depende da altura do card", async ({ page }) => {
+      const lixeira = page.getByTestId(tela.interno);
+      const card = page.getByTestId(tela.externo);
+
+      const lixeiraAntes = (await lixeira.boundingBox())!;
+      const cardAntes = (await card.boundingBox())!;
+      // A grandeza é o offset do centro da lixeira ao TOPO do card — e não o `y` absoluto dela.
+      // Se a página inteira descer, os dois descem juntos e o dedo continua acertando; o que
+      // machuca é a lixeira andar EM RELAÇÃO ao card que ela decora.
+      const offsetAntes = lixeiraAntes.y + lixeiraAntes.height / 2 - cardAntes.y;
+
+      await page.addStyleTag({
+        content: `[data-testid="${tela.externo}"] { padding-bottom: ${CRESCIMENTO_PX}px; }`,
+      });
+      await esperarLayoutEstavel(page, lixeira, card);
+
+      const lixeiraDepois = (await lixeira.boundingBox())!;
+      const cardDepois = (await card.boundingBox())!;
+      const offsetDepois = lixeiraDepois.y + lixeiraDepois.height / 2 - cardDepois.y;
+
+      // ⚠️ **Controle do INSTRUMENTO, antes da asserção — e o limiar dele não é literal solto.**
+      // Uma lixeira centrada anda `Δaltura / 2`. Para essa caminhada passar da meia-altura da
+      // lixeira, basta `Δaltura > altura`. Exigir isso aqui é exigir que a régua TENHA poder de
+      // reprovar o mutante: se o card crescer de menos, o teste não mediu nada e diz isso, em vez
+      // de passar verde por ter empurrado pouco.
+      const cresceu = cardDepois.height - cardAntes.height;
+      expect(
+        cresceu,
+        `o card cresceu ${cresceu.toFixed(2)}px, e a lixeira tem ${lixeiraAntes.height.toFixed(2)}px ` +
+          `de altura — com um crescimento menor que esse, uma lixeira CENTRADA andaria menos que a ` +
+          `meia-altura dela e esta régua passaria sem ter medido nada (#123). Aumente o ` +
+          `\`CRESCIMENTO_PX\`, ou descubra por que o \`padding-bottom\` não chegou ao card`,
+      ).toBeGreaterThan(lixeiraAntes.height);
+
+      const andou = Math.abs(offsetDepois - offsetAntes);
+      const meiaAltura = lixeiraAntes.height / 2;
+      expect(
+        andou,
+        `a caixa da lixeira está AMARRADA À ALTURA DO CARD: o card cresceu ${cresceu.toFixed(2)}px ` +
+          `e o centro da lixeira andou ${andou.toFixed(2)}px em relação ao topo dele ` +
+          `(${offsetAntes.toFixed(2)} → ${offsetDepois.toFixed(2)}), mais que a meia-altura dela ` +
+          `(${meiaAltura.toFixed(2)}px). Isso não é estética: qualquer reflow que mude a altura do ` +
+          `card — swap de fonte, título mais longo, tradução — move a lixeira debaixo do dedo que ` +
+          `já estava mirando nela, e o toque cai no card, que NAVEGA (#149/#160). Ancore a lixeira ` +
+          `numa borda que não dependa da altura (\`top-N\`), NÃO em \`top-1/2 -translate-y-1/2\` ` +
+          `nem em \`bottom-N\``,
+      ).toBeLessThan(meiaAltura);
     });
 
     test("o toque certeiro na lixeira apaga, e não navega", async ({ page }) => {
