@@ -285,8 +285,9 @@ def create_transfer(
     segundo escritor da mesma linha, que é o que torna a Regra da Origem inauditável.
 
     `db.flush()` **antes** do `audit.record`: o `id` tem default Python-side, e sem o flush a trilha
-    nasceria com `target=''` — o defeito MNT-001, que 17 call sites do projeto têm e que o módulo
-    `bank` é o único a evitar. **Não replique o erro aqui.**
+    nasceria com `target=''` — o defeito MNT-001. Este parágrafo dizia que 17 call sites do projeto
+    o tinham e que `bank` era o único a evitá-lo: os 17 foram fechados na issue #311, e agora quem
+    impede o 18º é `tests/test_audit_target_flush_gate.py`. **Não replique o erro aqui.**
 
     **Idempotência:** duas transferências idênticas no mesmo dia são **duas** transferências (é
     legítimo: dois Pix de R$ 500 para a mesma poupança no mesmo dia acontecem). O que o índice único

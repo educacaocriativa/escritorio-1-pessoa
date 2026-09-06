@@ -102,10 +102,16 @@ def create_template(
         variable_examples=data.variable_examples,
     )
     db.add(template)
-    audit.record(
-        db, tenant_id=tenant_id, actor=actor, action="whatsapp_template.create", target=template.id
-    )
     try:
+        # ⚠️ `flush` ANTES do `audit.record`, e DENTRO do `try`: o `id` tem default Python-side
+        # (`_uuid`) aplicado só no INSERT — sem o flush o rastro nasce com `target=''` (MNT-001).
+        # Estar dentro do `try` importa: é o flush, e não mais o commit, que levanta o
+        # `IntegrityError` da constraint única. Mesmo padrão de `bank/service.py::create_account`.
+        db.flush()
+        audit.record(
+            db, tenant_id=tenant_id, actor=actor,
+            action="whatsapp_template.create", target=template.id,
+        )
         db.commit()
     except IntegrityError as e:
         db.rollback()

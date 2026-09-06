@@ -71,6 +71,10 @@ def create_attachment(
         att.data = data
         att.storage_key = None
     db.add(att)
+    # `flush` ANTES do `audit.record`: o `id` tem default Python-side (`_uuid`) e só existe
+    # depois do INSERT — sem ele o rastro nasce com `target=''` (MNT-001). Gate:
+    # `tests/test_audit_target_flush_gate.py`.
+    db.flush()
     audit.record(db, tenant_id=tenant_id, actor=actor, action="attachment.create", target=att.id)
     db.commit()
     db.refresh(att)
@@ -135,6 +139,10 @@ def create_public_image(
         raise AttachmentError("Arquivo acima de 10 MB", 413)
     img = PublicImage(tenant_id=tenant_id, content_type=content_type, size=len(data), data=data)
     db.add(img)
+    # `flush` ANTES do `audit.record`: o `id` tem default Python-side (`_uuid`) e só existe
+    # depois do INSERT — sem ele o rastro nasce com `target=''` (MNT-001). Gate:
+    # `tests/test_audit_target_flush_gate.py`.
+    db.flush()
     audit.record(db, tenant_id=tenant_id, actor=actor, action="public_image.create", target=img.id)
     db.commit()
     db.refresh(img)

@@ -110,6 +110,10 @@ def create_template(
         tenant_id=tenant_id, name=data.name, clauses=[c.model_dump() for c in data.clauses]
     )
     db.add(tpl)
+    # `flush` ANTES do `audit.record`: o `id` tem default Python-side (`_uuid`) e só existe
+    # depois do INSERT — sem ele o rastro nasce com `target=''` (MNT-001). Gate:
+    # `tests/test_audit_target_flush_gate.py`.
+    db.flush()
     audit.record(
         db, tenant_id=tenant_id, actor=actor, action="contract.template.create", target=tpl.id
     )
