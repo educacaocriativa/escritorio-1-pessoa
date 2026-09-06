@@ -57,8 +57,16 @@ def registrar(db, *, tenant_id: str, actor: str, action: str, target: str = ""):
     """Grava a trilha do DNA, validando o vocabulário AGORA.
 
     ⚠️ Quem chama é responsável pelo `db.flush()` quando o `target` depende de uma linha recém
-    adicionada — o `id` tem default Python-side e só existe depois do INSERT (defeito MNT-001, 17
-    call sites no projeto; o módulo `bank` já faz certo).
+    adicionada — o `id` tem default Python-side e só existe depois do INSERT. Sem o flush o
+    `target` nasce `''` em silêncio (`String(255)`, `NOT NULL`, `default=""`): a entrada diz que
+    a ação aconteceu e não diz sobre o quê.
+
+    ERRATA (2026-09-05, issue #311): esta docstring afirmava "defeito MNT-001, 17 call sites no
+    projeto". Os 17 foram corrigidos e a contagem hoje é ZERO — mantê-la mandaria o próximo leitor
+    procurar defeito que não existe. A responsabilidade descrita acima continua valendo, e agora
+    tem guarda mecânica: `tests/test_audit_target_flush_gate.py` reprova por AST qualquer
+    `record(..., target=X.id)` alcançável depois de um `db.add(X)` sem flush. Ter documentado o
+    defeito por semanas sem contê-lo é a razão de o gate existir.
     """
     if not action.startswith(PREFIXO) or action not in ACTIONS:
         raise VocabularioError(

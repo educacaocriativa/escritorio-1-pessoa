@@ -130,7 +130,10 @@ def record(
     fato.
 
     ⚠️ Chame `db.flush()` antes se `subject_id` vier de um objeto recém-adicionado: o `id`
-    ainda é `None` antes do flush. É a dívida MNT-001 em 17 call sites de `audit.record`.
+    ainda é `None` antes do flush. É o defeito MNT-001, que `audit.record` teve em 17 call
+    sites até a issue #311 fechá-los; hoje são zero, e `tests/test_audit_target_flush_gate.py`
+    guarda a trilha de auditoria por AST. Esta função NÃO está sob aquele gate — aqui a
+    disciplina continua sendo de quem chama.
     """
     if not kind.startswith(f"{module}."):
         raise FactError(

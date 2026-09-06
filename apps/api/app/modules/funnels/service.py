@@ -293,6 +293,10 @@ def ai_compose(db: Session, *, tenant_id: str, kind: str, prompt: str) -> dict:
 def create_funnel(db: Session, *, tenant_id: str, actor: str, data: FunnelCreate) -> Funnel:
     funnel = Funnel(tenant_id=tenant_id, name=data.name, nodes=data.nodes, edges=data.edges)
     db.add(funnel)
+    # `flush` ANTES do `audit.record`: o `id` tem default Python-side (`_uuid`) e só existe
+    # depois do INSERT — sem ele o rastro nasce com `target=''` (MNT-001). Gate:
+    # `tests/test_audit_target_flush_gate.py`.
+    db.flush()
     audit.record(db, tenant_id=tenant_id, actor=actor, action="funnel.create", target=funnel.id)
     db.commit()
     db.refresh(funnel)

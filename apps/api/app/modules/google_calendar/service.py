@@ -181,6 +181,14 @@ def upsert_credential(db: Session, *, tenant_id: str, email: str, token_data: di
     if cred is None:
         cred = GoogleCredential(tenant_id=tenant_id)
         db.add(cred)
+        # ⚠️ `flush` AQUI, colado no `add` e não lá embaixo: o `target=cred.id` do `audit.record`
+        # no fim da função só existe depois do INSERT (`id` tem default Python-side `_uuid`), e
+        # sem isto o rastro do `connect` nascia com `target=''` (MNT-001). O caminho de UPDATE
+        # (`cred` já existia) não precisa: aquele id veio do banco. Colar o flush no `add` é o
+        # que torna as duas pernas equivalentes daqui para baixo, em vez de depender de um
+        # autoflush acidental do `_invalidar_vinculos_de_outra_conta` — que nem sempre roda
+        # (ele retorna 0 sem tocar no banco quando `email` vem vazio).
+        db.flush()
     cred.google_account_email = email
     cred.access_token = token_data.get("access_token", "")
     new_refresh = token_data.get("refresh_token")
