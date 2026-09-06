@@ -11,9 +11,14 @@ mais grave, porque **sustentava uma decisão de modelagem**: o upsert foi aceito
 rede que ninguém tinha tecido.
 
 Quem grava, hoje (verificável por `grep -rn "eventos.registrar" apps/api/app/modules/dna/`):
-`service._gravar` → `dna.answer.save` / `dna.answer.skip`, com `target=<source>:<pergunta>`;
-`router.nucleo_evento` → `dna.nucleo.open` / `dna.nucleo.abandon`. **Se esta lista divergir do
-grep, é ela que está errada.**
+`service._gravar` → `dna.answer.save` / `dna.answer.skip`, com `target=<id desta linha>` e
+`detail=<source>`; `router.nucleo_evento` → `dna.nucleo.open` / `dna.nucleo.abandon`, com
+`target=""` (não há entidade) e o denominador visto no `detail` do `open`. **Se esta lista
+divergir do grep, é ela que está errada.**
+
+O `source` vai para o `detail` e não para o `target` porque `audit_entries.target` é id, e só
+(issue #312) — e porque o id JÁ devolve a pergunta: `question_key` é a chave do upsert e não
+muda. O que o upsert apaga é a coluna `source` abaixo, e é ela que o rastro guarda.
 
 `value` nulo NÃO é ausência de linha: é "o dono viu a pergunta e pulou". A distinção sustenta a
 quarentena de 7 dias em `cadencia.py` sem tabela nova.

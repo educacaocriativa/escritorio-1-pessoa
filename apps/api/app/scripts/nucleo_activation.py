@@ -54,7 +54,8 @@ logger = logging.getLogger("e1p.nucleo_activation")
 class Passagem:
     """Uma passagem pelo núcleo: de um `open` até o `abandon` (ou até o fim do rastro).
 
-    `exibidas` é o denominador VISTO, lido do `target` do `open` — não é `len(catalog.NUCLEO)`.
+    `exibidas` é o denominador VISTO, lido do `detail` do `open` (e do `target`, no rastro
+    legado — ver a nota de compatibilidade abaixo) — não é `len(catalog.NUCLEO)`.
     `faltantes` devolve só as não respondidas, então na segunda visita a pessoa vê 4 e não 6; e
     `catalog.NUCLEO` pode crescer, o que viraria todo "k de 6" histórico em "k de 7"
     retroativamente. O progresso (`respondidas`/`puladas`) é DERIVADO dos eventos, e nada de
@@ -90,9 +91,60 @@ def entradas_do_dna(db: Session) -> list[AuditEntry]:
     )
 
 
+# ⚠️ **Compatibilidade com o rastro LEGADO — não é opcional, e tem condição de saída medível.**
+#
+# Até 2026-09-05 (issue #312) o módulo `dna` gravava as suas três informações no `target`, que não
+# tinha contrato: `save`/`skip` iam como `f"{source}:{key}"` e o `open` como a contagem crua
+# (`str(exibidas)`). Hoje o `target` é só id — o `source` mora em `detail`, e o denominador do
+# `open` também. **As duas funções abaixo leem as DUAS formas, e a antiga primeiro.**
+#
+# Por que não é opcional: existe trilha JÁ GRAVADA em produção nas formas antigas, e ela é a única
+# evidência de ativação do núcleo que este script existe para ler. Ler só o `detail` devolveria
+# `origem=""` e `exibidas=0` para todo o histórico — zero passagens contadas, **sem erro nenhum**,
+# que é indistinguível de "ninguém abriu o núcleo ainda". É o modo de falha que o docstring do topo
+# chama de pior que ficar calado, e a razão de este script imprimir a contagem de tenants.
+#
+# Por que não uma migration de dados, que apagaria o problema: (a) `audit_entries` tem `FORCE ROW
+# LEVEL SECURITY`; um `UPDATE` de migration roda **sem** `app.current_tenant_id` e é filtrado a
+# ZERO linhas em silêncio — é exatamente o que a 0087 documenta ao recusar backfill por `UPDATE`;
+# (b) o rastro é EVIDÊNCIA, e reescrever evidência é o que o topo deste arquivo recusa ao não ter
+# `--fix`; (c) a conversão não é reversível: reconstruir `f"{source}:{key}"` exigiria o `source`
+# que o upsert de `dna_answers` já pode ter sobrescrito — o rastro existe precisamente porque
+# aquela coluna não guarda o passado.
+#
+# **Até quando importa:** enquanto existir uma linha antiga. `audit_entries` não tem retenção nem
+# poda — a única remoção é a purga do tenant inteiro (`platform/service._business_table_names`).
+# A condição de saída é medível, e é esta, por tenant, dentro de `tenant_session`:
+#
+#     SELECT count(*) FROM audit_entries
+#      WHERE action LIKE 'dna.%' AND (target LIKE '%:%' OR target ~ '^[0-9]+$');
+#
+# Zero em TODOS os tenants é o dia em que os dois ramos legados abaixo podem sair. Antes disso,
+# removê-los cega o histórico sem produzir um único sintoma.
+
+
 def _origem(entrada: AuditEntry) -> str:
-    """A porta de entrada da resposta, lida do `target` (`<source>:<pergunta>`)."""
-    return entrada.target.split(":", 1)[0]
+    """A porta de entrada da resposta (`nucleo｜gancho｜config`).
+
+    Forma atual: `detail` é o `source`, cru. Forma LEGADA: `target` era `<source>:<pergunta>`.
+    O `":"` no `target` é o discriminador e é seguro nos dois sentidos — o contrato novo só
+    admite um UUID ou `""` ali, e nenhum dos dois contém `":"`.
+    """
+    if ":" in entrada.target:
+        return entrada.target.split(":", 1)[0]  # LEGADO (ver a nota acima)
+    return entrada.detail
+
+
+def _exibidas(entrada: AuditEntry) -> int:
+    """O denominador VISTO no `open`. Zero quando não dá para saber — nunca um chute.
+
+    Forma atual: o número está no `detail` (o `open` não tem entidade, então `target=""`). Forma
+    LEGADA: o número ERA o `target`. Um `target` que é dígito só pode ser legado — o contrato
+    novo só admite UUID ou `""` ali —, então a ordem dos ramos não é ambígua nos dois sentidos.
+    """
+    if entrada.target.isdigit():
+        return int(entrada.target)  # LEGADO (ver a nota acima)
+    return int(entrada.detail) if entrada.detail.isdigit() else 0
 
 
 def _com(p: Passagem, **campos) -> Passagem:
@@ -111,7 +163,7 @@ def derivar(entradas: Sequence[AuditEntry]) -> list[Passagem]:
 
     Resposta fora de uma passagem aberta é ignorada de propósito: gancho e `/config` acontecem o
     tempo todo, e contá-los inventaria passagem onde não houve abertura. É esse recorte que faz o
-    `source` no `target` pagar a conta.
+    `source` no `detail` pagar a conta.
     """
     passagens: list[Passagem] = []
     aberta: Passagem | None = None
@@ -120,9 +172,7 @@ def derivar(entradas: Sequence[AuditEntry]) -> list[Passagem]:
         if e.action == eventos.ACTION_OPEN:
             if aberta is not None:
                 passagens.append(aberta)
-            aberta = Passagem(
-                abertura=e.created_at, exibidas=int(e.target) if e.target.isdigit() else 0
-            )
+            aberta = Passagem(abertura=e.created_at, exibidas=_exibidas(e))
         elif e.action == eventos.ACTION_ABANDON:
             if aberta is not None:
                 passagens.append(_com(aberta, fim=e.created_at))

@@ -104,19 +104,23 @@ def nucleo_evento(
             detail=f"evento '{evento}' não existe; são {sorted(eventos.EVENTOS_DO_NUCLEO)}",
         )
 
-    alvo = ""
+    # `target=""` nos DOIS eventos do núcleo, e não é omissão: abrir e abandonar o núcleo não
+    # tocam entidade nenhuma — não há id a apontar (contrato de `audit_entries.target`).
+    # O denominador é gravado porque NÃO é derivável: `faltantes` devolve só as não respondidas
+    # (na 2ª visita são 4, não 6) e `catalog.NUCLEO` pode crescer. Ele é um VALOR, então vai no
+    # `detail`. Até a issue #312 ia no `target` (`str(corpo.exibidas)`) — a terceira forma que
+    # aquele campo acumulou sem contrato, e a que forçava `int(e.target)` no consumidor.
+    detalhe = ""
     if action == eventos.ACTION_OPEN:
-        # O denominador é gravado porque NÃO é derivável: `faltantes` devolve só as não
-        # respondidas (na 2ª visita são 4, não 6) e `catalog.NUCLEO` pode crescer.
         if corpo.exibidas is None or corpo.exibidas < 1:
             raise HTTPException(
                 status_code=422,
                 detail="'exibidas' é obrigatório no open: é a evidência do que a pessoa viu",
             )
-        alvo = str(corpo.exibidas)
+        detalhe = str(corpo.exibidas)
 
     eventos.registrar(
-        db, tenant_id=user.tenant_id, actor=user.user_id, action=action, target=alvo
+        db, tenant_id=user.tenant_id, actor=user.user_id, action=action, detail=detalhe
     )
     db.commit()
     return Response(status_code=204)

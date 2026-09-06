@@ -56,9 +56,16 @@ def headers_sub_crm(tenant_id: str) -> dict[str, str]:
     return {"Authorization": f"Bearer {token}"}
 
 
-def _do_dna(db: Session) -> list[tuple[str, str]]:
+def _do_dna(db: Session) -> list[tuple[str, str, str]]:
+    """`(action, target, detail)` — a trilha do DNA nos três campos que a issue #312 fixou.
+
+    O `target` entra na tupla apesar de ser SEMPRE `""` nos eventos do núcleo, e é por isso que
+    ele entra: abrir e abandonar o núcleo não tocam entidade nenhuma, então não há id a apontar.
+    Até a #312 era ali que o denominador visto ia parar (`str(exibidas)`), e afirmar `""` é o que
+    faz este teste morrer se alguém devolver um VALOR para o campo que só aceita id.
+    """
     return [
-        (e.action, e.target)
+        (e.action, e.target, e.detail)
         for e in db.scalars(select(AuditEntry).where(AuditEntry.action.like("dna.%"))).all()
     ]
 
@@ -78,14 +85,14 @@ def test_open_grava_o_denominador_que_a_pessoa_VIU(
     assert r.status_code == 204
     assert r.content == b""
 
-    assert _do_dna(db) == [("dna.nucleo.open", "4")]
+    assert _do_dna(db) == [("dna.nucleo.open", "", "4")]
 
 
 def test_abandon_grava_sem_alvo(client: TestClient, headers: dict[str, str], db: Session):
     r = client.post("/dna/nucleo/abandon", json={}, headers=headers)
     assert r.status_code == 204
 
-    assert _do_dna(db) == [("dna.nucleo.abandon", "")]
+    assert _do_dna(db) == [("dna.nucleo.abandon", "", "")]
 
 
 def test_evento_fora_da_tupla_nao_existe(client: TestClient, headers: dict[str, str], db: Session):
@@ -118,4 +125,4 @@ def test_403_do_sub_usuario_nao_produz_evento_nenhum(
 
     # Controle positivo: o MEMBRO, na mesma sessão, produz evento.
     assert client.post("/dna/nucleo/open", json={"exibidas": 6}, headers=headers).status_code == 204
-    assert _do_dna(db) == [("dna.nucleo.open", "6")]
+    assert _do_dna(db) == [("dna.nucleo.open", "", "6")]

@@ -98,19 +98,25 @@ def _seed(app_url: str, *, slug: str, exibidas: str, pergunta: str) -> str:
             session = Session(bind=conn)
             session.add(Tenant(id=tenant_id, slug=slug, legal_name=slug, document=f"{slug}-doc"))
             session.flush()
+            # Contrato de `audit_entries.target` (issue #312): id, ou `""` quando não há
+            # entidade. O `open` do núcleo não toca entidade nenhuma — o denominador visto é um
+            # VALOR e vai no `detail`. A resposta aponta para a `DnaAnswer`; aqui o id é
+            # sintético (não há linha de DNA a criar para exercer RLS de `audit_entries`), e é o
+            # `detail` que distingue a origem, como em produção.
             eventos.registrar(
                 session,
                 tenant_id=tenant_id,
                 actor="u",
                 action=eventos.ACTION_OPEN,
-                target=exibidas,
+                detail=exibidas,
             )
             eventos.registrar(
                 session,
                 tenant_id=tenant_id,
                 actor="u",
                 action=eventos.ACTION_SAVE,
-                target=eventos.alvo_da_resposta("nucleo", pergunta),
+                target=f"id-{pergunta}",
+                detail="nucleo",
             )
             eventos.registrar(
                 session, tenant_id=tenant_id, actor="u", action=eventos.ACTION_ABANDON, target=""
@@ -122,8 +128,12 @@ def _seed(app_url: str, *, slug: str, exibidas: str, pergunta: str) -> str:
     return tenant_id
 
 
-def _entradas_como(app_url: str, tenant_id: str | None) -> list[str]:
-    """Os `target`s da trilha do DNA vistos por esta sessão.
+def _entradas_como(app_url: str, tenant_id: str | None) -> list[tuple[str, str]]:
+    """Os pares `(target, detail)` da trilha do DNA vistos por esta sessão.
+
+    Os DOIS campos, porque desde a issue #312 a informação de uma entrada do DNA mora nos dois:
+    `target` é id (ou `""`) e `detail` carrega o `source` da resposta ou o denominador do `open`.
+    Ler só um deles deixaria metade do vazamento invisível a este teste.
 
     ⚠️ **Sem ordem prometida.** As três chamadas de `_seed` correm na MESMA transação, e
     `AuditEntry.created_at` usa `server_default=func.now()` — em Postgres isso é o instante da
@@ -144,7 +154,7 @@ def _entradas_como(app_url: str, tenant_id: str | None) -> list[str]:
             session = Session(bind=conn)
             entradas = entradas_do_dna(session)
             session.close()
-            return [e.target for e in entradas]
+            return [(e.target, e.detail) for e in entradas]
     finally:
         engine.dispose()
 
@@ -173,15 +183,19 @@ def test_a_ativacao_enxerga_a_propria_trilha_e_nao_a_do_vizinho() -> None:
         # por transação — a mesma razão que `test_investment_audit_rls` não tem aqui, porque lá
         # a ordem nunca era afirmada).
         alvos_a = _entradas_como(app_url, a)
-        assert sorted(alvos_a) == sorted(["6", "nucleo:oferta.o_que_vende", ""])
+        assert sorted(alvos_a) == sorted(
+            [("", "6"), ("id-oferta.o_que_vende", "nucleo"), ("", "")]
+        )
 
         # (3) — e não vê nada do vizinho. Se a leitura trocasse A por B (em vez de vazar as duas),
         # o roteiro distinto de cada tenant denuncia: o relatório de ativação de A citaria a
         # pergunta de B — o modo de falha que o épico chama de "pior do que ficar calado".
         alvos_b = _entradas_como(app_url, b)
-        assert sorted(alvos_b) == sorted(["5", "nucleo:oferta.como_cobra", ""])
-        assert "nucleo:oferta.como_cobra" not in alvos_a
-        assert "nucleo:oferta.o_que_vende" not in alvos_b
+        assert sorted(alvos_b) == sorted(
+            [("", "5"), ("id-oferta.como_cobra", "nucleo"), ("", "")]
+        )
+        assert ("id-oferta.como_cobra", "nucleo") not in alvos_a
+        assert ("id-oferta.o_que_vende", "nucleo") not in alvos_b
 
         # (4) — sem GUC: ZERO linhas, sem erro. É este silêncio que `main()` não pode confundir com
         # "nenhum tenant abriu o núcleo ainda", e por isso o script imprime a contagem de tenants.
