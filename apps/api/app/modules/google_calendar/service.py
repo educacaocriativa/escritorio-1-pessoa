@@ -196,9 +196,14 @@ def upsert_credential(db: Session, *, tenant_id: str, email: str, token_data: di
             "[google:reconexao:conta_trocada] tenant=%s eventos_invalidados=%d",
             tenant_id, invalidados,
         )
+    # `detail=email`: QUAL conta entrou. Sem isso, nem reconstruindo a sequência de entradas dá
+    # para saber de qual conta para qual a reconexão trocou — o `connect` é a única ponta que
+    # sabe o e-mail novo, e o `target` (id da credencial) é o MESMO em toda troca do tenant.
+    # `email` vazio (userinfo falhou no callback, ver `handle_callback`) grava "" e é honesto:
+    # a conexão de fato aconteceu sem que soubéssemos quem é.
     audit.record(
         db, tenant_id=tenant_id, actor="google:oauth", action="google.credential.connect",
-        target=cred.id,
+        target=cred.id, detail=email,
     )
     db.commit()
 
@@ -234,10 +239,19 @@ def disconnect(db: Session, *, tenant_id: str, actor: str) -> bool:
             )
         except Exception:
             logger.exception("[google:revoke:failed] tenant=%s", tenant_id)
+    # Lidos ANTES do `delete`: depois dele `cred` está marcado para remoção e ler atributo de
+    # instância deletada depende de a sessão ainda não ter expirado o objeto. O `target=cred.id`
+    # que ficava DEPOIS do delete só funcionava por acidente de timing; agora nenhum dos dois
+    # valores depende disso. (Mesma disciplina de `_descartar_credencial_revogada`, que já lê
+    # `tenant_id`/`cred_id` antes de mexer na credencial.)
+    cred_id = cred.id
+    email_da_conta = cred.google_account_email
     db.delete(cred)
+    # `detail`: QUAL conta saiu. A linha morre nesta mesma transação, então o e-mail não é
+    # recuperável por join depois — é exatamente o caso que a coluna `detail` existe para cobrir.
     audit.record(
         db, tenant_id=tenant_id, actor=actor, action="google.credential.disconnect",
-        target=cred.id,
+        target=cred_id, detail=email_da_conta,
     )
     db.commit()
     return True
@@ -267,6 +281,7 @@ def _descartar_credencial_revogada(cred: GoogleCredential) -> None:
     # usado dentro dela (nem depois do delete, que o expiraria lá).
     tenant_id = cred.tenant_id
     cred_id = cred.id
+    email_da_conta = cred.google_account_email
     try:
         with tenant_session(tenant_id) as descarte:
             morta = descarte.get(GoogleCredential, cred_id)
@@ -277,9 +292,12 @@ def _descartar_credencial_revogada(cred: GoogleCredential) -> None:
             # apagou foi o sistema ao ver o token morto, não o usuário pedindo para desconectar.
             # Confundir as duas no audit apagaria a diferença entre "revogado pelo Google" e
             # "o dono clicou em Desconectar".
+            # `detail`: QUAL conta o Google revogou. Vem do `email_da_conta` lido lá em cima, na
+            # sessão do CHAMADOR — `morta` é outra instância, e ler dela também serviria, mas o
+            # snapshot já está na mão e não depende do estado da sessão curta.
             audit.record(
                 descarte, tenant_id=tenant_id, actor="google:token",
-                action="google.credential.revoked", target=cred_id,
+                action="google.credential.revoked", target=cred_id, detail=email_da_conta,
             )
     except Exception:
         logger.exception("[google:token:descarte_falhou] tenant=%s", tenant_id)
