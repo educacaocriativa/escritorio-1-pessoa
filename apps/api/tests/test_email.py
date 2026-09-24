@@ -3,6 +3,7 @@
 Cobre os 3 caminhos: sem SMTP configurado (graceful degradation), envio real (mockando smtplib)
 e falha do provedor (não propaga exceção). Nunca depende de um servidor SMTP real.
 """
+import ssl
 from unittest.mock import patch
 
 from app.core import email
@@ -46,7 +47,8 @@ def test_send_email_sends_via_smtp(monkeypatch):
 
 def test_send_email_uses_smtp_from_when_set(monkeypatch):
     monkeypatch.setattr(email.settings, "smtp_host", "smtp.example.com", raising=False)
-    monkeypatch.setattr(email.settings, "smtp_user", "user@example.com", raising=False)
+    # Sem TLS só é aceito sem login (relay local de dev): com SMTP_USER, a senha iria em claro.
+    monkeypatch.setattr(email.settings, "smtp_user", "", raising=False)
     monkeypatch.setattr(email.settings, "smtp_from", "nao-responder@e1p.com", raising=False)
     monkeypatch.setattr(email.settings, "smtp_use_tls", False, raising=False)
 
@@ -66,3 +68,31 @@ def test_send_email_returns_failed_on_provider_error(monkeypatch):
     with patch("app.core.email.smtplib.SMTP", side_effect=OSError("connrefused")):
         status = email.send_email(to="d@example.com", subject="S", body="B")
     assert status == "failed"
+
+
+def test_starttls_verifica_certificado_e_hostname(monkeypatch):
+    # Sem `context`, o smtplib aceita qualquer certificado: um intermediário leva a senha.
+    monkeypatch.setattr(email.settings, "smtp_host", "smtp.resend.com", raising=False)
+    monkeypatch.setattr(email.settings, "smtp_user", "resend", raising=False)
+    monkeypatch.setattr(email.settings, "smtp_password", "re_x", raising=False)
+    monkeypatch.setattr(email.settings, "smtp_use_tls", True, raising=False)
+
+    with patch("app.core.email.smtplib.SMTP") as mock_smtp:
+        smtp_conn = mock_smtp.return_value.__enter__.return_value
+        assert email.send_email(to="d@example.com", subject="S", body="B") == "sent"
+
+    context = smtp_conn.starttls.call_args.kwargs["context"]
+    assert context.verify_mode == ssl.CERT_REQUIRED
+    assert context.check_hostname is True
+
+
+def test_login_sem_tls_e_recusado_antes_de_conectar(monkeypatch):
+    # SMTP_USER com TLS desligado mandaria a senha em texto puro: recusa sem abrir conexão.
+    monkeypatch.setattr(email.settings, "smtp_host", "smtp.resend.com", raising=False)
+    monkeypatch.setattr(email.settings, "smtp_user", "resend", raising=False)
+    monkeypatch.setattr(email.settings, "smtp_password", "re_x", raising=False)
+    monkeypatch.setattr(email.settings, "smtp_use_tls", False, raising=False)
+
+    with patch("app.core.email.smtplib.SMTP") as mock_smtp:
+        assert email.send_email(to="d@example.com", subject="S", body="B") == "failed"
+    mock_smtp.assert_not_called()
