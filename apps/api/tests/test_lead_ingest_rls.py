@@ -540,3 +540,66 @@ def test_rota_grava_no_tenant_do_token_e_ignora_o_tenant_do_corpo(ambiente, monk
                   i=contato_id, t=a) == 1
     assert _conta(b, registro, c=chave) == 0  # o tenant do corpo não recebeu nada
     assert _conta(b, cliente, e=email) == 0
+
+
+def test_admin_recusa_funil_de_outro_tenant_e_aceita_o_proprio(ambiente, monkeypatch, capsys):
+    """`lead_ingest_admin` com o `get_db`/`tenant_session` DE PRODUÇÃO (engine do container):
+    funil do tenant B no mapa do tenant A é recusado (exit 2) e a config de A não muda;
+    controle positivo: funil do próprio A passa.
+    """
+    from app.db import session as db_session
+    from app.modules.auth.models import Tenant
+    from app.modules.funnels.models import Funnel
+    from app.scripts import lead_ingest_admin as admin
+
+    url, a, b = ambiente["url"], ambiente["tenant_a"], ambiente["tenant_b"]
+    slug_a = f"a{uuid4().hex[:10]}"
+    with _sessao(url, None) as db:
+        for tid, slug in ((a, slug_a), (b, f"b{uuid4().hex[:10]}")):
+            if db.get(Tenant, tid) is None:
+                db.add(Tenant(id=tid, slug=slug, legal_name=slug, document=uuid4().hex[:14]))
+        db.commit()
+    with _sessao(url, a) as db:
+        funil_a = Funnel(tenant_id=a, name="A", nodes=[{"id": "n1"}], edges=[])
+        db.add(funil_a)
+        db.commit()
+        funil_a_id = funil_a.id
+    with _sessao(url, b) as db:
+        funil_b = Funnel(tenant_id=b, name="B", nodes=[{"id": "n1"}], edges=[])
+        db.add(funil_b)
+        db.commit()
+        funil_b_id = funil_b.id
+    slug_a = _slug(url, a)  # o tenant A pode já existir (módulo compartilhado) com outro slug
+
+    engine = create_engine(url, poolclass=NullPool)
+    monkeypatch.setattr(db_session, "engine", engine)
+    monkeypatch.setattr(
+        db_session,
+        "SessionLocal",
+        sessionmaker(bind=engine, autoflush=False, expire_on_commit=False),
+    )
+    try:
+        # controle positivo
+        positivo = ["configurar", "--tenant", slug_a, "--produto", "publia",
+                    "--funil", f"lead={funil_a_id}"]
+        assert admin.main(positivo) == 0
+        capsys.readouterr()
+        # negativo: funil do B
+        assert admin.main(
+            ["configurar", "--tenant", slug_a, "--funil", f"compra_aprovada={funil_b_id}"]
+        ) == 2
+        assert "Funil não encontrado" in capsys.readouterr().err
+    finally:
+        engine.dispose()
+
+    with _sessao(url, a) as db:
+        config = db.scalar(text("SELECT lead_ingest_config FROM tenant_profiles"))
+    assert config == {"produto": "publia", "funis": {"lead": funil_a_id}}
+
+
+def _slug(url: str, tenant_id: str) -> str | None:
+    from app.modules.auth.models import Tenant
+
+    with _sessao(url, None) as db:
+        t = db.get(Tenant, tenant_id)
+        return t.slug if t else None

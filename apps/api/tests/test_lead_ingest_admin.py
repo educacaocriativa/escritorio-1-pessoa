@@ -81,10 +81,19 @@ def test_configurar_com_funil_vazio_remove_o_mapeamento(db: Session, tenant: Ten
     assert resultado == {"produto": "publia", "funis": {}}
 
 
-def test_configurar_recusa_funil_inexistente_sem_gravar_nada(db: Session, tenant: Tenant):
+def test_configurar_recusa_funil_inexistente_sem_alterar_a_configuracao(
+    db: Session, tenant: Tenant
+):
+    f1 = _funil(db, tenant.id, "Boas-vindas")
+    f2 = _funil(db, tenant.id, "Recuperação")
+    anterior = admin.configurar(db, tenant_id=tenant.id, produto="publia", funis={"lead": f1.id})
     with pytest.raises(admin.AdminError, match="Funil não encontrado"):
-        admin.configurar(db, tenant_id=tenant.id, produto="publia", funis={"lead": "nao-existe"})
-    assert settings_service.get_profile(db, tenant.id).lead_ingest_config == {}
+        admin.configurar(
+            db, tenant_id=tenant.id, produto="outro",
+            funis={"carrinho_abandonado": f2.id, "compra_aprovada": "nao-existe"},
+        )
+    db.expire_all()
+    assert settings_service.get_profile(db, tenant.id).lead_ingest_config == anterior
 
 
 def test_configurar_recusa_produto_invalido(db: Session, tenant: Tenant):
@@ -121,3 +130,45 @@ def test_main_listar_e_revogar(db, tenant, mesma_sessao, capsys):
     assert admin.main(["revogar-token", "--id", token.id]) == 0
     with pytest.raises(machine_tokens_service.MachineTokenError):
         machine_tokens_service.resolve(db, raw=raw, scope=SCOPE_LEAD_INGEST)
+
+
+class _Espiao:
+    """Delega à sessão real e registra quais modelos foram buscados com `get`."""
+
+    def __init__(self, db: Session, rotulo: str, registro: list):
+        self._db, self._rotulo, self._registro = db, rotulo, registro
+
+    def get(self, modelo, *args, **kwargs):
+        self._registro.append((self._rotulo, modelo))
+        return self._db.get(modelo, *args, **kwargs)
+
+    def __getattr__(self, nome):
+        return getattr(self._db, nome)
+
+
+@pytest.mark.parametrize("comando", ["configurar", "mostrar"])
+def test_main_roda_na_sessao_do_tenant_do_slug(db, tenant, monkeypatch, capsys, comando):
+    f1 = _funil(db, tenant.id, "Boas-vindas")
+    registro: list = []
+    abertas: list = []
+
+    @contextmanager
+    def _global():
+        yield _Espiao(db, "global", registro)
+
+    @contextmanager
+    def _tenant(tenant_id):
+        abertas.append(tenant_id)
+        yield _Espiao(db, "tenant", registro)
+
+    monkeypatch.setattr(admin, "_sessao_global", _global)
+    monkeypatch.setattr(admin, "tenant_session", _tenant)
+    argv = [comando, "--tenant", "nexus"]
+    if comando == "configurar":
+        argv += ["--produto", "publia", "--funil", f"lead={f1.id}"]
+
+    assert admin.main(argv) == 0
+    assert abertas == [tenant.id]
+    if comando == "configurar":
+        assert ("tenant", Funnel) in registro
+        assert ("global", Funnel) not in registro

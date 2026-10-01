@@ -87,7 +87,9 @@ def configurar(
 ) -> dict:
     """Mescla na configuração atual e devolve a resultante.
 
-    Nada é gravado se algo for inválido: o perfil só recebe o dicionário novo no fim.
+    A configuração só é substituída no fim: se algo for inválido, a anterior fica intacta.
+    (`get_profile` pode criar o perfil padrão do tenant antes da validação; isso não é
+    configuração de ingestão.)
     """
     perfil = settings_service.get_profile(tdb, tenant_id)
     atual = dict(perfil.lead_ingest_config or {})
