@@ -1,0 +1,152 @@
+"""Ingestão: compra vai ao Ganho, pós-venda não tira de lá, e o funil é escolhido pelo evento."""
+import pytest
+from sqlalchemy import func, select
+from sqlalchemy.orm import Session
+
+from app.core import events
+from app.core.facts import Fact
+from app.modules.crm.models import Client, PipelineStage
+from app.modules.funnels import automation
+from app.modules.funnels.models import Funnel, FunnelRun
+from app.modules.lead_ingest import service
+from app.modules.settings import service as settings_service
+from tests.lead_ingest_apoio import TENANT, payload, usar_sessao_do_teste
+
+
+@pytest.fixture(autouse=True)
+def _sem_assinantes():
+    events.clear()
+    yield
+    events.clear()
+
+
+def _ingere(db: Session, **sobre):
+    return service.ingest(db, tenant_id=TENANT, dados=payload(**sobre))
+
+
+def _etapa(db: Session, client_id: str) -> str:
+    return db.get(PipelineStage, db.get(Client, client_id).stage_id).name
+
+
+def _conta_fatos(db: Session, client_id: str, kind: str) -> int:
+    return db.scalar(
+        select(func.count(Fact.id)).where(Fact.client_id == client_id, Fact.kind == kind)
+    )
+
+
+def _funil(db: Session, nome: str, *, espera: bool = False) -> Funnel:
+    if espera:
+        nodes = [
+            {"id": "n1", "data": {"key": "esperar", "config": {"delay_minutes": 60}}},
+            {"id": "n2"},
+        ]
+        edges = [{"id": "e1", "source": "n1", "target": "n2"}]
+    else:
+        nodes, edges = [{"id": "n1"}], []
+    funil = Funnel(tenant_id=TENANT, name=nome, nodes=nodes, edges=edges)
+    db.add(funil)
+    db.commit()
+    db.refresh(funil)
+    return funil
+
+
+def _configura(db: Session, *, padrao: str | None = None, **cfg) -> None:
+    perfil = settings_service.get_profile(db, TENANT)
+    perfil.default_entry_funnel_id = padrao
+    perfil.lead_ingest_config = cfg
+    db.commit()
+
+
+def _funis_do(db: Session, client_id: str) -> list[str]:
+    return [
+        r.funnel_id
+        for r in db.scalars(select(FunnelRun).where(FunnelRun.client_id == client_id)).all()
+    ]
+
+
+def test_compra_aprovada_move_para_o_ganho(db: Session):
+    r = _ingere(db, evento="compra_aprovada", chave_idempotencia="kiwify:ord_1:compra")
+    assert _etapa(db, r.contato_id) == "Ganho"
+    assert _conta_fatos(db, r.contato_id, "crm.etapa.movida") == 1
+
+
+@pytest.mark.parametrize("evento", ["reembolso", "chargeback", "cancelamento", "renovacao"])
+def test_pos_venda_nao_tira_do_ganho_nem_reabre(db: Session, evento: str):
+    compra = _ingere(db, evento="compra_aprovada", chave_idempotencia="kiwify:ord_1:compra")
+    _ingere(db, evento=evento, chave_idempotencia=f"kiwify:ord_1:{evento}")
+    assert _etapa(db, compra.contato_id) == "Ganho"
+    assert _conta_fatos(db, compra.contato_id, "crm.lead.reaberto") == 0
+
+
+def test_compra_sem_coluna_de_ganho_ativa_registra_sem_mover(db: Session):
+    _ingere(db)  # semeia as colunas e põe o contato em Entrada
+    ganho = db.scalar(select(PipelineStage).where(PipelineStage.is_won.is_(True)))
+    ganho.is_archived = True
+    db.commit()
+    r = _ingere(db, evento="compra_aprovada", chave_idempotencia="kiwify:ord_1:compra")
+    assert r.processado is True
+    assert _etapa(db, r.contato_id) == "Entrada"
+    assert _conta_fatos(db, r.contato_id, "comercial.compra.aprovada") == 1
+
+
+def test_evento_mapeado_vai_so_para_o_funil_do_evento(db: Session):
+    padrao = _funil(db, "Boas-vindas")
+    recuperacao = _funil(db, "Recuperação")
+    _configura(db, padrao=padrao.id, funis={"carrinho_abandonado": recuperacao.id})
+    r = _ingere(db, evento="carrinho_abandonado", chave_idempotencia="kiwify:c1:carrinho")
+    assert _funis_do(db, r.contato_id) == [recuperacao.id]
+
+
+def test_lead_sem_mapeamento_cai_no_funil_padrao(db: Session):
+    padrao = _funil(db, "Boas-vindas")
+    _configura(db, padrao=padrao.id)
+    r = _ingere(db)
+    assert _funis_do(db, r.contato_id) == [padrao.id]
+
+
+@pytest.mark.parametrize("evento", ["renovacao", "reembolso", "chargeback", "cancelamento"])
+def test_pos_venda_sem_mapeamento_nao_entra_no_funil_padrao(db: Session, evento: str):
+    padrao = _funil(db, "Boas-vindas")
+    _configura(db, padrao=padrao.id)
+    r = _ingere(
+        db, evento=evento, chave_idempotencia=f"kiwify:o:{evento}",
+        contato={"nome": "Ana", "email": "ana@exemplo.gov.br"},
+    )
+    assert _funis_do(db, r.contato_id) == []
+
+
+def test_pos_venda_mapeado_explicitamente_inscreve(db: Session):
+    retencao = _funil(db, "Retenção")
+    _configura(db, funis={"cancelamento": retencao.id})
+    r = _ingere(
+        db, evento="cancelamento", chave_idempotencia="kiwify:o:cancelamento",
+        contato={"nome": "Ana", "email": "ana@exemplo.gov.br"},
+    )
+    assert _funis_do(db, r.contato_id) == [retencao.id]
+
+
+def test_jornada_viva_nao_e_duplicada(db: Session):
+    padrao = _funil(db, "Boas-vindas", espera=True)
+    _configura(db, padrao=padrao.id)
+    primeiro = _ingere(db)
+    _ingere(db, chave_idempotencia="site:lead:2")
+    assert _funis_do(db, primeiro.contato_id) == [padrao.id]
+
+
+def test_funil_inexistente_nao_derruba_a_ingestao(db: Session):
+    _configura(db, funis={"lead": "funil-que-nao-existe"})
+    r = _ingere(db)
+    assert r.processado is True
+    assert _funis_do(db, r.contato_id) == []
+
+
+def test_com_assinantes_reais_o_lead_entra_em_um_unico_funil(db: Session, monkeypatch):
+    """Controller E1: auto-enroll do `source="api"` + inscrição por evento não somam."""
+    usar_sessao_do_teste(db, monkeypatch)
+    automation.register()
+    padrao = _funil(db, "Boas-vindas")
+    recuperacao = _funil(db, "Recuperação")
+    _configura(db, padrao=padrao.id, funis={"carrinho_abandonado": recuperacao.id})
+
+    novo = _ingere(db, evento="carrinho_abandonado", chave_idempotencia="kiwify:c1:carrinho")
+    assert _funis_do(db, novo.contato_id) == [recuperacao.id]

@@ -10,6 +10,8 @@ Uma chamada de `ingest`, na ordem:
    reembolso tiraria do Ganho quem comprou — o contrário da spec ("não movem o card").
 3. **Soma tags** sem duplicar e sem estourar o limite do CRM; o que sobrar fica registrado.
 4. **Grava o fato** na timeline (`module="comercial"`), com a atribuição no corpo.
+5. **Fecha.** `compra_aprovada` leva o card ao Ganho (coluna `is_won`) no mesmo commit.
+6. **Inscreve no funil do evento** (`config.funil_do_evento`), se não houver jornada viva nele.
 
 `absorb_lead` commita no meio (é assim que ele é, e os outros chamadores dependem disso): a
 reivindicação entra no MESMO commit do contato, e tags + fato + conclusão no seguinte. Ver a
@@ -18,6 +20,7 @@ docstring de `models.LeadIngestRecord` sobre a retomada quando o processo cai en
 from __future__ import annotations
 
 import json
+import logging
 from dataclasses import dataclass
 
 from sqlalchemy.orm import Session
@@ -35,13 +38,18 @@ from app.core.facts import (
 from app.modules.crm import service as crm_service
 from app.modules.crm.models import Client
 from app.modules.crm.schemas import ClientCreate
+from app.modules.funnels import automation, engine
+from app.modules.funnels.service import FunnelError
 from app.modules.lead_ingest import config
 from app.modules.lead_ingest import registro as registro_service
 from app.modules.lead_ingest.schemas import Contato, IngestIn
 from app.modules.lead_ingest.tags import somar_tags
 from app.modules.settings import service as settings_service
+from app.modules.settings.models import TenantProfile
 
 ATOR = "integracao:lead_ingest"
+
+logger = logging.getLogger("e1p.lead_ingest")
 
 KIND_POR_EVENTO = {
     "lead": COM_LEAD_RECEBIDO,
@@ -138,7 +146,10 @@ def ingest(db: Session, *, tenant_id: str, dados: IngestIn) -> ResultadoIngest:
     audit.record(
         db, tenant_id=tenant_id, actor=ATOR, action="lead_ingest.process", target=registro.id
     )
-    db.commit()
+    _fechar(db, tenant_id=tenant_id, evento=dados.evento, contato=contato)
+    _inscrever_no_funil(
+        db, tenant_id=tenant_id, perfil=perfil, evento=dados.evento, contato_id=contato.id
+    )
     return ResultadoIngest(processado=True, contato_id=contato.id)
 
 
@@ -196,3 +207,56 @@ def _sem_valores(valor):
     if isinstance(valor, list):
         return [_sem_valores(v) for v in valor]
     return valor
+
+
+def _fechar(db: Session, *, tenant_id: str, evento: str, contato: Client) -> None:
+    """Commita o que está pendente; em `compra_aprovada`, junto com a ida ao Ganho.
+
+    `move_client` commita a sessão inteira: tags, fato e conclusão do registro entram no MESMO
+    commit da mudança de etapa, e o aviso de "movido para Ganho" (notifications) só sai depois
+    dele. Reembolso, chargeback e cancelamento NÃO movem o card (spec §6.2): a venda aconteceu,
+    e o que mudou depois fica em tag e fato, não apagado.
+    """
+    if evento != "compra_aprovada":
+        db.commit()
+        return
+    ganho = next((s for s in crm_service.ensure_stages(db, tenant_id) if s.is_won), None)
+    if ganho is None:
+        logger.warning(
+            "[lead_ingest] tenant=%s sem coluna de Ganho ativa; compra registrada sem mover o "
+            "card %s",
+            tenant_id, contato.id,
+        )
+        db.commit()
+        return
+    if contato.stage_id == ganho.id:
+        db.commit()
+        return
+    crm_service.move_client(
+        db, client_id=contato.id, tenant_id=tenant_id, actor=ATOR, by_ai=False,
+        stage_id=ganho.id,
+    )
+
+
+def _inscrever_no_funil(
+    db: Session, *, tenant_id: str, perfil: TenantProfile, evento: str, contato_id: str
+) -> None:
+    """Funil por evento (spec §6.4). Melhor esforço: o lead já está commitado.
+
+    Mesma contenção do caminho automático (`automation.on_client_returned`): quem já anda no
+    funil não recomeça do zero porque o site mandou outro evento.
+    """
+    funil_id = config.funil_do_evento(perfil, evento)
+    if not funil_id or automation.jornada_viva(db, funnel_id=funil_id, client_id=contato_id):
+        return
+    try:
+        engine.enroll(
+            db, tenant_id=tenant_id, actor=ATOR, funnel_id=funil_id, client_id=contato_id
+        )
+    except FunnelError:
+        # Funil apagado, vazio ou sem entrada: não pode virar 500 — o site reenviaria e
+        # receberia 200 (chave concluída), e a inscrição continuaria sem acontecer em silêncio.
+        logger.warning(
+            "[lead_ingest] inscrição falhou tenant=%s funil=%s evento=%s cliente=%s",
+            tenant_id, funil_id, evento, contato_id,
+        )

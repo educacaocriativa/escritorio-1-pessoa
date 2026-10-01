@@ -79,3 +79,16 @@ def corpo(**sobre: Any) -> dict[str, Any]:
 
 def payload(**sobre: Any) -> IngestIn:
     return IngestIn.model_validate(corpo(**sobre))
+
+
+def usar_sessao_do_teste(db, monkeypatch) -> None:
+    """Faz os assinantes do barramento (`automation`) usarem a sessão do teste, não uma nova."""
+    from contextlib import contextmanager
+
+    from app.modules.funnels import automation
+
+    @contextmanager
+    def _fabrica(_tenant_id):
+        yield db
+
+    monkeypatch.setattr(automation, "tenant_session", _fabrica)
