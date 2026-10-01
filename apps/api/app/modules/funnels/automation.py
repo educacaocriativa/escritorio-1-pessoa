@@ -29,9 +29,17 @@ AUTO_ENROLL_SOURCES = {"landing", "api"}
 
 
 def on_client_created(
-    *, tenant_id: str, client_id: str, source: str, notes: str = "", **_: object
+    *,
+    tenant_id: str,
+    client_id: str,
+    source: str,
+    notes: str = "",
+    auto_enroll: bool = True,
+    **_: object,
 ) -> None:
-    if source not in AUTO_ENROLL_SOURCES:
+    # `auto_enroll=False`: quem criou o contato já decidiu o funil (ingestão de leads, que
+    # escolhe pelo EVENTO). Inscrever aqui também poria o contato em dois funis.
+    if not auto_enroll or source not in AUTO_ENROLL_SOURCES:
         return
     with tenant_session(tenant_id) as db:
         profile = settings_service.get_profile(db, tenant_id)
@@ -53,7 +61,7 @@ def on_client_created(
             )
 
 
-def _ja_esta_andando(db, *, funnel_id: str, client_id: str) -> bool:
+def jornada_viva(db, *, funnel_id: str, client_id: str) -> bool:
     """Jornada viva (running/waiting) para este contato neste funil."""
     return db.scalar(
         select(FunnelRun.id).where(
@@ -65,7 +73,13 @@ def _ja_esta_andando(db, *, funnel_id: str, client_id: str) -> bool:
 
 
 def on_client_returned(
-    *, tenant_id: str, client_id: str, source: str, notes: str = "", **_: object
+    *,
+    tenant_id: str,
+    client_id: str,
+    source: str,
+    notes: str = "",
+    auto_enroll: bool = True,
+    **_: object,
 ) -> None:
     """Contato conhecido voltou pela captura: reinscreve, se a jornada anterior já acabou.
 
@@ -74,13 +88,13 @@ def on_client_returned(
     em silêncio. Só o caminho automático precisa dessa contenção — senão preencher o
     formulário duas vezes reiniciaria a jornada do zero.
     """
-    if source not in AUTO_ENROLL_SOURCES:
+    if not auto_enroll or source not in AUTO_ENROLL_SOURCES:
         return
     with tenant_session(tenant_id) as db:
         profile = settings_service.get_profile(db, tenant_id)
         if not profile.default_entry_funnel_id:
             return
-        if _ja_esta_andando(
+        if jornada_viva(
             db, funnel_id=profile.default_entry_funnel_id, client_id=client_id
         ):
             return

@@ -226,7 +226,9 @@ def _titulo_de_chegada(source: str) -> str:
 # ── Clientes ───────────────────────────────────────────
 
 
-def create_client(db: Session, *, tenant_id: str, actor: str, data: ClientCreate) -> Client:
+def create_client(
+    db: Session, *, tenant_id: str, actor: str, data: ClientCreate, auto_enroll: bool = True
+) -> Client:
     stages = ensure_stages(db, tenant_id)
     if data.stage_id is not None:
         stage = db.get(PipelineStage, data.stage_id)
@@ -268,9 +270,12 @@ def create_client(db: Session, *, tenant_id: str, actor: str, data: ClientCreate
     db.refresh(client)
     # Gatilho de automação: outros módulos podem reagir (ex.: auto-enroll no funil de entrada
     # padrão do tenant, ver funnels/automation.py).
+    # `auto_enroll=False`: quem criou escolhe o funil sozinho (a ingestão de leads, que decide
+    # pelo EVENTO — `lead_ingest/service.py`). Sem isto, o caminho automático inscreveria no
+    # funil padrão e o contato andaria em dois funis.
     events.emit(
         EVENT_CLIENT_CREATED, tenant_id=tenant_id, client_id=client.id, source=client.source,
-        notes=data.notes,
+        notes=data.notes, auto_enroll=auto_enroll,
     )
     return client
 
@@ -301,6 +306,15 @@ def _find_existing(db: Session, *, phone_key: str | None, email: str | None) -> 
     return None
 
 
+def find_lead(db: Session, *, phone: str | None, email: str | None) -> Client | None:
+    """A MESMA identidade de `absorb_lead`, sem efeito colateral nenhum.
+
+    Para quem precisa saber se a pessoa já existe sem passar pelo "voltou" — a ingestão de
+    pós-venda (reembolso, chargeback...), em que `absorb_lead` reabriria o card do Ganho.
+    """
+    return _find_existing(db, phone_key=normalize_br(phone), email=email)
+
+
 _ROTULO_DE_RETORNO = {
     "landing": "Voltou pelo site",
     "api": "Voltou por integração",
@@ -312,7 +326,12 @@ def _titulo_de_retorno(source: str) -> str:
 
 
 def absorb_lead(
-    db: Session, *, tenant_id: str, actor: str, data: ClientCreate
+    db: Session,
+    *,
+    tenant_id: str,
+    actor: str,
+    data: ClientCreate,
+    auto_enroll: bool = True,
 ) -> tuple[Client, bool]:
     """Porta ÚNICA de entrada de lead. Devolve `(contato, é_novo)`.
 
@@ -326,7 +345,10 @@ def absorb_lead(
         email=str(data.email) if data.email else None,
     )
     if existente is None:
-        return create_client(db, tenant_id=tenant_id, actor=actor, data=data), True
+        novo = create_client(
+            db, tenant_id=tenant_id, actor=actor, data=data, auto_enroll=auto_enroll
+        )
+        return novo, True
 
     # Preenche só o que estava VAZIO. Sobrescrever apagaria o que o dono já corrigiu à mão;
     # a divergência (chegou outro e-mail) fica registrada no corpo do evento.
@@ -381,6 +403,7 @@ def absorb_lead(
         # `data.notes` (o envio ATUAL), não `corpo` (que mistura complementos tipo "telefone:
         # X" — bom pro Histórico, ruim pra virar {{cliente.notas}} no e-mail de alerta).
         notes=data.notes,
+        auto_enroll=auto_enroll,
     )
     return existente, False
 
