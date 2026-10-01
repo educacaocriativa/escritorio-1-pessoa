@@ -148,20 +148,22 @@ def test_backfill_da_0079_preenche_waba_id_de_quem_ja_estava_configurado():
     jeito certo: `waba_id` volta NULL, sem erro nenhum, exatamente como aconteceria em
     produção.
     """
-    from app.modules.settings.models import TenantProfile
-
     with _container_migrado_ate("0078") as url:
         # `tenants` não tem RLS; `tenant_profiles` tem — por isso o perfil é criado numa sessão
         # COM a GUC, pelo mesmo caminho que a aplicação usa.
         with _raw_session(url) as raw:
             _criar_tenant(raw, "t-backfill", "backfill")
 
+        # SQL crua com as colunas DA 0078, pelo mesmo motivo do snapshot logo abaixo: o modelo
+        # `TenantProfile` é o do head, e o INSERT do ORM levaria colunas que só nascem depois
+        # (`lead_ingest_config`, 0090). Só o que o backfill lê (`tenant_id`, `whatsapp_waba_id`)
+        # e o que identifica a conta; token e segredo ficam de fora porque são colunas
+        # cifradas pelo ORM, e texto puro nelas seria um perfil corrompido.
         with _tenant_session(url, "t-backfill") as tdb:
-            tdb.add(TenantProfile(
-                tenant_id="t-backfill",
-                whatsapp_token="tok", whatsapp_phone_id="phone-1",
-                whatsapp_waba_id="waba-real", whatsapp_app_secret="segredo",
-                whatsapp_verify_token="verify-1",
+            tdb.execute(text(
+                "INSERT INTO tenant_profiles "
+                "(id, tenant_id, whatsapp_phone_id, whatsapp_waba_id, whatsapp_verify_token) "
+                "VALUES ('perfil-backfill', 't-backfill', 'phone-1', 'waba-real', 'verify-1')"
             ))
             tdb.commit()
 
