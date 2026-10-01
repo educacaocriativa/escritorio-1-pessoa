@@ -24,6 +24,7 @@ from app.modules.auth.models import User
 from app.modules.crm import service as crm_service
 from app.modules.crm.models import Client
 from app.modules.crm.schemas import ClientCreate
+from app.modules.lead_ingest import whatsapp as lead_ingest_whatsapp
 from app.modules.notifications.models import Notification
 from app.modules.settings import service as settings_service
 from app.modules.vima import scheduler as vima_scheduler
@@ -141,12 +142,17 @@ def resolve_by_waba_id(db: Session, *, waba_id: str) -> PublicWhatsappAccount | 
 # ── Ingestão (webhook) ──────────────────────────────────────────────────────
 
 
-def _get_or_create_client(db: Session, *, tenant_id: str, phone: str, name: str) -> Client:
+def _resolve_client(
+    db: Session, *, tenant_id: str, phone: str, name: str
+) -> tuple[Client, bool]:
     """Resolve o contato pelo telefone NORMALIZADO — a mesma identidade que o site usa.
 
-    Comparar `Client.phone` cru (como era até aqui) deixava o conserto pela metade: o
-    formulário guarda "(11) 99999-8888" e o WhatsApp guarda "5511999998888", então a mesma
-    pessoa continuaria virando dois cards.
+    Devolve `(contato, criado_agora)`. Comparar `Client.phone` cru (como era até aqui) deixava o
+    conserto pela metade: o formulário guarda "(11) 99999-8888" e o WhatsApp guarda
+    "5511999998888", então a mesma pessoa continuaria virando dois cards.
+
+    `criado_agora` existe para a leitura do código de origem (spec §6.3), que só vale na 1ª
+    mensagem de um contato NOVO.
     """
     chave = normalize_br(phone)
     if chave:
@@ -154,15 +160,21 @@ def _get_or_create_client(db: Session, *, tenant_id: str, phone: str, name: str)
             select(Client).where(Client.phone_key == chave).order_by(Client.created_at, Client.id)
         ).first()
         if client is not None:
-            return client
+            return client, False
     # Fallback para contato legado cujo telefone nunca normalizou (e portanto não tem chave).
     client = db.scalar(select(Client).where(Client.phone == phone))
     if client is not None:
-        return client
-    return crm_service.create_client(
+        return client, False
+    novo = crm_service.create_client(
         db, tenant_id=tenant_id, actor="whatsapp:inbox",
         data=ClientCreate(name=name or phone, phone=phone, source="whatsapp"),
     )
+    return novo, True
+
+
+def _get_or_create_client(db: Session, *, tenant_id: str, phone: str, name: str) -> Client:
+    """Só o contato, sem dizer se foi criado agora (ver `_resolve_client`)."""
+    return _resolve_client(db, tenant_id=tenant_id, phone=phone, name=name)[0]
 
 
 def _resolve_group_title(profile, chat: WhatsappChat) -> None:
@@ -420,13 +432,14 @@ def ingest_webhook_payload(
                 # gravada, mas NÃO vira contato do CRM.
                 client_id = None
                 client = None
+                contato_novo = False
             else:
                 # `push_name` só nomeia o cliente quando o CONTATO escreveu: em mensagem
                 # espelhada do aparelho do dono (`from_me`), o `pushName` que a Evolution manda
                 # é o do PRÓPRIO DONO — usá-lo criaria (ou renomearia) o cliente com o nome do
                 # dono na primeira mensagem espelhada de um contato ainda desconhecido.
                 # `_get_or_create_client` cai no telefone quando o nome vem vazio.
-                client = _get_or_create_client(
+                client, contato_novo = _resolve_client(
                     db, tenant_id=tenant_id, phone=msg.from_phone,
                     name="" if msg.from_me else msg.push_name,
                 )
@@ -498,6 +511,15 @@ def ingest_webhook_payload(
                     subject_id=chat.id if chat is not None else None,
                     occurred_at=msg.occurred_at,
                 )
+                # A 1ª mensagem de um contato que ESTA mensagem acabou de criar pode trazer o
+                # código de origem que o site pôs no `wa.me` (spec §6.3). Contato que já existia
+                # não é relido: o código da primeira conversa é o que atribui; reler a cada
+                # mensagem reescreveria a origem com o que a pessoa colou depois.
+                if contato_novo and client is not None and msg.kind == KIND_TEXT:
+                    lead_ingest_whatsapp.aplicar_codigo_da_primeira_mensagem(
+                        db, tenant_id=tenant_id, cliente=client, perfil=profile,
+                        texto=msg.text_body, occurred_at=msg.occurred_at,
+                    )
 
             # O toque no botão do aviso do briefing (Vima, Onda 4). Fica DEPOIS do registro da
             # mensagem (a conversa mostra o toque como qualquer outra) e DENTRO do mesmo `try` —
