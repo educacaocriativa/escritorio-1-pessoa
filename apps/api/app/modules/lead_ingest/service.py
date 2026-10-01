@@ -157,8 +157,9 @@ def _resolve_contato(db: Session, *, tenant_id: str, dados: IngestIn) -> Client:
     """O contato do evento.
 
     Um `lead`/`carrinho_abandonado` que encontra o card numa coluna de Ganho não passa por
-    `absorb_lead` (reabriria o card, "Reaberto", fora do Ganho) nem entra em funil de entrada (uma Recuperação mandaria "volte" a quem acabou de pagar). As
-    tags e o fato na timeline continuam valendo. `compra_aprovada` segue pelo `absorb_lead`.
+    `absorb_lead` (reabriria o card, "Reaberto", fora do Ganho) nem entra em funil de entrada
+    (uma Recuperação mandaria "volte" a quem acabou de pagar). As tags e o fato na timeline
+    continuam valendo. `compra_aprovada` segue pelo `absorb_lead`.
     """
     contato = dados.contato
     if dados.evento not in config.EVENTOS_DE_ENTRADA:
