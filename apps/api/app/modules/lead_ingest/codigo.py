@@ -30,7 +30,7 @@ TAMANHO_MAX_CODIGO = 20
 CODIGO_SEM_ORIGEM = "np-lp"
 
 _NA_MENSAGEM = re.compile(
-    r"c[oó]digo\s*[:#]?\s*(?P<codigo>[a-z0-9]+(?:-[a-z0-9]+)+)(?![a-z0-9-])",
+    r"c[oó]digo\s{0,8}[:#]?\s{0,8}(?P<codigo>[a-z0-9]+(?:-[a-z0-9]+)+)(?![a-z0-9-])",
     re.IGNORECASE,
 )
 _FORMATO = re.compile(r"^(?P<canal>ig|gg|em|wa|pt)-[a-z0-9]+-[a-z0-9]+(?:-[a-z0-9]+)*$")

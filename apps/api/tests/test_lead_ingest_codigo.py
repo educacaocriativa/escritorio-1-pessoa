@@ -1,4 +1,5 @@
 """Leitura do código `<canal>-<tipo>-<id>` na mensagem de WhatsApp (spec §4.1 e §6.3)."""
+import time
 import unicodedata
 
 import pytest
@@ -48,3 +49,11 @@ def test_le_codigo_valido(texto, codigo, origem):
 )
 def test_ignora_o_que_nao_e_codigo(texto):
     assert ler_codigo(texto) is None
+
+
+@pytest.mark.parametrize("sufixo", ["!", ":", "x"])
+def test_texto_hostil_com_muito_espaco_nao_trava(sufixo):
+    """Entrada controlada por quem escreve no WhatsApp: o intervalo após "código" é limitado."""
+    inicio = time.perf_counter()
+    assert ler_codigo("código" + " " * 50000 + sufixo) is None
+    assert time.perf_counter() - inicio < 0.5
