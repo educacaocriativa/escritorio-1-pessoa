@@ -31,6 +31,7 @@ from app.modules.funnels.models import Funnel, FunnelRun  # noqa: F401
 from app.modules.google_calendar.models import GoogleCredential  # noqa: F401
 from app.modules.investments.models import InvestmentAccount  # noqa: F401
 from app.modules.juridico.models import LegalDocument  # noqa: F401
+from app.modules.lead_ingest.models import LeadIngestRecord  # noqa: F401
 from app.modules.machine_tokens.models import MachineToken  # noqa: F401
 from app.modules.marketing.models import Carousel  # noqa: F401
 from app.modules.notifications.models import Notification  # noqa: F401
