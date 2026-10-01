@@ -172,3 +172,9 @@ def test_main_roda_na_sessao_do_tenant_do_slug(db, tenant, monkeypatch, capsys, 
     if comando == "configurar":
         assert ("tenant", Funnel) in registro
         assert ("global", Funnel) not in registro
+
+
+def test_main_recusa_nome_de_credencial_acima_de_80_caracteres(db, tenant, mesma_sessao, capsys):
+    assert admin.main(["emitir-token", "--tenant", "nexus", "--nome", "x" * 81]) == 2
+    assert "80" in capsys.readouterr().err
+    assert machine_tokens_service.list_tokens(db, tenant_id=tenant.id) == []

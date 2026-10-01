@@ -48,3 +48,9 @@ def test_nao_muta_a_lista_do_contato():
 def test_schema_do_crm_continua_recusando_51_tags():
     with pytest.raises(ValidationError, match="máximo de 50 tags"):
         ClientCreate(name="X", tags=[f"t{i}" for i in range(51)])
+
+
+def test_tag_nova_nao_duplica_a_existente_com_outra_caixa():
+    resultado, descartadas = somar_tags(["Origem:Instagram"], ["origem:instagram"])
+    assert resultado == ["Origem:Instagram"]
+    assert descartadas == []

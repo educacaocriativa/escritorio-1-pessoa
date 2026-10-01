@@ -150,3 +150,59 @@ def test_com_assinantes_reais_o_lead_entra_em_um_unico_funil(db: Session, monkey
 
     novo = _ingere(db, evento="carrinho_abandonado", chave_idempotencia="kiwify:c1:carrinho")
     assert _funis_do(db, novo.contato_id) == [recuperacao.id]
+
+
+@pytest.mark.parametrize(
+    "evento", ["carrinho_abandonado", "lead"]
+)
+def test_evento_de_entrada_de_quem_ja_esta_no_ganho_nao_reabre_nem_inscreve(
+    db: Session, evento: str
+):
+    recuperacao = _funil(db, "Recuperação")
+    boas_vindas = _funil(db, "Boas-vindas")
+    _configura(db, padrao=boas_vindas.id, funis={"carrinho_abandonado": recuperacao.id})
+    compra = _ingere(db, evento="compra_aprovada", chave_idempotencia="kiwify:ord_1:compra")
+    runs_antes = _funis_do(db, compra.contato_id)
+
+    r = _ingere(
+        db, evento=evento, chave_idempotencia=f"site:{evento}:2", tags=["carrinho:aberto"]
+    )
+
+    assert r.contato_id == compra.contato_id
+    assert _etapa(db, compra.contato_id) == "Ganho"
+    assert _conta_fatos(db, compra.contato_id, "crm.lead.reaberto") == 0
+    assert _funis_do(db, compra.contato_id) == runs_antes
+    contato = db.get(Client, compra.contato_id)
+    assert "carrinho:aberto" in contato.tags
+    kind = "comercial.carrinho.abandonado" if evento == "carrinho_abandonado" else (
+        "comercial.lead.recebido"
+    )
+    assert _conta_fatos(db, compra.contato_id, kind) == 1
+
+
+def test_evento_de_entrada_fora_do_ganho_continua_passando_pelo_absorb_lead(db: Session):
+    recuperacao = _funil(db, "Recuperação")
+    _configura(db, funis={"carrinho_abandonado": recuperacao.id})
+    primeiro = _ingere(db)  # lead: fica em Entrada
+    r = _ingere(db, evento="carrinho_abandonado", chave_idempotencia="kiwify:c1:carrinho")
+    assert r.contato_id == primeiro.contato_id
+    assert _etapa(db, r.contato_id) == "Entrada"
+    assert _funis_do(db, r.contato_id) == [recuperacao.id]
+
+
+def test_falha_inesperada_na_inscricao_nao_derruba_a_ingestao(db: Session, monkeypatch, caplog):
+    from app.modules.funnels import engine
+
+    funil = _funil(db, "Boas-vindas")
+    _configura(db, funis={"lead": funil.id})
+
+    def _quebra(*_a, **_k):
+        raise RuntimeError("boom")
+
+    monkeypatch.setattr(engine, "enroll", _quebra)
+    r = _ingere(db)
+    assert r.processado is True
+    assert _funis_do(db, r.contato_id) == []
+    assert "inscrição falhou" in caplog.text
+    # o registro continua concluído: a retentativa é no-op
+    assert _ingere(db).processado is False

@@ -15,16 +15,19 @@ def somar_tags(atuais: list[str] | None, novas: list[str]) -> tuple[list[str], l
 
     Tags NOVAS chegam normalizadas — sem espaço nas pontas, em minúsculas: a taxonomia da spec
     (§4) é minúscula, e `Origem:Instagram` e `origem:instagram` virariam dois filtros no CRM. As
-    que já estavam no contato ficam como estão: o dono pode ter escrito "Tem Filhos" à mão.
+    que já estavam no contato ficam como estão: o dono pode ter escrito "Tem Filhos" à mão
+    (a comparação com elas ignora a caixa: "Origem:Instagram" barra "origem:instagram").
     """
     resultado = list(atuais or [])
     descartadas: list[str] = []
+    vistas = {t.lower() for t in resultado}
     for bruta in novas:
         tag = bruta.strip().lower()
-        if not tag or tag in resultado or tag in descartadas:
+        if not tag or tag in vistas or tag in descartadas:
             continue
         if len(tag) > TAG_MAX_LENGTH or len(resultado) >= TAG_LIMIT:
             descartadas.append(tag)
             continue
         resultado.append(tag)
+        vistas.add(tag)
     return resultado, descartadas

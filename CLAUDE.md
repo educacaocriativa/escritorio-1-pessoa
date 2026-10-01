@@ -3946,7 +3946,8 @@ contato ou comprou — com a origem já resolvida. O visitante anônimo fica no 
   `machine_tokens`, ambas globais, e `tenant_session` para o resto). Todo o processamento da rota
   roda numa `tenant_session` do tenant **do token**. Contrato congelado em
   `lead_ingest/schemas.py`: **201** processado, **200** chave já processada, **401** credencial,
-  **422** corpo, **413** corpo > 64 KB. Sem CORS.
+  **422** corpo (inclui o teto anti-abuso: **> 100 tags** ou **tag > 200 caracteres**; o site
+  trunca), **413** corpo > 64 KB. Sem CORS.
 - [x] **Idempotência (0089)** — `lead_ingest_records`, RLS, única por `(tenant_id,
   chave_idempotencia)`. `absorb_lead` commita no meio, então a reivindicação entra no commit do
   contato e tags + fato + Ganho no seguinte; linha sem `concluido_em` é **retomada** na próxima
@@ -3954,7 +3955,9 @@ contato ou comprou — com a origem já resolvida. O visitante anônimo fica no 
   e1p com o valor do pedido.
 - [x] **Serviço** (`lead_ingest/service.py`) — entrada (lead, carrinho, compra) via
   `absorb_lead(source="api", auto_enroll=False)`; pós-venda de contato conhecido **não** passa por
-  `absorb_lead` (reabriria o card do Ganho) — usa `crm.find_lead`. Tags somadas por
+  `absorb_lead` (reabriria o card do Ganho) — usa `crm.find_lead`. O mesmo vale para `lead` e
+  `carrinho_abandonado` de quem já está numa coluna `is_won`: sem `absorb_lead`, sem funil de
+  entrada; só tags e fato. Falha inesperada na inscrição em funil (savepoint) é logada, nunca 500. Tags somadas por
   `lead_ingest/tags.py` (50 × 40, excedente descartado E registrado). Fato `comercial.*` por
   evento (`core/facts.py`), atribuição em JSON no corpo, **sem `*_centavos`** (invariante 2).
   `compra_aprovada` → coluna `is_won` via `move_client`; reembolso/chargeback/cancelamento só

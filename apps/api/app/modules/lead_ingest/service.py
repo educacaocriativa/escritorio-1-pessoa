@@ -36,10 +36,9 @@ from app.core.facts import (
     COM_LEAD_RECEBIDO,
 )
 from app.modules.crm import service as crm_service
-from app.modules.crm.models import Client
+from app.modules.crm.models import Client, PipelineStage
 from app.modules.crm.schemas import ClientCreate
 from app.modules.funnels import automation, engine
-from app.modules.funnels.service import FunnelError
 from app.modules.lead_ingest import config
 from app.modules.lead_ingest import registro as registro_service
 from app.modules.lead_ingest.schemas import Contato, IngestIn
@@ -147,17 +146,28 @@ def ingest(db: Session, *, tenant_id: str, dados: IngestIn) -> ResultadoIngest:
         db, tenant_id=tenant_id, actor=ATOR, action="lead_ingest.process", target=registro.id
     )
     _fechar(db, tenant_id=tenant_id, evento=dados.evento, contato=contato)
-    _inscrever_no_funil(
-        db, tenant_id=tenant_id, perfil=perfil, evento=dados.evento, contato_id=contato.id
-    )
+    if not _entrada_de_quem_ja_ganhou(db, dados.evento, contato):
+        _inscrever_no_funil(
+            db, tenant_id=tenant_id, perfil=perfil, evento=dados.evento, contato_id=contato.id
+        )
     return ResultadoIngest(processado=True, contato_id=contato.id)
 
 
 def _resolve_contato(db: Session, *, tenant_id: str, dados: IngestIn) -> Client:
+    """O contato do evento.
+
+    Um `lead`/`carrinho_abandonado` que encontra o card numa coluna de Ganho não passa por
+    `absorb_lead` (reabriria o card, "Reaberto", fora do Ganho) nem entra em funil de entrada (uma Recuperação mandaria "volte" a quem acabou de pagar). As
+    tags e o fato na timeline continuam valendo. `compra_aprovada` segue pelo `absorb_lead`.
+    """
     contato = dados.contato
     if dados.evento not in config.EVENTOS_DE_ENTRADA:
         existente = crm_service.find_lead(db, phone=contato.telefone, email=contato.email)
         if existente is not None:
+            return existente
+    elif dados.evento != "compra_aprovada":
+        existente = crm_service.find_lead(db, phone=contato.telefone, email=contato.email)
+        if existente is not None and _no_ganho(db, existente):
             return existente
     cliente, _novo = crm_service.absorb_lead(
         db,
@@ -170,6 +180,16 @@ def _resolve_contato(db: Session, *, tenant_id: str, dados: IngestIn) -> Client:
         auto_enroll=False,
     )
     return cliente
+
+
+def _entrada_de_quem_ja_ganhou(db: Session, evento: str, contato: Client) -> bool:
+    """`lead`/`carrinho_abandonado` de contato no Ganho (ver `_resolve_contato`)."""
+    return evento in ("lead", "carrinho_abandonado") and _no_ganho(db, contato)
+
+
+def _no_ganho(db: Session, contato: Client) -> bool:
+    etapa = db.get(PipelineStage, contato.stage_id) if contato.stage_id else None
+    return bool(etapa and etapa.is_won)
 
 
 def _nome(contato: Contato) -> str:
@@ -250,13 +270,17 @@ def _inscrever_no_funil(
     if not funil_id or automation.jornada_viva(db, funnel_id=funil_id, client_id=contato_id):
         return
     try:
-        engine.enroll(
-            db, tenant_id=tenant_id, actor=ATOR, funnel_id=funil_id, client_id=contato_id
-        )
-    except FunnelError:
-        # Funil apagado, vazio ou sem entrada: não pode virar 500 — o site reenviaria e
-        # receberia 200 (chave concluída), e a inscrição continuaria sem acontecer em silêncio.
-        logger.warning(
+        # Savepoint: uma falha no meio do `enroll` desfaz só a inscrição, não o que já foi
+        # commitado nem a sessão inteira.
+        with db.begin_nested():
+            engine.enroll(
+                db, tenant_id=tenant_id, actor=ATOR, funnel_id=funil_id, client_id=contato_id
+            )
+    except Exception:
+        # Funil apagado, vazio ou sem entrada (FunnelError) ou qualquer imprevisto: não pode
+        # virar 500 — o site reenviaria e receberia 200 (chave concluída), e a inscrição
+        # continuaria sem acontecer em silêncio. O log é o rastro.
+        logger.exception(
             "[lead_ingest] inscrição falhou tenant=%s funil=%s evento=%s cliente=%s",
             tenant_id, funil_id, evento, contato_id,
         )

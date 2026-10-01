@@ -56,6 +56,12 @@ quando no registro da operação.
 
 ## 3. Configurar produto e funis
 
+> **Ordem: faça o §4 (teste de ponta a ponta) ANTES deste passo.** Com o funil `lead` mapeado
+> (ou um funil de entrada padrão em Configurações), o lead de teste do §4 entra de verdade na
+> jornada de Boas-vindas e dispara as mensagens reais. Sem mapeamento ainda, o teste só cria o
+> card. Se já configurou, rode o §4 num tenant de teste, ou aceite a inscrição e cancele a
+> jornada do "Teste Runbook" na tela de Funis antes de apagar o card.
+
 Monte os funis no editor (Funis) e copie o id de cada um da URL. Depois:
 
 ```bash
@@ -79,6 +85,8 @@ $DC exec api python -m app.scripts.lead_ingest_admin mostrar --tenant <slug>
 
 ## 4. Testar de ponta a ponta
 
+(Rode este passo **antes** do §3 — ver o aviso lá: o lead de teste não deve cair no funil real.)
+
 ```bash
 curl -sS -X POST "https://e1p.criativaeduca.com.br/api/public/ingest/leads" \
   -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" \
@@ -97,11 +105,31 @@ Esperado: `HTTP 201` e o card "Teste Runbook" na Entrada, com a tag `origem:test
 |---|---|
 | `401` | Token errado, revogado, de outro escopo, ou cabeçalho sem `Bearer `. `listar-tokens` mostra situação e último uso. |
 | `413` | Corpo acima de 64 KB. Erro permanente: o site não deve reenviar. |
-| `422` | Corpo fora do contrato (o `detail` diz o campo). Erro permanente: a fila do site não deve reenviar. |
+| `422` | Corpo fora do contrato (o `detail` diz o campo). Erro permanente: a fila do site não deve reenviar. Inclui o teto anti-abuso: **mais de 100 tags** na lista, ou **uma tag com mais de 200 caracteres**. O site trunca antes de enviar; é bug do site, não do e1p. (Dentro do teto, o excedente do limite do CRM — 50 tags × 40 caracteres — não dá erro: fica registrado em `tags_descartadas`.) |
 | `200` inesperado | A `chave_idempotencia` já foi processada — o site está reutilizando chave. |
 | `500` | Falha inesperada; o site reenvia. Ver `$DC logs api` (logger `e1p.lead_ingest`). |
 | Lead chegou e não entrou no funil | Funil apagado ou vazio: procure `[lead_ingest] inscrição falhou` no log. |
 | Compra registrada, card não foi para Ganho | O tenant não tem coluna de Ganho ativa: procure `sem coluna de Ganho ativa` no log. |
+
+### Registro preso (chave reivindicada que não concluiu)
+
+Um processo que cai entre o commit do contato e o das tags/fato deixa `concluido_em` nulo. A
+próxima tentativa do site retoma sozinha, então um registro preso por pouco tempo é normal. Mais de
+15 minutos indica que o site parou de reenviar (ou que a retentativa também falha). Somente
+leitura, tenant explícito:
+
+```bash
+$DC exec postgres psql -U e1p_root -d e1pdb -c   "SELECT id, chave_idempotencia, evento, client_id, created_at
+     FROM lead_ingest_records
+    WHERE tenant_id = '<tenant_id do §1>'
+      AND concluido_em IS NULL
+      AND created_at < now() - interval '15 minutes'
+    ORDER BY created_at;"
+```
+
+O que fazer: peça ao site para **reenviar o mesmo evento com a mesma `chave_idempotencia`** (a
+retomada conclui sem duplicar contato nem fato). Reenviado e ainda preso: veja `$DC logs api`
+(logger `e1p.lead_ingest`) pelo erro da retentativa. Não edite nem apague a linha à mão.
 
 ## 6. Trocar ou revogar a credencial
 

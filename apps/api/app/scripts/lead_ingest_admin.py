@@ -34,6 +34,7 @@ from app.modules.machine_tokens.models import SCOPE_LEAD_INGEST, MachineToken
 from app.modules.settings import service as settings_service
 
 ATOR = "script:lead_ingest_admin"
+NOME_MAX = 80  # `machine_tokens.name` é VARCHAR(80)
 
 
 class AdminError(Exception):
@@ -60,6 +61,8 @@ def tenant_por_slug(db: Session, slug: str) -> Tenant:
 
 
 def emitir_token(db: Session, *, slug: str, nome: str) -> tuple[MachineToken, str]:
+    if len(nome) > NOME_MAX:
+        raise AdminError(f"--nome tem {len(nome)} caracteres; o limite é {NOME_MAX}.")
     tenant = tenant_por_slug(db, slug)
     return machine_tokens_service.create_token(
         db, tenant_id=tenant.id, name=nome, scope=SCOPE_LEAD_INGEST
