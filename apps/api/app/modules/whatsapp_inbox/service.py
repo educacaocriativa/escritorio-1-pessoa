@@ -516,10 +516,19 @@ def ingest_webhook_payload(
                 # não é relido: o código da primeira conversa é o que atribui; reler a cada
                 # mensagem reescreveria a origem com o que a pessoa colou depois.
                 if contato_novo and client is not None and msg.kind == KIND_TEXT:
-                    lead_ingest_whatsapp.aplicar_codigo_da_primeira_mensagem(
-                        db, tenant_id=tenant_id, cliente=client, perfil=profile,
-                        texto=msg.text_body, occurred_at=msg.occurred_at,
-                    )
+                    # Atribuição é opcional: falha aqui desfaz só o trabalho dela (savepoint) e
+                    # nunca custa a 1ª mensagem do lead.
+                    try:
+                        with db.begin_nested():
+                            lead_ingest_whatsapp.aplicar_codigo_da_primeira_mensagem(
+                                db, tenant_id=tenant_id, cliente=client, perfil=profile,
+                                texto=msg.text_body, occurred_at=msg.occurred_at,
+                            )
+                    except Exception:  # noqa: BLE001
+                        logger.exception(
+                            "[whatsapp_inbox] leitura do código de origem falhou, "
+                            "mensagem segue sem atribuição"
+                        )
 
             # O toque no botão do aviso do briefing (Vima, Onda 4). Fica DEPOIS do registro da
             # mensagem (a conversa mostra o toque como qualquer outra) e DENTRO do mesmo `try` —

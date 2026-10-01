@@ -105,3 +105,46 @@ def test_mensagem_sem_codigo_so_cria_o_contato(db: Session):
     contato = _contato(db)
     assert contato is not None
     assert contato.tags == []
+
+
+def test_texto_vazio_ou_ausente_nao_atribui_nem_quebra(db: Session):
+    _produto(db)
+    inbox_service.ingest_webhook_payload(
+        db, tenant_id=TENANT,
+        messages=[InboundMessage(
+            wa_message_id="wamid.vazio", from_phone=FONE, kind="text", text_body=None,
+            media_ref=None, push_name="Maria",
+        )],
+    )
+    contato = _contato(db)
+    assert contato is not None
+    assert contato.tags == []
+    assert _fatos_de_origem(db, contato.id) == []
+
+
+def test_falha_na_atribuicao_nao_perde_a_mensagem(db: Session, monkeypatch):
+    from app.core import facts as facts_mod
+    from app.modules.lead_ingest import whatsapp as aplicador
+    from app.modules.whatsapp_inbox.models import WhatsappMessage
+
+    _produto(db)
+    original = facts_mod.record
+
+    def explode_so_na_origem(*args, **kwargs):
+        if kwargs.get("kind") == "comercial.origem.identificada":
+            raise RuntimeError("falha injetada")
+        return original(*args, **kwargs)
+
+    monkeypatch.setattr(aplicador.facts, "record", explode_so_na_origem)
+    _recebe(db, "Olá (código ig-r-c8abc)")
+    contato = _contato(db)
+    assert contato is not None
+    assert contato.tags == []
+    assert _fatos_de_origem(db, contato.id) == []
+    assert db.scalar(
+        select(WhatsappMessage).where(WhatsappMessage.wa_message_id == "wamid.1")
+    ) is not None
+    recebida = db.scalars(select(Fact).where(
+        Fact.client_id == contato.id, Fact.kind == "comercial.mensagem.recebida"
+    )).all()
+    assert len(recebida) == 1
