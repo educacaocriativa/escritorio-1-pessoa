@@ -173,6 +173,10 @@ def delete_account(db: Session, tenant_id: str, actor: CurrentUser) -> None:
                     text(f"DELETE FROM {table.name} WHERE tenant_id = :tid"),  # noqa: S608
                     {"tid": tenant_id},
                 )
+        # `machine_tokens` é GLOBAL (não herda TenantMixin) e escapa do laço acima. Credencial
+        # que sobrevive ao tenant continuaria autenticando o site e gravando leads sob um
+        # `tenant_id` que não existe mais. Tabela sem RLS: o filtro explícito é obrigatório.
+        tdb.execute(text("DELETE FROM machine_tokens WHERE tenant_id = :tid"), {"tid": tenant_id})
         tdb.execute(text("DELETE FROM users WHERE tenant_id = :tid"), {"tid": tenant_id})
         tdb.execute(text("DELETE FROM tenants WHERE id = :tid"), {"tid": tenant_id})
 

@@ -51,6 +51,12 @@ class TenantProfile(Base, TenantMixin, TimestampMixin):
     # `funnels.id` (mesmo padrão do projeto): funil apagado só faz o auto-enroll no-opar.
     default_entry_funnel_id: Mapped[str | None] = mapped_column(String(36), nullable=True)
 
+    # Ingestão de leads com atribuição (`POST /public/ingest/leads`, módulo `lead_ingest`):
+    # `{"produto": "<slug>", "funis": {"<evento>": "<funnel_id>"}}`. `{}` = sem tag de produto,
+    # sem leitura de código no WhatsApp e sem funil por evento (cai no funil padrão acima).
+    # Sem tela: quem escreve é `app/scripts/lead_ingest_admin.py`. Ver `lead_ingest/config.py`.
+    lead_ingest_config: Mapped[dict] = mapped_column(JSON, default=dict, nullable=False)
+
     # WhatsApp Cloud API (Meta) — POR TENANT (cada escritório tem sua própria conta/número; NÃO
     # existe mais uma env global compartilhada). None/vazio = integração desligada (graceful
     # degradation: `core/whatsapp.send_template` cai no status "logged"). Token cifrado em

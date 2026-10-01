@@ -23,6 +23,7 @@ from app.modules.google_calendar.router import public_router as google_calendar_
 from app.modules.google_calendar.router import router as google_calendar_router
 from app.modules.investments.router import router as investments_router
 from app.modules.juridico.router import router as juridico_router
+from app.modules.lead_ingest.router import router as lead_ingest_router
 from app.modules.marketing.router import router as marketing_router
 from app.modules.notifications.router import router as notifications_router
 from app.modules.pages.router import public_router as pages_public_router
@@ -70,6 +71,7 @@ ALL_ROUTERS: list[APIRouter] = [
     contracts_public_router,
     marketing_router,
     juridico_router,
+    lead_ingest_router,
     funnels_router,
     stock_router,
     settings_router,

@@ -3918,6 +3918,87 @@ chave nenhuma — e é ESSE o mecanismo que qualquer tenant usa hoje para site e
   reconstrua a chave de API se aparecer um caso que a página pública embutida não cubra (ex.: site
   headless que não pode embutir iframe).
 
+- **[2026-09-30] O caso previsto acima apareceu, e a capacidade voltou ESCOPADA** — não como
+  "chave de API" genérica: `POST /public/ingest/leads` com credencial de máquina
+  (`machine_tokens`, escopo `lead_ingest`), contrato fechado e idempotência por chave. Ver
+  §"Ingestão de leads com atribuição" e `docs/RUNBOOK-INGESTAO-DE-LEADS.md`. Nada da 0083 foi
+  desfeito: `integration_keys` e `public_integration_keys` continuam apagadas, e o resto que
+  sobrava do #270 em `app/main.py` (`PublicLeadsCORSMiddleware`, CORS aberto para
+  `/public/leads/*`) saiu junto.
+
+## Ingestão de leads com atribuição (Publ.IA → e1p) — 2026-09-30
+
+> Spec: `docs/superpowers/specs/2026-09-30-atribuicao-publia-e1p-design.md` **no repositório do
+> site** (Mkt), §6 · Plano: `docs/superpowers/plans/2026-09-30-ingest-atribuicao-publia.md` ·
+> Runbook: `docs/RUNBOOK-INGESTAO-DE-LEADS.md`
+
+Um site externo (hoje nexuspublica.com.br, tenant Nexus) empurra **pessoas** — quem deixou
+contato ou comprou — com a origem já resolvida. O visitante anônimo fica no site; o e1p não o vê.
+
+- [x] **`machine_tokens` (0088)** — credencial de máquina, tabela GLOBAL sem RLS, só hash
+  sha256, escopo `lead_ingest`, dono = TENANT (não há `user_id`). Desconhecida, revogada ou de
+  outro escopo → **401** sem distinguir (diferente de `device_tokens`, que dá 403). Sem tela:
+  `python -m app.scripts.lead_ingest_admin emitir-token|listar-tokens|revogar-token`.
+  ⚠️ Global = fora da purga dinâmica de `platform.delete_account`; o `DELETE` explícito mora lá.
+- [x] **`POST /public/ingest/leads`** (`modules/lead_ingest/router.py`) — `get_db` só no router,
+  para resolver a credencial (módulo na ALLOWLIST de `test_tenancy_guard.py`); scripts
+  administrativos abrem sessão própria (`lead_ingest_admin` usa `get_db` para `tenants` e
+  `machine_tokens`, ambas globais, e `tenant_session` para o resto). Todo o processamento da rota
+  roda numa `tenant_session` do tenant **do token**. Contrato congelado em
+  `lead_ingest/schemas.py`: **201** processado, **200** chave já processada, **401** credencial,
+  **422** corpo (inclui o teto anti-abuso: **> 100 tags** ou **tag > 200 caracteres**; o site
+  trunca), **413** corpo > 64 KB. Sem CORS.
+- [x] **Idempotência (0089)** — `lead_ingest_records`, RLS, única por `(tenant_id,
+  chave_idempotencia)`. `absorb_lead` commita no meio, então a reivindicação entra no commit do
+  contato e tags + fato + Ganho no seguinte; linha sem `concluido_em` é **retomada** na próxima
+  tentativa (sob `with_for_update()`). `payload` guarda o bruto, com valores — é o único lugar do
+  e1p com o valor do pedido.
+- [x] **Serviço** (`lead_ingest/service.py`) — entrada (lead, carrinho, compra) via
+  `absorb_lead(source="api", auto_enroll=False)`; pós-venda de contato conhecido **não** passa por
+  `absorb_lead` (reabriria o card do Ganho) — usa `crm.find_lead`. O mesmo vale para `lead` e
+  `carrinho_abandonado` de quem já está numa coluna `is_won`: sem `absorb_lead`, sem funil de
+  entrada; só tags e fato. Falha inesperada na inscrição em funil (savepoint) é logada, nunca 500. Tags somadas por
+  `lead_ingest/tags.py` (50 × 40, excedente descartado E registrado). Fato `comercial.*` por
+  evento (`core/facts.py`), atribuição em JSON no corpo, **sem `*_centavos`** (invariante 2).
+  `compra_aprovada` → coluna `is_won` via `move_client`; reembolso/chargeback/cancelamento só
+  tag `<produto>:reembolso|chargeback|cancelou`; renovação só fato.
+- [x] **Configuração por tenant (0090)** — `tenant_profiles.lead_ingest_config`:
+  `{"produto": "publia", "funis": {evento: funnel_id}}`, escrita por
+  `lead_ingest_admin configurar`. Sem `produto`, não há tag de produto nem leitura de código no
+  WhatsApp. Funil sem mapeamento cai no `default_entry_funnel_id` **só** para lead, carrinho e
+  compra — pós-venda só entra em funil mapeado.
+- [x] **WhatsApp com código** (`lead_ingest/codigo.py` + `whatsapp.py`, chamado do inbox) — só na
+  1ª mensagem de contato criado por ela: `origem:<instagram|google|email|whatsapp|parceria>`,
+  `post:<código>`, `<produto>:lead-whatsapp` e fato `comercial.origem.identificada`. `np-lp`
+  (botão sem toque) marca só `<produto>:lead-whatsapp`. Falha na leitura roda num savepoint: a
+  mensagem e o contato sempre gravam, só a atribuição se perde (e é logada).
+- [x] **CRM ganhou dois ganchos**: `absorb_lead`/`create_client` aceitam `auto_enroll=False`
+  (viaja no evento; `funnels/automation.py` respeita) e `crm.find_lead`. `automation._ja_esta_andando`
+  virou `jornada_viva` (pública). Limites de tag viraram `crm.models.TAG_LIMIT`/`TAG_MAX_LENGTH`.
+
+**Regra que fica:** tag de produto e vocabulário de `origem:` são DADO do tenant/contrato, nunca
+literal no núcleo; e o contrato de `lead_ingest/schemas.py` só muda depois da spec — o site
+codifica contra ele sem nenhum teste deste repo para avisar.
+
+**Operação:** o script administrativo (`emitir-token`, `configurar`, `mostrar`, `revogar-token`)
+roda SEMPRE via `docker compose exec api ...`, isto é, com o papel `e1p_app`, que sofre RLS.
+Nunca como `e1p_root` (superusuário, bypassa a RLS). Passo a passo no runbook.
+
+- **Dívida:** `device_tokens` tem o mesmo furo que `machine_tokens` fechou (global, sobrevive à
+  exclusão de conta).
+- **Dívida:** emitir e revogar token **não deixam trilha de auditoria** (só `configurar` grava
+  `audit`). Quem emitiu, quando e para quê só se reconstrói pelo `created_at`/`name` da linha.
+- **Dívida (janela residual em `absorb_lead`):** `absorb_lead` commita no meio, então um reenvio
+  concorrente da mesma chave pode pegar a trava entre o commit e o re-lock e rodar `absorb_lead`
+  de novo: grava `crm.lead.retornou` e a auditoria `crm.client.return` espúrios. **O fato
+  comercial nunca duplica** (provado em Postgres real, Task 10). Fechar exige `absorb_lead` sem
+  commit ou um savepoint.
+- **Dívida:** o vocabulário `origem:` derivado do prefixo do código precisa casar com as tags que
+  o site envia (o site usa `utm_source`; e-mail e parceria divergem — `nexus-newsletter`,
+  `partner-{slug}`). `packages/shared-types/src/generated.ts` ainda lista `/public/leads/{key}`
+  (stale desde o #270) e não tem a rota nova — regenerar com `pnpm generate:types` quando alguém
+  mexer ali. Relatório por origem é a fase 2 da spec.
+
 ## 7. Materiais de referência (fora do repo)
 - Spec mestre: `/Volumes/Extreme SSD/2026_e1p/Configuração do software.docx`
 - Design Figma exportado: `/Volumes/Extreme SSD/2026_Downloads de JUNHO/crm_export/` (PNGs do "Portal")

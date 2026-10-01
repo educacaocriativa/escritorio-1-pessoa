@@ -572,3 +572,17 @@ def test_clientes_em_atencao_respeita_limiares_injetados(db, card_parado_ha_12_d
 def test_clientes_em_atencao_sem_nada_pendente_devolve_lista_vazia(db):
     assert clientes_em_atencao(db, hoje=HOJE, agora=AGORA) == []
     assert not [k for k in LIMIARES_PADRAO if "conferencia" in k or "saldo" in k]
+
+
+def test_lead_ingerido_conta_como_topo_vivo(db, usuario_owner):
+    """Tenant alimentado só pela ingestão (sem formulário) não leva alerta falso de topo seco."""
+    from app.core import facts
+
+    facts.record(
+        db, tenant_id=usuario_owner.tenant_id, module="comercial",
+        kind="comercial.lead.recebido", title="Deixou o contato no site",
+        actor="integracao:lead_ingest", occurred_at=datetime(2026, 8, 5, 12, tzinfo=UTC),
+    )
+    db.commit()
+    ausencias = coletar(db, user=usuario_owner, hoje=HOJE).ditas
+    assert not any(a.kind == "comercial.topo.sem_lead" for a in ausencias)

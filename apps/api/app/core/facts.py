@@ -53,6 +53,17 @@ COM_ORCAMENTO_RECUSADO = "comercial.orcamento.recusado"
 COM_MENSAGEM_RECEBIDA = "comercial.mensagem.recebida"
 COM_FORMULARIO_RECEBIDO = "comercial.formulario.recebido"
 COM_PAGINA_PUBLICADA = "comercial.pagina.publicada"
+# Ingestão de leads com atribuição (`lead_ingest`, spec da Publ.IA §6). Um por evento do
+# contrato, sem nome de produto: o e1p é multi-tenant, o produto mora em `pedido`.
+COM_LEAD_RECEBIDO = "comercial.lead.recebido"
+COM_CARRINHO_ABANDONADO = "comercial.carrinho.abandonado"
+COM_COMPRA_APROVADA = "comercial.compra.aprovada"
+COM_ASSINATURA_RENOVADA = "comercial.assinatura.renovada"
+COM_COMPRA_REEMBOLSADA = "comercial.compra.reembolsada"
+COM_COMPRA_CONTESTADA = "comercial.compra.contestada"
+COM_ASSINATURA_CANCELADA = "comercial.assinatura.cancelada"
+# Código de origem lido na 1ª mensagem de WhatsApp (`lead_ingest/whatsapp.py`).
+COM_ORIGEM_IDENTIFICADA = "comercial.origem.identificada"
 
 OP_JORNADA_FALHOU = "operacao.jornada.falhou"
 
