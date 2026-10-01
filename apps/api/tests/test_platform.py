@@ -762,3 +762,22 @@ def test_producao_devolve_a_senha_da_CONTA_nova_quando_a_entrega_falha(
 
     assert body["delivery_status"] == "unconfigured"
     assert body["temp_password"]
+
+
+def test_delete_account_apaga_a_credencial_de_maquina_do_tenant(
+    client: TestClient, admin_headers, db: Session, _tenant_session_to_test_db
+):
+    """`machine_tokens` é GLOBAL (não herda `TenantMixin`) e por isso escapa da purga dinâmica.
+
+    Credencial que sobrevive ao tenant é pior que lixo: o site continuaria autenticando e a
+    ingestão gravaria leads sob um `tenant_id` que não existe mais.
+    """
+    from app.modules.machine_tokens import service as machine_tokens_service
+    from app.modules.machine_tokens.models import SCOPE_LEAD_INGEST, MachineToken
+
+    created = client.post("/admin/accounts", json=_account_payload(), headers=admin_headers).json()
+    tid = created["tenant"]["id"]
+    machine_tokens_service.create_token(db, tenant_id=tid, name="site", scope=SCOPE_LEAD_INGEST)
+
+    assert client.delete(f"/admin/accounts/{tid}", headers=admin_headers).status_code == 204
+    assert db.query(MachineToken).filter(MachineToken.tenant_id == tid).count() == 0
