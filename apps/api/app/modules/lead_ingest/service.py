@@ -11,7 +11,8 @@ Uma chamada de `ingest`, na ordem:
 3. **Soma tags** sem duplicar e sem estourar o limite do CRM; o que sobrar fica registrado.
 4. **Grava o fato** na timeline (`module="comercial"`), com a atribuição no corpo.
 5. **Fecha.** `compra_aprovada` leva o card ao Ganho (coluna `is_won`) no mesmo commit.
-6. **Inscreve no funil do evento** (`config.funil_do_evento`), se não houver jornada viva nele.
+6. **Compra encerra as jornadas de entrada** (lead/carrinho/funil padrão) do contato.
+7. **Inscreve no funil do evento** (`config.funil_do_evento`), se não houver jornada viva nele.
 
 `absorb_lead` commita no meio (é assim que ele é, e os outros chamadores dependem disso): a
 reivindicação entra no MESMO commit do contato, e tags + fato + conclusão no seguinte. Ver a
@@ -23,6 +24,7 @@ import json
 import logging
 from dataclasses import dataclass
 
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.core import audit, facts
@@ -39,6 +41,7 @@ from app.modules.crm import service as crm_service
 from app.modules.crm.models import Client, PipelineStage
 from app.modules.crm.schemas import ClientCreate
 from app.modules.funnels import automation, engine
+from app.modules.funnels.models import RUN_RUNNING, RUN_WAITING, FunnelRun
 from app.modules.lead_ingest import config
 from app.modules.lead_ingest import registro as registro_service
 from app.modules.lead_ingest.schemas import Contato, IngestIn
@@ -146,6 +149,10 @@ def ingest(db: Session, *, tenant_id: str, dados: IngestIn) -> ResultadoIngest:
         db, tenant_id=tenant_id, actor=ATOR, action="lead_ingest.process", target=registro.id
     )
     _fechar(db, tenant_id=tenant_id, evento=dados.evento, contato=contato)
+    if dados.evento == "compra_aprovada":
+        _encerrar_jornadas_de_entrada(
+            db, tenant_id=tenant_id, perfil=perfil, contato_id=contato.id
+        )
     if not _entrada_de_quem_ja_ganhou(db, dados.evento, contato):
         _inscrever_no_funil(
             db, tenant_id=tenant_id, perfil=perfil, evento=dados.evento, contato_id=contato.id
@@ -257,6 +264,60 @@ def _fechar(db: Session, *, tenant_id: str, evento: str, contato: Client) -> Non
         db, client_id=contato.id, tenant_id=tenant_id, actor=ATOR, by_ai=False,
         stage_id=ganho.id,
     )
+
+
+def _encerrar_jornadas_de_entrada(
+    db: Session, *, tenant_id: str, perfil: TenantProfile, contato_id: str
+) -> None:
+    """Quem pagou não pode receber "esqueceu o carrinho": cancela as jornadas vivas de entrada.
+
+    O site manda `carrinho_abandonado` assim que o pix/boleto é gerado, e muita gente paga minutos
+    depois. Cancela as jornadas vivas (running/waiting) do contato nos funis de ENTRADA do tenant
+    (os mapeados a `lead` e `carrinho_abandonado` + o funil de entrada padrão), exceto o funil
+    mapeado à própria `compra_aprovada`. Melhor esforço, como `_inscrever_no_funil`: a venda já
+    está commitada (`_fechar`), então a falha só é logada e a sessão volta limpa (rollback).
+    `cancel_run` commita e grava a auditoria `funnel.run.cancel`; não grava fato novo.
+    """
+    alvos = {
+        funil
+        for funil in (
+            config.funil_do_evento(perfil, "lead"),
+            config.funil_do_evento(perfil, "carrinho_abandonado"),
+            perfil.default_entry_funnel_id,
+        )
+        if funil
+    }
+    alvos.discard(config.funil_do_evento(perfil, "compra_aprovada"))
+    if not alvos:
+        return
+    try:
+        vivas = list(
+            db.scalars(
+                select(FunnelRun).where(
+                    FunnelRun.tenant_id == tenant_id,
+                    FunnelRun.client_id == contato_id,
+                    FunnelRun.funnel_id.in_(alvos),
+                    FunnelRun.status.in_((RUN_RUNNING, RUN_WAITING)),
+                )
+            ).all()
+        )
+    except Exception:
+        db.rollback()
+        logger.exception(
+            "[lead_ingest] busca de jornadas de entrada falhou tenant=%s cliente=%s",
+            tenant_id, contato_id,
+        )
+        return
+    for run in vivas:
+        run_id = run.id
+        try:
+            engine.cancel_run(db, run_id=run_id, tenant_id=tenant_id, actor=ATOR)
+        except Exception:
+            db.rollback()
+            logger.exception(
+                "[lead_ingest] cancelamento de jornada falhou tenant=%s jornada=%s cliente=%s",
+                tenant_id, run_id, contato_id,
+            )
 
 
 def _inscrever_no_funil(

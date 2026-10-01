@@ -3967,6 +3967,16 @@ contato ou comprou — com a origem já resolvida. O visitante anônimo fica no 
   `lead_ingest_admin configurar`. Sem `produto`, não há tag de produto nem leitura de código no
   WhatsApp. Funil sem mapeamento cai no `default_entry_funnel_id` **só** para lead, carrinho e
   compra — pós-venda só entra em funil mapeado.
+- [x] **Compra encerra as jornadas de entrada** — o site manda `carrinho_abandonado` assim que o
+  pix/boleto é gerado, e muita gente paga minutos depois. Em `compra_aprovada`,
+  `_encerrar_jornadas_de_entrada` cancela (`engine.cancel_run`, audit `funnel.run.cancel`) as
+  jornadas vivas (running/waiting) do contato nos funis mapeados a `lead` e `carrinho_abandonado`
+  e no `default_entry_funnel_id`, **exceto** o funil da própria compra (o mapeado a
+  `compra_aprovada`, ou o padrão quando nada o mapeia). Roda depois do commit da venda e antes da
+  inscrição no funil da compra; falha é logada e a sessão volta limpa (rollback), nunca 500.
+  Renovação, reembolso, chargeback e cancelamento não cancelam nada. Defesa em profundidade: o
+  funil de Recuperação deve começar por um "Esperar", para o pagamento rápido chegar antes do
+  primeiro envio.
 - [x] **WhatsApp com código** (`lead_ingest/codigo.py` + `whatsapp.py`, chamado do inbox) — só na
   1ª mensagem de contato criado por ela: `origem:<instagram|google|email|whatsapp|parceria>`,
   `post:<código>`, `<produto>:lead-whatsapp` e fato `comercial.origem.identificada`. `np-lp`
