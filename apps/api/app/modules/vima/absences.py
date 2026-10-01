@@ -21,7 +21,7 @@ from datetime import UTC, date, datetime, time, timedelta
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
-from app.core.facts import COM_FORMULARIO_RECEBIDO, Fact
+from app.core.facts import COM_FORMULARIO_RECEBIDO, COM_LEAD_RECEBIDO, Fact
 from app.core.tenancy import CurrentUser
 from app.core.tz import local_date
 from app.modules.agenda.models import (
@@ -515,7 +515,10 @@ def _topo_seco(db: Session, hoje: date, lim: dict[str, int]) -> list[Ausencia]:
     quantos = db.scalar(
         select(func.count())
         .select_from(Fact)
-        .where(Fact.kind == COM_FORMULARIO_RECEBIDO, Fact.occurred_at >= desde)
+        .where(
+            Fact.kind.in_((COM_FORMULARIO_RECEBIDO, COM_LEAD_RECEBIDO)),
+            Fact.occurred_at >= desde,
+        )
     )
     if quantos:
         return []

@@ -110,3 +110,19 @@ def test_contato_da_chave_desconhecida_e_none(db: Session):
 def test_restricao_unica_por_tenant_e_chave_esta_no_modelo():
     nomes = {c.name for c in LeadIngestRecord.__table__.constraints}
     assert "uq_lead_ingest_tenant_chave" in nomes
+
+
+def test_busca_travada_enxerga_conclusao_feita_por_fora_da_sessao(db: Session):
+    """Linha já no identity map com `concluido_em=None`; outra transação a conclui; a
+    segunda retomada (FOR UPDATE) tem de ver a conclusão e não reprocessar."""
+    contato = _contato(db)
+    linha = _reivindica(db)
+    db.commit()
+    db.refresh(linha)  # `concluido_em=None` passa a estar CARREGADO (e não só ausente)
+    assert linha.concluido_em is None
+    db.execute(
+        LeadIngestRecord.__table__.update()
+        .where(LeadIngestRecord.id == linha.id)
+        .values(concluido_em=QUANDO, client_id=contato.id)
+    )
+    assert _reivindica(db) is None

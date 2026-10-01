@@ -13,7 +13,11 @@ from app.modules.lead_ingest.models import LeadIngestRecord
 def _consulta(chave: str, *, travar: bool = False):
     # Sem filtro de tenant: a sessão já vem RLS-escopada (Regra de Ouro nº 1).
     consulta = select(LeadIngestRecord).where(LeadIngestRecord.chave_idempotencia == chave)
-    return consulta.with_for_update() if travar else consulta
+    if not travar:
+        return consulta
+    # `populate_existing`: se a linha já está no identity map da sessão, o FOR UPDATE traz o
+    # estado atual do banco em vez do cacheado (um `concluido_em=None` velho reprocessaria).
+    return consulta.with_for_update().execution_options(populate_existing=True)
 
 
 def _buscar(db: Session, *, chave: str, travar: bool = False) -> LeadIngestRecord | None:
