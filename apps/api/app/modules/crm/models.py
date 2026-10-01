@@ -27,6 +27,11 @@ from app.db.base import Base, TenantMixin, TimestampMixin, _uuid
 GENDER_VALUES = {"male", "female", "other", "unspecified"}
 SOURCE_VALUES = {"manual", "landing", "ai", "import", "api", "whatsapp"}
 
+# Limites de `Client.tags`. Validados no schema (`ClientBase._tags`) e respeitados por quem soma
+# tags por fora dele (`lead_ingest/tags.py`). Um lugar só, para os dois não divergirem.
+TAG_LIMIT = 50
+TAG_MAX_LENGTH = 40
+
 # Colunas padrão criadas no primeiro acesso ao board de um tenant.
 DEFAULT_STAGES = [
     {"name": "Entrada", "is_won": False, "is_lost": False},

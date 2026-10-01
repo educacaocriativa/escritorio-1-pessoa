@@ -6,7 +6,7 @@ from datetime import date, datetime
 from pydantic import BaseModel, EmailStr, Field, field_validator, model_validator
 
 from app.core.validators import validate_document
-from app.modules.crm.models import GENDER_VALUES, SOURCE_VALUES
+from app.modules.crm.models import GENDER_VALUES, SOURCE_VALUES, TAG_LIMIT, TAG_MAX_LENGTH
 
 # ── Estágios (colunas do Kanban) ───────────────────────
 
@@ -93,11 +93,11 @@ class ClientBase(BaseModel):
         for t in v:
             t = t.strip()
             if t and t not in seen:
-                if len(t) > 40:
-                    raise ValueError("tag muito longa (máx. 40 caracteres)")
+                if len(t) > TAG_MAX_LENGTH:
+                    raise ValueError(f"tag muito longa (máx. {TAG_MAX_LENGTH} caracteres)")
                 seen.append(t)
-        if len(seen) > 50:
-            raise ValueError("máximo de 50 tags por cliente")
+        if len(seen) > TAG_LIMIT:
+            raise ValueError(f"máximo de {TAG_LIMIT} tags por cliente")
         return seen
 
     @field_validator("birthdate")
