@@ -203,6 +203,20 @@ def test_falha_inesperada_na_inscricao_nao_derruba_a_ingestao(db: Session, monke
     r = _ingere(db)
     assert r.processado is True
     assert _funis_do(db, r.contato_id) == []
-    assert "inscrição falhou" in caplog.text
+    erros = [x for x in caplog.records if "inscrição falhou" in x.getMessage()]
+    assert len(erros) == 1
     # o registro continua concluído: a retentativa é no-op
     assert _ingere(db).processado is False
+    # a sessão segue utilizável depois do rollback
+    assert db.get(Client, r.contato_id) is not None
+    db.commit()
+
+
+def test_inscricao_bem_sucedida_nao_registra_erro_falso(db: Session, caplog):
+    funil = _funil(db, "Boas-vindas")
+    _configura(db, funis={"lead": funil.id})
+    with caplog.at_level("DEBUG"):
+        r = _ingere(db)
+    assert r.processado is True
+    assert [x for x in caplog.records if "inscrição falhou" in x.getMessage()] == []
+    assert _funis_do(db, r.contato_id) == [funil.id]

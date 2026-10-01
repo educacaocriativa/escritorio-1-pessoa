@@ -271,13 +271,14 @@ def _inscrever_no_funil(
     if not funil_id or automation.jornada_viva(db, funnel_id=funil_id, client_id=contato_id):
         return
     try:
-        # Savepoint: uma falha no meio do `enroll` desfaz só a inscrição, não o que já foi
-        # commitado nem a sessão inteira.
-        with db.begin_nested():
-            engine.enroll(
-                db, tenant_id=tenant_id, actor=ATOR, funnel_id=funil_id, client_id=contato_id
-            )
+        # Sem savepoint: `engine.enroll` termina em `db.commit()`, o que fecharia o savepoint e
+        # faria a saída do contexto estourar. O lead já está commitado (`_fechar`), então o
+        # `rollback` abaixo só descarta a inscrição pela metade.
+        engine.enroll(
+            db, tenant_id=tenant_id, actor=ATOR, funnel_id=funil_id, client_id=contato_id
+        )
     except Exception:
+        db.rollback()
         # Funil apagado, vazio ou sem entrada (FunnelError) ou qualquer imprevisto: não pode
         # virar 500 — o site reenviaria e receberia 200 (chave concluída), e a inscrição
         # continuaria sem acontecer em silêncio. O log é o rastro.
