@@ -27,6 +27,10 @@ Allowlist (usos legítimos, documentados com guarda explícita no próprio códi
                   `user_id` dos claims). Tabela contém apenas o hash sha256 do token (não o token
                   em si — sha256 é hash, não criptografia; não é reversível) e metadata —
                   nenhum dado de negócio.
+  - lead_ingest    → `POST /public/ingest/leads` resolve a credencial em `machine_tokens`
+                  (tabela GLOBAL sem RLS, só hash sha256 + metadado) pela sessão global e então
+                  abre `tenant_session` com o tenant DO TOKEN para todo dado de negócio — mesmo
+                  padrão de pages/quotes/contracts/whatsapp_inbox.
 """
 from __future__ import annotations
 
@@ -37,7 +41,7 @@ MODULES_DIR = pathlib.Path(__file__).resolve().parents[1] / "app" / "modules"
 # Módulos onde `get_db` (sessão global) é um uso legítimo e já auditado (ver docstring acima).
 ALLOWLIST = {
     "auth", "platform", "contracts", "pages", "quotes", "wallet", "attachments",
-    "whatsapp_inbox", "device_tokens",
+    "whatsapp_inbox", "device_tokens", "lead_ingest",
 }
 
 

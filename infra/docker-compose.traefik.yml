@@ -194,8 +194,7 @@ services:
       # afeta outros projetos na mesma VPS), definimos aqui um middleware PRÓPRIO com os mesmos
       # headers (HSTS, nosniff, referrer-policy, esconder Server) exceto frameDeny, e um router
       # mais específico (maior prioridade) só pra `/p/`. `/p/:slug` já é público/sem-sessão por
-      # design (mesmo padrão de CORS aberto de `/public/leads/*` — ver PublicLeadsCORSMiddleware),
-      # então não há dado sensível em jogo pra esse risco de clickjacking valer a pena.
+      # design, então não há dado sensível em jogo pra esse risco de clickjacking valer a pena.
       - traefik.http.middlewares.e1p-public-headers.headers.stsSeconds=31536000
       - traefik.http.middlewares.e1p-public-headers.headers.stsIncludeSubdomains=true
       - traefik.http.middlewares.e1p-public-headers.headers.stsPreload=true
