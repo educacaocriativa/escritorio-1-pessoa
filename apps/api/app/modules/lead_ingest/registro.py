@@ -39,6 +39,8 @@ def reivindicar(
     Linha existente SEM `concluido_em` é devolvida para retomada (ver a docstring do modelo),
     sob `FOR UPDATE`: a segunda retomada concorrente espera a primeira commitar e então
     enxerga `concluido_em` preenchido.
+    A trava vale até o próximo commit: quem commitar no meio (ex.: `absorb_lead`) deve retomá-la
+    com `_buscar(..., travar=True)` e reler `concluido_em` antes de escrever.
     **NÃO commita**: a reivindicação só fica visível para as outras requisições junto com o
     primeiro commit de quem chamou.
     """

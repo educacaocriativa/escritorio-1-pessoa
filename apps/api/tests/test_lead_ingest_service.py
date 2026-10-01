@@ -3,6 +3,7 @@
 Etapa do Kanban e funil por evento: `test_lead_ingest_etapa_funil.py`.
 """
 import json
+from datetime import UTC, datetime
 
 import pytest
 from sqlalchemy import func, select
@@ -210,3 +211,37 @@ def test_find_lead_sem_telefone_nem_email_devolve_none(db: Session):
 
     _ingere(db)
     assert crm_service.find_lead(db, phone=None, email=None) is None
+
+
+def test_retentativa_que_conclui_durante_o_commit_do_contato_nao_duplica(db: Session, monkeypatch):
+    """`absorb_lead` commita e solta a trava: se outra tentativa conclui nessa janela, esta
+    não escreve fato nem auditoria de novo."""
+    original = service._resolve_contato
+
+    def resolve_e_conclui_por_fora(db_, **kw):
+        contato = original(db_, **kw)
+        outro = _fatos(db_, contato.id, "comercial.lead.recebido")
+        assert outro == []
+        db_.execute(
+            LeadIngestRecord.__table__.update().values(
+                concluido_em=datetime.now(UTC), client_id=contato.id
+            )
+        )
+        db_.commit()
+        return contato
+
+    monkeypatch.setattr(service, "_resolve_contato", resolve_e_conclui_por_fora)
+    r = _ingere(db)
+    assert r.processado is False
+    assert r.contato_id is not None
+    assert _fatos(db, r.contato_id, "comercial.lead.recebido") == []
+
+
+def test_valor_em_centavos_nunca_entra_no_fato_nem_dentro_do_toque(db: Session):
+    toque = {"utm_source": "instagram", "valor_centavos": 123, "aninhado": {"x_centavos": 9}}
+    r = _ingere(db, atribuicao={"situacao": "resolvida", "ultimo_toque": toque})
+    [fato] = _fatos(db, r.contato_id, "comercial.lead.recebido")
+    assert "centavos" not in fato.body
+    assert db.scalar(select(LeadIngestRecord)).payload["atribuicao"]["ultimo_toque"][
+        "valor_centavos"
+    ] == 123

@@ -104,6 +104,16 @@ def ingest(db: Session, *, tenant_id: str, dados: IngestIn) -> ResultadoIngest:
 
     contato = _resolve_contato(db, tenant_id=tenant_id, dados=dados)
 
+    # `absorb_lead` pode ter commitado, e o commit solta o FOR UPDATE da reivindicação: neste
+    # intervalo a linha está visível, sem conclusão e sem trava. Retoma a trava agora e relê o
+    # estado (populate_existing): se uma retentativa concorrente concluiu nesse meio-tempo, não
+    # escreve nada de novo.
+    registro = registro_service._buscar(db, chave=dados.chave_idempotencia, travar=True)
+    if registro is None or registro.concluido_em is not None:
+        return ResultadoIngest(
+            processado=False, contato_id=registro.client_id if registro else contato.id
+        )
+
     novas = list(dados.tags)
     prefixo = config.produto(perfil)
     sufixo = SUFIXO_DE_PRODUTO.get(dados.evento)
@@ -160,25 +170,29 @@ def _corpo(dados: IngestIn, descartadas: list[str]) -> str:
     """A atribuição completa e o pedido — SEM valores (invariante 2 de `core/facts.py`).
 
     O fato não guarda dinheiro: o valor da venda mora no registro bruto
-    (`lead_ingest_records.payload`) e, na origem, na Kiwify. Filtra por SUFIXO (`*_centavos`), e
-    não por nome, porque `Pedido` aceita campos extras: um `taxa_centavos` que o site passe a
-    mandar amanhã não pode entrar aqui pela porta dos fundos.
+    (`lead_ingest_records.payload`) e, na origem, na Kiwify. Filtra por SUFIXO (`*_centavos`),
+    em qualquer nível, e não por nome: `Pedido` e `Toque` aceitam campos extras, e um
+    `taxa_centavos` que o site passe a mandar amanhã não pode entrar pela porta dos fundos.
     """
-    pedido = None
-    if dados.pedido is not None:
-        pedido = {
-            chave: valor
-            for chave, valor in dados.pedido.model_dump(mode="json").items()
-            if not chave.endswith("_centavos")
-        }
     return json.dumps(
         {
             "evento": dados.evento,
             "chave_idempotencia": dados.chave_idempotencia,
-            "atribuicao": dados.atribuicao.model_dump(mode="json"),
-            "pedido": pedido,
+            "atribuicao": _sem_valores(dados.atribuicao.model_dump(mode="json")),
+            "pedido": _sem_valores(
+                dados.pedido.model_dump(mode="json") if dados.pedido is not None else None
+            ),
             "tags_descartadas": descartadas,
         },
         ensure_ascii=False,
         indent=2,
     )
+
+
+def _sem_valores(valor):
+    """Remove, em qualquer profundidade, as chaves `*_centavos`."""
+    if isinstance(valor, dict):
+        return {k: _sem_valores(v) for k, v in valor.items() if not k.endswith("_centavos")}
+    if isinstance(valor, list):
+        return [_sem_valores(v) for v in valor]
+    return valor
