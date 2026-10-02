@@ -78,6 +78,12 @@ $DC exec api python -m app.scripts.lead_ingest_admin mostrar --tenant <slug>
 - `--funil evento=` (vazio) remove um mapeamento. Evento sem mapeamento: lead, carrinho e compra
   caem no funil de entrada padrão de Configurações; renovação, reembolso, chargeback e
   cancelamento não entram em funil nenhum.
+- **A compra encerra as jornadas de entrada.** Ao chegar `compra_aprovada`, as jornadas vivas do
+  contato nos funis de `lead`, `carrinho_abandonado` e no funil de entrada padrão são canceladas
+  (exceto o funil da própria compra), para quem pagou não receber "esqueceu o carrinho". O site
+  manda `carrinho_abandonado` assim que o pix/boleto é gerado, então o pagamento costuma chegar
+  minutos depois. Como defesa em profundidade, comece o funil de Recuperação por um passo
+  **"Esperar"** (ex.: 30 a 60 min): quem paga rápido nem chega a receber a 1ª mensagem.
 - Eventos válidos: `lead`, `carrinho_abandonado`, `compra_aprovada`, `renovacao`, `reembolso`,
   `chargeback`, `cancelamento`.
 - Slug, evento ou funil inexistente (ou de outro tenant) sai com `Erro: ...` e código 2; a

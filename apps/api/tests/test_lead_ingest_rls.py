@@ -603,3 +603,45 @@ def _slug(url: str, tenant_id: str) -> str | None:
     with _sessao(url, None) as db:
         t = db.get(Tenant, tenant_id)
         return t.slug if t else None
+
+
+def test_compra_cancela_a_recuperacao_so_do_proprio_tenant(ambiente):
+    from app.modules.funnels.models import Funnel, FunnelRun
+    from app.modules.settings import service as settings_service
+
+    url, a, b = ambiente["url"], ambiente["tenant_a"], ambiente["tenant_b"]
+    espera = {
+        "nodes": [
+            {"id": "n1", "data": {"key": "esperar", "config": {"delay_minutes": 60}}},
+            {"id": "n2"},
+        ],
+        "edges": [{"id": "e1", "source": "n1", "target": "n2"}],
+    }
+    email = _email()
+    contato = {"nome": "Maria", "email": email}
+    funis = {}
+    for tid in (a, b):
+        with _sessao(url, tid) as db:
+            funil = Funnel(tenant_id=tid, name="Recuperação", **espera)
+            db.add(funil)
+            db.commit()
+            perfil = settings_service.get_profile(db, tid)
+            perfil.lead_ingest_config = {"funis": {"carrinho_abandonado": funil.id}}
+            db.commit()
+            funis[tid] = funil.id
+        _ingere(
+            url, tid, evento="carrinho_abandonado", contato=contato,
+            chave_idempotencia=f"kiwify:{uuid4()}:carrinho",
+        )
+
+    _ingere(
+        url, a, evento="compra_aprovada", contato=contato,
+        chave_idempotencia=f"kiwify:{uuid4()}:compra",
+    )
+
+    def _status(tid: str) -> list[str]:
+        with _sessao(url, tid) as db:
+            return [r.status for r in db.query(FunnelRun).filter_by(funnel_id=funis[tid]).all()]
+
+    assert _status(a) == ["cancelled"]
+    assert _status(b) == ["waiting"]  # controle positivo: a compra em A não toca B
