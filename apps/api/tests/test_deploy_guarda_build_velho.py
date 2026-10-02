@@ -13,9 +13,11 @@ classe: `apps/web/e2e/` e os 96 `*.test.tsx`, que não entram no bundle.
 
 O defeito que a segunda guarda fecha é o oposto — o ponto cego que a primeira abriria sozinha: com
 `FRONT=0`, NADA mais verificava que o web havia sido reconstruído. A checagem de imagem não depende
-de conteúdo mudar: compara a imagem que o container em pé roda com a imagem recém-construída. Se o
-`up -d --build` construiu e não recriou o container, as duas divergem — que é exatamente "servindo
-build velho", e vale para `public/`, para e2e e para código real.
+de conteúdo mudar: compara o CONTEÚDO (camadas do filesystem) da imagem que o container em pé roda
+com o da imagem recém-construída. Se o `up -d --build` construiu e não recriou o container, divergem
+— "servindo build velho" — e a guarda recria só o web uma vez antes de abortar. Compara camadas e
+não ids porque, na AWS (Compose v5.5.0), os ids mudam a cada build mesmo com conteúdo idêntico: dois
+falsos alarmes em produção, 2026-10-01 e 2026-10-02.
 """
 
 from __future__ import annotations
@@ -186,34 +188,222 @@ def test_backend_NAO_marca_front(tmp_path):
 # ------------------------------------------------------ guarda 2: o container roda a imagem nova
 
 
-def _imagem_atual(em_pe: str, construida: str) -> bool:
-    """Roda a função REAL do deploy.sh. True = o container roda a imagem recém-construída."""
-    partes = _fonte().split("imagem_do_web_esta_atual()", 1)
-    assert len(partes) == 2, "não achei a função `imagem_do_web_esta_atual` no deploy.sh"
+def _funcao(nome: str) -> str:
+    """O texto REAL da função `nome()` do deploy.sh (até a `}` na coluna 0)."""
+    partes = _fonte().split(f"\n{nome}() {{", 1)
+    assert len(partes) == 2, f"não achei a função `{nome}` no deploy.sh"
     linhas = partes[1].splitlines()
     fim = next(i for i, linha in enumerate(linhas) if linha.startswith("}"))
-    funcao = "imagem_do_web_esta_atual()" + "\n".join(linhas[: fim + 1])
-    script = funcao + '\nimagem_do_web_esta_atual "$1" "$2"\n'
-    return _bash(script, em_pe, construida).returncode == 0
+    return f"{nome}() {{" + "\n".join(linhas[: fim + 1]) + "\n"
 
 
 SHA_A = "sha256:1111111111111111111111111111111111111111111111111111111111111111"
 SHA_B = "sha256:2222222222222222222222222222222222222222222222222222222222222222"
+SHA_C = "sha256:3333333333333333333333333333333333333333333333333333333333333333"
+CAMADAS_X = '["sha256:aaa","sha256:bbb"]'
+CAMADAS_Y = '["sha256:aaa","sha256:ccc"]'
+
+# Um `docker` de mentira, dirigido por variáveis de ambiente: CAMADAS_<id sem prefixo>. O container
+# está na imagem EM_PE; depois de `compose_ ... --force-recreate`, passa a estar na RECRIADA.
+# O estado vai por ARQUIVO (MARCA) porque `$(...)` roda em subshell e perderia uma variável.
+STUBS = r"""
+set -euo pipefail
+PROJETO=infra
+ok()     { echo "OK $*"; }
+aviso()  { echo "AVISO $*"; }
+morre()  { echo "ABORTADO $*" >&2; exit 1; }
+docker() {
+  case "$1 $2" in
+    "ps -q") [[ -f "$MARCA" && -n "${SEM_CID_POS:-}" ]] || echo cid ;;
+    "inspect cid")
+      if [[ -f "$MARCA" ]]; then echo "$RECRIADA"; else echo "$EM_PE"; fi ;;
+    "image inspect")
+      case "$5" in
+        '{{.Id}}') [[ -n "$CONSTRUIDA" ]] && echo "$CONSTRUIDA" || return 1 ;;
+        *) local v="CAM_${3#sha256:}"; [[ "$3" == infra-web ]] && v="CAM_${CONSTRUIDA#sha256:}"
+           [[ -n "${!v:-}" ]] && echo "${!v}" || return 1 ;;
+      esac ;;
+  esac
+}
+compose_() { echo "COMPOSE $*"; [[ -z "${COMPOSE_FALHA:-}" ]] || return 1; : > "$MARCA"; }
+"""
+
+_FUNCOES = (
+    "camadas_da_imagem",
+    "imagem_do_web_esta_atual",
+    "o_que_nao_resolveu",
+    "le_imagens_do_web",
+    "garante_web_na_imagem_nova",
+)
 
 
-def test_container_na_imagem_recem_construida_PASSA():
-    assert _imagem_atual(SHA_A, SHA_A)
-
-
-def test_container_em_imagem_ANTIGA_reprova():
-    """O caso que a guarda existe para pegar: construiu a nova e não recriou o container."""
-    assert not _imagem_atual(SHA_A, SHA_B), (
-        "o container em pé roda uma imagem DIFERENTE da recém-construída e a guarda aceitou — "
-        "é literalmente 'o web está servindo build velho'"
+def _roda_guarda(
+    tmp_path: pathlib.Path,
+    *,
+    em_pe: str,
+    construida: str,
+    recriada: str = "",
+    camadas: dict[str, str] | None = None,
+    extra_env: str = "",
+) -> subprocess.CompletedProcess[str]:
+    """Roda a `garante_web_na_imagem_nova` REAL contra um `docker`/`compose_` de mentira."""
+    exports = "".join(
+        f"export CAM_{k.removeprefix('sha256:')}='{v}'\n" for k, v in (camadas or {}).items()
     )
+    script = (
+        f"export EM_PE='{em_pe}' CONSTRUIDA='{construida}' RECRIADA='{recriada}'\n"
+        f"export MARCA=recriou\n"
+        + extra_env
+        + exports
+        + STUBS
+        + "".join(_funcao(f) for f in _FUNCOES)
+        + "garante_web_na_imagem_nova\n"
+    )
+    return _bash(script, cwd=tmp_path)
 
 
-def test_valor_vazio_reprova():
-    """Um `docker inspect` que falha devolve string vazia; vazio == vazio não pode virar OK."""
-    assert not _imagem_atual("", ""), "duas strings vazias passaram pela guarda"
-    assert not _imagem_atual(SHA_A, ""), "imagem construída vazia passou pela guarda"
+def _atual(em_pe: str, construida: str, camadas: dict[str, str] | None = None) -> int:
+    """Código de saída REAL de `imagem_do_web_esta_atual` (0 igual | 1 difere | 2 inconclusivo)."""
+    exports = "".join(
+        f"export CAM_{k.removeprefix('sha256:')}='{v}'\n" for k, v in (camadas or {}).items()
+    )
+    script = (
+        exports
+        + STUBS.replace("compose_()", "_nao_usada()")
+        + _funcao("camadas_da_imagem")
+        + _funcao("imagem_do_web_esta_atual")
+        + 'rc=0; imagem_do_web_esta_atual "$1" "$2" || rc=$?; exit $rc\n'
+    )
+    return _bash(script, em_pe, construida).returncode
+
+
+def test_mesmo_id_PASSA():
+    assert _atual(SHA_A, SHA_A) == 0
+
+
+def test_ids_diferentes_com_as_mesmas_camadas_PASSA():
+    """O falso alarme de produção (2026-10-01/02): id novo a cada build, conteúdo idêntico."""
+    assert _atual(SHA_A, SHA_B, {SHA_A: CAMADAS_X, SHA_B: CAMADAS_X}) == 0
+
+
+def test_camadas_diferentes_reprova():
+    """O que a guarda existe para pegar: o container serve um conteúdo que não é o construído."""
+    assert _atual(SHA_A, SHA_B, {SHA_A: CAMADAS_X, SHA_B: CAMADAS_Y}) == 1
+
+
+def test_valor_vazio_e_inconclusivo_nunca_ok():
+    """`docker inspect` que falha devolve vazio; vazio == vazio não pode virar OK."""
+    assert _atual("", "") == 2
+    assert _atual(SHA_A, "") == 2
+
+
+def test_camadas_irresolvivel_e_inconclusivo():
+    """Imagem antiga podada: ids diferentes e sem camadas de um lado -> não dá para afirmar nada."""
+    assert _atual(SHA_A, SHA_B, {SHA_B: CAMADAS_X}) == 2
+
+
+def test_fluxo_ids_diferentes_mesmo_conteudo_NAO_recria_nem_aborta(tmp_path):
+    r = _roda_guarda(
+        tmp_path, em_pe=SHA_A, construida=SHA_B, camadas={SHA_A: CAMADAS_X, SHA_B: CAMADAS_X}
+    )
+    assert r.returncode == 0, r.stderr
+    assert "OK web no conteudo recem-construido" in r.stdout
+    assert "COMPOSE" not in r.stdout, "recriou um web que já estava certo"
+
+
+def test_fluxo_conteudo_diferente_recria_so_o_web_e_passa_se_curou(tmp_path):
+    r = _roda_guarda(
+        tmp_path,
+        em_pe=SHA_A,
+        construida=SHA_B,
+        recriada=SHA_B,
+        camadas={SHA_A: CAMADAS_X, SHA_B: CAMADAS_Y},
+    )
+    assert r.returncode == 0, r.stderr
+    assert "COMPOSE up -d --no-deps --force-recreate web" in r.stdout
+    assert "--remove-orphans" not in r.stdout
+    assert "recriado e agora no conteudo recem-construido" in r.stdout
+
+
+def test_fluxo_conteudo_diferente_e_continua_diferente_ABORTA(tmp_path):
+    r = _roda_guarda(
+        tmp_path,
+        em_pe=SHA_A,
+        construida=SHA_B,
+        recriada=SHA_A,
+        camadas={SHA_A: CAMADAS_X, SHA_B: CAMADAS_Y},
+    )
+    assert r.returncode == 1
+    assert r.stdout.count("COMPOSE") == 1, "tentou curar mais de uma vez"
+    assert "ABORTADO" in r.stderr and "111111111111" in r.stderr
+    assert "CONTEUDO difere" in r.stderr
+
+
+def test_fluxo_irresolvivel_avisa_e_segue(tmp_path):
+    r = _roda_guarda(tmp_path, em_pe=SHA_A, construida=SHA_B, camadas={SHA_B: CAMADAS_X})
+    assert r.returncode == 0, r.stderr
+    assert "inconclusiva" in r.stdout
+    assert "COMPOSE" not in r.stdout
+
+
+def test_camadas_vazias_ou_nulas_nos_dois_lados_sao_inconclusivo():
+    """`[]` igual dos dois lados não é "mesmo conteúdo": é falta de dado."""
+    assert _atual(SHA_A, SHA_B, {SHA_A: "[]", SHA_B: "[]"}) == 2
+    assert _atual(SHA_A, SHA_B, {SHA_A: "null", SHA_B: "null"}) == 2
+
+
+def test_inconclusivo_diz_o_que_nao_resolveu(tmp_path):
+    r = _roda_guarda(tmp_path, em_pe=SHA_A, construida=SHA_B, camadas={SHA_B: CAMADAS_X})
+    assert "as camadas da imagem do container" in r.stdout
+    r = _roda_guarda(tmp_path, em_pe=SHA_A, construida=SHA_B, camadas={SHA_A: CAMADAS_X})
+    assert "as camadas da imagem construida" in r.stdout
+
+
+def test_cura_que_falha_ao_recriar_aborta_com_mensagem(tmp_path):
+    r = _roda_guarda(
+        tmp_path,
+        em_pe=SHA_A,
+        construida=SHA_B,
+        camadas={SHA_A: CAMADAS_X, SHA_B: CAMADAS_Y},
+        extra_env="export COMPOSE_FALHA=1\n",
+    )
+    assert r.returncode == 1
+    assert "falhou ao recriar o web" in r.stderr
+
+
+def test_depois_da_cura_sem_container_e_queda_real_e_aborta(tmp_path):
+    r = _roda_guarda(
+        tmp_path,
+        em_pe=SHA_A,
+        construida=SHA_B,
+        recriada=SHA_B,
+        camadas={SHA_A: CAMADAS_X, SHA_B: CAMADAS_Y},
+        extra_env="export SEM_CID_POS=1\n",
+    )
+    assert r.returncode == 1
+    assert "o web nao voltou depois de recriado" in r.stderr
+    assert "CONTEUDO difere" not in r.stderr
+
+
+def test_depois_da_cura_container_de_pe_sem_camadas_e_inconclusivo(tmp_path):
+    # A imagem recriada (SHA_C) não tem camadas resolvíveis: de pé, mas sem como comparar.
+    r = _roda_guarda(
+        tmp_path,
+        em_pe=SHA_A,
+        construida=SHA_B,
+        recriada=SHA_C,
+        camadas={SHA_A: CAMADAS_X, SHA_B: CAMADAS_Y},
+    )
+    assert r.returncode == 0, r.stderr
+    assert "inconclusiva" in r.stdout
+
+
+def test_camadas_da_imagem_sobrevive_ao_docker_falhando_sob_set_e():
+    """Chamada solta sob `set -e`, como o script faz: sem o `|| true` ela mataria o deploy."""
+    script = (
+        STUBS
+        + _funcao("camadas_da_imagem")
+        + 'export CONSTRUIDA=""; x="$(camadas_da_imagem infra-web)"; echo "vivo:[$x]"\n'
+    )
+    r = _bash(script, cwd=None)
+    assert "vivo:[]" in r.stdout, r.stderr
