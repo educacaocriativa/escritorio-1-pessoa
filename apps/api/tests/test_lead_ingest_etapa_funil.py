@@ -1,4 +1,4 @@
-"""Ingestão: compra vai ao Ganho, pós-venda não tira de lá, e o funil é escolhido pelo evento."""
+"""Ingestão: compra vai ao Ganho, estorno vai à Perda e funil segue o evento."""
 import pytest
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
@@ -26,6 +26,10 @@ def _ingere(db: Session, **sobre):
 
 def _etapa(db: Session, client_id: str) -> str:
     return db.get(PipelineStage, db.get(Client, client_id).stage_id).name
+
+
+def _etapa_obj(db: Session, client_id: str) -> PipelineStage:
+    return db.get(PipelineStage, db.get(Client, client_id).stage_id)
 
 
 def _conta_fatos(db: Session, client_id: str, kind: str) -> int:
@@ -70,12 +74,112 @@ def test_compra_aprovada_move_para_o_ganho(db: Session):
     assert _conta_fatos(db, r.contato_id, "crm.etapa.movida") == 1
 
 
-@pytest.mark.parametrize("evento", ["reembolso", "chargeback", "cancelamento", "renovacao"])
-def test_pos_venda_nao_tira_do_ganho_nem_reabre(db: Session, evento: str):
+@pytest.mark.parametrize(
+    ("evento", "kind", "tag"),
+    [
+        ("reembolso", "comercial.compra.reembolsada", "publia:reembolso"),
+        ("chargeback", "comercial.compra.contestada", "publia:chargeback"),
+    ],
+)
+def test_estorno_tira_do_ganho_para_perda_sem_apagar_a_trilha(
+    db: Session, evento: str, kind: str, tag: str
+):
+    perfil = settings_service.get_profile(db, TENANT)
+    perfil.lead_ingest_config = {"produto": "publia"}
+    db.commit()
+    compra = _ingere(db, evento="compra_aprovada", chave_idempotencia="kiwify:ord_1:compra")
+    tags_da_compra = list(db.get(Client, compra.contato_id).tags)
+
+    _ingere(db, evento=evento, chave_idempotencia=f"kiwify:ord_1:{evento}", tags=[])
+
+    contato = db.get(Client, compra.contato_id)
+    assert _etapa_obj(db, compra.contato_id).is_lost is True
+    assert tags_da_compra == contato.tags[: len(tags_da_compra)]
+    assert tag in contato.tags
+    assert _conta_fatos(db, compra.contato_id, kind) == 1
+    assert _conta_fatos(db, compra.contato_id, "crm.etapa.movida") == 2
+    assert _conta_fatos(db, compra.contato_id, "crm.lead.reaberto") == 0
+
+
+@pytest.mark.parametrize("evento", ["cancelamento", "renovacao"])
+def test_cancelamento_e_renovacao_preservam_o_ganho_sem_reabrir(db: Session, evento: str):
     compra = _ingere(db, evento="compra_aprovada", chave_idempotencia="kiwify:ord_1:compra")
     _ingere(db, evento=evento, chave_idempotencia=f"kiwify:ord_1:{evento}")
     assert _etapa(db, compra.contato_id) == "Ganho"
+    assert _conta_fatos(db, compra.contato_id, "crm.etapa.movida") == 1
     assert _conta_fatos(db, compra.contato_id, "crm.lead.reaberto") == 0
+
+
+@pytest.mark.parametrize("evento", ["reembolso", "chargeback"])
+def test_estorno_nao_sequestra_card_fora_do_ganho(db: Session, evento: str):
+    lead = _ingere(db)
+
+    _ingere(db, evento=evento, chave_idempotencia=f"kiwify:ord_1:{evento}")
+
+    assert _etapa(db, lead.contato_id) == "Entrada"
+    assert _conta_fatos(db, lead.contato_id, "crm.etapa.movida") == 0
+
+
+def test_reembolso_nao_move_card_em_ganho_arquivado(db: Session):
+    compra = _ingere(db, evento="compra_aprovada", chave_idempotencia="kiwify:ord_1:compra")
+    ganho = _etapa_obj(db, compra.contato_id)
+    ganho.is_archived = True
+    db.commit()
+
+    _ingere(db, evento="reembolso", chave_idempotencia="kiwify:ord_1:reembolso")
+
+    assert db.get(Client, compra.contato_id).stage_id == ganho.id
+    assert _conta_fatos(db, compra.contato_id, "comercial.compra.reembolsada") == 1
+    assert _conta_fatos(db, compra.contato_id, "crm.etapa.movida") == 1
+
+
+@pytest.mark.parametrize("cenario", ["ausente", "ambiguo"])
+def test_reembolso_sem_alvo_de_perda_inequivoco_registra_sem_mover(
+    db: Session, caplog, cenario: str
+):
+    compra = _ingere(db, evento="compra_aprovada", chave_idempotencia="kiwify:ord_1:compra")
+    perda = db.scalar(select(PipelineStage).where(PipelineStage.is_lost.is_(True)))
+    if cenario == "ausente":
+        perda.is_archived = True
+    else:
+        db.add(
+            PipelineStage(
+                tenant_id=TENANT,
+                name="Venda anulada",
+                position=99,
+                is_lost=True,
+            )
+        )
+    db.commit()
+
+    with caplog.at_level("WARNING"):
+        resultado = _ingere(
+            db, evento="reembolso", chave_idempotencia=f"kiwify:ord_1:reembolso:{cenario}"
+        )
+
+    assert resultado.processado is True
+    assert _etapa(db, compra.contato_id) == "Ganho"
+    assert _conta_fatos(db, compra.contato_id, "comercial.compra.reembolsada") == 1
+    assert _conta_fatos(db, compra.contato_id, "crm.etapa.movida") == 1
+    warnings_de_alvo = [
+        r for r in caplog.records if "sem coluna de Perda ativa inequívoca" in r.getMessage()
+    ]
+    assert len(warnings_de_alvo) == 1
+
+
+def test_reembolso_repetido_e_noop_e_cancelamento_anterior_nao_bloqueia_perda(db: Session):
+    compra = _ingere(db, evento="compra_aprovada", chave_idempotencia="kiwify:ord_1:compra")
+    _ingere(db, evento="cancelamento", chave_idempotencia="kiwify:ord_1:cancelamento")
+    chave = "kiwify:ord_1:reembolso"
+
+    primeiro = _ingere(db, evento="reembolso", chave_idempotencia=chave)
+    repetido = _ingere(db, evento="reembolso", chave_idempotencia=chave)
+
+    assert primeiro.processado is True
+    assert repetido.processado is False
+    assert _etapa_obj(db, compra.contato_id).is_lost is True
+    assert _conta_fatos(db, compra.contato_id, "comercial.compra.reembolsada") == 1
+    assert _conta_fatos(db, compra.contato_id, "crm.etapa.movida") == 2
 
 
 def test_compra_sem_coluna_de_ganho_ativa_registra_sem_mover(db: Session):
