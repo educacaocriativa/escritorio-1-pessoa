@@ -185,6 +185,52 @@ def test_contato_de_outro_tenant_nao_e_reaproveitado(ambiente):
         ) == 1
 
 
+def test_reembolso_move_so_o_card_do_proprio_tenant_para_perda(ambiente):
+    url, a, b = ambiente["url"], ambiente["tenant_a"], ambiente["tenant_b"]
+    contato = {
+        "nome": "Maria",
+        "email": _email(),
+        "telefone": f"(11) 9{uuid4().int % 10**8:08d}",
+    }
+    compras = {}
+    for tenant_id in (a, b):
+        compras[tenant_id] = _ingere(
+            url,
+            tenant_id,
+            evento="compra_aprovada",
+            chave_idempotencia=f"kiwify:{uuid4()}:compra",
+            contato=contato,
+        )
+
+    _ingere(
+        url,
+        a,
+        evento="reembolso",
+        chave_idempotencia=f"kiwify:{uuid4()}:reembolso",
+        contato=contato,
+    )
+
+    with _sessao(url, a) as db:
+        assert db.scalar(
+            text(
+                "SELECT s.is_lost FROM clients c "
+                "JOIN pipeline_stages s ON s.id = c.stage_id WHERE c.id = :id"
+            ),
+            {"id": compras[a].contato_id},
+        ) is True
+        assert db.scalar(
+            text("SELECT count(*) FROM clients WHERE id = :id"), {"id": compras[b].contato_id}
+        ) == 0
+    with _sessao(url, b) as db:
+        assert db.scalar(
+            text(
+                "SELECT s.is_won FROM clients c "
+                "JOIN pipeline_stages s ON s.id = c.stage_id WHERE c.id = :id"
+            ),
+            {"id": compras[b].contato_id},
+        ) is True
+
+
 def test_retentativas_concorrentes_da_mesma_chave_so_uma_tem_efeito(ambiente, monkeypatch):
     url, a = ambiente["url"], ambiente["tenant_a"]
     # Aquece: perfil e colunas do Kanban já existem, senão as duas threads disputariam o seed.

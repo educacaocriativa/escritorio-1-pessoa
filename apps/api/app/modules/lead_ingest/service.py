@@ -6,11 +6,11 @@ Uma chamada de `ingest`, na ordem:
 2. **Resolve o contato.** Evento de ENTRADA (lead, carrinho, compra) passa por
    `crm.absorb_lead` com `source="api"` — a porta única de lead, com a dedup de sempre (telefone
    normalizado, depois e-mail). Evento de PÓS-VENDA (renovação, reembolso, chargeback,
-   cancelamento) de quem já existe NÃO passa: `absorb_lead` reabre card em coluna terminal, e um
-   reembolso tiraria do Ganho quem comprou — o contrário da spec ("não movem o card").
+   cancelamento) de quem já existe NÃO passa: `absorb_lead` reabre card em coluna terminal.
 3. **Soma tags** sem duplicar e sem estourar o limite do CRM; o que sobrar fica registrado.
 4. **Grava o fato** na timeline (`module="comercial"`), com a atribuição no corpo.
-5. **Fecha.** `compra_aprovada` leva o card ao Ganho (coluna `is_won`) no mesmo commit.
+5. **Fecha.** `compra_aprovada` leva o card ao Ganho (`is_won`); reembolso/chargeback levam
+   apenas um card atualmente ganho à Perda (`is_lost`), no mesmo commit.
 6. **Compra encerra as jornadas de entrada** (lead/carrinho/funil padrão) do contato.
 7. **Inscreve no funil do evento** (`config.funil_do_evento`), se não houver jornada viva nele.
 
@@ -238,31 +238,40 @@ def _sem_valores(valor):
 
 
 def _fechar(db: Session, *, tenant_id: str, evento: str, contato: Client) -> None:
-    """Commita o que está pendente; em `compra_aprovada`, junto com a ida ao Ganho.
+    """Commita fato/tag/registro junto com a mudança terminal, quando ela for segura.
 
     `move_client` commita a sessão inteira: tags, fato e conclusão do registro entram no MESMO
-    commit da mudança de etapa, e o aviso de "movido para Ganho" (notifications) só sai depois
-    dele. Reembolso, chargeback e cancelamento NÃO movem o card (spec §6.2): a venda aconteceu,
-    e o que mudou depois fica em tag e fato, não apagado.
+    commit da mudança de etapa. Compra vai ao Ganho; reembolso/chargeback só levam à Perda
+    quem ainda está no Ganho. Cancelamento e renovação apenas registram o ocorrido.
     """
-    if evento != "compra_aprovada":
+    if evento == "compra_aprovada":
+        alvo = next((s for s in crm_service.ensure_stages(db, tenant_id) if s.is_won), None)
+        nome_alvo = "Ganho"
+    elif evento in ("reembolso", "chargeback"):
+        etapa_atual = db.get(PipelineStage, contato.stage_id) if contato.stage_id else None
+        if etapa_atual is None or etapa_atual.is_archived or not etapa_atual.is_won:
+            db.commit()
+            return
+        perdas = [s for s in crm_service.ensure_stages(db, tenant_id) if s.is_lost]
+        alvo = perdas[0] if len(perdas) == 1 else None
+        nome_alvo = "Perda"
+    else:
         db.commit()
         return
-    ganho = next((s for s in crm_service.ensure_stages(db, tenant_id) if s.is_won), None)
-    if ganho is None:
+    if alvo is None:
         logger.warning(
-            "[lead_ingest] tenant=%s sem coluna de Ganho ativa; compra registrada sem mover o "
-            "card %s",
-            tenant_id, contato.id,
+            "[lead_ingest] tenant=%s sem coluna de %s ativa inequívoca; evento=%s registrado "
+            "sem mover o card %s",
+            tenant_id, nome_alvo, evento, contato.id,
         )
         db.commit()
         return
-    if contato.stage_id == ganho.id:
+    if contato.stage_id == alvo.id:
         db.commit()
         return
     crm_service.move_client(
         db, client_id=contato.id, tenant_id=tenant_id, actor=ATOR, by_ai=False,
-        stage_id=ganho.id,
+        stage_id=alvo.id,
     )
 
 
