@@ -107,13 +107,65 @@ bundle_servido() {
   curl -sS --max-time 20 "https://$DOMINIO/" 2>/dev/null \
     | grep -oE '/assets/index-[A-Za-z0-9_-]+[.]js' | head -1 || true
 }
-# Imagens do Docker sao content-addressed: se o build nao mudou o `dist/`, a imagem continua sendo
-# a MESMA e o compose nem recria o container -- entao "a imagem mudou?" seria a pergunta errada,
-# ela acusaria um deploy correto. A pergunta certa e "o container em pe esta na imagem mais nova?",
-# e essa nao depende de conteudo nenhum mudar: vale para uma mudanca em `public/` (que muda a
-# imagem sem tocar no bundle), para e2e (que nao muda nem uma nem outra) e para codigo real.
+# O web esta rodando o que o `up -d --build` acabou de construir? A pergunta certa e "o container em
+# pe esta na imagem mais nova?", e nao "a imagem mudou?": o build pode sair 100% de cache (o `dist/`
+# nao mudou) e o compose entao nem recria o container -- um deploy correto, que a pergunta errada
+# acusaria. Ela vale para `public/`, para e2e e para codigo real.
+#
+# Mas comparar IDs de imagem NAO serve nesta AWS (Docker Compose v5.5.0), e custou dois falsos
+# alarmes em producao, em 2026-10-01 e 2026-10-02: o deploy estava certo (API saudavel, alembic no
+# head, `api` e `worker` recriados) e o script abortou no fim, "o container do web roda a imagem
+# 375550b39186 mas a construida agora e 7d25aa8dc180". O `docker inspect <container> .Image` e o
+# `docker image inspect <projeto>-web .Id` trocam a cada build mesmo com o CONTEUDO identico (a
+# attestation/provenance do build gera um digest de indice novo), enquanto o compose decide pelo
+# digest dele -- e corretamente deixa o container de pe (`Container infra-web-1 Running`). Ate o
+# label `com.docker.compose.image` do container era um TERCEIRO id (f21f19fa1178). So
+# `--force-recreate` igualava os ids, sem mudar nada que se servisse.
+#
+# Entao a comparacao e por CONTEUDO: as camadas do filesystem (`RootFS.Layers`) da imagem do
+# container contra as da recem-construida. Camadas iguais = mesmo conteudo, ids diferentes ou nao.
+# Retorno: 0 = mesmo conteudo | 1 = conteudo diferente | 2 = nao deu para comparar.
+camadas_da_imagem() { # $1 = id ou nome da imagem
+  docker image inspect "$1" --format '{{json .RootFS.Layers}}' 2>/dev/null || true
+}
 imagem_do_web_esta_atual() { # $1 = imagem do container em pe, $2 = imagem recem-construida
-  [[ -n "$1" && -n "$2" && "$1" == "$2" ]]
+  [[ -n "$1" && -n "$2" ]] || return 2
+  [[ "$1" == "$2" ]] && return 0
+  local a b
+  a="$(camadas_da_imagem "$1")"
+  b="$(camadas_da_imagem "$2")"
+  # Sem camadas de um dos lados (imagem antiga ja podada, p.ex.) nao ha o que comparar.
+  [[ -n "$a" && "$a" != null && -n "$b" && "$b" != null ]] || return 2
+  [[ "$a" == "$b" ]]
+}
+# Le o container do web em pe e a imagem `<projeto>-web` (globais IMG_EM_PE e IMG_CONSTRUIDA).
+le_imagens_do_web() {
+  local cid
+  cid="$(docker ps -q --filter "label=com.docker.compose.project=$PROJETO" --filter "label=com.docker.compose.service=web" 2>/dev/null | head -1)"
+  IMG_EM_PE="$(docker inspect "$cid" --format '{{.Image}}' 2>/dev/null || true)"
+  IMG_CONSTRUIDA="$(docker image inspect "${PROJETO}-web" --format '{{.Id}}' 2>/dev/null || true)"
+}
+# Inconclusivo NAO e reprovacao: avisa e segue. Conteudo realmente diferente (container velho de
+# verdade) se cura UMA vez -- recria so o web, mesmas flags de compose, sem --remove-orphans e sem
+# nomear outro servico -- e confere de novo; se ainda diverge, ai sim aborta.
+garante_web_na_imagem_nova() {
+  local rc=0
+  le_imagens_do_web
+  imagem_do_web_esta_atual "$IMG_EM_PE" "$IMG_CONSTRUIDA" || rc=$?
+  case "$rc" in
+    0) ok "web no conteudo recem-construido (container ${IMG_EM_PE:7:12}, imagem ${IMG_CONSTRUIDA:7:12})"; return 0 ;;
+    2) aviso "nao consegui comparar a imagem do web (em pe: ${IMG_EM_PE:-?} | construida: ${IMG_CONSTRUIDA:-?}) - checagem inconclusiva, nao e reprovacao"; return 0 ;;
+  esac
+  aviso "o web roda ${IMG_EM_PE:7:12}, de conteudo diferente da construida ${IMG_CONSTRUIDA:7:12} - recriando so o web, uma vez"
+  compose_ up -d --no-deps --force-recreate web
+  le_imagens_do_web
+  rc=0
+  imagem_do_web_esta_atual "$IMG_EM_PE" "$IMG_CONSTRUIDA" || rc=$?
+  if (( rc == 0 )); then
+    ok "web recriado e agora no conteudo recem-construido (${IMG_EM_PE:7:12})"
+  else
+    morre "o container do web roda a imagem ${IMG_EM_PE:7:12} e a construida agora e ${IMG_CONSTRUIDA:7:12}: o CONTEUDO difere mesmo depois de recriar o web - esta servindo build velho."
+  fi
 }
 
 # --- 2. O checkout esta limpo? ------------------------------------------------
@@ -274,25 +326,12 @@ else
   morre "alembic ficou em '$ALEMBIC_DEPOIS' mas o repo pede '$HEAD_REPO' - a migration nao aplicou."
 fi
 
-# O web esta rodando a imagem que o `up -d --build` acabou de construir? Esta checagem nao
-# depende de o conteudo mudar, entao ela cobre o buraco que a exclusao do `FORA_DO_BUNDLE` abriria
-# sozinha: um deploy que so mexe em `public/` cai no ramo "bundle inalterado, como esperado" e
-# passaria SEM NINGUEM ter verificado que o web foi reconstruido.
-#
-# Inconclusivo NAO e reprovacao. Se o nome da imagem ou o container nao resolverem neste host, o
-# script avisa e segue: a alternativa seria inventar um jeito novo de bloquear producao por uma
-# suposicao de nomenclatura -- e derrubar deploy por engano ja custou ~40 min de fora do ar aqui
-# uma vez (issue #151).
-CID_WEB="$(docker ps -q --filter "label=com.docker.compose.project=$PROJETO" --filter "label=com.docker.compose.service=web" 2>/dev/null | head -1)"
-IMG_EM_PE="$(docker inspect "$CID_WEB" --format '{{.Image}}' 2>/dev/null || true)"
-IMG_CONSTRUIDA="$(docker image inspect "${PROJETO}-web" --format '{{.Id}}' 2>/dev/null || true)"
-if [[ -z "$IMG_EM_PE" || -z "$IMG_CONSTRUIDA" ]]; then
-  aviso "nao consegui comparar a imagem do web (em pe: ${IMG_EM_PE:-?} | construida: ${IMG_CONSTRUIDA:-?}) - checagem inconclusiva, nao e reprovacao"
-elif imagem_do_web_esta_atual "$IMG_EM_PE" "$IMG_CONSTRUIDA"; then
-  ok "web na imagem recem-construida (${IMG_EM_PE:7:12})"
-else
-  morre "o container do web roda a imagem ${IMG_EM_PE:7:12} mas a construida agora e ${IMG_CONSTRUIDA:7:12} - o container nao foi recriado e esta servindo build velho."
-fi
+# Esta checagem nao depende de o conteudo mudar, entao ela cobre o buraco que a exclusao do
+# `FORA_DO_BUNDLE` abriria sozinha: um deploy que so mexe em `public/` cai no ramo "bundle
+# inalterado, como esperado" e passaria SEM NINGUEM ter verificado que o web foi reconstruido.
+# Por que compara conteudo e nao ids, e por que inconclusivo nao aborta: ver `imagem_do_web_esta_atual`
+# (falsos alarmes de 2026-10-01/02) e a issue #151 (derrubar deploy por engano ja custou ~40 min).
+garante_web_na_imagem_nova
 
 BUNDLE_DEPOIS="$(bundle_servido)"
 if (( FRONT )); then
