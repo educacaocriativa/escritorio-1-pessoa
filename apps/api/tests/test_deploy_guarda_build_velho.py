@@ -137,7 +137,9 @@ def _front_para(tmp_path: pathlib.Path, caminho: str) -> int:
         "set -uo pipefail\n"
         'SHA_ANTES="HEAD~1"\n'
         'SHA_ALVO="HEAD"\n'
-        "FRONT=0\n" + _classificacao_front() + 'echo "$FRONT"\n'
+        "FRONT=0\n"
+        + _classificacao_front()
+        + 'echo "$FRONT"\n'
     )
     r = _bash(script, cwd=tmp_path)
     assert r.returncode == 0, f"a classificação estourou: {r.stderr}"
@@ -168,9 +170,9 @@ def test_teste_de_unidade_NAO_marca_front(tmp_path):
 
 def test_codigo_do_front_MARCA_front(tmp_path):
     """Controle positivo. Sem ele, uma classificação que devolve 0 para TUDO passaria acima."""
-    assert (
-        _front_para(tmp_path, "apps/web/src/features/legal/PrivacidadePage.tsx") == 1
-    ), "código-fonte do front não marcou FRONT=1 — a guarda do bundle deixou de existir"
+    assert _front_para(tmp_path, "apps/web/src/features/legal/PrivacidadePage.tsx") == 1, (
+        "código-fonte do front não marcou FRONT=1 — a guarda do bundle deixou de existir"
+    )
 
 
 def test_packages_MARCA_front(tmp_path):
@@ -197,6 +199,7 @@ def _funcao(nome: str) -> str:
 
 SHA_A = "sha256:1111111111111111111111111111111111111111111111111111111111111111"
 SHA_B = "sha256:2222222222222222222222222222222222222222222222222222222222222222"
+SHA_C = "sha256:3333333333333333333333333333333333333333333333333333333333333333"
 CAMADAS_X = '["sha256:aaa","sha256:bbb"]'
 CAMADAS_Y = '["sha256:aaa","sha256:ccc"]'
 
@@ -204,14 +207,14 @@ CAMADAS_Y = '["sha256:aaa","sha256:ccc"]'
 # está na imagem EM_PE; depois de `compose_ ... --force-recreate`, passa a estar na RECRIADA.
 # O estado vai por ARQUIVO (MARCA) porque `$(...)` roda em subshell e perderia uma variável.
 STUBS = r"""
-set -uo pipefail
+set -euo pipefail
 PROJETO=infra
 ok()     { echo "OK $*"; }
 aviso()  { echo "AVISO $*"; }
 morre()  { echo "ABORTADO $*" >&2; exit 1; }
 docker() {
   case "$1 $2" in
-    "ps -q") echo cid ;;
+    "ps -q") [[ -f "$MARCA" && -n "${SEM_CID_POS:-}" ]] || echo cid ;;
     "inspect cid")
       if [[ -f "$MARCA" ]]; then echo "$RECRIADA"; else echo "$EM_PE"; fi ;;
     "image inspect")
@@ -222,12 +225,13 @@ docker() {
       esac ;;
   esac
 }
-compose_() { echo "COMPOSE $*"; : > "$MARCA"; }
+compose_() { echo "COMPOSE $*"; [[ -z "${COMPOSE_FALHA:-}" ]] || return 1; : > "$MARCA"; }
 """
 
 _FUNCOES = (
     "camadas_da_imagem",
     "imagem_do_web_esta_atual",
+    "o_que_nao_resolveu",
     "le_imagens_do_web",
     "garante_web_na_imagem_nova",
 )
@@ -240,6 +244,7 @@ def _roda_guarda(
     construida: str,
     recriada: str = "",
     camadas: dict[str, str] | None = None,
+    extra_env: str = "",
 ) -> subprocess.CompletedProcess[str]:
     """Roda a `garante_web_na_imagem_nova` REAL contra um `docker`/`compose_` de mentira."""
     exports = "".join(
@@ -248,6 +253,7 @@ def _roda_guarda(
     script = (
         f"export EM_PE='{em_pe}' CONSTRUIDA='{construida}' RECRIADA='{recriada}'\n"
         f"export MARCA=recriou\n"
+        + extra_env
         + exports
         + STUBS
         + "".join(_funcao(f) for f in _FUNCOES)
@@ -266,7 +272,7 @@ def _atual(em_pe: str, construida: str, camadas: dict[str, str] | None = None) -
         + STUBS.replace("compose_()", "_nao_usada()")
         + _funcao("camadas_da_imagem")
         + _funcao("imagem_do_web_esta_atual")
-        + 'imagem_do_web_esta_atual "$1" "$2"\n'
+        + 'rc=0; imagem_do_web_esta_atual "$1" "$2" || rc=$?; exit $rc\n'
     )
     return _bash(script, em_pe, construida).returncode
 
@@ -338,3 +344,66 @@ def test_fluxo_irresolvivel_avisa_e_segue(tmp_path):
     assert r.returncode == 0, r.stderr
     assert "inconclusiva" in r.stdout
     assert "COMPOSE" not in r.stdout
+
+
+def test_camadas_vazias_ou_nulas_nos_dois_lados_sao_inconclusivo():
+    """`[]` igual dos dois lados não é "mesmo conteúdo": é falta de dado."""
+    assert _atual(SHA_A, SHA_B, {SHA_A: "[]", SHA_B: "[]"}) == 2
+    assert _atual(SHA_A, SHA_B, {SHA_A: "null", SHA_B: "null"}) == 2
+
+
+def test_inconclusivo_diz_o_que_nao_resolveu(tmp_path):
+    r = _roda_guarda(tmp_path, em_pe=SHA_A, construida=SHA_B, camadas={SHA_B: CAMADAS_X})
+    assert "as camadas da imagem do container" in r.stdout
+    r = _roda_guarda(tmp_path, em_pe=SHA_A, construida=SHA_B, camadas={SHA_A: CAMADAS_X})
+    assert "as camadas da imagem construida" in r.stdout
+
+
+def test_cura_que_falha_ao_recriar_aborta_com_mensagem(tmp_path):
+    r = _roda_guarda(
+        tmp_path,
+        em_pe=SHA_A,
+        construida=SHA_B,
+        camadas={SHA_A: CAMADAS_X, SHA_B: CAMADAS_Y},
+        extra_env="export COMPOSE_FALHA=1\n",
+    )
+    assert r.returncode == 1
+    assert "falhou ao recriar o web" in r.stderr
+
+
+def test_depois_da_cura_sem_container_e_queda_real_e_aborta(tmp_path):
+    r = _roda_guarda(
+        tmp_path,
+        em_pe=SHA_A,
+        construida=SHA_B,
+        recriada=SHA_B,
+        camadas={SHA_A: CAMADAS_X, SHA_B: CAMADAS_Y},
+        extra_env="export SEM_CID_POS=1\n",
+    )
+    assert r.returncode == 1
+    assert "o web nao voltou depois de recriado" in r.stderr
+    assert "CONTEUDO difere" not in r.stderr
+
+
+def test_depois_da_cura_container_de_pe_sem_camadas_e_inconclusivo(tmp_path):
+    # A imagem recriada (SHA_C) não tem camadas resolvíveis: de pé, mas sem como comparar.
+    r = _roda_guarda(
+        tmp_path,
+        em_pe=SHA_A,
+        construida=SHA_B,
+        recriada=SHA_C,
+        camadas={SHA_A: CAMADAS_X, SHA_B: CAMADAS_Y},
+    )
+    assert r.returncode == 0, r.stderr
+    assert "inconclusiva" in r.stdout
+
+
+def test_camadas_da_imagem_sobrevive_ao_docker_falhando_sob_set_e():
+    """Chamada solta sob `set -e`, como o script faz: sem o `|| true` ela mataria o deploy."""
+    script = (
+        STUBS
+        + _funcao("camadas_da_imagem")
+        + 'export CONSTRUIDA=""; x="$(camadas_da_imagem infra-web)"; echo "vivo:[$x]"\n'
+    )
+    r = _bash(script, cwd=None)
+    assert "vivo:[]" in r.stdout, r.stderr

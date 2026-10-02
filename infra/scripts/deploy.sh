@@ -115,12 +115,13 @@ bundle_servido() {
 # Mas comparar IDs de imagem NAO serve nesta AWS (Docker Compose v5.5.0), e custou dois falsos
 # alarmes em producao, em 2026-10-01 e 2026-10-02: o deploy estava certo (API saudavel, alembic no
 # head, `api` e `worker` recriados) e o script abortou no fim, "o container do web roda a imagem
-# 375550b39186 mas a construida agora e 7d25aa8dc180". O `docker inspect <container> .Image` e o
-# `docker image inspect <projeto>-web .Id` trocam a cada build mesmo com o CONTEUDO identico (a
-# attestation/provenance do build gera um digest de indice novo), enquanto o compose decide pelo
-# digest dele -- e corretamente deixa o container de pe (`Container infra-web-1 Running`). Ate o
-# label `com.docker.compose.image` do container era um TERCEIRO id (f21f19fa1178). So
-# `--force-recreate` igualava os ids, sem mudar nada que se servisse.
+# 375550b39186 mas a construida agora e 7d25aa8dc180". Fatos medidos: os ids diferiam com o
+# CONTEUDO identico (build 100% de cache); `up -d --no-deps web` dizia `Container infra-web-1
+# Running`; o label `com.docker.compose.image` do container era um TERCEIRO id (f21f19fa1178); so
+# `--force-recreate` igualava os ids. A causa PROVAVEL (nao verificada) e que a attestation/
+# provenance do build gera um digest de indice novo a cada build, enquanto o compose decide pelo
+# digest dele. Para confirmar no host: `docker image inspect <id antigo> --format '{{json .RootFS.Layers}}'`
+# e comparar com o da imagem nova -- camadas iguais confirmam.
 #
 # Entao a comparacao e por CONTEUDO: as camadas do filesystem (`RootFS.Layers`) da imagem do
 # container contra as da recem-construida. Camadas iguais = mesmo conteudo, ids diferentes ou nao.
@@ -134,38 +135,51 @@ imagem_do_web_esta_atual() { # $1 = imagem do container em pe, $2 = imagem recem
   local a b
   a="$(camadas_da_imagem "$1")"
   b="$(camadas_da_imagem "$2")"
-  # Sem camadas de um dos lados (imagem antiga ja podada, p.ex.) nao ha o que comparar.
-  [[ -n "$a" && "$a" != null && -n "$b" && "$b" != null ]] || return 2
+  # Camadas validas comecam por `["sha256:`. Vazio, `[]` ou `null` (imagem antiga ja podada, p.ex.)
+  # nao e "conteudo igual": e que nao ha o que comparar.
+  [[ "$a" == '["sha256:'* && "$b" == '["sha256:'* ]] || return 2
   [[ "$a" == "$b" ]]
 }
-# Le o container do web em pe e a imagem `<projeto>-web` (globais IMG_EM_PE e IMG_CONSTRUIDA).
+# Diz, para a mensagem de inconclusivo, o que nao deu para resolver.
+o_que_nao_resolveu() { # $1 = imagem do container, $2 = imagem construida
+  if [[ -z "$1" ]]; then echo "o id da imagem do container do web"
+  elif [[ -z "$2" ]]; then echo "o id da imagem ${PROJETO}-web construida"
+  elif [[ "$(camadas_da_imagem "$1")" != '["sha256:'* ]]; then echo "as camadas da imagem do container (${1:7:12})"
+  else echo "as camadas da imagem construida (${2:7:12})"
+  fi
+}
+# Le o container do web em pe e a imagem `<projeto>-web` (globais CID_WEB, IMG_EM_PE, IMG_CONSTRUIDA).
 le_imagens_do_web() {
-  local cid
-  cid="$(docker ps -q --filter "label=com.docker.compose.project=$PROJETO" --filter "label=com.docker.compose.service=web" 2>/dev/null | head -1)"
-  IMG_EM_PE="$(docker inspect "$cid" --format '{{.Image}}' 2>/dev/null || true)"
+  CID_WEB="$(docker ps -q --filter "label=com.docker.compose.project=$PROJETO" --filter "label=com.docker.compose.service=web" 2>/dev/null | head -1)"
+  IMG_EM_PE="$(docker inspect "$CID_WEB" --format '{{.Image}}' 2>/dev/null || true)"
   IMG_CONSTRUIDA="$(docker image inspect "${PROJETO}-web" --format '{{.Id}}' 2>/dev/null || true)"
 }
 # Inconclusivo NAO e reprovacao: avisa e segue. Conteudo realmente diferente (container velho de
 # verdade) se cura UMA vez -- recria so o web, mesmas flags de compose, sem --remove-orphans e sem
-# nomear outro servico -- e confere de novo; se ainda diverge, ai sim aborta.
+# nomear outro servico -- e confere de novo; se ainda diverge, ai sim aborta. Depois da cura:
+# sem container do web de pe e uma queda real (aborta, com mensagem propria); container de pe mas
+# sem como comparar e inconclusivo de novo (avisa e segue).
 garante_web_na_imagem_nova() {
   local rc=0
   le_imagens_do_web
   imagem_do_web_esta_atual "$IMG_EM_PE" "$IMG_CONSTRUIDA" || rc=$?
   case "$rc" in
     0) ok "web no conteudo recem-construido (container ${IMG_EM_PE:7:12}, imagem ${IMG_CONSTRUIDA:7:12})"; return 0 ;;
-    2) aviso "nao consegui comparar a imagem do web (em pe: ${IMG_EM_PE:-?} | construida: ${IMG_CONSTRUIDA:-?}) - checagem inconclusiva, nao e reprovacao"; return 0 ;;
+    2) aviso "nao consegui comparar a imagem do web (nao resolvi $(o_que_nao_resolveu "$IMG_EM_PE" "$IMG_CONSTRUIDA")) - checagem inconclusiva, nao e reprovacao"; return 0 ;;
   esac
   aviso "o web roda ${IMG_EM_PE:7:12}, de conteudo diferente da construida ${IMG_CONSTRUIDA:7:12} - recriando so o web, uma vez"
-  compose_ up -d --no-deps --force-recreate web
+  compose_ up -d --no-deps --force-recreate web || morre "falhou ao recriar o web - confira 'docker compose ps' e os logs do web"
   le_imagens_do_web
   rc=0
   imagem_do_web_esta_atual "$IMG_EM_PE" "$IMG_CONSTRUIDA" || rc=$?
-  if (( rc == 0 )); then
-    ok "web recriado e agora no conteudo recem-construido (${IMG_EM_PE:7:12})"
-  else
-    morre "o container do web roda a imagem ${IMG_EM_PE:7:12} e a construida agora e ${IMG_CONSTRUIDA:7:12}: o CONTEUDO difere mesmo depois de recriar o web - esta servindo build velho."
-  fi
+  case "$rc" in
+    0) ok "web recriado e agora no conteudo recem-construido (${IMG_EM_PE:7:12})" ;;
+    1) morre "o container do web roda a imagem ${IMG_EM_PE:7:12} e a construida agora e ${IMG_CONSTRUIDA:7:12}: o CONTEUDO difere mesmo depois de recriar o web - esta servindo build velho." ;;
+    *)
+      [[ -n "$CID_WEB" ]] || morre "o web nao voltou depois de recriado - confira 'docker compose ps' e os logs do web"
+      aviso "web recriado e de pe, mas nao consegui comparar a imagem (nao resolvi $(o_que_nao_resolveu "$IMG_EM_PE" "$IMG_CONSTRUIDA")) - checagem inconclusiva, nao e reprovacao"
+      ;;
+  esac
 }
 
 # --- 2. O checkout esta limpo? ------------------------------------------------
